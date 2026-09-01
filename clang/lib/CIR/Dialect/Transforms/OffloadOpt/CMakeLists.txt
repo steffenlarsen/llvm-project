@@ -7,6 +7,7 @@ add_clang_library(MLIRCIROffloadOpt
   KernelCloning.cpp
   DeviceIndex.cpp
   PropagateBlockShape.cpp
+  PropagatePointerFacts.cpp
   TightenLaunchBounds.cpp
   EliminateCoveredGuards.cpp
 

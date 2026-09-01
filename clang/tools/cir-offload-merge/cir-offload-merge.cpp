@@ -116,6 +116,11 @@ llvm::cl::opt<bool> NoKernelArgConstProp(
 // Off by default: correct and it fires widely (1744 kernels on ggml), but it
 // measures null on llama while costing +18.5% device binary, because every
 // specialization is a clone. See the cir-pointer-facts-port memory note.
+llvm::cl::opt<bool> PropagatePointerFacts(
+    "propagate-pointer-facts",
+    llvm::cl::desc("Enable pointer alignment/noalias/access propagation "
+                   "(experimental)"),
+    llvm::cl::init(false), llvm::cl::cat(CIROffloadMergeCategory));
 llvm::cl::opt<bool>
     NoPropagateBlockShape("no-propagate-block-shape",
                           llvm::cl::desc("Disable block shape propagation"),
@@ -412,6 +417,8 @@ int runOffloadOptPasses(mlir::ModuleOp module) {
     // After the geometry passes: pointer facts do not feed them, but their
     // clones are what the launches now reach, so annotating afterwards puts the
     // facts on the kernel that actually runs.
+    if (PropagatePointerFacts)
+      containerPM.addPass(mlir::createOffloadPropagatePointerFactsPass());
     if (!NoDeadKernelElimination)
       containerPM.addPass(mlir::createOffloadDeadKernelEliminationPass());
   }
