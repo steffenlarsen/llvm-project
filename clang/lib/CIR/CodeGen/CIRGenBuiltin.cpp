@@ -2723,6 +2723,16 @@ RValue CIRGenFunction::emitBuiltinExpr(const GlobalDecl &gd, unsigned builtinID,
     if (isa<cir::VoidType>(correctedReturnType))
       return RValue::get(nullptr);
 
+    // An intrinsic declared to return i1 backs a builtin whose AST type is
+    // `bool`. Those are distinct types in CIR -- ops such as cir.if accept
+    // only !cir.bool -- so the result has to be converted rather than handed
+    // back as a one-bit integer.
+    if (fd && fd->getReturnType()->isBooleanType() &&
+        !mlir::isa<cir::BoolType>(intrinsicRes.getType()))
+      intrinsicRes = cir::CastOp::create(
+          builder, getLoc(e->getExprLoc()), convertType(fd->getReturnType()),
+          cir::CastKind::int_to_bool, intrinsicRes);
+
     return RValue::get(intrinsicRes);
   }
 

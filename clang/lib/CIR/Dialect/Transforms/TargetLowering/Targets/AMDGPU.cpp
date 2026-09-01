@@ -38,6 +38,26 @@ public:
            "Unknown CIR address space for AMDGPU target");
     return AMDGPUAddrSpaceMap[idx];
   }
+
+  /// AMDGPU implements every scope CIR can name bar the NVIDIA-specific
+  /// cluster scope, so they are kept rather than widened to system scope as
+  /// the default does.
+  ///
+  /// Widening is sound -- system is the strongest scope -- but it is not free:
+  /// a `seq_cst` global atomic at workgroup scope is a bare `global_atomic_*`,
+  /// while the same atomic at system scope is bracketed by `buffer_wbl2`,
+  /// `buffer_invl2` and `buffer_wbinvl1_vol` on gfx90a. Widening also loses
+  /// the scope a user asked for through `__builtin_amdgcn_atomic_*` or
+  /// `__builtin_amdgcn_fence`.
+  cir::SyncScopeKind
+  convertSyncScope(cir::SyncScopeKind syncScope) const override {
+    // Cluster scope has no AMDGPU equivalent. System scope is the sound
+    // over-approximation.
+    if (syncScope == cir::SyncScopeKind::Cluster ||
+        syncScope == cir::SyncScopeKind::HIPCluster)
+      return cir::SyncScopeKind::System;
+    return syncScope;
+  }
 };
 
 } // namespace
