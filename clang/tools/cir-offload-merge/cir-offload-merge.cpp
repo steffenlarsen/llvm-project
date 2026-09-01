@@ -99,6 +99,11 @@ llvm::cl::opt<bool> NoEliminateCoveredGuards(
 // from one frame above the launch at the launch site, where constant
 // propagation can use them, at the cost of a host-side clone per distinct
 // constant set.
+llvm::cl::opt<bool> NoSpecializeConstantArgs(
+    "no-specialize-constant-args",
+    llvm::cl::desc(
+        "Disable launch-helper specialization on constant scalar arguments"),
+    llvm::cl::init(false), llvm::cl::cat(CIROffloadMergeCategory));
 llvm::cl::opt<bool> NoKernelArgConstProp(
     "no-kernel-arg-const-prop",
     llvm::cl::desc("Disable kernel argument constant propagation"),
@@ -386,6 +391,8 @@ int runOffloadOptPasses(mlir::ModuleOp module) {
     // the binding table, so every pass below would skip it.
     // Then: a launch argument that is a literal one frame up is recorded as a
     // runtime value, so pin it before anything reads the binding table.
+    if (!NoSpecializeConstantArgs)
+      containerPM.addPass(mlir::createOffloadSpecializeConstantArgsPass());
     if (!NoEliminateCoveredGuards)
       containerPM.addPass(mlir::createOffloadEliminateCoveredGuardsPass());
     if (!NoKernelArgConstProp)

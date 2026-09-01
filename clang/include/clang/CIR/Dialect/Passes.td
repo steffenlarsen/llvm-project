@@ -349,6 +349,32 @@ def OffloadKernelArgConstantPropagation
 }
 
 
+def OffloadSpecializeConstantArgs
+    : Pass<"cir-offload-specialize-constant-args", "cir::OffloadContainerOp"> {
+  let summary = "Clone launch helpers per constant scalar argument";
+  let description = [{
+    Runs over a `cir.offload.container`. Launch arguments are often literals one
+    call frame above the launch: a thin entry point forwards 1 for the higher
+    dimensions into a general helper that does the launch, so at the launch site
+    the extent is a block argument and looks like a runtime value.
+
+    This clones such a helper once per distinct set of integer constants its
+    callers pass, pins them in the clone, and retargets those callers. The
+    literals then sit at the launch site, where kernel-argument constant
+    propagation can bake them into the kernel. Only parameters that actually
+    reach a launch are pinned.
+
+    No guard is needed: the values are compile-time constants, so the retargeted
+    callers are exactly the ones a clone is valid for, and any caller that does
+    not pass constants keeps the original. A helper all of whose callers moved
+    to clones is erased, so that its abandoned launch site cannot defeat the
+    unanimity rule downstream.
+
+    Runs before the passes that consume launch sites.
+  }];
+  let constructor = "mlir::createOffloadSpecializeConstantArgsPass()";
+  let dependentDialects = ["cir::CIRDialect"];
+}
 
 
 
