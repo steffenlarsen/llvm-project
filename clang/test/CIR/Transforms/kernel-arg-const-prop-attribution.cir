@@ -29,7 +29,8 @@ module attributes {cir.offload.container} {
       cir.return
     }
 
-    // Skipped: external stub, another TU may launch with a different value.
+    // Skipped: external stub, another TU may launch with a different value,
+    // and with no handle global the kernel cannot be cloned instead.
     cir.func @stub_external(%arg0: !s32i) attributes {cu.kernel_name = #cir.cu.kernel_name<"kern_external">} {
       cir.return
     }
@@ -68,4 +69,4 @@ module attributes {cir.offload.container} {
 
 // Both skips are reported, and the reason distinguishes them.
 // REMARK-DAG: remark: [Missed] KernelArgConstProp | Category:cir-offload-const-prop | Function=kern_nolaunch | {{.*}}Reason="no launch site in this translation unit"
-// REMARK-DAG: remark: [Missed] KernelArgConstProp | Category:cir-offload-const-prop | Function=kern_external | {{.*}}Reason="launch sites not all visible"
+// REMARK-DAG: remark: [Missed] KernelArgConstProp | Category:cir-offload-const-prop | Function=kern_external | {{.*}}Reason="launch sites not all visible and the kernel cannot be cloned"
