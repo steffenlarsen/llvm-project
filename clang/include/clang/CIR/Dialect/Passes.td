@@ -332,12 +332,14 @@ def OffloadKernelArgConstantPropagation
     buffer and the registration of the kernel are all left alone, so the
     argument simply becomes unused on the device side.
 
-    The rewrite requires every launch to be visible. That holds when the host
-    stub has internal linkage, so no other TU can call it, and every reference
-    to the stub outside its own body is a direct call: a stub whose address
-    escapes may be called indirectly with arguments this pass cannot see. The
-    stub always references itself, since it passes its own address to
-    `cudaLaunchKernel`.
+    Rewriting the kernel in place requires every launch of it to be visible.
+    That holds when the host stub has internal linkage, so no other TU can call
+    it, and every reference to the stub outside its own body is a direct call:
+    a stub whose address escapes may be called indirectly with arguments this
+    pass cannot see. The stub always references itself, since it passes its own
+    address to `cudaLaunchKernel`. When a launch could be hidden, a clone of the
+    kernel is specialised instead and the visible launches are retargeted at it,
+    leaving the original to serve the rest.
 
     Requires the launch arguments to already be constants at the call site,
     which for anything but a literal means `mem2reg` and `sccp` have run.
@@ -345,5 +347,43 @@ def OffloadKernelArgConstantPropagation
   let constructor = "mlir::createOffloadKernelArgConstantPropagationPass()";
   let dependentDialects = ["cir::CIRDialect"];
 }
+
+
+
+
+
+
+def OffloadTightenLaunchBounds
+    : Pass<"cir-offload-tighten-launch-bounds", "cir::OffloadContainerOp"> {
+  let summary = "Narrow a kernel's promised maximum block size";
+  let description = [{
+    Runs over a `cir.offload.container`. When every launch of a kernel uses a
+    constant block shape, the `cir.amdgpu-flat-work-group-size` maximum on the
+    device kernel is lowered to the largest block any of those launches
+    produces.
+
+    The attribute is a promise to the backend about how many threads a block
+    can hold, and a smaller promise lets it give each thread more registers.
+    CIRGen sets the maximum to `--gpu-max-threads-per-block` (1024 by default)
+    for any kernel without `__launch_bounds__`, which is usually far above what
+    the program actually launches.
+
+    The bound has to cover every launch that reaches the kernel, so a single
+    launch with an unresolved block dimension suppresses the whole kernel
+    rather than yielding a bound derived from the readable launches. The
+    minimum is left as CIRGen set it, since that half of the attribute is the
+    user's statement rather than this pass's.
+
+    Only AMDGPU kernels carry the attribute; kernels for other targets are
+    left alone.
+
+    Soundness follows the same rule as constant argument propagation: in place
+    when every launch is visible, on a specialised clone otherwise.
+  }];
+  let constructor = "mlir::createOffloadTightenLaunchBoundsPass()";
+  let dependentDialects = ["cir::CIRDialect"];
+}
+
+
 
 #endif // CLANG_CIR_DIALECT_PASSES_TD

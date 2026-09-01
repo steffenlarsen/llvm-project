@@ -76,6 +76,48 @@ llvm::cl::list<std::string>
                                    "multiple times in split mode."),
                     llvm::cl::cat(CIROffloadMergeCategory));
 
+// Each optimization runs by default; these turn one off so its effect can be
+// isolated, which is the only way to attribute a codegen or performance
+// difference to a single pass.
+llvm::cl::opt<bool> NoOffloadOpts(
+    "no-offload-opts",
+    llvm::cl::desc("Disable every container-level offload optimization"),
+    llvm::cl::init(false), llvm::cl::cat(CIROffloadMergeCategory));
+llvm::cl::opt<bool> NoModuleOpts(
+    "no-module-opts",
+    llvm::cl::desc("Disable mem2reg and SCCP on the nested modules"),
+    llvm::cl::init(false), llvm::cl::cat(CIROffloadMergeCategory));
+// Off by default: the pass is correct on every case inspected so far, but the
+// resulting ggml build hangs during inference and the cause is not yet known.
+// See the cir-launch-wrapper-port memory note.
+// On by default: measured +0.69% prefill on llama.cpp / qwen3-8b-q8_0, which is
+// what takes this pipeline from behind OGCG to ahead of it. It puts literals
+// from one frame above the launch at the launch site, where constant
+// propagation can use them, at the cost of a host-side clone per distinct
+// constant set.
+llvm::cl::opt<bool> NoKernelArgConstProp(
+    "no-kernel-arg-const-prop",
+    llvm::cl::desc("Disable kernel argument constant propagation"),
+    llvm::cl::init(false), llvm::cl::cat(CIROffloadMergeCategory));
+// Off by default: correct and it fires widely (1744 kernels on ggml), but it
+// measures null on llama while costing +18.5% device binary, because every
+// specialization is a clone. See the cir-pointer-facts-port memory note.
+llvm::cl::opt<bool>
+    NoPropagateBlockShape("no-propagate-block-shape",
+                          llvm::cl::desc("Disable block shape propagation"),
+                          llvm::cl::init(false),
+                          llvm::cl::cat(CIROffloadMergeCategory));
+llvm::cl::opt<bool>
+    NoTightenLaunchBounds("no-tighten-launch-bounds",
+                          llvm::cl::desc("Disable launch bounds tightening"),
+                          llvm::cl::init(false),
+                          llvm::cl::cat(CIROffloadMergeCategory));
+llvm::cl::opt<bool>
+    NoDeadKernelElimination("no-dead-kernel-elimination",
+                            llvm::cl::desc("Disable dead kernel elimination"),
+                            llvm::cl::init(false),
+                            llvm::cl::cat(CIROffloadMergeCategory));
+
 struct InputTarget {
   std::string Input;
   std::string Target;
@@ -323,11 +365,38 @@ int runOffloadOptPasses(mlir::ModuleOp module) {
   // Promote stack slots and propagate constants so that a kernel argument known
   // at compile time reaches the device stub call site as a cir.const. Runs on
   // every nested module, host and device.
-  mlir::OpPassManager &modulePM = containerPM.nest<mlir::ModuleOp>();
-  modulePM.addPass(mlir::createMem2Reg());
-  modulePM.addPass(mlir::createSCCPPass());
+  // mem2reg and SCCP are ordinary MLIR optimizations rather than offload ones,
+  // so --no-offload-opts leaves them alone; --no-module-opts turns them off.
+  if (!NoModuleOpts) {
+    mlir::OpPassManager &modulePM = containerPM.nest<mlir::ModuleOp>();
+    modulePM.addPass(mlir::createMem2Reg());
+    modulePM.addPass(mlir::createSCCPPass());
+  }
 
-  containerPM.addPass(mlir::createOffloadDeadKernelEliminationPass());
+  // Bake launch arguments that every visible call site agrees on into the
+  // device kernels. Runs after the module-level passes above so those
+  // constants have reached the stub call sites, and before dead-kernel
+  // elimination so the latter still sees the full binding table.
+  if (!NoOffloadOpts) {
+    // First: a launch hidden behind a kernel-pointer wrapper is invisible to
+    // the binding table, so every pass below would skip it.
+    // Then: a launch argument that is a literal one frame up is recorded as a
+    // runtime value, so pin it before anything reads the binding table.
+    if (!NoKernelArgConstProp)
+      containerPM.addPass(
+          mlir::createOffloadKernelArgConstantPropagationPass());
+    if (!NoTightenLaunchBounds)
+      containerPM.addPass(mlir::createOffloadTightenLaunchBoundsPass());
+    // After the geometry passes: pointer facts do not feed them, but their
+    // clones are what the launches now reach, so annotating afterwards puts the
+    // facts on the kernel that actually runs.
+    if (!NoDeadKernelElimination)
+      containerPM.addPass(mlir::createOffloadDeadKernelEliminationPass());
+  }
+
+  // ABI, not an optimization: a HIP kernel's pointer arguments are global, and
+  // OGCG states that on every build. Outside the --no-offload-opts gate for the
+  // same reason, and last so the body is already in its final shape.
 
   if (mlir::failed(pm.run(module)))
     return reportError("offload-container passes failed");
