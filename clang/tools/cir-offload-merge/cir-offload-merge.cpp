@@ -385,6 +385,8 @@ int runOffloadOptPasses(mlir::ModuleOp module) {
     if (!NoKernelArgConstProp)
       containerPM.addPass(
           mlir::createOffloadKernelArgConstantPropagationPass());
+    if (!NoPropagateBlockShape)
+      containerPM.addPass(mlir::createOffloadPropagateBlockShapePass());
     if (!NoTightenLaunchBounds)
       containerPM.addPass(mlir::createOffloadTightenLaunchBoundsPass());
     // After the geometry passes: pointer facts do not feed them, but their

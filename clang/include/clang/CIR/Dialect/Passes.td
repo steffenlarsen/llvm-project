@@ -352,6 +352,29 @@ def OffloadKernelArgConstantPropagation
 
 
 
+def OffloadPropagateBlockShape
+    : Pass<"cir-offload-propagate-block-shape", "cir::OffloadContainerOp"> {
+  let summary = "Propagate the launch block shape into device kernels";
+  let description = [{
+    Runs over a `cir.offload.container`. When every launch of a kernel uses the
+    same constant block dimension, reads of `blockDim` for that dimension
+    inside the device kernel are replaced by the constant.
+
+    A `blockDim` read is a call here rather than an operation, and is matched
+    both as the accessor the HIP/CUDA headers define and as the device-library
+    entry point it inlines to, so the pass gives the same answer on either side
+    of inlining.
+
+    Turning `blockDim.x` into a literal is what lets the rest of the pipeline
+    fold the index arithmetic built on top of it, which is where the payoff
+    is; the load itself is cheap.
+
+    Soundness follows the same rule as constant argument propagation: in place
+    when every launch is visible, on a specialised clone otherwise.
+  }];
+  let constructor = "mlir::createOffloadPropagateBlockShapePass()";
+  let dependentDialects = ["cir::CIRDialect"];
+}
 
 def OffloadTightenLaunchBounds
     : Pass<"cir-offload-tighten-launch-bounds", "cir::OffloadContainerOp"> {

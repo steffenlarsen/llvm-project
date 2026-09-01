@@ -4,6 +4,7 @@ add_clang_library(MLIRCIROffloadOpt
   KernelArgConstantPropagation.cpp
   KernelCloning.cpp
   DeviceIndex.cpp
+  PropagateBlockShape.cpp
   TightenLaunchBounds.cpp
 
   DEPENDS
