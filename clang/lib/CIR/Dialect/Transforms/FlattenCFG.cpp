@@ -701,6 +701,11 @@ public:
     rewriter.setInsertionPointToEnd(entry);
     cir::BrOp::create(rewriter, op.getLoc(), &op.getEntry().front());
 
+    // Loop hints from `#pragma unroll` live on the structured loop op. The
+    // back-edge branches created below are where LLVM expects them, so carry
+    // them across; loops without a hint stay unannotated.
+    auto loopHint = op->getAttrOfType<cir::LoopHintAttr>("loop_hint");
+
     // Branch from condition region to body or exit. The ConditionOp may not
     // be in the first block of the condition region if a cleanup scope was
     // already flattened within it, introducing multiple blocks. The
@@ -708,6 +713,11 @@ public:
     auto conditionOp =
         cast<cir::ConditionOp>(op.getCond().back().getTerminator());
     lowerConditionOp(conditionOp, body, exit, rewriter);
+
+    // For a do-while, the condition's brcond is itself the back-edge.
+    if (loopHint && isa<cir::DoWhileOp>(op.getOperation()) &&
+        op.getCond().back().mightHaveTerminator())
+      op.getCond().back().getTerminator()->setAttr("loop_hint", loopHint);
 
     // TODO(cir): Remove the walks below. It visits operations unnecessarily.
     // However, to solve this we would likely need a custom DialectConversion
@@ -736,17 +746,27 @@ public:
     // Lower optional body region yield.
     for (mlir::Block &blk : op.getBody().getBlocks()) {
       auto bodyYield = dyn_cast<cir::YieldOp>(blk.getTerminator());
-      if (bodyYield)
-        lowerTerminator(bodyYield, (step ? step : cond), rewriter);
+      if (!bodyYield)
+        continue;
+      mlir::Block *yieldBlock = bodyYield->getBlock();
+      lowerTerminator(bodyYield, (step ? step : cond), rewriter);
+      // With no step region, the body yield branches back to the condition.
+      if (loopHint && !step && yieldBlock->mightHaveTerminator())
+        yieldBlock->getTerminator()->setAttr("loop_hint", loopHint);
     }
 
     // Lower mandatory step region yield. Like the condition region, the
     // YieldOp may be in the last block rather than the first if a cleanup
     // scope was already flattened within the step region.
-    if (step)
-      lowerTerminator(
-          cast<cir::YieldOp>(op.maybeGetStep()->back().getTerminator()), cond,
-          rewriter);
+    if (step) {
+      auto stepYield =
+          cast<cir::YieldOp>(op.maybeGetStep()->back().getTerminator());
+      mlir::Block *yieldBlock = stepYield->getBlock();
+      lowerTerminator(stepYield, cond, rewriter);
+      // The step yield branches back to the condition: the for-loop back-edge.
+      if (loopHint && yieldBlock->mightHaveTerminator())
+        yieldBlock->getTerminator()->setAttr("loop_hint", loopHint);
+    }
 
     // Move region contents out of the loop op.
     rewriter.inlineRegionBefore(op.getCond(), exit);

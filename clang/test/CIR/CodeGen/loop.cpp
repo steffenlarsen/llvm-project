@@ -507,12 +507,9 @@ void unreachable_after_continue() {
 // CIR:       cir.condition(%[[TRUE]])
 // CIR:     } body {
 // CIR:       cir.scope {
-// CIR:         %[[X:.*]] = cir.alloca "x" align(4) init : !cir.ptr<!s32i>
+// CIR:         %[[X:.*]] = cir.alloca "x" align(4) : !cir.ptr<!s32i>
 // CIR:         cir.continue
-// CIR:       ^bb1:  // no predecessors
-// CIR:         %[[ONE:.*]] = cir.const #cir.int<1> : !s32i
-// CIR:         cir.store{{.*}} %[[ONE]], %[[X]] : !s32i, !cir.ptr<!s32i>
-// CIR:         cir.yield
+// CIR-NOT:     cir.store{{.*}} %[[X]]
 // CIR:       }
 // CIR:       cir.yield
 // CIR:     } step {
@@ -535,10 +532,8 @@ void unreachable_after_continue() {
 // LLVM:   br label %[[LABEL7:.*]]
 // LLVM: [[LABEL5:.*]]:
 // LLVM-SAME: ; No predecessors!
-// LLVM:   store i32 1, ptr %[[X]], align 4
-// LLVM:   br label %[[LABEL6:.*]]
-// LLVM: [[LABEL6]]:
-// LLVM:   br label %[[LABEL7:.*]]
+// LLVM-NOT: store i32 1, ptr %[[X]]
+// LLVM:   br label %[[LABEL7]]
 // LLVM: [[LABEL7]]:
 // LLVM:   br label %[[LABEL2]]
 // LLVM: [[LABEL8]]:
@@ -567,12 +562,9 @@ void unreachable_after_break() {
 // CIR:       cir.condition(%[[TRUE]])
 // CIR:     } body {
 // CIR:       cir.scope {
-// CIR:         %[[X:.*]] = cir.alloca "x" align(4) init : !cir.ptr<!s32i>
+// CIR:         %[[X:.*]] = cir.alloca "x" align(4) : !cir.ptr<!s32i>
 // CIR:         cir.break
-// CIR:       ^bb1:  // no predecessors
-// CIR:         %[[ONE:.*]] = cir.const #cir.int<1> : !s32i
-// CIR:         cir.store{{.*}} %[[ONE]], %[[X]] : !s32i, !cir.ptr<!s32i>
-// CIR:         cir.yield
+// CIR-NOT:     cir.store{{.*}} %[[X]]
 // CIR:       }
 // CIR:       cir.yield
 // CIR:     } step {
@@ -595,9 +587,7 @@ void unreachable_after_break() {
 // LLVM:   br label %[[LABEL8]]
 // LLVM: [[LABEL5:.*]]:
 // LLVM-SAME: ; No predecessors!
-// LLVM:   store i32 1, ptr %[[X]], align 4
-// LLVM:   br label %[[LABEL6:.*]]
-// LLVM: [[LABEL6]]:
+// LLVM-NOT: store i32 1, ptr %[[X]]
 // LLVM:   br label %[[LABEL7:.*]]
 // LLVM: [[LABEL7]]:
 // LLVM:   br label %[[LABEL2]]
