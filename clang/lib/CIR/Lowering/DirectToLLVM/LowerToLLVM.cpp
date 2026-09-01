@@ -5786,6 +5786,42 @@ lowerDirectlyFromCIRToLLVMIR(mlir::ModuleOp mlirModule, LLVMContext &llvmCtx,
       mlirModule->print(out);
   }
 
+  // Apply the fast-math flags the frontend recorded on the module, mirroring
+  // the per-op FMF OGCG emits. CIRGen does not carry them on individual
+  // operations, so they are stamped here, once the FP ops are LLVM-dialect ops
+  // that implement FastmathFlagsInterface.
+  //
+  // `nnan`/`ninf` come from `cir.finite_math_only` alone.
+  // `-funsafe-math-optimizations` sets `cir.unsafe_fp_math` but does *not*
+  // license assuming finiteness -- OGCG emits `reassoc nsz arcp contract afn`
+  // for it, i.e. "fast" minus nnan/ninf. Using the full `fast` flag here would
+  // tell the optimiser no NaN or Inf can occur, miscompiling any kernel that
+  // uses infinities deliberately (ggml's flash attention masks with -inf).
+  {
+    const bool unsafeMath = mlirModule->hasAttr("cir.unsafe_fp_math");
+    const bool finiteMathOnly = mlirModule->hasAttr("cir.finite_math_only");
+    const bool fpContract = mlirModule->hasAttr("cir.fp_contract_fast");
+    if (unsafeMath || finiteMathOnly || fpContract) {
+      auto flags = mlir::LLVM::FastmathFlags::none;
+      if (unsafeMath)
+        flags = flags | mlir::LLVM::FastmathFlags::reassoc |
+                mlir::LLVM::FastmathFlags::nsz |
+                mlir::LLVM::FastmathFlags::arcp |
+                mlir::LLVM::FastmathFlags::contract |
+                mlir::LLVM::FastmathFlags::afn;
+      if (finiteMathOnly)
+        flags = flags | mlir::LLVM::FastmathFlags::nnan |
+                mlir::LLVM::FastmathFlags::ninf;
+      if (fpContract)
+        flags = flags | mlir::LLVM::FastmathFlags::contract;
+      auto fmfAttr = mlir::LLVM::FastmathFlagsAttr::get(mlirCtx, flags);
+      mlirModule->walk([&](mlir::Operation *op) {
+        if (mlir::isa<mlir::LLVM::FastmathFlagsInterface>(op))
+          op->setAttr("fastmathFlags", fmfAttr);
+      });
+    }
+  }
+
   mlir::registerBuiltinDialectTranslation(*mlirCtx);
   mlir::registerLLVMDialectTranslation(*mlirCtx);
   mlir::registerOpenMPDialectTranslation(*mlirCtx);
@@ -5801,6 +5837,8 @@ lowerDirectlyFromCIRToLLVMIR(mlir::ModuleOp mlirModule, LLVMContext &llvmCtx,
     // FIXME: Handle any errors where they occurs and return a nullptr here.
     report_fatal_error("Lowering from LLVMIR dialect to llvm IR failed!");
   }
+
+  expandAMDGPUDevicePrintf(*llvmModule);
 
   return llvmModule;
 }
