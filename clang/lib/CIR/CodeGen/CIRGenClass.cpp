@@ -906,11 +906,33 @@ void CIRGenFunction::emitImplicitAssignmentOperatorBody(FunctionArgList &args) {
   // explicit. For now, we don't insert memcpy at all, though in some
   // cases the AST contains a call to memcpy.
   assert(!cir::MissingFeatures::assignMemcpyizer());
-  for (Stmt *s : rootCS->body())
+
+  // When the assignment is trivial throughout, the whole body is equivalent to
+  // copying the object representation, so emit that one copy and let the rest
+  // of the body (the `return *this`) follow. Assigning member by member instead
+  // costs a load and a store per field at the field's own width: a struct of
+  // two ints becomes two 4-byte pairs where the target can do one 8-byte pair,
+  // and on a GPU the extra addresses cost registers, which cost occupancy.
+  if (assignOp->isTrivial()) {
+    const CXXRecordDecl *classDecl = assignOp->getParent();
+    QualType recordTy = getContext().getCanonicalTagType(classDecl);
+    LValue dest = makeNaturalAlignAddrLValue(loadCXXThis(), recordTy);
+    cir::LoadOp srcPtr = builder.createLoad(getLoc(assignOp->getLocation()),
+                                            getAddrOfLocalVar(args[1]));
+    LValue src = makeNaturalAlignAddrLValue(srcPtr, recordTy);
+    emitAggregateCopy(dest, src, recordTy, AggValueSlot::MayOverlap);
+  }
+
+  for (Stmt *s : rootCS->body()) {
+    // The member assignments are already covered by the copy above; emitting
+    // them again would just repeat the writes.
+    if (assignOp->isTrivial() && !isa<ReturnStmt>(s))
+      continue;
     if (emitStmt(s, /*useCurrentScope=*/true).failed())
       cgm.errorNYI(s->getSourceRange(),
                    std::string("emitImplicitAssignmentOperatorBody: ") +
                        s->getStmtClassName());
+  }
 }
 
 void CIRGenFunction::emitForwardingCallToLambda(

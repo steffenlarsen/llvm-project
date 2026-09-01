@@ -58,7 +58,6 @@ void copy_c(C &c1, C &c2) {
 }
 
 // CIR: cir.func private @_ZN1AaSERKS_(!cir.ptr<!rec_A> {{.*}}, !cir.ptr<!rec_A> {{.*}}) -> (!cir.ptr<!rec_A>{{.*}})
-// CIR: cir.func private @memcpy(!cir.ptr<!void> {{.*}}, !cir.ptr<!void> {{.*}}, !u64i {{.*}}) -> !cir.ptr<!void>
 
 // Implicit assignment operator for C.
 
@@ -79,7 +78,7 @@ void copy_c(C &c1, C &c2) {
 // CIR:   %[[B_MEMBER_2:.*]] = cir.get_member %[[RET_LOAD]][1] {name = "b"}
 // CIR:   %[[B_VOID_PTR_2:.*]] = cir.cast bitcast %[[B_MEMBER_2]] : !cir.ptr<!cir.array<!rec_B x 16>> -> !cir.ptr<!void>
 // CIR:   %[[SIZE:.*]] = cir.const #cir.int<64> : !u64i
-// CIR:   %[[COUNT:.*]] = cir.call @memcpy(%[[B_VOID_PTR]], %[[B_VOID_PTR_2]], %[[SIZE]])
+// CIR:   cir.libc.memcpy %[[SIZE]] bytes from %[[B_VOID_PTR_2]] to %[[B_VOID_PTR]]
 // CIR:   cir.store %[[THIS]], %[[RET_ADDR]]
 // CIR:   %[[RET_VAL:.*]] = cir.load{{.*}} %[[RET_ADDR]]
 // CIR:   cir.return %[[RET_VAL]]
@@ -95,7 +94,7 @@ void copy_c(C &c1, C &c2) {
 // LLVM:   %[[B1:.*]] = getelementptr inbounds nuw %struct.C, ptr %[[THIS_LOAD]], i32 0, i32 1
 // LLVM:   %[[ARG_LOAD2:.*]] = load ptr, ptr %[[ARG_ADDR]]
 // LLVM:   %[[B2:.*]] = getelementptr inbounds nuw %struct.C, ptr %[[ARG_LOAD2]], i32 0, i32 1
-// LLVM:   %{{.*}} = call ptr @memcpy(ptr {{.*}} %[[B1]], ptr {{.*}} %[[B2]], i64 {{.*}} 64)
+// LLVM:   call void @llvm.memcpy.p0.p0.i64(ptr %[[B1]], ptr %[[B2]], i64 64, i1 false)
 
 // OGCG: define {{.*}} ptr @_ZN1CaSERKS_(ptr {{.*}} %[[THIS:.*]], ptr {{.*}} %[[ARG:.*]])
 // OGCG:   %[[THIS_ADDR:.*]] = alloca ptr
