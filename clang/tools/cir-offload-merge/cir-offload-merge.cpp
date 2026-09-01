@@ -82,6 +82,10 @@ llvm::cl::opt<bool> DisableCirInferLaunchBounds(
     "disable-cir-infer-launch-bounds",
     llvm::cl::desc("Disable launch-bound inference from host launch sites"),
     llvm::cl::cat(CIROffloadMergeCategory));
+llvm::cl::opt<bool> DisableCirPropagateBlockShape(
+    "disable-cir-propagate-block-shape",
+    llvm::cl::desc("Disable block shape propagation"),
+    llvm::cl::cat(CIROffloadMergeCategory));
 llvm::cl::opt<bool> DisableCirPropKernelArgs(
     "disable-cir-prop-kernel-args",
     llvm::cl::desc("Disable constant kernel-argument propagation"),
@@ -347,6 +351,8 @@ int runOffloadOptPasses(mlir::ModuleOp module) {
   pm.addPass(mlir::createOffloadDeadKernelEliminationPass());
   if (!DisableCirPropKernelArgs)
     pm.addPass(mlir::createOffloadKernelArgConstantPropagationPass());
+  if (!DisableCirPropagateBlockShape)
+    pm.addPass(mlir::createOffloadPropagateBlockShapePass());
   if (!DisableCirInferLaunchBounds)
     pm.addPass(mlir::createOffloadLaunchBoundsPropagationPass());
 

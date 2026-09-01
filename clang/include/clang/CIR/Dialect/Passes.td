@@ -398,4 +398,32 @@ def OffloadLaunchBoundsPropagation
   let dependentDialects = ["cir::CIRDialect"];
 }
 
+def OffloadPropagateBlockShape
+    : Pass<"cir-offload-propagate-block-shape", "mlir::ModuleOp"> {
+  let summary = "Propagate the launch block shape into device kernels";
+  let description = [{
+    Runs on an offload container module. When every launch of a kernel uses the
+    same constant block dimension, reads of `blockDim` for that dimension
+    inside the device kernel are replaced by the constant.
+
+    A `blockDim` read is a call here rather than an operation, and is matched
+    both as the accessor the HIP/CUDA headers define and as the device-library
+    entry point it inlines to, so the pass gives the same answer on either side
+    of inlining.
+
+    Turning `blockDim.x` into a literal is what lets the rest of the pipeline
+    fold the index arithmetic built on top of it, which is where the payoff
+    is; the load itself is cheap.
+
+    The constant is pinned in a specialised clone the launches are retargeted
+    at, as `getSpecializationTarget` decides; the original kernel is kept,
+    since the runtime can still reach it by name.
+
+    The pass is anchored on a module; it acts only when the module carries the
+    `cir.offload.container` unit attribute, leaving any other module alone.
+  }];
+  let constructor = "mlir::createOffloadPropagateBlockShapePass()";
+  let dependentDialects = ["cir::CIRDialect"];
+}
+
 #endif // CLANG_CIR_DIALECT_PASSES_TD
