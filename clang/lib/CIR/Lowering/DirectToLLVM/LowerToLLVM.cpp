@@ -74,6 +74,48 @@ mlir::Type elementTypeIfVector(mlir::Type type) {
           [](auto p) { return p.getElementType(); })
       .Default([](mlir::Type p) { return p; });
 }
+
+/// Convert a CIR LoopHintAttr into the LLVM dialect's LoopAnnotationAttr,
+/// which the LLVM IR exporter turns into `!llvm.loop` metadata.
+static mlir::LLVM::LoopAnnotationAttr convertLoopHint(cir::LoopHintAttr hint,
+                                                      mlir::MLIRContext *ctx) {
+  if (!hint)
+    return {};
+
+  mlir::LLVM::LoopUnrollAttr unrollAttr;
+  if (auto mode = hint.getUnrollMode()) {
+    switch (mode.getValue()) {
+    case cir::LoopUnrollMode::Full:
+      unrollAttr = mlir::LLVM::LoopUnrollAttr::get(
+          ctx, {}, {}, {}, mlir::BoolAttr::get(ctx, true), {}, {}, {});
+      break;
+    case cir::LoopUnrollMode::Disable:
+      unrollAttr = mlir::LLVM::LoopUnrollAttr::get(
+          ctx, mlir::BoolAttr::get(ctx, true), {}, {}, {}, {}, {}, {});
+      break;
+    case cir::LoopUnrollMode::Enable:
+      unrollAttr = mlir::LLVM::LoopUnrollAttr::get(
+          ctx, mlir::BoolAttr::get(ctx, false), {}, {}, {}, {}, {}, {});
+      break;
+    case cir::LoopUnrollMode::None:
+      break;
+    }
+  }
+  // An explicit `#pragma unroll N` count supersedes the mode.
+  if (auto count = hint.getUnrollCount())
+    unrollAttr = mlir::LLVM::LoopUnrollAttr::get(
+        ctx, {},
+        mlir::IntegerAttr::get(mlir::IntegerType::get(ctx, 32), *count), {}, {},
+        {}, {}, {});
+
+  mlir::BoolAttr mustProgress = hint.getMustProgress()
+                                    ? mlir::BoolAttr::get(ctx, true)
+                                    : mlir::BoolAttr();
+  return mlir::LLVM::LoopAnnotationAttr::get(ctx, {}, {}, {}, unrollAttr, {},
+                                             {}, {}, {}, {}, {}, mustProgress,
+                                             {}, {}, {}, {});
+}
+
 } // namespace
 
 /// In-memory storage width in bits for a _BitInt(N): N rounded up to the type's
@@ -1516,9 +1558,13 @@ mlir::LogicalResult CIRToLLVMBrCondOpLowering::matchAndRewrite(
 
   mlir::Value i1Condition = adaptor.getCond();
 
-  rewriter.replaceOpWithNewOp<mlir::LLVM::CondBrOp>(
+  auto newOp = rewriter.replaceOpWithNewOp<mlir::LLVM::CondBrOp>(
       brOp, i1Condition, brOp.getDestTrue(), adaptor.getDestOperandsTrue(),
       brOp.getDestFalse(), adaptor.getDestOperandsFalse());
+
+  if (auto hint = brOp->getAttrOfType<cir::LoopHintAttr>("loop_hint"))
+    if (auto ann = convertLoopHint(hint, brOp->getContext()))
+      newOp.setLoopAnnotationAttr(ann);
 
   return mlir::success();
 }
@@ -4328,8 +4374,13 @@ void ConvertCIRToLLVMPass::runOnOperation() {
 mlir::LogicalResult CIRToLLVMBrOpLowering::matchAndRewrite(
     cir::BrOp op, OpAdaptor adaptor,
     mlir::ConversionPatternRewriter &rewriter) const {
-  rewriter.replaceOpWithNewOp<mlir::LLVM::BrOp>(op, adaptor.getOperands(),
-                                                op.getDest());
+  auto newOp = rewriter.replaceOpWithNewOp<mlir::LLVM::BrOp>(
+      op, adaptor.getOperands(), op.getDest());
+
+  if (auto hint = op->getAttrOfType<cir::LoopHintAttr>("loop_hint"))
+    if (auto ann = convertLoopHint(hint, op->getContext()))
+      newOp.setLoopAnnotationAttr(ann);
+
   return mlir::LogicalResult::success();
 }
 

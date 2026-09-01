@@ -675,7 +675,12 @@ LogicalResult cir::CastOp::verify() {
   // casts for within a different address space are illegal.
   auto srcPtrTy = mlir::dyn_cast<cir::PointerType>(srcType);
   auto resPtrTy = mlir::dyn_cast<cir::PointerType>(resType);
-  if (srcPtrTy && resPtrTy && (kind != cir::CastKind::address_space))
+  // array_to_ptrdecay may implicitly change address space (e.g. a private/
+  // alloca or workgroup array decays to a flat pointer on AMDGPU).  This
+  // mirrors the addrspacecast that LLVM IR emits for array-to-pointer decay
+  // across address spaces, so we allow the mismatch here.
+  if (srcPtrTy && resPtrTy && (kind != cir::CastKind::address_space) &&
+      (kind != cir::CastKind::array_to_ptrdecay))
     if (srcPtrTy.getAddrSpace() != resPtrTy.getAddrSpace()) {
       return emitOpError() << "result type address space does not match the "
                               "address space of the operand";
@@ -2765,8 +2770,18 @@ bool cir::FuncOp::isCxxTrivialMemberFunction() {
 }
 
 mlir::Region *cir::FuncOp::getCallableRegion() {
-  // TODO(CIR): This function will have special handling for aliases and a
-  // check for an external function, once those features have been upstreamed.
+  // TODO(CIR): This function will have special handling for aliases, once that
+  // feature has been upstreamed.
+  //
+  // A function with no body -- a declaration, or an alias -- has no region for
+  // callers to analyze. MLIR's interprocedural dataflow analyses read a null
+  // region as "external" and conservatively mark a call's results overdefined.
+  // Handing them the empty region instead makes them treat the callee as
+  // analyzable: they find no return op, so the call's results are never given
+  // a lattice value and stay uninitialized, which SCCP then folds as though
+  // the call had produced a constant.
+  if (getFunctionBody().empty())
+    return nullptr;
   return &getBody();
 }
 

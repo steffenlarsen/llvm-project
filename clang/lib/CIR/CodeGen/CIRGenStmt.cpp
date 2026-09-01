@@ -206,11 +206,11 @@ mlir::LogicalResult CIRGenFunction::emitStmt(const Stmt *s,
   case Stmt::SwitchStmtClass:
     return emitSwitchStmt(cast<SwitchStmt>(*s));
   case Stmt::ForStmtClass:
-    return emitForStmt(cast<ForStmt>(*s));
+    return emitForStmt(cast<ForStmt>(*s), attr);
   case Stmt::WhileStmtClass:
-    return emitWhileStmt(cast<WhileStmt>(*s));
+    return emitWhileStmt(cast<WhileStmt>(*s), attr);
   case Stmt::DoStmtClass:
-    return emitDoStmt(cast<DoStmt>(*s));
+    return emitDoStmt(cast<DoStmt>(*s), attr);
   case Stmt::CXXTryStmtClass:
     return emitCXXTryStmt(cast<CXXTryStmt>(*s));
   case Stmt::CXXForRangeStmtClass:
@@ -1004,7 +1004,54 @@ CIRGenFunction::emitCXXForRangeStmt(const CXXForRangeStmt &s,
   return mlir::success();
 }
 
-mlir::LogicalResult CIRGenFunction::emitForStmt(const ForStmt &s) {
+/// Build a CIR LoopHintAttr from AST loop attributes (`#pragma unroll` and
+/// friends).  Returns a null attribute when the loop carries no hint, so that
+/// only loops the source actually annotated get one.
+static cir::LoopHintAttr buildLoopHintAttr(mlir::MLIRContext *ctx,
+                                           clang::ASTContext &astCtx,
+                                           ArrayRef<const Attr *> attrs) {
+  cir::LoopUnrollModeAttr unrollMode;
+  std::optional<int64_t> unrollCount;
+
+  for (const Attr *a : attrs) {
+    const auto *hint = dyn_cast<clang::LoopHintAttr>(a);
+    if (!hint)
+      continue;
+    using LH = clang::LoopHintAttr;
+    if (hint->getOption() == LH::Unroll) {
+      switch (hint->getState()) {
+      case LH::Enable:
+        unrollMode =
+            cir::LoopUnrollModeAttr::get(ctx, cir::LoopUnrollMode::Enable);
+        break;
+      case LH::Full:
+        unrollMode =
+            cir::LoopUnrollModeAttr::get(ctx, cir::LoopUnrollMode::Full);
+        break;
+      case LH::Disable:
+        unrollMode =
+            cir::LoopUnrollModeAttr::get(ctx, cir::LoopUnrollMode::Disable);
+        break;
+      default:
+        break;
+      }
+    } else if (hint->getOption() == LH::UnrollCount) {
+      if (const Expr *value = hint->getValue()) {
+        Expr::EvalResult result;
+        if (value->EvaluateAsInt(result, astCtx))
+          unrollCount = result.Val.getInt().getZExtValue();
+      }
+    }
+  }
+
+  if (unrollMode || unrollCount)
+    return cir::LoopHintAttr::get(ctx, unrollMode, unrollCount,
+                                  /*must_progress=*/true);
+  return {};
+}
+
+mlir::LogicalResult CIRGenFunction::emitForStmt(const ForStmt &s,
+                                                ArrayRef<const Attr *> attrs) {
   cir::ForOp forOp;
 
   // TODO: pass in an array of attributes.
@@ -1090,11 +1137,15 @@ mlir::LogicalResult CIRGenFunction::emitForStmt(const ForStmt &s) {
   if (res.failed())
     return res;
 
+  if (auto hint = buildLoopHintAttr(&getMLIRContext(), getContext(), attrs))
+    forOp->setAttr("loop_hint", hint);
+
   terminateStructuredRegionBody(forOp.getBody(), getLoc(s.getEndLoc()));
   return mlir::success();
 }
 
-mlir::LogicalResult CIRGenFunction::emitDoStmt(const DoStmt &s) {
+mlir::LogicalResult CIRGenFunction::emitDoStmt(const DoStmt &s,
+                                               ArrayRef<const Attr *> attrs) {
   cir::DoWhileOp doWhileOp;
 
   // TODO: pass in array of attributes.
@@ -1137,14 +1188,18 @@ mlir::LogicalResult CIRGenFunction::emitDoStmt(const DoStmt &s) {
   if (res.failed())
     return res;
 
+  if (auto hint = buildLoopHintAttr(&getMLIRContext(), getContext(), attrs))
+    doWhileOp->setAttr("loop_hint", hint);
+
   terminateStructuredRegionBody(doWhileOp.getBody(), getLoc(s.getEndLoc()));
   return mlir::success();
 }
 
-mlir::LogicalResult CIRGenFunction::emitWhileStmt(const WhileStmt &s) {
+mlir::LogicalResult
+CIRGenFunction::emitWhileStmt(const WhileStmt &s,
+                              ArrayRef<const Attr *> attrs) {
   cir::WhileOp whileOp;
 
-  // TODO: pass in array of attributes.
   auto whileStmtBuilder = [&]() -> mlir::LogicalResult {
     mlir::LogicalResult loopRes = mlir::success();
     assert(!cir::MissingFeatures::loopInfoStack());
@@ -1209,6 +1264,9 @@ mlir::LogicalResult CIRGenFunction::emitWhileStmt(const WhileStmt &s) {
 
   if (res.failed())
     return res;
+
+  if (auto hint = buildLoopHintAttr(&getMLIRContext(), getContext(), attrs))
+    whileOp->setAttr("loop_hint", hint);
 
   terminateStructuredRegionBody(whileOp.getBody(), getLoc(s.getEndLoc()));
   return mlir::success();
