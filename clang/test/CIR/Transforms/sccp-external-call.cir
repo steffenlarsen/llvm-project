@@ -1,0 +1,47 @@
+// RUN: cir-opt %s -sccp -o - | FileCheck %s
+
+!s32i = !cir.int<s, 32>
+!void = !cir.void
+
+#true = #cir.bool<true> : !cir.bool
+
+module {
+  cir.func private @f(!cir.ptr<!void>) -> !cir.bool
+  cir.func private @g(!cir.ptr<!void>) -> !cir.bool
+
+  // The result of a call to a declaration is not knowable, so neither ternary
+  // may be folded. A declaration reports a null callable region precisely so
+  // that MLIR's interprocedural dataflow marks such results overdefined; if it
+  // reported its empty body instead, the analysis would find no return op,
+  // leave %2 uninitialized, and fold %3's condition to the true-region's
+  // constant.
+  cir.func dso_local @cond(%arg0: !s32i, %arg1: !s32i, %arg2: !cir.ptr<!void>) -> !cir.bool {
+    %0 = cir.cmp ne %arg0, %arg1 : !s32i
+    %1 = cir.ternary(%0, true {
+      %5 = cir.const #true
+      cir.yield %5 : !cir.bool
+    }, false {
+      %5 = cir.call @f(%arg2) : (!cir.ptr<!void>) -> !cir.bool
+      %6 = cir.not %5 : !cir.bool
+      cir.yield %6 : !cir.bool
+    }) : (!cir.bool) -> !cir.bool
+    %2 = cir.ternary(%1, true {
+      %5 = cir.const #true
+      cir.yield %5 : !cir.bool
+    }, false {
+      %5 = cir.call @g(%arg2) : (!cir.ptr<!void>) -> !cir.bool
+      %6 = cir.not %5 : !cir.bool
+      cir.yield %6 : !cir.bool
+    }) : (!cir.bool) -> !cir.bool
+    cir.return %2 : !cir.bool
+  }
+}
+
+// CHECK-LABEL: cir.func dso_local @cond
+// CHECK:         %[[CMP:.*]] = cir.cmp ne
+// CHECK:         %[[T1:.*]] = cir.ternary(%[[CMP]], true {
+// CHECK:           cir.call @f(
+// The second ternary must still branch on the first one's result, not on a
+// folded constant.
+// CHECK:         cir.ternary(%[[T1]], true {
+// CHECK:           cir.call @g(
