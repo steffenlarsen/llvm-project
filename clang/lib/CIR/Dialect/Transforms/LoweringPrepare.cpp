@@ -2449,13 +2449,20 @@ cir::FuncOp CUDAModuleRegistrationBuilder::buildRuntimeFunction(
 /// \endcode
 void CUDAModuleRegistrationBuilder::buildCUDAModuleCtor() {
   bool isHIP = lowerModule->getLangOpts().HIP;
+  bool isRDC = lowerModule->getLangOpts().GPURelocatableDeviceCode;
 
-  if (lowerModule->getLangOpts().GPURelocatableDeviceCode)
-    llvm_unreachable("GPU RDC NYI");
+  // Relocatable device code for NVIDIA registers through
+  // __cudaRegisterLinkedBinary and a module-id section instead of the fat
+  // binary handle below, which is a different construction entirely.
+  if (isRDC && !isHIP) {
+    mlirModule->emitError("NYI: CUDA relocatable device code");
+    return;
+  }
 
   // For CUDA without -fgpu-rdc, it's safe to stop generating ctor
-  // if there's nothing to register.
-  if (cudaKernelMap.empty() && cudaDeviceVars.empty())
+  // if there's nothing to register. Under -fgpu-rdc the ctor still has to
+  // register the fat binary, which other translation units share.
+  if (!isRDC && cudaKernelMap.empty() && cudaDeviceVars.empty())
     return;
 
   // There's no device-side binary, so no need to proceed for CUDA.
@@ -2556,14 +2563,33 @@ void CUDAModuleRegistrationBuilder::buildCUDAModuleCtor() {
                            {magicInit, versionInit, fatbinInit, unusedInit})));
 
   // Create the GPU binary handle global variable.
+  //
+  // There is one HIP fat binary per linked module but a constructor per
+  // translation unit, so under -fgpu-rdc the handle is shared: it becomes an
+  // external definition keyed on the CUID, and whichever constructor runs
+  // first registers the binary. Its name, size and initialization pattern are
+  // part of the HIP ABI. Without -fgpu-rdc it is private to this module.
   std::string gpubinHandleName =
       addUnderscoredPrefix(cudaPrefix, "_gpubin_handle");
+  // Same hash ASTContext::getCUIDHash computes, recomputed here because this
+  // pass is meant to run on serialized CIR without an AST.
+  llvm::StringRef cuid = lowerModule->getLangOpts().CUID;
+  if (isRDC && !cuid.empty())
+    gpubinHandleName +=
+        "_" + llvm::utohexstr(llvm::MD5Hash(cuid), /*LowerCase=*/true);
 
-  GlobalOp gpuBinHandle = GlobalOp::create(
-      builder, loc, gpubinHandleName, voidPtrPtrTy,
-      /*isConstant=*/false, {}, cir::GlobalLinkageKind::InternalLinkage);
-  gpuBinHandle.setInitialValueAttr(builder.getConstNullPtrAttr(voidPtrPtrTy));
-  gpuBinHandle.setPrivate();
+  GlobalOp gpuBinHandle =
+      GlobalOp::create(builder, loc, gpubinHandleName, voidPtrPtrTy,
+                       /*isConstant=*/false, {},
+                       isRDC ? cir::GlobalLinkageKind::ExternalLinkage
+                             : cir::GlobalLinkageKind::InternalLinkage);
+  if (isRDC) {
+    // Hidden so that the copies in different shared libraries are not merged.
+    gpuBinHandle.setGlobalVisibility(cir::VisibilityKind::Hidden);
+  } else {
+    gpuBinHandle.setInitialValueAttr(builder.getConstNullPtrAttr(voidPtrPtrTy));
+    gpuBinHandle.setPrivate();
+  }
 
   // Declare this function:
   //    void **__{cuda|hip}RegisterFatBinary(void *);

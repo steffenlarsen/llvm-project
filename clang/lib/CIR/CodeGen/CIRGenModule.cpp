@@ -2727,10 +2727,14 @@ static std::string getMangledNameImpl(CIRGenModule &cgm, GlobalDecl gd,
                    "getMangledName: multi-version functions");
     }
   }
-  if (cgm.getLangOpts().GPURelocatableDeviceCode) {
-    cgm.errorNYI(nd->getSourceRange(),
-                 "getMangledName: GPU relocatable device code");
-  }
+  // Relocatable device code needs a unique name only for a static file-scope
+  // declaration that has to be externalized: with -fgpu-rdc those become
+  // visible across translation units, so two of them from different TUs would
+  // otherwise collide. Everything else mangles as usual.
+  if (cgm.getASTContext().shouldExternalize(nd) &&
+      cgm.getLangOpts().GPURelocatableDeviceCode &&
+      cgm.getLangOpts().CUDAIsDevice)
+    cgm.printPostfixForExternalizedDecl(out, nd);
 
   return std::string(out.str());
 }
