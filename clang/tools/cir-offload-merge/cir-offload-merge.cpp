@@ -90,6 +90,11 @@ llvm::cl::opt<bool> DisableCirEliminateCoveredGuards(
     "disable-cir-eliminate-covered-guards",
     llvm::cl::desc("Disable the covered-guard elimination pass"),
     llvm::cl::cat(CIROffloadMergeCategory));
+llvm::cl::opt<bool> DisableCirSpecializeConstantArgs(
+    "disable-cir-specialize-constant-args",
+    llvm::cl::desc(
+        "Disable launch-helper specialization on constant scalar arguments"),
+    llvm::cl::cat(CIROffloadMergeCategory));
 llvm::cl::opt<bool> DisableCirPropKernelArgs(
     "disable-cir-prop-kernel-args",
     llvm::cl::desc("Disable constant kernel-argument propagation"),
@@ -353,6 +358,8 @@ int runOffloadOptPasses(mlir::ModuleOp module) {
   // Container passes run on the container itself; the nested modules carry no
   // container attribute and would make them early-return.
   pm.addPass(mlir::createOffloadDeadKernelEliminationPass());
+  if (!DisableCirSpecializeConstantArgs)
+    pm.addPass(mlir::createOffloadSpecializeConstantArgsPass());
   if (!DisableCirEliminateCoveredGuards)
     pm.addPass(mlir::createOffloadEliminateCoveredGuardsPass());
   if (!DisableCirPropKernelArgs)
