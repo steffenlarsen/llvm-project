@@ -6,6 +6,7 @@ add_clang_library(MLIRCIROffloadOpt
   KernelArgConstantPropagation.cpp
   LaunchBoundsPropagation.cpp
   PropagateBlockShape.cpp
+  EliminateCoveredGuards.cpp
 
   DEPENDS
   MLIRCIROpsIncGen
