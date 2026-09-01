@@ -238,6 +238,13 @@ void CIRGenFunction::emitAutoVarInit(
   // If this local has an initializer, emit it now.
   const Expr *init = d.getInit();
 
+  // At an unreachable point the storage still has to exist, because reachable
+  // code may name the variable, but the initializer never runs. Emitting it
+  // anyway would odr-use whatever it references and leave the dead block
+  // holding uses of values the rest of the skipped code never computed.
+  if (atUnreachablePoint() && (!init || !containsLabel(init)))
+    return;
+
   // Initialize the variable here if it doesn't have a initializer and it is a
   // C struct that is non-trivial to initialize or an array containing such a
   // struct.
@@ -509,6 +516,14 @@ CIRGenModule::getOrCreateStaticVarDecl(const VarDecl &d,
 
   cir::GlobalOp gv = builder.createVersionedGlobal(
       getModule(), getLoc(d.getLocation()), name, lty, false, linkage);
+  // A __shared__ variable belongs in the target's local (LDS) address space.
+  // Left in the default space it becomes a single module-wide allocation that
+  // every workgroup writes to, so blocks race and __syncthreads() -- which
+  // orders threads within one block -- cannot make the accesses well defined.
+  if (d.hasAttr<CUDASharedAttr>())
+    gv.setAddrSpaceAttr(cir::TargetAddressSpaceAttr::get(
+        builder.getContext(),
+        getASTContext().getTargetAddressSpace(LangAS::cuda_shared)));
   insertGlobalSymbol(gv);
   // TODO(cir): infer visibility from linkage in global op builder.
   gv.setVisibility(getMLIRVisibilityFromCIRLinkage(linkage));
@@ -735,8 +750,15 @@ void CIRGenFunction::emitStaticVarDecl(const VarDecl &d,
 
   assert(!cir::MissingFeatures::cudaSupport());
 
+  // CUDA's local and local static __shared__ variables should not have any
+  // non-empty initializers. This is ensured by Sema. Whatever initializer such
+  // a variable may have when it gets here is a no-op, and emitting it would
+  // give an LDS global an initializer, which the target cannot represent.
+  bool isCudaSharedVar = getLangOpts().CUDA && getLangOpts().CUDAIsDevice &&
+                         d.hasAttr<CUDASharedAttr>();
+
   // If this value has an initializer, emit it.
-  if (d.getInit())
+  if (d.getInit() && !isCudaSharedVar)
     var = addInitializerToStaticVarDecl(d, var, getAddrOp);
 
   var.setAlignment(alignment.getAsAlign().value());
