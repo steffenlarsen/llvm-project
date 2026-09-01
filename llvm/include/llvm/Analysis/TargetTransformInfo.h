@@ -60,6 +60,7 @@ class LoadInst;
 class Loop;
 class LoopInfo;
 class LoopVectorizationLegality;
+class MemIntrinsic;
 class ProfileSummaryInfo;
 class RecurrenceDescriptor;
 class SCEV;
@@ -476,6 +477,15 @@ public:
   /// Returns the maximum memset / memcpy size in bytes that still makes it
   /// profitable to inline the call.
   LLVM_ABI uint64_t getMaxMemIntrinsicInlineSizeThreshold() const;
+
+  /// Whether \p MI should be expanded into loads and stores in IR even though
+  /// it is small enough for getMaxMemIntrinsicInlineSizeThreshold() to leave
+  /// it to the target's own late expansion.
+  ///
+  /// Lets a target opt individual cases out of that expansion, for instance
+  /// because expanding early exposes the accesses to scheduling that the late
+  /// path cannot give them.
+  LLVM_ABI bool preferMemIntrinsicExpansion(const MemIntrinsic *MI) const;
 
   /// \return The estimated number of case clusters when lowering \p 'SI'.
   /// \p JTSize Set a jump table size only when \p SI is suitable for a jump
