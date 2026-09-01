@@ -48,6 +48,7 @@ std::unique_ptr<Pass> createCUDARegisterModulePass();
 std::unique_ptr<Pass> createOffloadLaunchBoundsPropagationPass();
 std::unique_ptr<Pass> createOffloadSpecializeLaunchWrappersPass();
 std::unique_ptr<Pass> createOffloadSpecializeConstantArgsPass();
+std::unique_ptr<Pass> createOffloadPromoteKernelArgSpacePass();
 std::unique_ptr<Pass> createOffloadPropagatePointerFactsPass();
 std::unique_ptr<Pass> createOffloadPropagateBlockShapePass();
 std::unique_ptr<Pass> createOffloadEliminateCoveredGuardsPass();

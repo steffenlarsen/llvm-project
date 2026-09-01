@@ -7,6 +7,7 @@ add_clang_library(MLIRCIROffloadOpt
   LaunchBoundsPropagation.cpp
   SpecializeLaunchWrappers.cpp
   SpecializeConstantArgs.cpp
+  PromoteKernelArgSpace.cpp
   PropagateBlockShape.cpp
   PropagatePointerFacts.cpp
   EliminateCoveredGuards.cpp
