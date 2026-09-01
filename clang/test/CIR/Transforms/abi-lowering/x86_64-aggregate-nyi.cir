@@ -87,29 +87,4 @@ module attributes {
 
   // CHECK: not yet implemented for type '!cir.struct<"P" packed
 
-  // A padded (over-aligned) struct is rejected: it needs pad-aware
-  // classification.
-  cir.func @take_padded(%arg0: !rec_Ov) {
-    cir.return
-  }
-
-  // CHECK: not yet implemented for type '!cir.struct<"Ov" padded
-
-  // An empty C++ class is laid out as a single padded byte, so it is rejected
-  // by the padded check; its Ignore classification is deferred.
-  cir.func @take_empty(%arg0: !rec_E) {
-    cir.return
-  }
-
-  // CHECK: not yet implemented for type '!cir.struct<"E" padded
-
-  // CIRGen wraps an atomic whose value is narrower than its lock-free size in
-  // an anonymous record with a trailing pad member, which the padded check
-  // rejects for the same reason.
-  cir.func @take_atomic_wrapper(%arg0: !rec_AtomicWrapper) {
-    cir.return
-  }
-
-  // CHECK: not yet implemented for type '!cir.struct<padded {{.*}}pad !cir.array<!cir.int<s, 8> x 2>}>'
-
 }

@@ -163,13 +163,16 @@ static bool isSupportedType(mlir::Type ty, const DataLayout &dl) {
         if (!llvm::any_of(members, spansRecord))
           return false;
       }
-    } else if (recTy.getPadded()) {
-      // A struct's padding is a member the classifier would have to recognize
-      // as padding rather than data, which is not implemented.
-      return false;
     }
-    return llvm::all_of(recTy.getMembers(),
-                        [&](mlir::Type m) { return isSupportedType(m, dl); });
+
+    // Only data members carry ABI-relevant bytes: a pad or empty member
+    // counted as data could turn an Ignore or SSE eightbyte into INTEGER. A
+    // record with no data members has nothing to classify.
+    for (const auto &[kind, member] :
+         llvm::zip(recTy.getMemberKinds(), recTy.getMembers()))
+      if (kind == cir::RecordMemberKind::Data && !isSupportedType(member, dl))
+        return false;
+    return true;
   }
   return false;
 }
@@ -283,16 +286,20 @@ static const llvm::abi::Type *mapCIRType(mlir::Type type,
                                  llvm::abi::StructPacking::Default, flags);
         }
 
-        // isSupportedType rejects packed and padded structs, so every field
-        // here sits at its naturally-aligned offset.
-        uint64_t offsetBits = 0;
-        for (mlir::Type fieldTy : recTy.getMembers()) {
+        // Only data members are described to the classifier; `sizeBits`
+        // already spans the rest, so skipping them here does not shrink the
+        // record. Each field's offset comes from the record layout rather
+        // than being accumulated, so this is correct no matter where the pad
+        // or empty members fall. A record with no data members yields no
+        // fields and classifies as Ignore.
+        llvm::ArrayRef<cir::RecordMemberKind> kinds = recTy.getMemberKinds();
+        for (const auto &[i, fieldTy] : llvm::enumerate(recTy.getMembers())) {
+          if (kinds[i] != cir::RecordMemberKind::Data)
+            continue;
           const llvm::abi::Type *mappedField =
               mapCIRType(fieldTy, typeMapper, dl, modOp);
-          offsetBits =
-              llvm::alignTo(offsetBits, dl.getTypeABIAlignment(fieldTy) * 8);
-          fields.push_back(llvm::abi::FieldInfo(mappedField, offsetBits));
-          offsetBits += dl.getTypeSizeInBits(fieldTy).getFixedValue();
+          fields.push_back(llvm::abi::FieldInfo(
+              mappedField, recTy.getElementOffset(dl, i) * 8));
         }
         return tb.getRecordType(
             fields, sizeBits, align, llvm::abi::StructPacking::Default,

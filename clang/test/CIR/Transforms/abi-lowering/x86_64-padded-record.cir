@@ -1,0 +1,59 @@
+// RUN: cir-opt %s -cir-call-conv-lowering=target=x86_64 | FileCheck %s
+
+// CIRGen models padding and empty-for-ABI storage as ordinary members. The
+// classifier must skip them: counting one as data could turn an Ignore or
+// SSE eightbyte into INTEGER. Each field's offset comes from the record
+// layout, so this works no matter where the non-data members fall.
+
+!s32i = !cir.int<s, 32>
+!u8i = !cir.int<u, 8>
+!cir_float = !cir.float
+
+// Two floats sharing one eightbyte, then tail padding. Classifies SSE only
+// if the pad is excluded from the data.
+!rec_FF = !cir.struct<"FF" padded {data !cir_float, data !cir_float, pad !cir.array<!u8i x 8>}>
+
+// All padding, like CIRGen's layout for an empty C++ class. Classifies Ignore.
+!rec_AllPad = !cir.struct<"AllPad" padded {pad !cir.array<!u8i x 4>}>
+
+// Two floats split into separate eightbytes by an interior pad. The offset
+// must come from the record layout, not be re-derived by accumulating over
+// the surviving data members, or both floats would land in the same
+// eightbyte.
+!rec_FPadF = !cir.struct<"FPadF" padded {data !cir_float, pad !cir.array<!u8i x 4>, data !cir_float}>
+
+// A float with a trailing empty member (e.g. an unnamed bit-field unit).
+// Empty must be excluded like pad, or it forces a second argument.
+!rec_EmptyMember = !cir.struct<"EmptyMember" {data !cir_float, empty !u8i}>
+
+module attributes {
+  dlti.dl_spec = #dlti.dl_spec<
+    #dlti.dl_entry<i32, dense<32>: vector<2xi64>>,
+    #dlti.dl_entry<i64, dense<64>: vector<2xi64>>,
+    #dlti.dl_entry<f32, dense<32>: vector<2xi64>>,
+    #dlti.dl_entry<f64, dense<64>: vector<2xi64>>>
+} {
+  cir.func @take_ff_padded(%arg0: !rec_FF) {
+    cir.return
+  }
+
+  // CHECK: cir.func{{.*}} @take_ff_padded(%arg0: !cir.vector<2 x !cir.float>)
+
+  cir.func @take_all_pad(%arg0: !rec_AllPad) {
+    cir.return
+  }
+
+  // CHECK: cir.func{{.*}} @take_all_pad()
+
+  cir.func @take_interior_pad(%arg0: !rec_FPadF) {
+    cir.return
+  }
+
+  // CHECK: cir.func{{.*}} @take_interior_pad(%arg0: !cir.double, %arg1: !cir.float)
+
+  cir.func @take_empty_member(%arg0: !rec_EmptyMember) {
+    cir.return
+  }
+
+  // CHECK: cir.func{{.*}} @take_empty_member(%arg0: !cir.float)
+}
