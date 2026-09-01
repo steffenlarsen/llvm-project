@@ -112,6 +112,11 @@ static bool isSupportedType(mlir::Type ty, const DataLayout &dl) {
   if (auto ptrTy = dyn_cast<cir::PointerType>(ty))
     return !ptrTy.getAddrSpace() ||
            mlir::isa<cir::TargetAddressSpaceAttr>(ptrTy.getAddrSpace());
+  // A vptr is a pointer in the default address space -- that is what it lowers
+  // to -- so it classifies like one. Polymorphic classes reach here through
+  // their vtable-pointer member.
+  if (isa<cir::VPtrType>(ty))
+    return true;
   if (isa<cir::VoidType, cir::BoolType>(ty))
     return true;
   // Every CIR floating-point type carries the semantics the classifier
@@ -238,6 +243,13 @@ static const llvm::abi::Type *mapCIRType(mlir::Type type,
         return tb.getPointerType(dl.getTypeSizeInBits(type),
                                  llvm::Align(dl.getTypeABIAlignment(type)),
                                  addrSpace);
+      })
+      .Case([&](cir::VPtrType) {
+        // Always the default address space; see the VPtrType conversion in the
+        // CIR-to-LLVM type converter.
+        return tb.getPointerType(dl.getTypeSizeInBits(type),
+                                 llvm::Align(dl.getTypeABIAlignment(type)),
+                                 /*AddrSpace=*/0);
       })
       .Case([&](cir::BoolType) {
         return tb.getIntegerType(dl.getTypeSizeInBits(type),
