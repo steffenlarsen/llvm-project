@@ -127,6 +127,10 @@ int main(int argc, char **argv) {
     return mlir::createOffloadSpecializeConstantArgsPass();
   });
 
+  ::mlir::registerPass([]() -> std::unique_ptr<::mlir::Pass> {
+    return mlir::createOffloadSpecializeLaunchWrappersPass();
+  });
+
   mlir::omp::registerOpenMPPasses();
   mlir::registerTransformsPasses();
 

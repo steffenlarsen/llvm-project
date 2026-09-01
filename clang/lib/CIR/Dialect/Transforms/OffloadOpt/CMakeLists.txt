@@ -5,6 +5,7 @@ add_clang_library(MLIRCIROffloadOpt
   DeadKernelElimination.cpp
   KernelArgConstantPropagation.cpp
   LaunchBoundsPropagation.cpp
+  SpecializeLaunchWrappers.cpp
   SpecializeConstantArgs.cpp
   PropagateBlockShape.cpp
   EliminateCoveredGuards.cpp

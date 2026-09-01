@@ -95,6 +95,11 @@ llvm::cl::opt<bool> DisableCirSpecializeConstantArgs(
     llvm::cl::desc(
         "Disable launch-helper specialization on constant scalar arguments"),
     llvm::cl::cat(CIROffloadMergeCategory));
+llvm::cl::opt<bool> EnableCirSpecializeLaunchWrappers(
+    "enable-cir-specialize-launch-wrappers",
+    llvm::cl::desc(
+        "Enable kernel-launch wrapper specialization (experimental)"),
+    llvm::cl::cat(CIROffloadMergeCategory));
 llvm::cl::opt<bool> DisableCirPropKernelArgs(
     "disable-cir-prop-kernel-args",
     llvm::cl::desc("Disable constant kernel-argument propagation"),
@@ -358,6 +363,8 @@ int runOffloadOptPasses(mlir::ModuleOp module) {
   // Container passes run on the container itself; the nested modules carry no
   // container attribute and would make them early-return.
   pm.addPass(mlir::createOffloadDeadKernelEliminationPass());
+  if (EnableCirSpecializeLaunchWrappers)
+    pm.addPass(mlir::createOffloadSpecializeLaunchWrappersPass());
   if (!DisableCirSpecializeConstantArgs)
     pm.addPass(mlir::createOffloadSpecializeConstantArgsPass());
   if (!DisableCirEliminateCoveredGuards)
