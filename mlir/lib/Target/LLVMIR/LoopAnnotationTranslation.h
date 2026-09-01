@@ -44,20 +44,30 @@ public:
 
 private:
   /// Returns the LLVM metadata corresponding to a llvm loop metadata attribute.
-  llvm::MDNode *lookupLoopMetadata(Attribute options) const {
-    return loopMetadataMapping.lookup(options);
+  llvm::MDNode *lookupLoopMetadata(Attribute options, Operation *op) const {
+    return loopMetadataMapping.lookup({options, op});
   }
 
-  void mapLoopMetadata(Attribute options, llvm::MDNode *metadata) {
-    auto result = loopMetadataMapping.try_emplace(options, metadata);
+  void mapLoopMetadata(Attribute options, Operation *op,
+                       llvm::MDNode *metadata) {
+    auto result = loopMetadataMapping.try_emplace({options, op}, metadata);
     (void)result;
     assert(result.second &&
            "attempting to map loop options that was already mapped");
   }
 
-  /// Mapping from an attribute describing loop metadata to its LLVM metadata.
-  /// The metadata is attached to Latch block branches with this attribute.
-  DenseMap<Attribute, llvm::MDNode *> loopMetadataMapping;
+  /// Mapping from an annotated operation to its LLVM loop metadata. The
+  /// metadata is attached to Latch block branches with this attribute.
+  ///
+  /// Keyed on the operation and not on the attribute alone: attributes are
+  /// uniqued, so every structurally identical annotation in a module would
+  /// otherwise collapse onto one node and leave unrelated loops sharing an
+  /// identifier. LLVM requires the identifier to be distinct per loop -- passes
+  /// that record progress on a loop rewrite that node, and Loop::getLoopID()
+  /// compares the metadata across latches -- so sharing makes a whole module's
+  /// loops indistinguishable to them.
+  DenseMap<std::pair<Attribute, Operation *>, llvm::MDNode *>
+      loopMetadataMapping;
 
   /// Mapping from an access group attribute to its LLVM metadata.
   /// This map is populated on module entry and is used to annotate loops (as

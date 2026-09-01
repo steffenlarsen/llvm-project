@@ -320,3 +320,26 @@ llvm.func @loop_annotation_with_locs() {
 // CHECK: ![[LOOP_NODE]] = distinct !{![[LOOP_NODE]], ![[START_LOC:.*]], ![[END_LOC:.*]]}
 // CHECK: ![[START_LOC]] = !DILocation(line: 42, column: 4, scope:
 // CHECK: ![[END_LOC]] = !DILocation(line: 52, column: 4, scope:
+
+// -----
+
+// Two loops carrying an identical annotation must still get their own
+// identifier. Attributes are uniqued, so both branches below reference the very
+// same attribute, but LLVM identifies a loop *by* this node: passes that record
+// having transformed a loop rewrite it, and Loop::getLoopID() compares the node
+// across latches. Sharing one node would make the two loops indistinguishable.
+
+// CHECK-LABEL: @distinct_loop_ids
+llvm.func @distinct_loop_ids() {
+  // CHECK: br {{.*}} !llvm.loop ![[LOOP_A:[0-9]+]]
+  llvm.br ^bb1 {loop_annotation = #llvm.loop_annotation<mustProgress = true>}
+^bb1:
+  // CHECK: br {{.*}} !llvm.loop ![[LOOP_B:[0-9]+]]
+  llvm.br ^bb2 {loop_annotation = #llvm.loop_annotation<mustProgress = true>}
+^bb2:
+  llvm.return
+}
+
+// CHECK-DAG: ![[LOOP_A]] = distinct !{![[LOOP_A]], ![[MP:[0-9]+]]}
+// CHECK-DAG: ![[LOOP_B]] = distinct !{![[LOOP_B]], ![[MP]]}
+// CHECK-DAG: ![[MP]] = !{!"llvm.loop.mustprogress"}
