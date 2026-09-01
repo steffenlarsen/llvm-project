@@ -33,6 +33,7 @@
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/MD5.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/VirtualFileSystem.h"
@@ -1901,6 +1902,22 @@ void LoweringPreparePass::buildCXXGlobalInitFunc() {
 /// iterates over every element.  For cir.array.ctor ops whose partial_dtor
 /// region is non-empty, the ctor loop is wrapped in a cir.cleanup.scope whose
 /// EH cleanup performs a reverse destruction loop using the partial dtor body.
+/// The address space the target puts allocas in, or a null attribute when
+/// that is the default space. Read from the module's data layout.
+mlir::ptr::MemorySpaceAttrInterface
+getAllocaAddrSpace(mlir::Operation *scope) {
+  auto mod = scope->getParentOfType<mlir::ModuleOp>();
+  if (!mod)
+    return {};
+  mlir::DataLayout layout(mod);
+  auto space = mlir::dyn_cast_if_present<mlir::IntegerAttr>(
+      layout.getAllocaMemorySpace());
+  if (!space || space.getValue().getZExtValue() == 0)
+    return {};
+  return cir::TargetAddressSpaceAttr::get(mod.getContext(),
+                                          space.getValue().getZExtValue());
+}
+
 static void lowerArrayDtorCtorIntoLoop(cir::CIRBaseBuilderTy &builder,
                                        clang::ASTContext *astCtx,
                                        mlir::Operation *op, mlir::Type eltTy,
@@ -1954,9 +1971,21 @@ static void lowerArrayDtorCtorIntoLoop(cir::CIRBaseBuilderTy &builder,
     builder.setInsertionPointToStart(&ifOp.getThenRegion().front());
   }
 
+  // The iteration slot is a local, so it belongs in the target's alloca
+  // address space like any other; AMDGPU rejects an alloca outside
+  // addrspace(5).
+  cir::PointerType idxTy =
+      builder.getPointerTo(eltTy, getAllocaAddrSpace(op));
+  // The slot holds a pointer, so it needs pointer alignment. Hardcoding 1 left
+  // an under-aligned slot whose loads and stores are all naturally aligned --
+  // a shape classic CodeGen never emits, and one that SROA has to reason
+  // around.
+  cir::CIRDataLayout idxDataLayout(op->getParentOfType<mlir::ModuleOp>());
+  mlir::IntegerAttr idxAlign =
+      builder.getAlignmentAttr(idxDataLayout.getABITypeAlign(idxTy));
+
   mlir::Value tmpAddr =
-      builder.createAlloca(loc, /*addr type*/ builder.getPointerTo(eltTy),
-                           "__array_idx", builder.getAlignmentAttr(1));
+      builder.createAlloca(loc, /*addr type*/ idxTy, "__array_idx", idxAlign);
   builder.createStore(loc, start, tmpAddr);
 
   mlir::Block *bodyBlock = &op->getRegion(0).front();
