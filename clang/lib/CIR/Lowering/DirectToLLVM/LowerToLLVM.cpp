@@ -1436,6 +1436,14 @@ mlir::LogicalResult CIRToLLVMAtomicFetchOpLowering::matchAndRewrite(
       rewriter, op.getLoc(), llvmBinOp, adaptor.getPtr(), adaptor.getVal(),
       llvmOrder, llvmSyncScope);
 
+  // CIRGen decides the metadata for a C++/HIP atomic from the atomic options
+  // in effect, so those markers are simply carried across.
+  for (llvm::StringRef marker :
+       {"cir.amdgpu_no_fine_grained_memory", "cir.amdgpu_no_remote_memory",
+        "cir.amdgpu_ignore_denormal_mode"})
+    if (mlir::Attribute a = op->getAttr(marker))
+      rmwVal->setAttr(marker, a);
+
   // The AMDGPU raw hardware atomic builtins need metadata for the backend to
   // select the native instruction; without it a float fadd is expanded into a
   // cmpxchg loop. LDS atomics are always native, so the metadata is only

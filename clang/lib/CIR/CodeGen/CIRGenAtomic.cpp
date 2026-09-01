@@ -646,6 +646,37 @@ static void emitAtomicCmpXchgFailureSetCheckWeak(
       });
 }
 
+/// Attach the AMDGPU atomic metadata markers that the current atomic options
+/// call for. Mirrors AMDGPUTargetCodeGenInfo::setTargetAtomicMetadata: the
+/// "no.X" metadata is emitted when the corresponding option is *off*, since it
+/// asserts the absence of that memory kind. `[[clang::atomic]]` is what turns
+/// the options on and off.
+///
+/// The markers are carried to LLVM IR by the CIR-to-LLVM lowering, following
+/// the cir.riscv_nontemporal_domain pattern; see amendOperation in
+/// LowerToLLVMIR.cpp.
+static void setAMDGPUAtomicMetadata(CIRGenFunction &cgf, mlir::Operation *op) {
+  if (!cgf.cgm.getTriple().isAMDGCN())
+    return;
+  // Only a read-modify-write instruction carries these; a plain load, store or
+  // cmpxchg does not.
+  auto fetchOp = mlir::dyn_cast<cir::AtomicFetchOp>(op);
+  if (!fetchOp)
+    return;
+
+  clang::AtomicOptions atomicOpts = cgf.cgm.getAtomicOpts();
+  mlir::UnitAttr unit = cgf.getBuilder().getUnitAttr();
+  if (!atomicOpts.getOption(clang::AtomicOptionKind::FineGrainedMemory))
+    op->setAttr("cir.amdgpu_no_fine_grained_memory", unit);
+  if (!atomicOpts.getOption(clang::AtomicOptionKind::RemoteMemory))
+    op->setAttr("cir.amdgpu_no_remote_memory", unit);
+  // Denormal flushing only matters for a float add.
+  if (atomicOpts.getOption(clang::AtomicOptionKind::IgnoreDenormalMode) &&
+      fetchOp.getBinop() == cir::AtomicFetchKind::Add &&
+      mlir::isa<cir::SingleType>(fetchOp.getVal().getType()))
+    op->setAttr("cir.amdgpu_ignore_denormal_mode", unit);
+}
+
 static void emitAtomicOp(CIRGenFunction &cgf, AtomicExpr *expr, Address dest,
                          Address ptr, Address val1, Address val2,
                          Expr *isWeakExpr, Expr *failureOrderExpr, int64_t size,
@@ -926,6 +957,8 @@ static void emitAtomicOp(CIRGenFunction &cgf, AtomicExpr *expr, Address dest,
     rmwOp->setAttr("is_volatile", builder.getUnitAttr());
   if (fetchFirst && opName == cir::AtomicFetchOp::getOperationName())
     rmwOp->setAttr("fetch_first", builder.getUnitAttr());
+
+  setAMDGPUAtomicMetadata(cgf, rmwOp);
 
   mlir::Value result = rmwOp->getResult(0);
 
