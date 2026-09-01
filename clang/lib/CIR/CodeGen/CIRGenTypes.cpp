@@ -11,6 +11,7 @@
 #include "clang/Basic/TargetInfo.h"
 #include "clang/CIR/Dialect/IR/CIRTypes.h"
 #include "clang/CIR/MissingFeatures.h"
+#include "llvm/Support/Path.h"
 
 #include <cassert>
 
@@ -114,8 +115,30 @@ std::string CIRGenTypes::getRecordTypeName(const clang::RecordDecl *recordDecl,
         .print(outStream, policy);
   else if (auto *typedefNameDecl = recordDecl->getTypedefNameForAnonDecl())
     typedefNameDecl->printQualifiedName(outStream, policy);
-  else
-    outStream << builder.getUniqueAnonRecordName();
+  else {
+    // Name an anonymous record after where it is declared, not by a per-TU
+    // counter. The host and device halves of one CUDA/HIP translation unit
+    // instantiate types in different orders, so counter-based names disagree
+    // between them -- and the offload merge step parses both into a single
+    // MLIRContext, where CIR reuses an identified record by name. A collision
+    // there silently binds one module's operations to the other module's type,
+    // which surfaces much later as `member type mismatch`. A source location
+    // is the same in both halves, so the two agree.
+    // Only for CUDA/HIP: that is where the two halves are merged, and a
+    // location-based name would otherwise bake source line numbers into every
+    // anonymous record's name, so an unrelated edit above the declaration
+    // would rename the type.
+    clang::PresumedLoc ploc =
+        astContext.getLangOpts().CUDA
+            ? astContext.getSourceManager().getPresumedLoc(
+                  recordDecl->getLocation())
+            : clang::PresumedLoc();
+    if (ploc.isValid())
+      outStream << "anon." << llvm::sys::path::filename(ploc.getFilename())
+                << "." << ploc.getLine() << "." << ploc.getColumn();
+    else
+      outStream << builder.getUniqueAnonRecordName();
+  }
 
   if (!suffix.empty())
     outStream << suffix;
