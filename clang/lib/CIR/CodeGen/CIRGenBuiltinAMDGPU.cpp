@@ -423,17 +423,20 @@ CIRGenFunction::emitAMDGPUBuiltinExpr(unsigned builtinId,
   }
   case AMDGPU::BI__builtin_amdgcn_ballot_w32:
   case AMDGPU::BI__builtin_amdgcn_ballot_w64: {
-    cgm.errorNYI(expr->getSourceRange(),
-                 std::string("unimplemented AMDGPU builtin call: ") +
-                     getContext().BuiltinInfo.getName(builtinId));
-    return mlir::Value{};
+    // llvm.amdgcn.ballot is overloaded on its *result* type, which is what
+    // distinguishes the w32 and w64 forms.
+    mlir::Value src = emitScalarExpr(expr->getArg(0));
+    return builder.emitIntrinsicCallOp(getLoc(expr->getExprLoc()),
+                                       "amdgcn.ballot",
+                                       convertType(expr->getType()), src);
   }
   case AMDGPU::BI__builtin_amdgcn_inverse_ballot_w32:
   case AMDGPU::BI__builtin_amdgcn_inverse_ballot_w64: {
-    cgm.errorNYI(expr->getSourceRange(),
-                 std::string("unimplemented AMDGPU builtin call: ") +
-                     getContext().BuiltinInfo.getName(builtinId));
-    return mlir::Value{};
+    // The inverse is overloaded on its argument type instead.
+    mlir::Value src = emitScalarExpr(expr->getArg(0));
+    return builder.emitIntrinsicCallOp(getLoc(expr->getExprLoc()),
+                                       "amdgcn.inverse.ballot",
+                                       convertType(expr->getType()), src);
   }
   case AMDGPU::BI__builtin_amdgcn_tanhf:
   case AMDGPU::BI__builtin_amdgcn_tanhh:
@@ -565,10 +568,23 @@ CIRGenFunction::emitAMDGPUBuiltinExpr(unsigned builtinId,
   case AMDGPU::BI__builtin_amdgcn_read_exec:
   case AMDGPU::BI__builtin_amdgcn_read_exec_lo:
   case AMDGPU::BI__builtin_amdgcn_read_exec_hi: {
-    cgm.errorNYI(expr->getSourceRange(),
-                 std::string("unimplemented AMDGPU builtin call: ") +
-                     getContext().BuiltinInfo.getName(builtinId));
-    return mlir::Value{};
+    // The exec mask is read as a ballot over an all-true predicate. The
+    // ballot is at least as wide as the wavefront, so that a wave64 target
+    // still reports both halves for the _lo/_hi forms.
+    mlir::Location loc = getLoc(expr->getExprLoc());
+    unsigned registerWidth =
+        builtinId == AMDGPU::BI__builtin_amdgcn_read_exec_lo ? 32 : 64;
+    unsigned ballotWidth =
+        std::max(getTarget().getGridValue().GV_Warp_Size, registerWidth);
+    cir::IntType ballotTy = builder.getUIntNTy(ballotWidth);
+
+    mlir::Value truePred = builder.getBool(true, loc).getResult();
+    mlir::Value result =
+        builder.emitIntrinsicCallOp(loc, "amdgcn.ballot", ballotTy, truePred);
+
+    if (builtinId == AMDGPU::BI__builtin_amdgcn_read_exec_hi)
+      result = builder.createShiftRight(loc, result, 32);
+    return builder.createIntCast(result, convertType(expr->getType()));
   }
   case AMDGPU::BI__builtin_amdgcn_image_bvh_intersect_ray:
   case AMDGPU::BI__builtin_amdgcn_image_bvh_intersect_ray_h:
