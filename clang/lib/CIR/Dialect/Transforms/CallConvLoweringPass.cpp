@@ -142,10 +142,15 @@ static bool isSupportedType(mlir::Type ty, const DataLayout &dl) {
     return isSupportedType(complexTy.getElementType(), dl);
   if (auto arrTy = dyn_cast<cir::ArrayType>(ty))
     return isSupportedType(arrTy.getElementType(), dl);
+  // The classifier implements the vector rules in full: SSE/AVX classification
+  // from the configured AVX ABI level, the coercion of a vector that fits in a
+  // single eightbyte to the scalar filling it, the illegal-vector and
+  // byte-vector paths, and the unnamed-vector-to-memory rule.
+  if (auto vecTy = dyn_cast<cir::VectorType>(ty))
+    return isSupportedType(vecTy.getElementType(), dl);
   if (auto recTy = dyn_cast<cir::RecordType>(ty)) {
-    // An incomplete record has no layout to classify, and a packed one needs
-    // pad-aware eightbyte classification this bridge does not implement.
-    if (!recTy.isComplete() || recTy.getPacked())
+    // An incomplete record has no layout to classify.
+    if (!recTy.isComplete())
       return false;
     if (recTy.isUnion()) {
       // The classifier sizes a union's eightbytes from the union itself, which
@@ -274,6 +279,13 @@ static const llvm::abi::Type *mapCIRType(mlir::Type type,
         return tb.getArrayType(elemAbi, arrTy.getSize(),
                                dl.getTypeSizeInBits(type).getFixedValue());
       })
+      .Case([&](cir::VectorType vecTy) {
+        const llvm::abi::Type *elemAbi =
+            mapCIRType(vecTy.getElementType(), typeMapper, dl, modOp);
+        return tb.getVectorType(elemAbi,
+                                llvm::ElementCount::getFixed(vecTy.getSize()),
+                                llvm::Align(dl.getTypeABIAlignment(type)));
+      })
       .Case([&](cir::RecordType recTy) -> const llvm::abi::Type * {
         llvm::abi::RecordFlags flags = llvm::abi::RecordFlags::None;
         if (recordCanPassInRegs(modOp, recTy))
@@ -347,9 +359,13 @@ convertABIArgInfo(const llvm::abi::ArgInfo &info, MLIRContext *ctx,
     const llvm::abi::Type *coerceAbi = info.getCoerceToType();
     bool isAggregate = isa_and_present<cir::RecordType, cir::ArrayType>(origTy);
     // For a _Complex the classifier's coerce is only sometimes the natural
-    // type, so it has to be read rather than assumed.
+    // type, so it has to be read rather than assumed. The same holds for a
+    // vector: one that fits in a single eightbyte is coerced to the scalar
+    // filling it -- `i32` at four bytes, `double` at eight -- and dropping
+    // that coercion would pass a four-byte vector in an XMM where the ABI
+    // puts it in a GPR.
     bool comparesAgainstCoerce =
-        coerceAbi && isa_and_present<cir::ComplexType>(origTy);
+        coerceAbi && isa_and_present<cir::ComplexType, cir::VectorType>(origTy);
     bool coerceIsRegisterTuple =
         isa_and_present<llvm::abi::RecordType>(coerceAbi);
     // Compare widths rather than identity: a coerce no wider than the natural
@@ -393,8 +409,9 @@ convertABIArgInfo(const llvm::abi::ArgInfo &info, MLIRContext *ctx,
 /// Where \p fnTy's declared parameters end and its ellipsis arguments begin.
 ///
 /// The only x86_64 rule that reads this boundary sends an unnamed vector wider
-/// than 128 bits to memory, and isSupportedType rejects every vector, so no
-/// input this bridge accepts can observe the difference.
+/// than the AVX ABI level's native size to memory. Vectors do reach the
+/// classifier, so this boundary is live: a cir.func's declared parameters are
+/// exactly its inputs, and everything past them arrived through the ellipsis.
 static llvm::abi::RequiredArgs requiredArgs(cir::FuncType fnTy) {
   if (!fnTy.isVarArg())
     return llvm::abi::RequiredArgs::All;
