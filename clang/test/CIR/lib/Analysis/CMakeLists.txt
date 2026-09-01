@@ -1,5 +1,6 @@
 add_clang_library(CIRTestAnalysis
   TestCIRAliasAnalysis.cpp
+  TestDeviceIndices.cpp
   TestKernelBindings.cpp
 
   LINK_LIBS PUBLIC

@@ -35,6 +35,16 @@ namespace cir {
 inline constexpr llvm::StringRef kSpecializationCloneAttr =
     "cir.offload.specialization_clone";
 
+// Marks a host launch helper cloned by SpecializeConstantArgs. Such a clone
+// exists for no reason other than to carry a particular set of constants, so
+// the launches inside it form a group by construction rather than by accident
+// of the source -- which is what lets a specialising pass treat them apart
+// from the helper's other callers. Matching on this rather than on the clone's
+// name is deliberate: a kernel's first clone can take the plain suffix, so
+// name-counting is not a reliable detector.
+inline constexpr llvm::StringRef kConstArgsCloneAttr =
+    "cir.offload.const_args_clone";
+
 struct KernelClone {
   // The cloned device kernels, one per device module that held the original.
   llvm::SmallVector<cir::FuncOp, 2> deviceKernels;
