@@ -53,6 +53,88 @@ mlir::Block *replaceThrowWithTryThrow(cir::ThrowOp throwOp,
 void collectUnreachable(mlir::Operation *parent,
                         llvm::SmallVectorImpl<mlir::Operation *> &ops);
 
+//===----------------------------------------------------------------------===//
+// CIR Value Tracer — shared backward-walk utility for offload passes
+//===----------------------------------------------------------------------===//
+
+/// Result of tracing a CIR value backward to its origin.
+struct ValueTraceResult {
+  enum Kind {
+    Constant,    ///< Compile-time integer constant
+    Alloca,      ///< Local alloca (Value is the alloca result)
+    BlockArg,    ///< Function/region block argument
+    Dim3CtorArg, ///< Argument of a dim3 constructor call
+    Unknown      ///< Could not determine origin
+  };
+
+  Kind kind = Unknown;
+  mlir::Value terminal;                 ///< The origin value
+  std::optional<int64_t> constantValue; ///< Valid when kind == Constant
+  unsigned dim3FieldIndex = 0;          ///< x=0, y=1, z=2 for Dim3CtorArg
+};
+
+/// Trace a CIR value backward through casts, loads, alloca unique-store
+/// forwarding, and dim3 struct paths (get_member → copy → constructor).
+///
+/// This is the shared core of tryResolveIndexToConstant (TightenLaunchBounds),
+/// tryTracePointerToAllocation (PropagatePointerFacts), and the planned
+/// GridCoverage pass.  Each pass interprets the terminal differently:
+///   - TightenLaunchBounds: checks kind == Constant
+///   - PropagatePointerFacts: checks kind == Alloca, then hipMalloc
+///   - GridCoverage: checks the Dim3CtorArg for a division pattern
+ValueTraceResult traceValueOrigin(mlir::Value v, unsigned maxDepth = 16);
+
+/// Try to resolve a CIR value to a compile-time integer constant.
+/// Convenience wrapper around traceValueOrigin.
+std::optional<int64_t> tryResolveToConstant(mlir::Value v);
+
+/// Given a dim3 constructor argument value, check if it is of the form
+/// `(expr + C-1) / C` (ceiling division by C).  If so, return C and set
+/// `dividend` to the `expr` value.  Returns std::nullopt if the pattern
+/// doesn't match.
+std::optional<int64_t> matchCeilDiv(mlir::Value v, mlir::Value &dividend);
+
+/// The index into \p kernelArgs of the argument \p v ultimately comes from, or
+/// std::nullopt when it comes from none of them.
+///
+/// Both sides are reduced to their traced origin first, so a parameter reached
+/// through the slot CIRGen spilled it into matches the same parameter reached
+/// directly.
+std::optional<unsigned> traceToKernelArgIndex(mlir::Value v,
+                                              mlir::ValueRange kernelArgs);
+
+/// The address space an alloca must live in on the target \p scope belongs to,
+/// or null when that is the default space.
+///
+/// AMDGPU rejects an alloca outside addrspace(5). CIRGen puts every local there
+/// via CIRGenModule, but a temporary introduced by a pass has no CIRGenModule
+/// to ask, and the requirement is recorded on the module's data layout instead.
+mlir::ptr::MemorySpaceAttrInterface getAllocaAddrSpace(mlir::Operation *scope);
+
+/// How a launch grid dimension relates to a kernel argument: the grid covers
+/// `argIndex` in steps of `divisor`, optionally clamped to `cap` blocks.
+struct GridDimRelation {
+  unsigned argIndex = 0;
+  int64_t divisor = 1;
+  std::optional<int64_t> cap;
+
+  bool isCapped() const { return cap.has_value(); }
+};
+
+/// Find a kernel argument that \p gridDim plausibly bounds, without proving
+/// the relation.
+///
+/// Looks through block arguments, so it still finds the argument once a clamp
+/// has been flattened into a diamond. The returned divisor is the one
+/// recovered along the way, or 1 when none was found -- the latter is merely a
+/// weaker claim, not a wrong one.
+///
+/// Only for callers that test the relation at run time. Nothing here
+/// establishes that the relation holds, so using the result as an unguarded
+/// assumption would be unsound.
+std::optional<GridDimRelation>
+findGridDimCandidate(mlir::Value gridDim, mlir::ValueRange kernelArgs);
+
 } // namespace cir
 
 #endif // LLVM_CLANG_CIR_DIALECT_TRANSFORMS_CIRTRANSFORMUTILS_H

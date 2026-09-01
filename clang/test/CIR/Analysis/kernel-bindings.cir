@@ -411,3 +411,74 @@ module {
 // CHECK-NEXT: host-stub @stub_stream
 // CHECK-NEXT: device @device_0 : @kern_stream
 // CHECK-NEXT: launch in @launch_stream : 1 args, grid const, block const, stream explicit
+
+// -----
+
+!s32i = !cir.int<s, 32>
+!u32i = !cir.int<u, 32>
+!u64i = !cir.int<u, 64>
+!rec_dim3 = !cir.struct<"dim3" {data !u32i, data !u32i, data !u32i}>
+!rec_anon_struct = !cir.struct<{data !u64i, data !u32i}>
+
+// The shape CIRGen actually emits for HIP: the target ABI coerces each dim3
+// into an {i64, i32} pair, so the push call takes six operands rather than
+// four and each dim3 has to be recovered through the scratch slot it was
+// stored into. The geometry is the same launch either way.
+module {
+  cir.offload.container {
+    builtin.module @host attributes {cir.offload.kind = #cir.offload_kind<host>} {
+      cir.func private @__hipPushCallConfiguration(!u64i, !u32i, !u64i, !u32i, !u64i, !cir.ptr<!s32i>) -> !u32i
+      cir.func private @dim3_ctor(!cir.ptr<!rec_dim3>, !u32i, !u32i, !u32i) func_info<#cir.cxx_ctor<!rec_dim3, custom>>
+      cir.func internal private @stub_coerced(%arg0: !s32i) attributes {cu.kernel_name = #cir.cu.kernel_name<"kern_coerced">} {
+        cir.return
+      }
+      cir.func @launch_coerced() {
+        %gridTmp = cir.alloca "agg.tmp0" align(4) : !cir.ptr<!rec_dim3>
+        %blockTmp = cir.alloca "agg.tmp1" align(4) : !cir.ptr<!rec_dim3>
+        %gridCoerce = cir.alloca "coerce" align(8) : !cir.ptr<!rec_anon_struct>
+        %blockCoerce = cir.alloca "coerce" align(8) : !cir.ptr<!rec_anon_struct>
+        %one = cir.const #cir.int<1> : !u32i
+        %c8 = cir.const #cir.int<8> : !u32i
+        %c256 = cir.const #cir.int<256> : !u32i
+        cir.call @dim3_ctor(%gridTmp, %c8, %one, %one) : (!cir.ptr<!rec_dim3>, !u32i, !u32i, !u32i) -> ()
+        cir.call @dim3_ctor(%blockTmp, %c256, %one, %one) : (!cir.ptr<!rec_dim3>, !u32i, !u32i, !u32i) -> ()
+        %grid = cir.load align(4) %gridTmp : !cir.ptr<!rec_dim3>, !rec_dim3
+        %block = cir.load align(4) %blockTmp : !cir.ptr<!rec_dim3>, !rec_dim3
+        %gridSlot = cir.cast bitcast %gridCoerce : !cir.ptr<!rec_anon_struct> -> !cir.ptr<!rec_dim3>
+        cir.store %grid, %gridSlot : !rec_dim3, !cir.ptr<!rec_dim3>
+        %gm0 = cir.get_member %gridCoerce[0] {name = ""} : !cir.ptr<!rec_anon_struct> -> !cir.ptr<!u64i>
+        %glo = cir.load %gm0 : !cir.ptr<!u64i>, !u64i
+        %gm1 = cir.get_member %gridCoerce[1] {name = ""} : !cir.ptr<!rec_anon_struct> -> !cir.ptr<!u32i>
+        %ghi = cir.load %gm1 : !cir.ptr<!u32i>, !u32i
+        %blockSlot = cir.cast bitcast %blockCoerce : !cir.ptr<!rec_anon_struct> -> !cir.ptr<!rec_dim3>
+        cir.store %block, %blockSlot : !rec_dim3, !cir.ptr<!rec_dim3>
+        %bm0 = cir.get_member %blockCoerce[0] {name = ""} : !cir.ptr<!rec_anon_struct> -> !cir.ptr<!u64i>
+        %blo = cir.load %bm0 : !cir.ptr<!u64i>, !u64i
+        %bm1 = cir.get_member %blockCoerce[1] {name = ""} : !cir.ptr<!rec_anon_struct> -> !cir.ptr<!u32i>
+        %bhi = cir.load %bm1 : !cir.ptr<!u32i>, !u32i
+        %shmem = cir.const #cir.int<0> : !u64i
+        %stream = cir.const #cir.ptr<null> : !cir.ptr<!s32i>
+        %r = cir.call @__hipPushCallConfiguration(%glo, %ghi, %blo, %bhi, %shmem, %stream) : (!u64i, !u32i, !u64i, !u32i, !u64i, !cir.ptr<!s32i>) -> !u32i
+        %c = cir.cast int_to_bool %r : !u32i -> !cir.bool
+        cir.if %c {
+        } else {
+          %v = cir.const #cir.int<7> : !s32i
+          cir.call @stub_coerced(%v) {cu.kernel_name = #cir.cu.kernel_name<"kern_coerced">} : (!s32i) -> ()
+        }
+        cir.return
+      }
+    }
+    builtin.module @device_0 attributes {cir.offload.kind = #cir.offload_kind<device>} {
+      cir.func @kern_coerced(%arg0: !s32i) cc(ptx_kernel) {
+        cir.return
+      }
+    }
+  }
+}
+
+// CHECK: KernelBindingTable
+// CHECK-NEXT: size 1 empty false
+// CHECK-NEXT: kernel kern_coerced
+// CHECK-NEXT: host-stub @stub_coerced
+// CHECK-NEXT: device @device_0 : @kern_coerced
+// CHECK-NEXT: launch in @launch_coerced : 1 args, grid const, block const, stream default
