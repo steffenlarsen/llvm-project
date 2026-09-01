@@ -173,13 +173,21 @@ static bool isSupportedType(mlir::Type ty, const DataLayout &dl) {
         if (!llvm::any_of(members, spansRecord))
           return false;
       }
-    } else if (recTy.getPadded()) {
-      // A struct's padding is a member the classifier would have to recognize
-      // as padding rather than data, which is not implemented.
-      return false;
     }
-    return llvm::all_of(recTy.getMembers(),
-                        [&](mlir::Type m) { return isSupportedType(m, dl); });
+
+    // Padding members are described by the record's member kinds, and
+    // mapCIRType drops them and takes each real field's offset from the record
+    // layout, so a padded or packed struct classifies from its data alone.
+    // An all-padding record -- how CIRGen lays out an empty C++ class -- has no
+    // data at all and classifies as Ignore.
+    llvm::ArrayRef<cir::RecordMemberKind> kinds = recTy.getMemberKinds();
+    for (auto [i, m] : llvm::enumerate(recTy.getMembers())) {
+      if (i < kinds.size() && kinds[i] == cir::RecordMemberKind::Pad)
+        continue;
+      if (!isSupportedType(m, dl))
+        return false;
+    }
+    return true;
   }
   return false;
 }
@@ -307,16 +315,26 @@ static const llvm::abi::Type *mapCIRType(mlir::Type type,
                                  llvm::abi::StructPacking::Default, flags);
         }
 
-        // isSupportedType rejects packed and padded structs, so every field
-        // here sits at its naturally-aligned offset.
-        uint64_t offsetBits = 0;
-        for (mlir::Type fieldTy : recTy.getMembers()) {
+        // Only the data members are described to the classifier. CIRGen models
+        // padding as ordinary members, but SysV classifies an eightbyte from
+        // the data that lands in it -- a pad passed along as a field would look
+        // like data and could turn an Ignore or an SSE eightbyte into INTEGER.
+        // `sizeBits` already spans the padding, so the eightbyte count stays
+        // right without describing it.
+        //
+        // Offsets come from the record layout rather than being accumulated,
+        // which is what makes this correct for a packed record and for padding
+        // that sits between fields rather than only after them. A record whose
+        // members are all padding -- CIRGen's layout for an empty C++ class --
+        // yields no fields at all and classifies as Ignore.
+        llvm::ArrayRef<cir::RecordMemberKind> kinds = recTy.getMemberKinds();
+        for (auto [i, fieldTy] : llvm::enumerate(recTy.getMembers())) {
+          if (i < kinds.size() && kinds[i] == cir::RecordMemberKind::Pad)
+            continue;
           const llvm::abi::Type *mappedField =
               mapCIRType(fieldTy, typeMapper, dl, modOp);
-          offsetBits =
-              llvm::alignTo(offsetBits, dl.getTypeABIAlignment(fieldTy) * 8);
-          fields.push_back(llvm::abi::FieldInfo(mappedField, offsetBits));
-          offsetBits += dl.getTypeSizeInBits(fieldTy).getFixedValue();
+          fields.push_back(llvm::abi::FieldInfo(
+              mappedField, recTy.getElementOffset(dl, i) * 8));
         }
         return tb.getRecordType(
             fields, sizeBits, align, llvm::abi::StructPacking::Default,
