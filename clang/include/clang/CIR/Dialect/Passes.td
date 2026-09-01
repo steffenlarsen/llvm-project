@@ -485,4 +485,31 @@ def OffloadSpecializeConstantArgs
   let dependentDialects = ["cir::CIRDialect"];
 }
 
+def OffloadSpecializeLaunchWrappers
+    : Pass<"cir-offload-specialize-launch-wrappers", "mlir::ModuleOp"> {
+  let summary = "Clone kernel-launch wrappers per constant kernel argument";
+  let description = [{
+    Runs on an offload container module. A helper that takes the kernel as a
+    parameter and launches it -- the `launch(kernel, grid, block, args...)`
+    idiom -- launches through an indirect `cir.call`, which carries no
+    `cu.kernel_name` and so is invisible to every other offload pass.
+
+    This clones such a helper once per kernel its callers pass, pins the kernel
+    parameter in the clone, and rewrites the indirect launch into the direct,
+    tagged call a source-level `<<<>>>` produces. The launch is then an
+    ordinary binding-table entry that the specialising passes can act on.
+
+    Runs before the passes that consume launch sites, and iterates: pinning an
+    outer wrapper's parameter is what exposes an inner one.
+
+    Call sites that do not pass a recognisable kernel keep calling the
+    original, which is left untouched.
+
+    The pass is anchored on a module; it acts only when the module carries the
+    `cir.offload.container` unit attribute, leaving any other module alone.
+  }];
+  let constructor = "mlir::createOffloadSpecializeLaunchWrappersPass()";
+  let dependentDialects = ["cir::CIRDialect"];
+}
+
 #endif // CLANG_CIR_DIALECT_PASSES_TD
