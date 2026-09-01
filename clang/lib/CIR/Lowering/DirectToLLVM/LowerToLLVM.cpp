@@ -49,6 +49,8 @@
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/IR/Module.h"
+#include "llvm/Transforms/Utils/AMDGPUEmitPrintf.h"
+#include "llvm/IR/IRBuilder.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/TimeProfiler.h"
@@ -5595,6 +5597,42 @@ void populateCIRToLLVMPasses(mlir::OpPassManager &pm, bool enableOpenMP) {
     pm.addPass(mlir::omp::createHostOpFilteringPass());
 }
 
+// Expand calls to the internal `__cir_device_printf` marker CIRGen emits for a
+// device-side printf into the real AMDGPU sequence.
+//
+// CIRGen cannot do this itself: `llvm::emitAMDGPUPrintfCall` builds LLVM IR
+// through an IRBuilder, so the expansion has to wait until the module has been
+// translated. It has to happen here rather than later because the `__ockl_*`
+// calls it generates are what make the device-library linker pull in ockl.
+static void expandAMDGPUDevicePrintf(llvm::Module &module) {
+  llvm::Function *marker = module.getFunction("__cir_device_printf");
+  if (!marker)
+    return;
+
+  // CIR records the requested lowering as a module flag.
+  bool isBuffered = false;
+  if (llvm::Metadata *md = module.getModuleFlag("amdgpu_printf_kind"))
+    if (auto *mdStr = llvm::dyn_cast<llvm::MDString>(md))
+      isBuffered = mdStr->getString() == "buffered";
+
+  llvm::SmallVector<llvm::CallInst *, 8> calls;
+  for (llvm::User *u : marker->users())
+    if (auto *ci = llvm::dyn_cast<llvm::CallInst>(u))
+      calls.push_back(ci);
+
+  for (llvm::CallInst *ci : calls) {
+    llvm::IRBuilder<> irb(ci);
+    llvm::SmallVector<llvm::Value *, 8> args(ci->args());
+    llvm::Value *res = llvm::emitAMDGPUPrintfCall(irb, args, isBuffered);
+    if (res && !ci->use_empty())
+      ci->replaceAllUsesWith(res);
+    ci->eraseFromParent();
+  }
+
+  if (marker->use_empty())
+    marker->eraseFromParent();
+}
+
 std::unique_ptr<llvm::Module>
 lowerDirectlyFromCIRToLLVMIR(mlir::ModuleOp mlirModule, LLVMContext &llvmCtx,
                              bool enableOpenMP, StringRef mlirSaveTempsOutFile,
@@ -5636,6 +5674,8 @@ lowerDirectlyFromCIRToLLVMIR(mlir::ModuleOp mlirModule, LLVMContext &llvmCtx,
     // FIXME: Handle any errors where they occurs and return a nullptr here.
     report_fatal_error("Lowering from LLVMIR dialect to llvm IR failed!");
   }
+
+  expandAMDGPUDevicePrintf(*llvmModule);
 
   return llvmModule;
 }

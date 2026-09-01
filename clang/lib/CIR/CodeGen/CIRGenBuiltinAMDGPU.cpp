@@ -1039,3 +1039,51 @@ CIRGenFunction::emitAMDGPUBuiltinExpr(unsigned builtinId,
     return std::nullopt;
   }
 }
+
+//===----------------------------------------------------------------------===//
+// Device-side printf
+//===----------------------------------------------------------------------===//
+
+// Emit an AMDGPU device-side `printf`.
+//
+// The real expansion (hostcall or buffered) is performed by
+// llvm::emitAMDGPUPrintfCall(), which builds LLVM IR directly and therefore
+// cannot run during CIRGen.  Instead we emit a call to the internal marker
+// function `__cir_device_printf`, which the ROCDL target expands into the
+// proper sequence after the module has been translated to LLVM IR.
+mlir::Value
+CIRGenFunction::emitAMDGPUDevicePrintfCallExpr(const CallExpr *expr) {
+  assert(cgm.getTriple().isAMDGCN() ||
+         (cgm.getTriple().isSPIRV() &&
+          cgm.getTriple().getVendor() == llvm::Triple::AMD));
+  assert(expr->getBuiltinCallee() == Builtin::BIprintf ||
+         expr->getBuiltinCallee() == Builtin::BI__builtin_printf);
+  assert(expr->getNumArgs() >= 1); // printf always has at least one arg.
+
+  CallArgList args;
+  emitCallArgs(args,
+               expr->getDirectCallee()->getType()->getAs<FunctionProtoType>(),
+               expr->arguments(), expr->getDirectCallee());
+
+  mlir::Location loc = getLoc(expr->getBeginLoc());
+
+  // We don't know how to emit non-scalar varargs.
+  bool hasNonScalar = llvm::any_of(args, [&](const CallArg &a) {
+    return a.hasLValue() || !a.getKnownRValue().isScalar();
+  });
+  if (hasNonScalar) {
+    cgm.errorUnsupported(expr, "non-scalar args to printf");
+    return builder.getConstInt(loc, builder.getSInt32Ty(), 0);
+  }
+
+  llvm::SmallVector<mlir::Value, 8> callArgs;
+  for (const CallArg &a : args)
+    callArgs.push_back(a.getKnownRValue().getValue());
+
+  // int __cir_device_printf(char *format, ...);
+  auto fnTy = cir::FuncType::get({cir::PointerType::get(builder.getSInt8Ty())},
+                                 builder.getSInt32Ty(),
+                                 /*isVarArg=*/true);
+  cir::FuncOp fn = cgm.createRuntimeFunction(fnTy, "__cir_device_printf");
+  return builder.createCallOp(loc, fn, callArgs).getResult();
+}
