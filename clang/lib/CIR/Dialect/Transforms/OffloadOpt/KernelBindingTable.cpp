@@ -15,13 +15,171 @@
 
 using namespace cir;
 
-// The constant `v` holds, or null if it is not a constant.
-static mlir::TypedAttr asConst(mlir::Value v) {
-  if (!v)
+namespace {
+// A launch argument is rarely a `cir.const` at the launch itself: the constant
+// is typically stated a call frame or two above and arrives as a parameter, a
+// cast, or the result of arithmetic on other constants. Chasing it costs a
+// bounded walk per query, so cap the recursion.
+constexpr int kMaxResolveDepth = 4;
+} // namespace
+
+static mlir::TypedAttr asConstAtDepth(mlir::Value v, int depth);
+
+// The constant every caller of `arg`'s function passes in its position, or null
+// if they disagree, any of them is not constant, or the function could be
+// called from outside this module.
+static mlir::TypedAttr resolveParameter(mlir::BlockArgument arg, int depth) {
+  auto fn =
+      mlir::dyn_cast<mlir::FunctionOpInterface>(arg.getOwner()->getParentOp());
+  // Only a parameter of the function itself, not a block argument of some
+  // nested control flow, is fixed by the call sites.
+  if (!fn || arg.getOwner() != &fn->getRegion(0).front())
     return {};
-  auto cst = v.getDefiningOp<cir::ConstantOp>();
-  return cst ? cst.getValue() : mlir::TypedAttr{};
+
+  // Agreement among the call sites we can see says nothing unless they are all
+  // the call sites there are. A function another translation unit can name, or
+  // whose address is taken, can be entered with any arguments at all.
+  if (mlir::SymbolTable::getSymbolVisibility(fn) !=
+      mlir::SymbolTable::Visibility::Private)
+    return {};
+
+  auto mod = fn->getParentOfType<mlir::ModuleOp>();
+  if (!mod)
+    return {};
+  std::optional<mlir::SymbolTable::UseRange> uses =
+      mlir::SymbolTable::getSymbolUses(fn, mod);
+  if (!uses)
+    return {};
+
+  unsigned argIdx = arg.getArgNumber();
+  mlir::TypedAttr common;
+  bool sawCall = false;
+  for (const mlir::SymbolTable::SymbolUse &use : *uses) {
+    auto call = mlir::dyn_cast<cir::CallOp>(use.getUser());
+    // A reference that is not a direct call -- the address being taken, say --
+    // leaves callers we cannot enumerate.
+    if (!call || call.getCallee() != fn.getName())
+      return {};
+    mlir::OperandRange callArgs = call.getArgOperands();
+    if (argIdx >= callArgs.size())
+      return {};
+    mlir::TypedAttr value = asConstAtDepth(callArgs[argIdx], depth + 1);
+    if (!value)
+      return {};
+    if (!sawCall) {
+      common = value;
+      sawCall = true;
+    } else if (common != value) {
+      return {};
+    }
+  }
+  // A private function with no calls is dead, and says nothing.
+  return sawCall ? common : mlir::TypedAttr{};
 }
+
+// The value stored into `slot`, if exactly one store writes it and nothing can
+// write it behind our back.
+static mlir::Value uniqueStoredValue(mlir::Value slot) {
+  auto alloca = slot.getDefiningOp<cir::AllocaOp>();
+  if (!alloca)
+    return {};
+  mlir::Value stored;
+  for (mlir::OpOperand &use : slot.getUses()) {
+    mlir::Operation *user = use.getOwner();
+    if (auto store = mlir::dyn_cast<cir::StoreOp>(user)) {
+      if (store.getAddr() != slot)
+        return {};
+      if (stored)
+        return {}; // more than one store: which one wins is not obvious here
+      stored = store.getValue();
+      continue;
+    }
+    if (mlir::isa<cir::LoadOp>(user))
+      continue;
+    // The address escapes, so the slot may be written through an alias --
+    // unless it is const, where such a write would be undefined and the single
+    // initialising store is the whole story.
+    if (!alloca.getConstant())
+      return {};
+  }
+  return stored;
+}
+
+// The constant `v` holds, or null if it is not a constant.
+static mlir::TypedAttr asConstAtDepth(mlir::Value v, int depth) {
+  if (!v || depth > kMaxResolveDepth)
+    return {};
+
+  if (auto cst = v.getDefiningOp<cir::ConstantOp>())
+    return cst.getValue();
+
+  mlir::Operation *def = v.getDefiningOp();
+  if (!def) {
+    auto arg = mlir::dyn_cast<mlir::BlockArgument>(v);
+    return arg ? resolveParameter(arg, depth) : mlir::TypedAttr{};
+  }
+
+  // Ask the op to fold itself once every operand is known. A helper handed
+  // ne02 == 1 and ne03 == 1 passes their product, so without folding the launch
+  // still looks like a runtime value one step short of where it matters.
+  // Delegating to the op's own folder keeps one definition of what each op
+  // means; no canonicalisation runs over host CIR before these passes.
+  if (def->getNumResults() == 1 && def->getNumOperands() > 0) {
+    llvm::SmallVector<mlir::Attribute> operands;
+    operands.reserve(def->getNumOperands());
+    for (mlir::Value operand : def->getOperands()) {
+      mlir::TypedAttr value = asConstAtDepth(operand, depth + 1);
+      if (!value)
+        break;
+      operands.push_back(value);
+    }
+    if (operands.size() == def->getNumOperands()) {
+      llvm::SmallVector<mlir::OpFoldResult> results;
+      if (mlir::succeeded(def->fold(operands, results)) && results.size() == 1)
+        if (auto folded =
+                mlir::dyn_cast_if_present<mlir::Attribute>(results[0]))
+          if (auto typed = mlir::dyn_cast<mlir::TypedAttr>(folded))
+            if (typed.getType() == v.getType())
+              return typed;
+
+      // The integer arithmetic ops have no folder -- nothing canonicalises CIR
+      // before these passes, so nothing has needed one -- which leaves the
+      // delegation above failing for precisely the ne02*ne03 case it describes.
+      // Evaluate them here rather than giving them folders, which would also
+      // change what SCCP does to every CIR module.
+      if (operands.size() == 2) {
+        auto lhs = mlir::dyn_cast<cir::IntAttr>(operands[0]);
+        auto rhs = mlir::dyn_cast<cir::IntAttr>(operands[1]);
+        auto ty = mlir::dyn_cast<cir::IntType>(v.getType());
+        if (lhs && rhs && ty && lhs.getType() == ty && rhs.getType() == ty) {
+          llvm::APInt a = lhs.getValue(), b = rhs.getValue(), r;
+          bool overflow = true;
+          bool isSigned = ty.isSigned();
+          if (mlir::isa<cir::AddOp>(def))
+            r = isSigned ? a.sadd_ov(b, overflow) : a.uadd_ov(b, overflow);
+          else if (mlir::isa<cir::SubOp>(def))
+            r = isSigned ? a.ssub_ov(b, overflow) : a.usub_ov(b, overflow);
+          else if (mlir::isa<cir::MulOp>(def))
+            r = isSigned ? a.smul_ov(b, overflow) : a.umul_ov(b, overflow);
+          else if (mlir::isa<cir::DivOp>(def) && !b.isZero())
+            r = isSigned ? a.sdiv_ov(b, overflow)
+                         : (overflow = false, a.udiv(b));
+          if (!overflow)
+            return cir::IntAttr::get(ty, r);
+        }
+      }
+    }
+  }
+
+  // A value loaded straight back out of the slot it was stored into.
+  if (auto load = mlir::dyn_cast<cir::LoadOp>(def))
+    if (mlir::Value stored = uniqueStoredValue(load.getAddr()))
+      return asConstAtDepth(stored, depth + 1);
+
+  return {};
+}
+
+static mlir::TypedAttr asConst(mlir::Value v) { return asConstAtDepth(v, 0); }
 
 // Sema picks the launch configuration function from the language mode, in
 // SemaCUDA::getConfigureFuncName. Of the five it can pick, CIRGen emits a stub
@@ -29,9 +187,30 @@ static mlir::TypedAttr asConst(mlir::Value v) {
 // runtime is constructed, and the legacy `cudaConfigureCall` /
 // `hipConfigureCall` reach errorNYI("Emit Stub Body Legacy").
 //
-// The argument count is part of the test because the geometry accessors index
+// The operand layout is part of the test because the geometry accessors index
 // the operands directly; without it, only the name stands between a same-named
 // declaration and a read past the end.
+namespace {
+// Operand positions in the push call, for whichever shape it is in. `grid` and
+// `block` index the dim3 itself in the un-coerced shape and the low half of its
+// coerced pair otherwise. See `unwrapCoercedDim3` for what coercion does.
+struct PushCallLayout {
+  unsigned grid, block, sharedMem, stream;
+  bool coerced;
+};
+} // namespace
+
+static std::optional<PushCallLayout> pushCallLayout(cir::CallOp push) {
+  switch (push.getArgOperands().size()) {
+  case 4:
+    return PushCallLayout{0, 1, 2, 3, /*coerced=*/false};
+  case 6:
+    return PushCallLayout{0, 2, 4, 5, /*coerced=*/true};
+  default:
+    return std::nullopt;
+  }
+}
+
 static bool isPushCallConfiguration(cir::CallOp call) {
   std::optional<llvm::StringRef> callee = call.getCallee();
   if (!callee)
@@ -42,7 +221,7 @@ static bool isPushCallConfiguration(cir::CallOp call) {
   if (*callee != "__cudaPushCallConfiguration" &&
       *callee != "__hipPushCallConfiguration")
     return false;
-  return call.getArgOperands().size() == 4;
+  return pushCallLayout(call).has_value();
 }
 
 // CIRGen guards a launch with the result of the push-call-configuration call:
@@ -53,17 +232,21 @@ static bool isPushCallConfiguration(cir::CallOp call) {
 //
 // Walk that back from the stub call. Returns null for any other shape,
 // including a launch whose CFG has already been flattened.
+//
+// Every enclosing conditional is tried rather than just the innermost: a pass
+// may have wrapped the call in a dispatch of its own -- EliminateCoveredGuards
+// does exactly that -- and the geometry is still the one this launch uses.
 static cir::CallOp tracePushConfiguration(cir::CallOp stubCall) {
-  auto ifOp = stubCall->getParentOfType<cir::IfOp>();
-  if (!ifOp)
-    return {};
-  auto cast = ifOp.getCondition().getDefiningOp<cir::CastOp>();
-  if (!cast)
-    return {};
-  auto call = cast.getSrc().getDefiningOp<cir::CallOp>();
-  if (!call || !isPushCallConfiguration(call))
-    return {};
-  return call;
+  for (auto ifOp = stubCall->getParentOfType<cir::IfOp>(); ifOp;
+       ifOp = ifOp->getParentOfType<cir::IfOp>()) {
+    auto cast = ifOp.getCondition().getDefiningOp<cir::CastOp>();
+    if (!cast)
+      continue;
+    auto call = cast.getSrc().getDefiningOp<cir::CallOp>();
+    if (call && isPushCallConfiguration(call))
+      return call;
+  }
+  return {};
 }
 
 // Whether `call` runs a constructor of `recordType`. CIR marks a constructor
@@ -93,6 +276,8 @@ static bool constructsRecord(cir::CallOp call, mlir::Type recordType) {
 // The constructor is found through the slot, so the components belong to the
 // temporary this launch reads rather than to any dim3 in the function.
 static cir::LaunchSite::Dim3 traceDim3(mlir::Value dim) {
+  if (!dim)
+    return {};
   auto load = dim.getDefiningOp<cir::LoadOp>();
   if (!load)
     return {};
@@ -150,23 +335,76 @@ bool cir::LaunchSite::Dim3::isFullyConstant() const {
   return constX() && constY() && constZ();
 }
 
-// Push call operands: grid, block, shared memory, stream.
+// The push call reaches this pass in one of two shapes. Written as declared it
+// takes the two dim3s by value, but the HIP target ABI coerces a dim3 into an
+// {i64, i32} pair, and CIRGen emits the call already coerced:
+//
+//   %c = cir.alloca "coerce" : !cir.ptr<!rec_anon_struct>
+//   %b = cir.cast bitcast %c : ... -> !cir.ptr<!rec_dim3>
+//   cir.store %d, %b
+//   %lo = cir.load (cir.get_member %c[0])
+//   %hi = cir.load (cir.get_member %c[1])
+//
+// so each dim3 occupies two operands instead of one. Both shapes describe the
+// same launch and every caller wants the same answer, so the difference is
+// resolved here rather than in each pass.
+//
+// Recovering the dim3 from a coerced pair means going back through the scratch
+// slot to the whole-record store, whose value is the dim3 the launch built.
+static mlir::Value unwrapCoercedDim3(mlir::Value lowHalf) {
+  auto load = lowHalf.getDefiningOp<cir::LoadOp>();
+  if (!load)
+    return {};
+  auto member = load.getAddr().getDefiningOp<cir::GetMemberOp>();
+  if (!member)
+    return {};
+
+  mlir::Value stored;
+  for (mlir::Operation *user : member.getAddr().getUsers()) {
+    auto cast = mlir::dyn_cast<cir::CastOp>(user);
+    if (!cast || cast.getKind() != cir::CastKind::bitcast)
+      continue;
+    for (mlir::Operation *castUser : cast.getResult().getUsers()) {
+      auto store = mlir::dyn_cast<cir::StoreOp>(castUser);
+      if (!store || store.getAddr() != cast.getResult())
+        continue;
+      // A slot written more than once leaves the value the loads see
+      // undecided; report no geometry rather than guess which store wins.
+      if (stored)
+        return {};
+      stored = store.getValue();
+    }
+  }
+  return stored;
+}
+
+static cir::LaunchSite::Dim3 traceDimOperand(cir::CallOp push, bool wantBlock) {
+  std::optional<PushCallLayout> layout = pushCallLayout(push);
+  if (!layout)
+    return {};
+  mlir::Value operand =
+      push.getArgOperands()[wantBlock ? layout->block : layout->grid];
+  return traceDim3(layout->coerced ? unwrapCoercedDim3(operand) : operand);
+}
+
 cir::LaunchSite::Dim3 cir::LaunchSite::getGridDim() const {
   if (!hasGeometry())
     return {};
-  return traceDim3(cir::CallOp(pushConfigCall).getArgOperands()[0]);
+  return traceDimOperand(cir::CallOp(pushConfigCall), /*wantBlock=*/false);
 }
 
 cir::LaunchSite::Dim3 cir::LaunchSite::getBlockDim() const {
   if (!hasGeometry())
     return {};
-  return traceDim3(cir::CallOp(pushConfigCall).getArgOperands()[1]);
+  return traceDimOperand(cir::CallOp(pushConfigCall), /*wantBlock=*/true);
 }
 
 mlir::Value cir::LaunchSite::getSharedMemBytes() const {
   if (!hasGeometry())
     return {};
-  return cir::CallOp(pushConfigCall).getArgOperands()[2];
+  cir::CallOp push = pushConfigCall;
+  std::optional<PushCallLayout> layout = pushCallLayout(push);
+  return layout ? push.getArgOperands()[layout->sharedMem] : mlir::Value{};
 }
 
 mlir::TypedAttr cir::LaunchSite::getConstSharedMem() const {
@@ -176,7 +414,9 @@ mlir::TypedAttr cir::LaunchSite::getConstSharedMem() const {
 mlir::Value cir::LaunchSite::getStream() const {
   if (!hasGeometry())
     return {};
-  return cir::CallOp(pushConfigCall).getArgOperands()[3];
+  cir::CallOp push = pushConfigCall;
+  std::optional<PushCallLayout> layout = pushCallLayout(push);
+  return layout ? push.getArgOperands()[layout->stream] : mlir::Value{};
 }
 
 bool cir::LaunchSite::isDefaultStream() const {
