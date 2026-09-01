@@ -105,6 +105,10 @@ llvm::cl::opt<bool> EnableCirPropagatePointerFacts(
     llvm::cl::desc("Enable pointer alignment, noalias and access-mode facts "
                    "on kernel arguments"),
     llvm::cl::cat(CIROffloadMergeCategory));
+llvm::cl::opt<bool> DisableCirDeadArgElimination(
+    "disable-cir-dead-arg-elimination",
+    llvm::cl::desc("Disable dead kernel-argument elimination"),
+    llvm::cl::cat(CIROffloadMergeCategory));
 llvm::cl::opt<bool> DisableCirPropKernelArgs(
     "disable-cir-prop-kernel-args",
     llvm::cl::desc("Disable constant kernel-argument propagation"),
@@ -382,6 +386,8 @@ int runOffloadOptPasses(mlir::ModuleOp module) {
     pm.addPass(mlir::createOffloadLaunchBoundsPropagationPass());
   if (EnableCirPropagatePointerFacts)
     pm.addPass(mlir::createOffloadPropagatePointerFactsPass());
+  if (!DisableCirDeadArgElimination)
+    pm.addPass(mlir::createOffloadDeadArgEliminationPass());
 
   if (mlir::failed(pm.run(module)))
     return reportError("offload-container passes failed");
