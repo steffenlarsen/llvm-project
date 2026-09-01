@@ -48,12 +48,15 @@
 #include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/TypeSwitch.h"
+#include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Module.h"
+#include "llvm/Support/AMDGPUAddrSpace.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/TimeProfiler.h"
 #include "llvm/Support/VirtualFileSystem.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Transforms/Utils/AMDGPUEmitPrintf.h"
 
 using namespace cir;
 using namespace llvm;
@@ -1432,6 +1435,23 @@ mlir::LogicalResult CIRToLLVMAtomicFetchOpLowering::matchAndRewrite(
   auto rmwVal = mlir::LLVM::AtomicRMWOp::create(
       rewriter, op.getLoc(), llvmBinOp, adaptor.getPtr(), adaptor.getVal(),
       llvmOrder, llvmSyncScope);
+
+  // The AMDGPU raw hardware atomic builtins need metadata for the backend to
+  // select the native instruction; without it a float fadd is expanded into a
+  // cmpxchg loop. LDS atomics are always native, so the metadata is only
+  // needed for the global and flat address spaces.
+  if (op->hasAttr("cir.amdgpu_raw_atomic")) {
+    auto ptrTy =
+        mlir::cast<mlir::LLVM::LLVMPointerType>(adaptor.getPtr().getType());
+    if (ptrTy.getAddressSpace() != llvm::AMDGPUAS::LOCAL_ADDRESS) {
+      mlir::UnitAttr unit = rewriter.getUnitAttr();
+      rmwVal->setAttr("cir.amdgpu_no_fine_grained_memory", unit);
+      // Denormal flushing only matters for a float add.
+      if (llvmBinOp == mlir::LLVM::AtomicBinOp::fadd &&
+          mlir::isa<cir::SingleType>(op.getVal().getType()))
+        rmwVal->setAttr("cir.amdgpu_ignore_denormal_mode", unit);
+    }
+  }
 
   mlir::Value result = rmwVal.getResult();
   if (!op.getFetchFirst()) {
@@ -5643,6 +5663,42 @@ void populateCIRToLLVMPasses(mlir::OpPassManager &pm, bool enableOpenMP) {
   pm.addPass(createConvertCIRToLLVMPass());
   if (enableOpenMP)
     pm.addPass(mlir::omp::createHostOpFilteringPass());
+}
+
+// Expand calls to the internal `__cir_device_printf` marker CIRGen emits for a
+// device-side printf into the real AMDGPU sequence.
+//
+// CIRGen cannot do this itself: `llvm::emitAMDGPUPrintfCall` builds LLVM IR
+// through an IRBuilder, so the expansion has to wait until the module has been
+// translated. It has to happen here rather than later because the `__ockl_*`
+// calls it generates are what make the device-library linker pull in ockl.
+static void expandAMDGPUDevicePrintf(llvm::Module &module) {
+  llvm::Function *marker = module.getFunction("__cir_device_printf");
+  if (!marker)
+    return;
+
+  // CIR records the requested lowering as a module flag.
+  bool isBuffered = false;
+  if (llvm::Metadata *md = module.getModuleFlag("amdgpu_printf_kind"))
+    if (auto *mdStr = llvm::dyn_cast<llvm::MDString>(md))
+      isBuffered = mdStr->getString() == "buffered";
+
+  llvm::SmallVector<llvm::CallInst *, 8> calls;
+  for (llvm::User *u : marker->users())
+    if (auto *ci = llvm::dyn_cast<llvm::CallInst>(u))
+      calls.push_back(ci);
+
+  for (llvm::CallInst *ci : calls) {
+    llvm::IRBuilder<> irb(ci);
+    llvm::SmallVector<llvm::Value *, 8> args(ci->args());
+    llvm::Value *res = llvm::emitAMDGPUPrintfCall(irb, args, isBuffered);
+    if (res && !ci->use_empty())
+      ci->replaceAllUsesWith(res);
+    ci->eraseFromParent();
+  }
+
+  if (marker->use_empty())
+    marker->eraseFromParent();
 }
 
 std::unique_ptr<llvm::Module>
