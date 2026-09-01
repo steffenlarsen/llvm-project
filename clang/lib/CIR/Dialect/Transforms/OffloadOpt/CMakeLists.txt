@@ -6,6 +6,7 @@ add_clang_library(MLIRCIROffloadOpt
   DeviceIndex.cpp
   PropagateBlockShape.cpp
   TightenLaunchBounds.cpp
+  EliminateCoveredGuards.cpp
 
   DEPENDS
   MLIRCIROpsIncGen

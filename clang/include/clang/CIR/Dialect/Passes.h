@@ -63,6 +63,7 @@ std::unique_ptr<Pass> createOffloadDeadKernelEliminationPass();
 std::unique_ptr<Pass> createOffloadKernelArgConstantPropagationPass();
 std::unique_ptr<Pass> createOffloadPropagateBlockShapePass();
 std::unique_ptr<Pass> createOffloadTightenLaunchBoundsPass();
+std::unique_ptr<Pass> createOffloadEliminateCoveredGuardsPass();
 std::unique_ptr<Pass> createGotoSolverPass();
 std::unique_ptr<Pass> createIdiomRecognizerPass();
 std::unique_ptr<Pass> createLibOptPass();

@@ -407,6 +407,31 @@ def OffloadTightenLaunchBounds
   let dependentDialects = ["cir::CIRDialect"];
 }
 
+def OffloadEliminateCoveredGuards
+    : Pass<"cir-offload-eliminate-covered-guards", "cir::OffloadContainerOp"> {
+  let summary = "Prove tail guards dead when the launch covers the range exactly";
+  let description = [{
+    Runs over a `cir.offload.container`. A kernel that covers `n` elements in
+    blocks of `d` is launched with `gridDim = ceil(n/d)` and carries tail
+    guards -- `if (index >= n) return;` -- for the final, partially populated
+    block. When `n % d == 0` that block is full and every such guard is dead.
+
+    The fact needed is `d*blockIdx.x + rest < n`, which relates two runtime
+    unknowns. LLVM's value analyses are per-value interval domains and cannot
+    use it, so the proof is done here and the comparison folded outright rather
+    than described to the backend with an assume.
+
+    A clone is specialised with the guards folded away and the launches are
+    dispatched to it behind a runtime `n % d == 0`, so the copy is only entered
+    where its premise holds and the original keeps serving every other case.
+
+    When the index arithmetic is evaluated in fewer bits than the comparison,
+    the dispatch also requires `n` to be small enough that the narrow product
+    cannot wrap, since the proof assumes it does not.
+  }];
+  let constructor = "mlir::createOffloadEliminateCoveredGuardsPass()";
+  let dependentDialects = ["cir::CIRDialect"];
+}
 
 
 #endif // CLANG_CIR_DIALECT_PASSES_TD

@@ -87,6 +87,10 @@ llvm::cl::opt<bool> NoModuleOpts(
     "no-module-opts",
     llvm::cl::desc("Disable mem2reg and SCCP on the nested modules"),
     llvm::cl::init(false), llvm::cl::cat(CIROffloadMergeCategory));
+llvm::cl::opt<bool> NoEliminateCoveredGuards(
+    "no-eliminate-covered-guards",
+    llvm::cl::desc("Disable the covered-guard elimination pass"),
+    llvm::cl::init(false), llvm::cl::cat(CIROffloadMergeCategory));
 // Off by default: the pass is correct on every case inspected so far, but the
 // resulting ggml build hangs during inference and the cause is not yet known.
 // See the cir-launch-wrapper-port memory note.
@@ -382,6 +386,8 @@ int runOffloadOptPasses(mlir::ModuleOp module) {
     // the binding table, so every pass below would skip it.
     // Then: a launch argument that is a literal one frame up is recorded as a
     // runtime value, so pin it before anything reads the binding table.
+    if (!NoEliminateCoveredGuards)
+      containerPM.addPass(mlir::createOffloadEliminateCoveredGuardsPass());
     if (!NoKernelArgConstProp)
       containerPM.addPass(
           mlir::createOffloadKernelArgConstantPropagationPass());
