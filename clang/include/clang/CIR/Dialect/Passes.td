@@ -512,4 +512,35 @@ def OffloadSpecializeLaunchWrappers
   let dependentDialects = ["cir::CIRDialect"];
 }
 
+def OffloadPropagatePointerFacts
+    : Pass<"cir-offload-propagate-pointer-facts", "mlir::ModuleOp"> {
+  let summary = "State pointer alignment, noalias and access mode on kernel arguments";
+  let description = [{
+    Runs on an offload container module. A kernel's pointer parameters carry no
+    information about how they are aligned, whether they can overlap, or how the
+    kernel reaches memory through them -- but the host knows, because it
+    allocated the buffers and wrote the launch.
+
+    Traces each pointer launch argument back to the allocation it came from and,
+    when every visible launch agrees, states on the kernel parameter:
+
+      * `llvm.align`, since every HIP allocator returns 256-byte aligned memory;
+      * `llvm.noalias`, when the parameter comes from a different allocation
+        than every other pointer parameter at every launch;
+      * `llvm.readonly` / `llvm.writeonly`, from how the kernel body uses it.
+
+    These are real LLVM parameter attributes: alias analysis, the vectoriser and
+    load/store widening all consume them.
+
+    The facts are stated on a specialised clone the launches are retargeted at,
+    as `getSpecializationTarget` decides; the original kernel is kept, since
+    the runtime can still reach it by name.
+
+    The pass is anchored on a module; it acts only when the module carries the
+    `cir.offload.container` unit attribute, leaving any other module alone.
+  }];
+  let constructor = "mlir::createOffloadPropagatePointerFactsPass()";
+  let dependentDialects = ["cir::CIRDialect"];
+}
+
 #endif // CLANG_CIR_DIALECT_PASSES_TD
