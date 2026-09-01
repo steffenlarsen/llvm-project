@@ -94,6 +94,11 @@ llvm::cl::opt<bool> NoEliminateCoveredGuards(
 // Off by default: the pass is correct on every case inspected so far, but the
 // resulting ggml build hangs during inference and the cause is not yet known.
 // See the cir-launch-wrapper-port memory note.
+llvm::cl::opt<bool> SpecializeLaunchWrappers(
+    "specialize-launch-wrappers",
+    llvm::cl::desc(
+        "Enable kernel-launch wrapper specialization (experimental)"),
+    llvm::cl::init(false), llvm::cl::cat(CIROffloadMergeCategory));
 // On by default: measured +0.69% prefill on llama.cpp / qwen3-8b-q8_0, which is
 // what takes this pipeline from behind OGCG to ahead of it. It puts literals
 // from one frame above the launch at the launch site, where constant
@@ -389,6 +394,8 @@ int runOffloadOptPasses(mlir::ModuleOp module) {
   if (!NoOffloadOpts) {
     // First: a launch hidden behind a kernel-pointer wrapper is invisible to
     // the binding table, so every pass below would skip it.
+    if (SpecializeLaunchWrappers)
+      containerPM.addPass(mlir::createOffloadSpecializeLaunchWrappersPass());
     // Then: a launch argument that is a literal one frame up is recorded as a
     // runtime value, so pin it before anything reads the binding table.
     if (!NoSpecializeConstantArgs)

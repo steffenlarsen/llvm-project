@@ -2,6 +2,7 @@ add_clang_library(MLIRCIROffloadOpt
   KernelBindingTable.cpp
   DeadKernelElimination.cpp
   KernelArgConstantPropagation.cpp
+  SpecializeLaunchWrappers.cpp
   SpecializeConstantArgs.cpp
   KernelCloning.cpp
   DeviceIndex.cpp
