@@ -355,6 +355,13 @@ protected:
   LLVM_PREFERRED_TYPE(Linkage)
   mutable unsigned CacheValidAndLinkage : 3;
 
+  /// The attributes attached to this declaration, or null if it has none.
+  ///
+  /// This pointer is the sole record of whether the declaration has
+  /// attributes, so it must be cleared whenever the vector becomes empty.
+  /// Owned by the ASTContext that allocated it.
+  AttrVec *Attrs = nullptr;
+
   /// Allocate memory for a deserialized declaration.
   ///
   /// This routine must be used to allocate memory for any declaration that is
@@ -399,19 +406,18 @@ public:
 protected:
   Decl(Kind DK, DeclContext *DC, SourceLocation L)
       : NextInContextAndBits(nullptr, getModuleOwnershipKindForChildOf(DC)),
-        DeclCtx(DC), Loc(L), DeclKind(DK), InvalidDecl(false), HasAttrs(false),
-        Implicit(false), Used(false), Referenced(false),
-        TopLevelDeclInObjCContainer(false), Access(AS_none), FromASTFile(0),
+        DeclCtx(DC), Loc(L), DeclKind(DK), InvalidDecl(false), Implicit(false),
+        Used(false), Referenced(false), TopLevelDeclInObjCContainer(false),
+        Access(AS_none), FromASTFile(0),
         IdentifierNamespace(getIdentifierNamespaceForKind(DK)),
         CacheValidAndLinkage(llvm::to_underlying(Linkage::Invalid)) {
     if (StatisticsEnabled) add(DK);
   }
 
   Decl(Kind DK, EmptyShell Empty)
-      : DeclKind(DK), InvalidDecl(false), HasAttrs(false), Implicit(false),
-        Used(false), Referenced(false), TopLevelDeclInObjCContainer(false),
-        Access(AS_none), FromASTFile(0),
-        IdentifierNamespace(getIdentifierNamespaceForKind(DK)),
+      : DeclKind(DK), InvalidDecl(false), Implicit(false), Used(false),
+        Referenced(false), TopLevelDeclInObjCContainer(false), Access(AS_none),
+        FromASTFile(0), IdentifierNamespace(getIdentifierNamespaceForKind(DK)),
         CacheValidAndLinkage(llvm::to_underlying(Linkage::Invalid)) {
     if (StatisticsEnabled) add(DK);
   }
@@ -523,7 +529,7 @@ public:
     return AccessSpecifier(Access);
   }
 
-  bool hasAttrs() const { return HasAttrs; }
+  bool hasAttrs() const { return Attrs != nullptr; }
 
   void setAttrs(const AttrVec& Attrs) {
     return setAttrsImpl(Attrs, getASTContext());
@@ -552,13 +558,13 @@ public:
   }
 
   template <typename... Ts> void dropAttrs() {
-    if (!HasAttrs) return;
+    if (!Attrs)
+      return;
 
-    AttrVec &Vec = getAttrs();
-    llvm::erase_if(Vec, [](Attr *A) { return isa<Ts...>(A); });
+    llvm::erase_if(*Attrs, [](Attr *A) { return isa<Ts...>(A); });
 
-    if (Vec.empty())
-      HasAttrs = false;
+    if (Attrs->empty())
+      dropAttrs();
   }
 
   template <typename T> void dropAttr() { dropAttrs<T>(); }
