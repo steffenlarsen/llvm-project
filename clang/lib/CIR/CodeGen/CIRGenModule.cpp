@@ -1285,7 +1285,23 @@ CIRGenModule::getOrCreateCIRGlobal(StringRef mangledName, mlir::Type ty,
       errorNYI(d->getSourceRange(),
                "getOrCreateCIRGlobal: OpenMP target global variable");
 
-    gv.setAlignmentAttr(getSize(astContext.getDeclAlign(d)));
+    CharUnits alignment = astContext.getDeclAlign(d);
+
+    // `extern __shared__ T x[]` is dynamically sized: the launch supplies the
+    // extent, so the declaration carries only the element type's alignment --
+    // 4 for `half2`. That understates what the block actually gets. The
+    // declared alignment here is not a promise about some external allocator;
+    // it is a request the backend honours when it lays LDS out, at
+    // `alignTo(Offset, getAlign(DL, DynamicVariable))` in
+    // AMDGPULowerModuleLDSPass. Asking for less than the widest single LDS
+    // access simply throws away access width: in ggml's MMA flash attention
+    // the stores to `extern __shared__ half2 tile_Q[]` split into
+    // `ds_write2_b32` pairs where 8-byte alignment yields one `ds_write2_b64`.
+    if (langOpts.CUDAIsDevice && d->hasAttr<CUDASharedAttr>() &&
+        d->getType()->isIncompleteArrayType())
+      alignment = std::max(alignment, CharUnits::fromQuantity(16));
+
+    gv.setAlignmentAttr(getSize(alignment));
 
     setLinkageForGV(gv, d);
 
