@@ -109,6 +109,10 @@ llvm::cl::opt<bool> NoSpecializeConstantArgs(
     llvm::cl::desc(
         "Disable launch-helper specialization on constant scalar arguments"),
     llvm::cl::init(false), llvm::cl::cat(CIROffloadMergeCategory));
+llvm::cl::opt<bool> NoPromoteKernelArgSpace(
+    "no-promote-kernel-arg-space",
+    llvm::cl::desc("Disable stating AMDGPU kernel pointer arguments as global"),
+    llvm::cl::init(false), llvm::cl::cat(CIROffloadMergeCategory));
 llvm::cl::opt<bool> NoKernelArgConstProp(
     "no-kernel-arg-const-prop",
     llvm::cl::desc("Disable kernel argument constant propagation"),
@@ -432,6 +436,8 @@ int runOffloadOptPasses(mlir::ModuleOp module) {
   // ABI, not an optimization: a HIP kernel's pointer arguments are global, and
   // OGCG states that on every build. Outside the --no-offload-opts gate for the
   // same reason, and last so the body is already in its final shape.
+  if (!NoPromoteKernelArgSpace)
+    containerPM.addPass(mlir::createOffloadPromoteKernelArgSpacePass());
 
   if (mlir::failed(pm.run(module)))
     return reportError("offload-container passes failed");

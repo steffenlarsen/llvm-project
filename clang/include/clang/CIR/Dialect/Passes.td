@@ -399,6 +399,29 @@ def OffloadSpecializeConstantArgs
   let dependentDialects = ["cir::CIRDialect"];
 }
 
+def OffloadPromoteKernelArgSpace
+    : Pass<"cir-offload-promote-kernel-arg-space", "cir::OffloadContainerOp"> {
+  let summary = "State AMDGPU kernel pointer arguments as global";
+  let description = [{
+    Runs over a `cir.offload.container`. A HIP kernel's pointer arguments always
+    point to global memory, so the ABI states them in the global address space --
+    OGCG does this in `AMDGPUABIInfo::classifyKernelArgumentType`. Without it a
+    parameter reaches the backend as a generic pointer and accesses through it
+    are `flat_` rather than `global_` wherever InferAddressSpaces cannot recover
+    the space.
+
+    Restates the parameter type on AMDGPU kernels and casts straight back to
+    generic at the top of the entry block, so the body is unchanged and only the
+    signature carries the fact. Parameters that already have an address space are
+    left alone.
+
+    Runs last, on the device module only. Doing the same coercion in CIRGen
+    leaves `cir.copy` with a global-space destination pointing at a stack slot,
+    which is then silently dropped.
+  }];
+  let constructor = "mlir::createOffloadPromoteKernelArgSpacePass()";
+  let dependentDialects = ["cir::CIRDialect"];
+}
 
 def OffloadPropagatePointerFacts
     : Pass<"cir-offload-propagate-pointer-facts", "cir::OffloadContainerOp"> {
