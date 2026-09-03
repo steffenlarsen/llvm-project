@@ -415,6 +415,10 @@ public:
     return static_cast<unsigned>(llvm::AMDGPUAS::CONSTANT_ADDRESS);
   }
 
+  // AMDGPULowerModuleLDSPass lays out dynamic LDS using the declared
+  // alignment; request the widest single LDS access (128 bits).
+  unsigned getDynamicSharedMemoryAlignment() const override { return 128; }
+
   /// \returns If a target requires an address within a target specific address
   /// space \p AddressSpace to be converted in order to be used, then return the
   /// corresponding target specific DWARF address space.

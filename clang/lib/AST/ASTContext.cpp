@@ -1917,6 +1917,12 @@ CharUnits ASTContext::getDeclAlign(const Decl *D, bool ForAlignof) const {
         uint64_t TypeSize =
             !BaseT->isIncompleteType() ? getTypeSize(T.getTypePtr()) : 0;
         Align = std::max(Align, getMinGlobalAlignOfVar(TypeSize, VD));
+
+        // `extern __shared__ T x[]` has incomplete type, so Align above
+        // only reflects T. Let the device target ask for more.
+        if (LangOpts.CUDAIsDevice && T->isIncompleteArrayType() &&
+            VD->hasAttr<CUDASharedAttr>())
+          Align = std::max(Align, Target->getDynamicSharedMemoryAlignment());
       }
 
     // Fields can be subject to extra alignment constraints, like if

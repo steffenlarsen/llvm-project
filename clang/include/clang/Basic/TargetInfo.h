@@ -754,6 +754,11 @@ public:
     return MinGlobalAlign;
   }
 
+  /// Minimum alignment, in bits, for a dynamically sized `extern __shared__`
+  /// CUDA/HIP array. Its incomplete type means the declared alignment would
+  /// otherwise only reflect the element type; 0 if the target needs no more.
+  virtual unsigned getDynamicSharedMemoryAlignment() const { return 0; }
+
   /// Return the largest alignment for which a suitably-sized allocation with
   /// '::operator new(size_t)' is guaranteed to produce a correctly-aligned
   /// pointer.
