@@ -2532,6 +2532,34 @@ mlir::Value ScalarExprEmitter::emitOr(const BinOpInfo &ops) {
   return cir::OrOp::create(builder, cgf.getLoc(ops.loc), ops.lhs, ops.rhs);
 }
 
+// Sema cannot see the address spaces that CUDA/HIP attributes (e.g.
+// __shared__) assign to pointers, since those are resolved purely from decl
+// attributes during CodeGen, not encoded in the AST QualType. As a result,
+// casts between such pointers can arrive here as CK_BitCast or CK_NoOp
+// instead of CK_AddressSpaceConversion. Detect the mismatch ourselves,
+// mirroring OGCG's equivalent workaround in CGExprScalar.cpp. Returns a null
+// mlir::Value if there is no address space mismatch to fix up.
+static mlir::Value fixupPointerAddrSpaceMismatch(CIRGenFunction &cgf,
+                                                 mlir::Location loc,
+                                                 mlir::Value src,
+                                                 mlir::Type dstTy) {
+  auto srcPtrTy = mlir::dyn_cast<cir::PointerType>(src.getType());
+  auto dstPtrTy = mlir::dyn_cast<cir::PointerType>(dstTy);
+  if (!srcPtrTy || !dstPtrTy ||
+      srcPtrTy.getAddrSpace() == dstPtrTy.getAddrSpace())
+    return {};
+
+  if (srcPtrTy.getPointee() == dstPtrTy.getPointee())
+    return cgf.performAddrSpaceCast(src, dstTy);
+  // The address_space cast kind requires identical pointee types, so
+  // bitcast the pointee type first (within the source address space), then
+  // cast the address space.
+  mlir::Type midTy = cgf.getBuilder().getPointerTo(dstPtrTy.getPointee(),
+                                                   srcPtrTy.getAddrSpace());
+  mlir::Value mid = cgf.getBuilder().createBitcast(loc, src, midTy);
+  return cgf.performAddrSpaceCast(mid, dstTy);
+}
+
 // Emit code for an explicit or implicit cast.  Implicit
 // casts have to handle a more broad range of conversions than explicit
 // casts, as they handle things like function to ptr-to-function decay
@@ -2570,7 +2598,9 @@ mlir::Value ScalarExprEmitter::VisitCastExpr(CastExpr *ce) {
     mlir::Value src = Visit(const_cast<Expr *>(subExpr));
     mlir::Type dstTy = cgf.convertType(destTy);
 
-    assert(!cir::MissingFeatures::addressSpace());
+    if (mlir::Value fixed = fixupPointerAddrSpaceMismatch(
+            cgf, cgf.getLoc(subExpr->getSourceRange()), src, dstTy))
+      return fixed;
 
     if (cgf.sanOpts.has(SanitizerKind::CFIUnrelatedCast))
       cgf.getCIRGenModule().errorNYI(subExpr->getSourceRange(),
@@ -2623,9 +2653,15 @@ mlir::Value ScalarExprEmitter::VisitCastExpr(CastExpr *ce) {
   case CK_NonAtomicToAtomic:
   case CK_UserDefinedConversion:
     return Visit(const_cast<Expr *>(subExpr));
-  case CK_NoOp:
-    return ce->changesVolatileQualification() ? emitLoadOfLValue(ce)
-                                              : Visit(subExpr);
+  case CK_NoOp: {
+    if (ce->changesVolatileQualification())
+      return emitLoadOfLValue(ce);
+    mlir::Value src = Visit(subExpr);
+    if (mlir::Value fixed = fixupPointerAddrSpaceMismatch(
+            cgf, cgf.getLoc(ce->getSourceRange()), src, cgf.convertType(destTy)))
+      return fixed;
+    return src;
+  }
   case CK_IntegralToPointer: {
     mlir::Type destCIRTy = cgf.convertType(destTy);
     mlir::Value src = Visit(const_cast<Expr *>(subExpr));
