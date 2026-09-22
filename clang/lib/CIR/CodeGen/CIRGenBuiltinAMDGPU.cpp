@@ -1020,7 +1020,75 @@ CIRGenFunction::emitAMDGPUBuiltinExpr(unsigned builtinId,
   case AMDGPU::BI__builtin_amdgcn_atomic_inc32:
   case AMDGPU::BI__builtin_amdgcn_atomic_inc64:
   case AMDGPU::BI__builtin_amdgcn_atomic_dec32:
-  case AMDGPU::BI__builtin_amdgcn_atomic_dec64:
+  case AMDGPU::BI__builtin_amdgcn_atomic_dec64: {
+    cir::AtomicFetchKind kind =
+        (builtinId == AMDGPU::BI__builtin_amdgcn_atomic_inc32 ||
+         builtinId == AMDGPU::BI__builtin_amdgcn_atomic_inc64)
+            ? cir::AtomicFetchKind::UIncWrap
+            : cir::AtomicFetchKind::UDecWrap;
+
+    Address ptr = checkAtomicAlignment(expr);
+    mlir::Value val = emitScalarExpr(expr->getArg(1));
+
+    // Infer volatile from the passed-in pointer's pointee type, matching
+    // OGCG (the builtin's declared parameter type is always `volatile`, but
+    // the actual argument's own qualification is what determines whether the
+    // atomic access is volatile).
+    QualType ptrType = expr->getArg(0)->IgnoreImpCasts()->getType();
+    bool isVolatile =
+        ptrType->castAs<PointerType>()->getPointeeType().isVolatileQualified();
+
+    std::optional<std::string> scopeName =
+        expr->getArg(3)->tryEvaluateString(getContext());
+    std::optional<std::pair<llvm::AtomicScope, bool>> parsedScope =
+        scopeName ? llvm::parseAtomicScopeIRString(getTarget().getTriple(),
+                                                    *scopeName)
+                  : std::nullopt;
+    if (!parsedScope) {
+      cgm.errorNYI(expr->getSourceRange(),
+                   "unrecognized amdgcn atomic inc/dec scope");
+      return mlir::Value{};
+    }
+
+    cir::SyncScopeKind syncScope;
+    switch (parsedScope->first) {
+    case llvm::AtomicScope::System:
+      syncScope = cir::SyncScopeKind::System;
+      break;
+    case llvm::AtomicScope::Device:
+      syncScope = cir::SyncScopeKind::Device;
+      break;
+    case llvm::AtomicScope::Workgroup:
+      syncScope = cir::SyncScopeKind::Workgroup;
+      break;
+    case llvm::AtomicScope::Wavefront:
+      syncScope = cir::SyncScopeKind::Wavefront;
+      break;
+    case llvm::AtomicScope::Single:
+      syncScope = cir::SyncScopeKind::SingleThread;
+      break;
+    case llvm::AtomicScope::Cluster:
+      syncScope = cir::SyncScopeKind::Cluster;
+      break;
+    }
+
+    mlir::Location loc = getLoc(expr->getSourceRange());
+    // The chosen memory order may not be known until runtime, in which case
+    // emitAtomicExprWithMemOrder emits the AtomicFetchOp inside a switch
+    // region; route the result through a temporary so it is visible after
+    // the switch.
+    Address tmp = createDefaultAlignTempAlloca(val.getType(), loc,
+                                               "atomic.inc_dec.tmp");
+    emitAtomicExprWithMemOrder(
+        expr->getArg(2), /*isStore=*/false, /*isLoad=*/false,
+        /*isFence=*/false, [&](cir::MemOrder order) {
+          auto rmw = cir::AtomicFetchOp::create(
+              builder, loc, ptr.emitRawPointer(), val, kind, order, syncScope,
+              isVolatile, /*fetch_first=*/true);
+          builder.createStore(loc, rmw->getResult(0), tmp);
+        });
+    return builder.createLoad(loc, tmp);
+  }
   case AMDGPU::BI__builtin_amdgcn_ds_atomic_fadd_f64:
   case AMDGPU::BI__builtin_amdgcn_ds_atomic_fadd_f32:
   case AMDGPU::BI__builtin_amdgcn_ds_atomic_fadd_v2f16:

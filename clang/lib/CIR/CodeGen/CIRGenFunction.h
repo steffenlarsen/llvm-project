@@ -1792,6 +1792,8 @@ public:
       mlir::Value *emittedArgValue = nullptr,
       cir::MemOrder ordering = cir::MemOrder::SequentiallyConsistent);
 
+  Address checkAtomicAlignment(const clang::CallExpr *e);
+
   /// Emit `cir.atomic.cmpxchg`. Returns the old value, or the success flag
   /// when `returnBool` is true.
   mlir::Value emitAtomicCmpXchg(

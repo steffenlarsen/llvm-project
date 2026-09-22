@@ -293,18 +293,18 @@ static mlir::Value emitSignBit(mlir::Location loc, CIRGenFunction &cgf,
   return returnValue->getResult(0);
 }
 
-static Address checkAtomicAlignment(CIRGenFunction &cgf, const CallExpr *e) {
-  ASTContext &astContext = cgf.getContext();
-  Address ptr = cgf.emitPointerWithAlignment(e->getArg(0));
+Address CIRGenFunction::checkAtomicAlignment(const CallExpr *e) {
+  ASTContext &astContext = getContext();
+  Address ptr = emitPointerWithAlignment(e->getArg(0));
   unsigned bytes =
       mlir::isa<cir::PointerType>(ptr.getElementType())
           ? astContext.getTypeSizeInChars(astContext.VoidPtrTy).getQuantity()
-          : cgf.cgm.getDataLayout().getTypeSizeInBits(ptr.getElementType()) /
-                cgf.cgm.getASTContext().getCharWidth();
+          : cgm.getDataLayout().getTypeSizeInBits(ptr.getElementType()) /
+                cgm.getASTContext().getCharWidth();
 
   unsigned align = ptr.getAlignment().getQuantity();
   if (align % bytes != 0) {
-    DiagnosticsEngine &diags = cgf.cgm.getDiags();
+    DiagnosticsEngine &diags = cgm.getDiags();
     diags.Report(e->getBeginLoc(), diag::warn_sync_op_misaligned);
     // Force address to be at least naturally-aligned.
     return ptr.withAlignment(CharUnits::fromQuantity(bytes));
@@ -330,7 +330,7 @@ mlir::Value CIRGenFunction::makeBinaryAtomicValue(cir::AtomicFetchKind kind,
   assert(cgf.getContext().hasSameUnqualifiedType(type,
                                                  expr->getArg(1)->getType()));
 
-  Address destAddr = checkAtomicAlignment(cgf, expr);
+  Address destAddr = cgf.checkAtomicAlignment(expr);
   CIRGenBuilderTy &builder = cgf.getBuilder();
 
   mlir::Value val = cgf.emitScalarExpr(expr->getArg(1));
@@ -403,7 +403,7 @@ mlir::Value CIRGenFunction::emitAtomicCmpXchg(const CallExpr *e,
                                               cir::MemOrder successOrder,
                                               cir::MemOrder failureOrder,
                                               cir::SyncScopeKind scope) {
-  Address destAddr = checkAtomicAlignment(*this, e);
+  Address destAddr = checkAtomicAlignment(e);
   CIRGenBuilderTy &builder = getBuilder();
   mlir::Value destValue = destAddr.emitRawPointer();
   mlir::Value expected = emitScalarExpr(e->getArg(1));
@@ -422,7 +422,7 @@ mlir::Value CIRGenFunction::emitAtomicCmpXchg(const CallExpr *e,
 /// Emit a `cir.atomic.xchg` for __sync_swap_N and __sync_lock_test_and_set_N.
 static RValue emitAtomicXchg(CIRGenFunction &cgf, const CallExpr *e,
                              cir::MemOrder ordering) {
-  Address destAddr = checkAtomicAlignment(cgf, e);
+  Address destAddr = cgf.checkAtomicAlignment(e);
   CIRGenBuilderTy &builder = cgf.getBuilder();
   mlir::Value destValue = destAddr.emitRawPointer();
   mlir::Value val = cgf.emitScalarExpr(e->getArg(1));
@@ -436,7 +436,7 @@ static RValue emitAtomicXchg(CIRGenFunction &cgf, const CallExpr *e,
 /// Emit a release store of 0 for __sync_lock_release_N.
 static void emitAtomicLockRelease(CIRGenFunction &cgf, const CallExpr *e) {
   CIRGenBuilderTy &builder = cgf.getBuilder();
-  Address destAddr = checkAtomicAlignment(cgf, e);
+  Address destAddr = cgf.checkAtomicAlignment(e);
   mlir::Location loc = cgf.getLoc(e->getSourceRange());
   mlir::Type elemTy = destAddr.getElementType();
   mlir::Value zero = builder.getConstant(loc, builder.getZeroInitAttr(elemTy));

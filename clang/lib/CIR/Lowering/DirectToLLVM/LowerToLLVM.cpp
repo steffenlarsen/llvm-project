@@ -1498,7 +1498,14 @@ mlir::LogicalResult CIRToLLVMAtomicFetchOpLowering::matchAndRewrite(
   }
 
   mlir::LLVM::AtomicOrdering llvmOrder = getLLVMMemOrder(op.getMemOrder());
-  llvm::StringRef llvmSyncScope = getLLVMSyncScope(op.getSyncScope());
+  mlir::ModuleOp moduleOp = op->getParentOfType<mlir::ModuleOp>();
+  llvm::Triple triple(
+      mlir::cast<mlir::StringAttr>(
+          moduleOp->getAttr(cir::CIRDialect::getTripleAttrName()))
+          .getValue());
+  llvm::StringRef llvmSyncScope = triple.isAMDGCN()
+                                      ? getAMDGPUSyncScope(op.getSyncScope())
+                                      : getLLVMSyncScope(op.getSyncScope());
   mlir::LLVM::AtomicBinOp llvmBinOp =
       getLLVMAtomicBinOp(op.getBinop(), isInt, isSignedInt);
   auto rmwVal = mlir::LLVM::AtomicRMWOp::create(

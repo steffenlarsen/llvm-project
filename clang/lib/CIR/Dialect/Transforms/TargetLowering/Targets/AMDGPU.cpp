@@ -38,6 +38,38 @@ public:
            "Unknown CIR address space for AMDGPU target");
     return AMDGPUAddrSpaceMap[idx];
   }
+
+  // Collapses HIP- and OpenCL-specific sync scopes onto the target-neutral
+  // scopes AMDGPU actually distinguishes, mirroring OGCG's
+  // clang::CodeGen::getAtomicScope (clang/lib/CodeGen/TargetInfo.h).
+  cir::SyncScopeKind
+  convertSyncScope(cir::SyncScopeKind syncScope) const override {
+    switch (syncScope) {
+    case cir::SyncScopeKind::SingleThread:
+    case cir::SyncScopeKind::HIPSingleThread:
+      return cir::SyncScopeKind::SingleThread;
+    case cir::SyncScopeKind::Wavefront:
+    case cir::SyncScopeKind::HIPWavefront:
+    case cir::SyncScopeKind::OpenCLSubGroup:
+      return cir::SyncScopeKind::Wavefront;
+    case cir::SyncScopeKind::Workgroup:
+    case cir::SyncScopeKind::HIPWorkgroup:
+    case cir::SyncScopeKind::OpenCLWorkGroup:
+      return cir::SyncScopeKind::Workgroup;
+    case cir::SyncScopeKind::Cluster:
+    case cir::SyncScopeKind::HIPCluster:
+      return cir::SyncScopeKind::Cluster;
+    case cir::SyncScopeKind::Device:
+    case cir::SyncScopeKind::HIPAgent:
+    case cir::SyncScopeKind::OpenCLDevice:
+      return cir::SyncScopeKind::Device;
+    case cir::SyncScopeKind::System:
+    case cir::SyncScopeKind::HIPSystem:
+    case cir::SyncScopeKind::OpenCLAllSVMDevices:
+      return cir::SyncScopeKind::System;
+    }
+    llvm_unreachable("unhandled sync scope");
+  }
 };
 
 } // namespace
