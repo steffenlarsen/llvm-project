@@ -16,6 +16,7 @@
 #include "clang/Basic/TargetBuiltins.h"
 #include "llvm/Support/AMDGPUAddrSpace.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/TargetParser/AtomicScope.h"
 
 using namespace clang;
 using namespace clang::CIRGen;
@@ -965,9 +966,55 @@ CIRGenFunction::emitAMDGPUBuiltinExpr(unsigned builtinId,
     return mlir::Value{};
   }
   case AMDGPU::BI__builtin_amdgcn_fence: {
-    cgm.errorNYI(expr->getSourceRange(),
-                 std::string("unimplemented AMDGPU builtin call: ") +
-                     getContext().BuiltinInfo.getName(builtinId));
+    // The address-space MMRA annotations (any arguments beyond order/scope)
+    // have no representation on CIR_AtomicFenceOp yet.
+    if (expr->getNumArgs() > 2) {
+      cgm.errorNYI(expr->getSourceRange(),
+                   "amdgcn_fence with address-space MMRA annotations");
+      return mlir::Value{};
+    }
+
+    std::optional<std::string> scopeName =
+        expr->getArg(1)->tryEvaluateString(getContext());
+    std::optional<std::pair<llvm::AtomicScope, bool>> parsedScope =
+        scopeName ? llvm::parseAtomicScopeIRString(getTarget().getTriple(),
+                                                    *scopeName)
+                  : std::nullopt;
+    if (!parsedScope) {
+      cgm.errorNYI(expr->getSourceRange(), "unrecognized amdgcn_fence scope");
+      return mlir::Value{};
+    }
+
+    cir::SyncScopeKind syncScope;
+    switch (parsedScope->first) {
+    case llvm::AtomicScope::System:
+      syncScope = cir::SyncScopeKind::System;
+      break;
+    case llvm::AtomicScope::Device:
+      syncScope = cir::SyncScopeKind::Device;
+      break;
+    case llvm::AtomicScope::Workgroup:
+      syncScope = cir::SyncScopeKind::Workgroup;
+      break;
+    case llvm::AtomicScope::Wavefront:
+      syncScope = cir::SyncScopeKind::Wavefront;
+      break;
+    case llvm::AtomicScope::Single:
+      syncScope = cir::SyncScopeKind::SingleThread;
+      break;
+    case llvm::AtomicScope::Cluster:
+      syncScope = cir::SyncScopeKind::Cluster;
+      break;
+    }
+
+    emitAtomicExprWithMemOrder(
+        expr->getArg(0), /*isStore=*/false, /*isLoad=*/false,
+        /*isFence=*/true, [&](cir::MemOrder order) {
+          cir::AtomicFenceOp::create(
+              builder, getLoc(expr->getExprLoc()), order,
+              cir::SyncScopeKindAttr::get(&getMLIRContext(), syncScope));
+        });
+
     return mlir::Value{};
   }
   case AMDGPU::BI__builtin_amdgcn_atomic_inc32:

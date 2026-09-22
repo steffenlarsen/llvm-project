@@ -1234,6 +1234,34 @@ getLLVMSyncScope(std::optional<cir::SyncScopeKind> syncScope) {
   return std::nullopt;
 }
 
+// AMDGPU spells its syncscopes differently from the generic mapping above
+// (e.g. "agent" rather than "block"/""), so cir.atomic.fence needs a
+// target-specific mapping to match the strings the AMDGPU backend
+// recognizes (see llvm::getAtomicScopeIRString).
+static llvm::StringRef getAMDGPUSyncScope(cir::SyncScopeKind syncScope) {
+  switch (syncScope) {
+  case cir::SyncScopeKind::SingleThread:
+    return "singlethread";
+  case cir::SyncScopeKind::Wavefront:
+    return "wavefront";
+  case cir::SyncScopeKind::Workgroup:
+    return "workgroup";
+  case cir::SyncScopeKind::Device:
+    return "agent";
+  case cir::SyncScopeKind::Cluster:
+    return "cluster";
+  default:
+    return "";
+  }
+}
+
+static std::optional<llvm::StringRef>
+getAMDGPUSyncScope(std::optional<cir::SyncScopeKind> syncScope) {
+  if (syncScope.has_value())
+    return getAMDGPUSyncScope(*syncScope);
+  return std::nullopt;
+}
+
 mlir::LogicalResult CIRToLLVMAtomicCmpXchgOpLowering::matchAndRewrite(
     cir::AtomicCmpXchgOp op, OpAdaptor adaptor,
     mlir::ConversionPatternRewriter &rewriter) const {
@@ -1317,8 +1345,17 @@ mlir::LogicalResult CIRToLLVMAtomicFenceOpLowering::matchAndRewrite(
     mlir::ConversionPatternRewriter &rewriter) const {
   mlir::LLVM::AtomicOrdering llvmOrder = getLLVMMemOrder(adaptor.getOrdering());
 
+  mlir::ModuleOp moduleOp = op->getParentOfType<mlir::ModuleOp>();
+  llvm::Triple triple(
+      mlir::cast<mlir::StringAttr>(
+          moduleOp->getAttr(cir::CIRDialect::getTripleAttrName()))
+          .getValue());
+  std::optional<llvm::StringRef> syncScope =
+      triple.isAMDGCN() ? getAMDGPUSyncScope(adaptor.getSyncscope())
+                        : getLLVMSyncScope(adaptor.getSyncscope());
+
   auto fence = mlir::LLVM::FenceOp::create(rewriter, op.getLoc(), llvmOrder);
-  fence.setSyncscope(getLLVMSyncScope(adaptor.getSyncscope()));
+  fence.setSyncscope(syncScope);
 
   rewriter.replaceOp(op, fence);
 
