@@ -231,9 +231,9 @@ mlir::Attribute rewriteAttribute(const mlir::TypeConverter &tc,
       .Case<cir::DynamicCastInfoAttr>([&tc,
                                        ctx](cir::DynamicCastInfoAttr dcia) {
         return cir::DynamicCastInfoAttr::get(
-            mlir::cast<cir::GlobalViewAttr>(
+            mlir::cast<mlir::TypedAttr>(
                 rewriteAttribute(tc, ctx, dcia.getSrcRtti())),
-            mlir::cast<cir::GlobalViewAttr>(
+            mlir::cast<mlir::TypedAttr>(
                 rewriteAttribute(tc, ctx, dcia.getDestRtti())),
             dcia.getRuntimeFunc(), dcia.getBadCastFunc(), dcia.getOffsetHint());
       })

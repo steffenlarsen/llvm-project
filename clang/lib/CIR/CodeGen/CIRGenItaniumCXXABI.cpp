@@ -2274,9 +2274,15 @@ static cir::DynamicCastInfoAttr emitDynamicCastInfo(CIRGenFunction &cgf,
                                                     mlir::Location loc,
                                                     QualType srcRecordTy,
                                                     QualType destRecordTy) {
-  auto srcRtti = mlir::cast<cir::GlobalViewAttr>(
+  // This is usually a GlobalViewAttr referencing the RTTI descriptor global,
+  // but degenerates to a bogus null ConstPtrAttr when RTTI is disabled for
+  // the current target (e.g. CUDA/HIP device compilation) -- see
+  // CIRGenModule::getAddrOfRTTIDescriptor. Either way it's just materialized
+  // as a cir.const operand at the call site in LowerItaniumCXXABI, which only
+  // needs a TypedAttr, not specifically a GlobalViewAttr.
+  auto srcRtti = mlir::cast<mlir::TypedAttr>(
       cgf.cgm.getAddrOfRTTIDescriptor(loc, srcRecordTy.getUnqualifiedType()));
-  auto destRtti = mlir::cast<cir::GlobalViewAttr>(
+  auto destRtti = mlir::cast<mlir::TypedAttr>(
       cgf.cgm.getAddrOfRTTIDescriptor(loc, destRecordTy.getUnqualifiedType()));
 
   cir::FuncOp runtimeFuncOp = getItaniumDynamicCastFn(cgf);

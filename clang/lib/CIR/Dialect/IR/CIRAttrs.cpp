@@ -968,14 +968,26 @@ LogicalResult cir::VTableAttr::verify(
 // DynamicCastInfoAtttr definitions
 //===----------------------------------------------------------------------===//
 
+static void appendRttiAliasComponent(std::string &alias,
+                                      mlir::TypedAttr rtti) {
+  // RTTI is normally a GlobalViewAttr referencing the RTTI descriptor global.
+  // When RTTI is disabled for the current target (e.g. CUDA/HIP device
+  // compilation), it degenerates to a bogus null ConstPtrAttr instead, which
+  // has no symbol to name the alias after.
+  if (auto globalView = mlir::dyn_cast<cir::GlobalViewAttr>(rtti))
+    alias.append(globalView.getSymbol().getValue());
+  else
+    alias.append("null");
+}
+
 std::string DynamicCastInfoAttr::getAlias() const {
   // The alias looks like: `dyn_cast_info_<src>_<dest>`
 
   std::string alias = "dyn_cast_info_";
 
-  alias.append(getSrcRtti().getSymbol().getValue());
+  appendRttiAliasComponent(alias, getSrcRtti());
   alias.push_back('_');
-  alias.append(getDestRtti().getSymbol().getValue());
+  appendRttiAliasComponent(alias, getDestRtti());
 
   return alias;
 }
@@ -995,8 +1007,8 @@ static bool isRttiPtr(mlir::Type ty) {
 }
 
 LogicalResult DynamicCastInfoAttr::verify(
-    function_ref<InFlightDiagnostic()> emitError, cir::GlobalViewAttr srcRtti,
-    cir::GlobalViewAttr destRtti, mlir::FlatSymbolRefAttr runtimeFunc,
+    function_ref<InFlightDiagnostic()> emitError, mlir::TypedAttr srcRtti,
+    mlir::TypedAttr destRtti, mlir::FlatSymbolRefAttr runtimeFunc,
     mlir::FlatSymbolRefAttr badCastFunc, cir::IntAttr offsetHint) {
   if (!isRttiPtr(srcRtti.getType()))
     return emitError() << "srcRtti must be an RTTI pointer";

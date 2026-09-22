@@ -1167,7 +1167,12 @@ def CIR_DynamicCastInfoAttr : CIR_Attr<"DynamicCastInfo", "dyn_cast_info"> {
     Provide ABI specific information about a dynamic cast operation.
 
     The `src_rtti` and the `dest_rtti` parameters give the RTTI of the source
-    record type and the destination record type, respectively.
+    record type and the destination record type, respectively. These are
+    usually a `GlobalViewAttr` referencing the RTTI descriptor global, but may
+    be a bogus null `ConstPtrAttr` when RTTI is disabled for the current
+    target (e.g. CUDA/HIP device compilation), matching the "bogus pointer"
+    that classic CodeGen's `CodeGenModule::GetAddrOfRTTIDescriptor` produces
+    in that same case.
 
     The `runtime_func` parameter gives the `__dynamic_cast` function which is
     provided by the runtime. The `bad_cast_func` parameter gives the
@@ -1178,8 +1183,8 @@ def CIR_DynamicCastInfoAttr : CIR_Attr<"DynamicCastInfo", "dyn_cast_info"> {
   }];
 
   let parameters = (ins
-    CIR_GlobalViewAttr:$src_rtti,
-    CIR_GlobalViewAttr:$dest_rtti,
+    "mlir::TypedAttr":$src_rtti,
+    "mlir::TypedAttr":$dest_rtti,
     "mlir::FlatSymbolRefAttr":$runtime_func,
     "mlir::FlatSymbolRefAttr":$bad_cast_func,
     CIR_IntAttr:$offset_hint
@@ -1187,8 +1192,8 @@ def CIR_DynamicCastInfoAttr : CIR_Attr<"DynamicCastInfo", "dyn_cast_info"> {
 
   let builders = [
     AttrBuilderWithInferredContext<(ins
-                                    "GlobalViewAttr":$src_rtti,
-                                    "GlobalViewAttr":$dest_rtti,
+                                    "mlir::TypedAttr":$src_rtti,
+                                    "mlir::TypedAttr":$dest_rtti,
                                     "mlir::FlatSymbolRefAttr":$runtime_func,
                                     "mlir::FlatSymbolRefAttr":$bad_cast_func,
                                     "IntAttr":$offset_hint), [{
