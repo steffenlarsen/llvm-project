@@ -947,8 +947,31 @@ static LValue emitFunctionDeclLValue(CIRGenFunction &cgf, const Expr *e,
 
   mlir::Type fnTy = funcOp.getFunctionType();
   mlir::Type ptrTy = cir::PointerType::get(fnTy);
-  mlir::Value addr = cir::GetGlobalOp::create(cgf.getBuilder(), loc, ptrTy,
-                                              funcOp.getSymName());
+  mlir::Value addr;
+
+  // On the host, a reference to a __global__ kernel must resolve to the
+  // address of the kernel handle registered with the offload runtime, not
+  // the device stub's own address -- pointer-based dispatch APIs (e.g.
+  // hipFuncGetAttributes, hipLaunchKernel) look the pointer up against the
+  // handle. This mirrors the "kernel" value computed for the <<<>>> launch
+  // itself in emitDeviceStubBodyNew above.
+  CIRGenModule &cgm = cgf.cgm;
+  if ((cgm.getLangOpts().CUDA || cgm.getLangOpts().HIP) &&
+      !cgm.getLangOpts().CUDAIsDevice && fd->hasAttr<CUDAGlobalAttr>()) {
+    mlir::Operation *handle = cgm.getCUDARuntime().getKernelHandle(funcOp, gd);
+    if (auto globalOp = mlir::dyn_cast<cir::GlobalOp>(handle)) {
+      cir::PointerType handlePtrTy =
+          cir::PointerType::get(globalOp.getSymType());
+      mlir::Value handleAddr = cir::GetGlobalOp::create(
+          cgf.getBuilder(), loc, handlePtrTy, globalOp.getSymName());
+      addr = cir::CastOp::create(cgf.getBuilder(), loc, ptrTy,
+                                 cir::CastKind::bitcast, handleAddr);
+    }
+  }
+
+  if (!addr)
+    addr = cir::GetGlobalOp::create(cgf.getBuilder(), loc, ptrTy,
+                                    funcOp.getSymName());
 
   if (funcOp.getFunctionType() != cgf.convertType(fd->getType())) {
     fnTy = cgf.convertType(fd->getType());
@@ -2394,7 +2417,23 @@ RValue CIRGenFunction::emitCall(clang::QualType calleeTy,
   }
 
   assert(!cir::MissingFeatures::opCallFnInfoOpts());
-  assert(!cir::MissingFeatures::hip());
+
+  // HIP function pointer contains kernel handle when it is used in triple
+  // chevron. The kernel stub needs to be loaded from kernel handle and used
+  // as callee.
+  const clang::Decl *targetDecl = origCallee.getAbstractInfo().getCalleeDecl().getDecl();
+  if (getLangOpts().HIP && !getLangOpts().CUDAIsDevice &&
+      isa<CUDAKernelCallExpr>(e) &&
+      (!targetDecl || !isa<FunctionDecl>(targetDecl))) {
+    mlir::Value handleAddr = callee.getFunctionPointer()->getResult(0);
+    mlir::Location loc = getLoc(e->getSourceRange());
+    auto handlePtrTy = mlir::cast<cir::PointerType>(handleAddr.getType());
+    mlir::Value handleAddrAddr =
+        builder.createBitcast(handleAddr, cir::PointerType::get(handlePtrTy));
+    cir::LoadOp stub = builder.createLoad(
+        loc, Address(handleAddrAddr, handlePtrTy, getPointerAlign()));
+    callee.setFunctionPointer(stub.getOperation());
+  }
 
   cir::CIRCallOpInterface callOp;
   RValue callResult = emitCall(funcInfo, callee, returnValue, args, &callOp,
