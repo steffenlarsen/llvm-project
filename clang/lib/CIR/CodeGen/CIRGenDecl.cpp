@@ -770,8 +770,17 @@ void CIRGenFunction::emitStaticVarDecl(const VarDecl &d,
 
   assert(!cir::MissingFeatures::cudaSupport());
 
+  // CUDA/HIP's local and local static __shared__ variables should not have
+  // any non-empty initializers. This is ensured by Sema. Nevertheless, we may
+  // still have empty initializers due to default constructors, which we
+  // should ignore: __shared__ variables live in address space 3 (LDS on
+  // AMDGPU), which cannot hold an initializer at all, not even a zero one.
+  bool isCudaSharedVar =
+      getLangOpts().CUDA && getLangOpts().CUDAIsDevice &&
+      d.hasAttr<CUDASharedAttr>();
+
   // If this value has an initializer, emit it.
-  if (d.getInit())
+  if (d.getInit() && !isCudaSharedVar)
     var = addInitializerToStaticVarDecl(d, var, getAddrOp);
 
   var.setAlignment(alignment.getAsAlign().value());

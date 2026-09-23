@@ -2078,9 +2078,15 @@ static void lowerArrayDtorCtorIntoLoop(cir::CIRBaseBuilderTy &builder,
     builder.setInsertionPointToStart(&ifOp.getThenRegion().front());
   }
 
-  mlir::Value tmpAddr =
-      builder.createAlloca(loc, /*addr type*/ builder.getPointerTo(eltTy),
-                           "__array_idx", builder.getAlignmentAttr(1));
+  // The induction variable is a plain stack local: it must live in the
+  // target's alloca address space (e.g. addrspace(5) on AMDGPU), matching
+  // what CIRGenFunction::emitAlloca does for every other local variable.
+  cir::CIRDataLayout dataLayout(op->getParentOfType<mlir::ModuleOp>());
+  cir::PointerType tmpAddrTy = builder.getPointerTo(
+      eltTy, dataLayout.getAllocaAddrSpace(builder.getContext()));
+  mlir::Value tmpAddr = builder.createAlloca(
+      loc, /*addr type*/ tmpAddrTy, "__array_idx",
+      builder.getAlignmentAttr(dataLayout.getABITypeAlign(tmpAddrTy).value()));
   builder.createStore(loc, start, tmpAddr);
 
   mlir::Block *bodyBlock = &op->getRegion(0).front();
