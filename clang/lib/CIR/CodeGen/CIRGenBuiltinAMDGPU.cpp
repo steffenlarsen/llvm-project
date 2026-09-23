@@ -207,10 +207,82 @@ CIRGenFunction::emitAMDGPUBuiltinExpr(unsigned builtinId,
   case AMDGPU::BI__builtin_amdgcn_mov_dpp8:
   case AMDGPU::BI__builtin_amdgcn_mov_dpp:
   case AMDGPU::BI__builtin_amdgcn_update_dpp: {
-    cgm.errorNYI(expr->getSourceRange(),
-                 std::string("unimplemented AMDGPU builtin call: ") +
-                     getContext().BuiltinInfo.getName(builtinId));
-    return mlir::Value{};
+    mlir::Location loc = getLoc(expr->getExprLoc());
+    unsigned iceArguments = 0;
+    ASTContext::GetBuiltinTypeError error;
+    getContext().GetBuiltinType(builtinId, error, &iceArguments);
+    assert(error == ASTContext::GE_None && "Should not codegen an error");
+
+    mlir::Type dataTy = convertType(expr->getArg(0)->getType());
+    unsigned size = cgm.getDataLayout().getTypeSizeInBits(dataTy);
+    cir::IntType intTy = builder.getUIntNTy(std::max(size, 32u));
+
+    bool isMovDpp8 = builtinId == AMDGPU::BI__builtin_amdgcn_mov_dpp8;
+    bool isUpdateDpp = builtinId == AMDGPU::BI__builtin_amdgcn_update_dpp;
+    llvm::StringRef intrinsicName =
+        isMovDpp8 ? "amdgcn.mov.dpp8" : "amdgcn.update.dpp";
+
+    assert(expr->getNumArgs() == 5 || expr->getNumArgs() == 6 ||
+           expr->getNumArgs() == 2);
+    // __builtin_amdgcn_mov_dpp has no "old" operand at the source level, but
+    // the real intrinsic it lowers to (llvm.amdgcn.update.dpp) requires one;
+    // synthesize a poison value for it since it is never meaningfully read.
+    bool insertOld = builtinId == AMDGPU::BI__builtin_amdgcn_mov_dpp;
+
+    // Fixed (non-overloaded) parameter types of the target LLVM intrinsics,
+    // following the "old"/"data" operand(s) which share the overloaded
+    // integer type computed above as `intTy`.
+    llvm::SmallVector<mlir::Type, 4> fixedTailTypes;
+    if (isMovDpp8)
+      fixedTailTypes = {builder.getUInt32Ty()};
+    else
+      fixedTailTypes = {builder.getUInt32Ty(), builder.getUInt32Ty(),
+                        builder.getUInt32Ty(), builder.getUIntNTy(1)};
+
+    auto coerceTo = [&](mlir::Value v, mlir::Type expected) -> mlir::Value {
+      if (v.getType() == expected)
+        return v;
+      if (mlir::isa<cir::IntType>(v.getType()) &&
+          mlir::isa<cir::IntType>(expected))
+        return builder.createIntCast(v, expected);
+      return builder.createBitcast(v, expected);
+    };
+
+    llvm::SmallVector<mlir::Value, 6> args;
+    if (insertOld)
+      args.push_back(builder.getConstant(loc, cir::PoisonAttr::get(intTy)));
+
+    // Number of builtin-level leading args (before "old" insertion) that
+    // need zero-extend promotion when the data type is narrower than 32
+    // bits: both "old" and "data" for update_dpp, just "data" otherwise.
+    unsigned numPromotedArgs = isUpdateDpp ? 2u : 1u;
+    // Number of leading positions in the *final* intrinsic call args that
+    // share the overloaded `intTy` type: both "old" and "data" feed
+    // amdgcn.update.dpp (used by both mov_dpp and update_dpp), while only
+    // "data" feeds amdgcn.mov.dpp8.
+    unsigned numIntTyFinalPositions = isMovDpp8 ? 1u : 2u;
+    for (unsigned i = 0; i != expr->getNumArgs(); ++i) {
+      mlir::Value v =
+          emitScalarOrConstFoldImmArg(iceArguments, i, expr->getArg(i));
+      if (i < numPromotedArgs && size < 32) {
+        mlir::Type sameWidthUTy = builder.getUIntNTy(size);
+        if (v.getType() != sameWidthUTy)
+          v = builder.createBitcast(v, sameWidthUTy);
+        v = builder.createIntCast(v, intTy);
+      }
+      unsigned finalIdx = i + (insertOld ? 1 : 0);
+      mlir::Type expectedTy =
+          finalIdx < numIntTyFinalPositions
+              ? intTy
+              : fixedTailTypes[finalIdx - numIntTyFinalPositions];
+      args.push_back(coerceTo(v, expectedTy));
+    }
+
+    mlir::Value result = builder.emitIntrinsicCallOp(loc, intrinsicName, intTy,
+                                                      mlir::ValueRange(args));
+    if (size < 32 && !mlir::isa<cir::IntType>(dataTy))
+      result = builder.createIntCast(result, builder.getUIntNTy(size));
+    return coerceTo(result, dataTy);
   }
   case AMDGPU::BI__builtin_amdgcn_permlane16:
   case AMDGPU::BI__builtin_amdgcn_permlanex16: {
