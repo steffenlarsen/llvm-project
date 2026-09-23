@@ -12,27 +12,28 @@
 // RUN: %clang_cc1 -triple x86_64-unknown-linux-gnu -emit-llvm %s -o %t-ogcg-wrapv.ll -fwrapv
 // RUN: FileCheck --check-prefix=OGCG_NO_POISON --input-file=%t-ogcg-wrapv.ll %s
 
-// Note: In the final implementation, we will want these to generate
-// CIR-specific libc operations. This test is just a placeholder
-// to make sure we can compile these to normal function calls
-// until the special handling is implemented.
-
 void *memcpy(void *, const void *, unsigned long);
 void testMemcpy(void *dst, const void *src, unsigned long size) {
   memcpy(dst, src, size);
-  // CHECK: cir.call @memcpy
+  // CHECK: cir.libc.memcpy %{{.+}} bytes from %{{.+}} to %{{.+}} : !u64i, !cir.ptr<!void> -> !cir.ptr<!void>
+  // LLVM: call void @llvm.memcpy.p0.p0.i64(ptr {{.*}}, ptr {{.*}}, i64 {{.*}}, i1 false)
+  // OGCG: call void @llvm.memcpy.p0.p0.i64(ptr {{.*}}, ptr {{.*}}, i64 {{.*}}, i1 false)
 }
 
 void *memmove(void *, const void *, unsigned long);
 void testMemmove(void *src, const void *dst, unsigned long size) {
   memmove(dst, src, size);
-  // CHECK: cir.call @memmove
+  // CHECK: cir.libc.memmove %{{.+}} bytes from %{{.+}} to %{{.+}} : !cir.ptr<!void>, !u64i
+  // LLVM: call void @llvm.memmove.p0.p0.i64(ptr {{.*}}, ptr {{.*}}, i64 {{.*}}, i1 false)
+  // OGCG: call void @llvm.memmove.p0.p0.i64(ptr {{.*}}, ptr {{.*}}, i64 {{.*}}, i1 false)
 }
 
 void *memset(void *, int, unsigned long);
 void testMemset(void *dst, int val, unsigned long size) {
   memset(dst, val, size);
-  // CHECK: cir.call @memset
+  // CHECK: cir.libc.memset %{{.+}} bytes at %{{.+}} to %{{.+}} : !cir.ptr<!void>, !u8i, !u64i
+  // LLVM: call void @llvm.memset.p0.i64(ptr {{.*}}, i8 {{.*}}, i64 {{.*}}, i1 false)
+  // OGCG: call void @llvm.memset.p0.i64(ptr {{.*}}, i8 {{.*}}, i64 {{.*}}, i1 false)
 }
 
 double fabs(double);

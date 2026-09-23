@@ -2376,16 +2376,52 @@ RValue CIRGenFunction::emitBuiltinExpr(const GlobalDecl &gd, unsigned builtinID,
   case Builtin::BImemcpy:
   case Builtin::BI__builtin_memcpy:
   case Builtin::BImempcpy:
-  case Builtin::BI__builtin_mempcpy:
+  case Builtin::BI__builtin_mempcpy: {
+    Address dest = emitPointerWithAlignment(e->getArg(0));
+    Address src = emitPointerWithAlignment(e->getArg(1));
+    mlir::Value sizeVal = emitScalarExpr(e->getArg(2));
+    emitNonNullArgCheck(RValue::get(dest.getPointer()), e->getArg(0)->getType(),
+                        e->getArg(0)->getExprLoc(), fd, 0);
+    emitNonNullArgCheck(RValue::get(src.getPointer()), e->getArg(1)->getType(),
+                        e->getArg(1)->getExprLoc(), fd, 0);
+    builder.createMemCpy(getLoc(e->getSourceRange()), dest.getPointer(),
+                         src.getPointer(), sizeVal);
+    if (builtinID == Builtin::BImempcpy ||
+        builtinID == Builtin::BI__builtin_mempcpy)
+      return RValue::get(builder.createPtrStride(getLoc(e->getSourceRange()),
+                                                  dest.getPointer(), sizeVal));
+    return RValue::get(dest.getPointer());
+  }
+  case Builtin::BI__builtin_trivially_relocate:
+  case Builtin::BImemmove:
+  case Builtin::BI__builtin_memmove: {
+    Address dest = emitPointerWithAlignment(e->getArg(0));
+    Address src = emitPointerWithAlignment(e->getArg(1));
+    mlir::Value sizeVal = emitScalarExpr(e->getArg(2));
+    emitNonNullArgCheck(RValue::get(dest.getPointer()), e->getArg(0)->getType(),
+                        e->getArg(0)->getExprLoc(), fd, 0);
+    emitNonNullArgCheck(RValue::get(src.getPointer()), e->getArg(1)->getType(),
+                        e->getArg(1)->getExprLoc(), fd, 0);
+    builder.createMemMove(getLoc(e->getSourceRange()), dest.getPointer(),
+                          src.getPointer(), sizeVal);
+    return RValue::get(dest.getPointer());
+  }
+  case Builtin::BImemset:
+  case Builtin::BI__builtin_memset: {
+    Address dest = emitPointerWithAlignment(e->getArg(0));
+    mlir::Value byteVal = builder.createIntCast(emitScalarExpr(e->getArg(1)),
+                                                builder.getUInt8Ty());
+    mlir::Value sizeVal = emitScalarExpr(e->getArg(2));
+    emitNonNullArgCheck(RValue::get(dest.getPointer()), e->getArg(0)->getType(),
+                        e->getArg(0)->getExprLoc(), fd, 0);
+    builder.createMemSet(getLoc(e->getSourceRange()), dest.getPointer(),
+                         byteVal, sizeVal);
+    return RValue::get(dest.getPointer());
+  }
   case Builtin::BI__builtin_memcpy_inline:
   case Builtin::BI__builtin___memcpy_chk:
   case Builtin::BI__builtin_objc_memmove_collectable:
   case Builtin::BI__builtin___memmove_chk:
-  case Builtin::BI__builtin_trivially_relocate:
-  case Builtin::BImemmove:
-  case Builtin::BI__builtin_memmove:
-  case Builtin::BImemset:
-  case Builtin::BI__builtin_memset:
   case Builtin::BI__builtin_memset_inline:
   case Builtin::BI__builtin___memset_chk:
   case Builtin::BI__builtin_wmemchr:
