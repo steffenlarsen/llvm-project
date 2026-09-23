@@ -116,9 +116,8 @@ struct Big varargs_aggregate_memory(int count, ...) {
 // CIR:   cir.copy %[[TMP_ADDR]] align(4) to %[[RET_ADDR]] align(4) : !cir.ptr<!rec_Bar>
 // CIR:   %[[VA_PTR2:.+]] = cir.cast array_to_ptrdecay %[[VAAREA]] : !cir.ptr<!cir.array<!rec___va_list_tag x 1>> -> !cir.ptr<!rec___va_list_tag>
 // CIR:   cir.va_end %[[VA_PTR2]] : !cir.ptr<!rec___va_list_tag>
-// CIR:   %[[RETVAL:.+]] = cir.load{{.*}} %[[RET_ADDR]] : !cir.ptr<!rec_Bar>, !rec_Bar
 // CIR:   %[[SLOT:.+]] = cir.cast bitcast %[[COERCE]] : !cir.ptr<!rec_anon_struct{{[0-9]*}}> -> !cir.ptr<!rec_Bar>
-// CIR:   cir.store %[[RETVAL]], %[[SLOT]] : !rec_Bar, !cir.ptr<!rec_Bar>
+// CIR:   cir.copy %[[RET_ADDR]] to %[[SLOT]] : !cir.ptr<!rec_Bar>
 // CIR:   %[[COERCED:.+]] = cir.load %[[COERCE]] : !cir.ptr<!rec_anon_struct{{[0-9]*}}>, !rec_anon_struct{{[0-9]*}}
 // CIR:   cir.return %[[COERCED]] : !rec_anon_struct{{[0-9]*}}
 

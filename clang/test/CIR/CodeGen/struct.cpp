@@ -348,8 +348,7 @@ void calling_function_with_default_values() {
 // CIR: %[[ELEM_1_PTR:.*]] = cir.get_member %[[AGG_ADDR]][1] {name = "b"} : !cir.ptr<!rec_CompleteS> -> !cir.ptr<!s8i>
 // CIR: %[[CONST_2:.*]] = cir.const #cir.int<2> : !s8i
 // CIR: cir.store{{.*}} %[[CONST_2]], %[[ELEM_1_PTR]] : !s8i, !cir.ptr<!s8i>
-// CIR: %[[TMP_AGG:.*]] = cir.load{{.*}} %[[AGG_ADDR]] : !cir.ptr<!rec_CompleteS>, !rec_CompleteS
-// CIR: cir.store %[[TMP_AGG]], %[[COERCE]] : !rec_CompleteS, !cir.ptr<!rec_CompleteS>
+// CIR: cir.copy %[[AGG_ADDR]] to %[[COERCE]] : !cir.ptr<!rec_CompleteS>
 // CIR: %[[COERCE_PTR:.*]] = cir.cast bitcast %[[COERCE]] : !cir.ptr<!rec_CompleteS> -> !cir.ptr<!u64i>
 // CIR: %[[ARG:.*]] = cir.load %[[COERCE_PTR]] : !cir.ptr<!u64i>, !u64i
 // CIR: cir.call @_Z31function_arg_with_default_value9CompleteS(%[[ARG]]) : (!u64i) -> ()
@@ -360,8 +359,7 @@ void calling_function_with_default_values() {
 // LLVM: store i32 1, ptr %[[ELEM_0_PTR]], align 4
 // LLVM: %[[ELEM_1_PTR:.*]] = getelementptr inbounds nuw %struct.CompleteS, ptr %[[AGG_ADDR]], i32 0, i32 1
 // LLVM: store i8 2, ptr %[[ELEM_1_PTR]], align 4
-// LLVM: %[[TMP_AGG:.*]] = load %struct.CompleteS, ptr %[[AGG_ADDR]], align 4
-// LLVM: store %struct.CompleteS %[[TMP_AGG]], ptr %[[COERCE]], align 4
+// LLVM: call void @llvm.memcpy.p0.p0.i64(ptr align 4 %[[COERCE]], ptr align 4 %[[AGG_ADDR]], i64 8, i1 false)
 // LLVM: %[[ARG:.*]] = load i64, ptr %[[COERCE]], align 8
 // LLVM: call void @_Z31function_arg_with_default_value9CompleteS(i64 %[[ARG]])
 

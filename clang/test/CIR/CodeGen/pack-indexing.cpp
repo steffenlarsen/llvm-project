@@ -60,22 +60,18 @@ float _Complex pack_indexing_complex() {
 // CIR:   %[[CONST_COMPLEX_0:.*]] = cir.const #cir.const_complex<#cir.fp<1.000000e+00> : !cir.float, #cir.fp<2.000000e+00> : !cir.float> : !cir.complex<!cir.float>
 // CIR:   %[[CONST_COMPLEX_1:.*]] = cir.const #cir.const_complex<#cir.fp<3.000000e+00> : !cir.float, #cir.fp<4.000000e+00> : !cir.float> : !cir.complex<!cir.float>
 // CIR:   cir.store {{.*}} %[[CONST_COMPLEX_0]], %[[COMPLEX_0]] : !cir.complex<!cir.float>, !cir.ptr<!cir.complex<!cir.float>>
-// CIR:   %[[TMP_COMPLEX_0:.*]] = cir.load {{.*}} %[[COMPLEX_0]] : !cir.ptr<!cir.complex<!cir.float>>, !cir.complex<!cir.float>
 // CIR:   cir.store {{.*}} %[[CONST_COMPLEX_1]], %[[COMPLEX_1]] : !cir.complex<!cir.float>, !cir.ptr<!cir.complex<!cir.float>>
-// CIR:   %[[TMP_COMPLEX_1:.*]] = cir.load {{.*}} %[[COMPLEX_1]] : !cir.ptr<!cir.complex<!cir.float>>, !cir.complex<!cir.float>
-// CIR:   cir.store %[[TMP_COMPLEX_0]], %[[A0:.*]] : !cir.complex<!cir.float>, !cir.ptr<!cir.complex<!cir.float>>
+// CIR:   cir.copy %[[COMPLEX_0]] to %[[A0:.*]] : !cir.ptr<!cir.complex<!cir.float>>
 // CIR:   %[[A0_PTR:.*]] = cir.cast bitcast %[[A0]] : !cir.ptr<!cir.complex<!cir.float>> -> !cir.ptr<!cir.vector<2 x !cir.float>>
 // CIR:   %[[A0_VEC:.*]] = cir.load %[[A0_PTR]] : !cir.ptr<!cir.vector<2 x !cir.float>>, !cir.vector<2 x !cir.float>
-// CIR:   cir.store %[[TMP_COMPLEX_1]], %[[A1:.*]] : !cir.complex<!cir.float>, !cir.ptr<!cir.complex<!cir.float>>
+// CIR:   cir.copy %[[COMPLEX_1]] to %[[A1:.*]] : !cir.ptr<!cir.complex<!cir.float>>
 // CIR:   %[[A1_PTR:.*]] = cir.cast bitcast %[[A1]] : !cir.ptr<!cir.complex<!cir.float>> -> !cir.ptr<!cir.vector<2 x !cir.float>>
 // CIR:   %[[A1_VEC:.*]] = cir.load %[[A1_PTR]] : !cir.ptr<!cir.vector<2 x !cir.float>>, !cir.vector<2 x !cir.float>
 // CIR:   %[[RESULT:.*]] = cir.call @_Z13pack_indexingIJCfS0_EEDaDpT_(%[[A0_VEC]], %[[A1_VEC]]) : (!cir.vector<2 x !cir.float> {llvm.noundef}, !cir.vector<2 x !cir.float> {llvm.noundef}) -> (!cir.vector<2 x !cir.float> {llvm.noundef})
 // CIR:   cir.store %[[RESULT]], %[[R_SLOT:.*]] : !cir.vector<2 x !cir.float>, !cir.ptr<!cir.vector<2 x !cir.float>>
 // CIR:   %[[R_PTR:.*]] = cir.cast bitcast %[[R_SLOT]] : !cir.ptr<!cir.vector<2 x !cir.float>> -> !cir.ptr<!cir.complex<!cir.float>>
-// CIR:   %[[R_CPLX:.*]] = cir.load %[[R_PTR]] : !cir.ptr<!cir.complex<!cir.float>>, !cir.complex<!cir.float>
-// CIR:   cir.store {{.*}} %[[R_CPLX]], %[[RET_VAL]] : !cir.complex<!cir.float>, !cir.ptr<!cir.complex<!cir.float>>
-// CIR:   %[[TMP_RET:.*]] = cir.load %[[RET_VAL]] : !cir.ptr<!cir.complex<!cir.float>>, !cir.complex<!cir.float>
-// CIR:   cir.store %[[TMP_RET]], %[[RET_SLOT:.*]] : !cir.complex<!cir.float>, !cir.ptr<!cir.complex<!cir.float>>
+// CIR:   cir.copy %[[R_PTR]] to %[[RET_VAL]] : !cir.ptr<!cir.complex<!cir.float>>
+// CIR:   cir.copy %[[RET_VAL]] to %[[RET_SLOT:.*]] : !cir.ptr<!cir.complex<!cir.float>>
 // CIR:   %[[RET_PTR:.*]] = cir.cast bitcast %[[RET_SLOT]] : !cir.ptr<!cir.complex<!cir.float>> -> !cir.ptr<!cir.vector<2 x !cir.float>>
 // CIR:   %[[RET_VEC:.*]] = cir.load %[[RET_PTR]] : !cir.ptr<!cir.vector<2 x !cir.float>>, !cir.vector<2 x !cir.float>
 // CIR:   cir.return %[[RET_VEC]] : !cir.vector<2 x !cir.float>
@@ -85,19 +81,15 @@ float _Complex pack_indexing_complex() {
 // LLVM:   %[[COMPLEX_0:.*]] = alloca { float, float }, align 4
 // LLVM:   %[[COMPLEX_1:.*]] = alloca { float, float }, align 4
 // LLVM:   store { float, float } { float 1.000000e+00, float 2.000000e+00 }, ptr %[[COMPLEX_0]], align 4
-// LLVM:   %[[TMP_COMPLEX_0:.*]] = load { float, float }, ptr %[[COMPLEX_0]], align 4
 // LLVM:   store { float, float } { float 3.000000e+00, float 4.000000e+00 }, ptr %[[COMPLEX_1]], align 4
-// LLVM:   %[[TMP_COMPLEX_1:.*]] = load { float, float }, ptr %[[COMPLEX_1]], align 4
-// LLVM:   store { float, float } %[[TMP_COMPLEX_0]], ptr %[[A0:.*]], align 4
+// LLVM:   call void @llvm.memcpy.p0.p0.i64(ptr align 4 %[[A0:.*]], ptr align 4 %[[COMPLEX_0]], i64 8, i1 false)
 // LLVM:   %[[A0_VEC:.*]] = load <2 x float>, ptr %[[A0]], align 8
-// LLVM:   store { float, float } %[[TMP_COMPLEX_1]], ptr %[[A1:.*]], align 4
+// LLVM:   call void @llvm.memcpy.p0.p0.i64(ptr align 4 %[[A1:.*]], ptr align 4 %[[COMPLEX_1]], i64 8, i1 false)
 // LLVM:   %[[A1_VEC:.*]] = load <2 x float>, ptr %[[A1]], align 8
 // LLVM:   %[[RESULT:.*]] = call noundef <2 x float> @_Z13pack_indexingIJCfS0_EEDaDpT_(<2 x float> noundef %[[A0_VEC]], <2 x float> noundef %[[A1_VEC]])
 // LLVM:   store <2 x float> %[[RESULT]], ptr %[[R_SLOT:.*]], align 8
-// LLVM:   %[[R_CPLX:.*]] = load { float, float }, ptr %[[R_SLOT]], align 4
-// LLVM:   store { float, float } %[[R_CPLX]], ptr %[[RET_VAL]], align 4
-// LLVM:   %[[TMP_RET:.*]] = load { float, float }, ptr %[[RET_VAL]], align 4
-// LLVM:   store { float, float } %[[TMP_RET]], ptr %[[RET_SLOT:.*]], align 4
+// LLVM:   call void @llvm.memcpy.p0.p0.i64(ptr align 4 %[[RET_VAL]], ptr align 4 %[[R_SLOT]], i64 8, i1 false)
+// LLVM:   call void @llvm.memcpy.p0.p0.i64(ptr align 4 %[[RET_SLOT:.*]], ptr align 4 %[[RET_VAL]], i64 8, i1 false)
 // LLVM:   %[[RET_VEC:.*]] = load <2 x float>, ptr %[[RET_SLOT]], align 8
 // LLVM:   ret <2 x float> %[[RET_VEC]]
 

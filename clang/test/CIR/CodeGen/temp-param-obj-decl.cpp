@@ -48,9 +48,9 @@ HasMem get_m() { return m; }
 // CIR: cir.copy %[[GET_GLOB]] align(4) to %[[RET_ALLOCA]] align(4) : !cir.ptr<!rec_HasMem>
 // 
 // LLVM-BOTH-LABEL: define linkonce_odr i32 @_Z5get_mIXtl6HasMemLi2EEEES0_v()
+// LLVM: %[[COERCE:.*]] = alloca %struct.HasMem
 // LLVM-BOTH: call void @llvm.memcpy.p0.p0.i64(ptr {{.*}}%[[RET_ALLOCA:.*]], ptr {{.*}}@_ZTAXtl6HasMemLi2EEE, i64 4, i1 false)
-// LLVM: %[[LOAD_RET:.*]] = load %struct.HasMem, ptr %[[RET_ALLOCA]]
-// LLVM: store %struct.HasMem %[[LOAD_RET]], ptr %[[COERCE:.*]], align 4
+// LLVM: call void @llvm.memcpy.p0.p0.i64(ptr align 4 %[[COERCE]], ptr align 4 %[[RET_ALLOCA]], i64 4, i1 false)
 // LLVM: %[[TO_RET:.*]] = load i32, ptr %[[COERCE]]
 // LLVM: ret i32 %[[TO_RET]]
 

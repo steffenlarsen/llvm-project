@@ -112,9 +112,9 @@ struct outer ret_outer() {
   // CIR: cir.copy %[[GET_GLOB]] to %[[RET_ALLOCA]] : !cir.ptr<!rec_outer>
 
   // LLVM-LABEL: define dso_local { i64, i32 } @ret_outer()
+  // LLVMCIR: %[[COERCE:.*]] = alloca %struct.outer
   // LLVM: call void @llvm.memcpy.p0.p0.i64(ptr {{.*}}%[[RET_ALLOCA:.*]], ptr {{.*}}@__const.ret_outer.{{.*}}, i64 16, i1 false)
-  // LLVMCIR: %[[OUTER:.*]] = load %struct.outer, ptr %[[RET_ALLOCA]]
-  // LLVMCIR: store %struct.outer %[[OUTER]], ptr %[[COERCE:.*]], align 8
+  // LLVMCIR: call void @llvm.memcpy.p0.p0.i64(ptr align 8 %[[COERCE]], ptr align 8 %[[RET_ALLOCA]], i64 16, i1 false)
   // LLVMCIR: %[[RET:.*]] = load { i64, i32 }, ptr %[[COERCE]]
   // OGCG: %[[RET:.*]] = load { i64, i32 }, ptr %[[RET_ALLOCA]]
   // LLVM: ret { i64, i32 } %[[RET]]

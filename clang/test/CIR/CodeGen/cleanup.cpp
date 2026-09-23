@@ -111,8 +111,7 @@ void complex_expr_with_cleanup() {
 // CHECK:   %[[CONST_0:.*]] = cir.const #cir.int<0> : !s32i
 // CHECK:   %[[ARG_COMPLEX:.*]] = cir.complex.create %[[CONST_10]], %[[CONST_0]] : !s32i -> !cir.complex<!s32i>
 // CHECK:   cir.store {{.*}} %[[ARG_COMPLEX]], %[[ARG_ADDR]] : !cir.complex<!s32i>, !cir.ptr<!cir.complex<!s32i>>
-// CHECK:   %[[TMP_ARG:.*]] = cir.load {{.*}} %[[ARG_ADDR]] : !cir.ptr<!cir.complex<!s32i>>, !cir.complex<!s32i>
-// CHECK:   cir.store %[[TMP_ARG]], %[[ARG_SLOT:.*]] : !cir.complex<!s32i>, !cir.ptr<!cir.complex<!s32i>>
+// CHECK:   cir.copy %[[ARG_ADDR]] to %[[ARG_SLOT:.*]] : !cir.ptr<!cir.complex<!s32i>>
 // CHECK:   %[[ARG_PTR:.*]] = cir.cast bitcast %[[ARG_SLOT]] : !cir.ptr<!cir.complex<!s32i>> -> !cir.ptr<!u64i>
 // CHECK:   %[[ARG_COERCED:.*]] = cir.load %[[ARG_PTR]] : !cir.ptr<!u64i>, !u64i
 // CHECK:   cir.call @_ZN16ComplexContainerC1ECi(%[[CONTAINER_ADDR]], %[[ARG_COERCED]]) : (!cir.ptr<!rec_ComplexContainer> {{.*}}, !u64i {{.*}}) -> ()
@@ -139,8 +138,7 @@ void complex_expr_with_cleanup_inside_cleanupscope() {
 // CHECK:   %[[CONST_0:.*]] = cir.const #cir.int<0> : !s32i
 // CHECK:   %[[ARG_COMPLEX:.*]] = cir.complex.create %[[CONST_10]], %[[CONST_0]] : !s32i -> !cir.complex<!s32i>
 // CHECK:   cir.store {{.*}} %[[ARG_COMPLEX]], %[[ARG_ADDR]] : !cir.complex<!s32i>, !cir.ptr<!cir.complex<!s32i>>
-// CHECK:   %[[TMP_ARG:.*]] = cir.load {{.*}} %[[ARG_ADDR]] : !cir.ptr<!cir.complex<!s32i>>, !cir.complex<!s32i>
-// CHECK:   cir.store %[[TMP_ARG]], %[[ARG_SLOT:.*]] : !cir.complex<!s32i>, !cir.ptr<!cir.complex<!s32i>>
+// CHECK:   cir.copy %[[ARG_ADDR]] to %[[ARG_SLOT:.*]] : !cir.ptr<!cir.complex<!s32i>>
 // CHECK:   %[[ARG_PTR:.*]] = cir.cast bitcast %[[ARG_SLOT]] : !cir.ptr<!cir.complex<!s32i>> -> !cir.ptr<!u64i>
 // CHECK:   %[[ARG_COERCED:.*]] = cir.load %[[ARG_PTR]] : !cir.ptr<!u64i>, !u64i
 // CHECK:   cir.call @_ZN24ComplexContainerWithDtorC1ECi(%[[CONTAINER_ADDR]], %[[ARG_COERCED]]) : (!cir.ptr<!rec_ComplexContainerWithDtor> {{.*}}, !u64i {{.*}}) -> ()

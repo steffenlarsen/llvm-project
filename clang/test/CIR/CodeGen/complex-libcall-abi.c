@@ -15,14 +15,14 @@ float _Complex divf(float _Complex a, float _Complex b) { return a / b; }
 // CIR: %[[COERCED:.*]] = cir.call @__divsc3({{.*}}) : (!cir.float, !cir.float, !cir.float, !cir.float) -> !cir.vector<2 x !cir.float>
 // CIR: cir.store %[[COERCED]], %[[SLOT:.*]] : !cir.vector<2 x !cir.float>, !cir.ptr<!cir.vector<2 x !cir.float>>
 // CIR: %[[SLOT_PTR:.*]] = cir.cast bitcast %[[SLOT]] : !cir.ptr<!cir.vector<2 x !cir.float>> -> !cir.ptr<!cir.complex<!cir.float>>
-// CIR: cir.load %[[SLOT_PTR]] : !cir.ptr<!cir.complex<!cir.float>>, !cir.complex<!cir.float>
+// CIR: cir.copy %[[SLOT_PTR]] to %{{.*}} : !cir.ptr<!cir.complex<!cir.float>>
 
 // The caller's own signature is coerced the same way on both paths.
 // LLVM: define dso_local <2 x float> @divf(<2 x float> noundef %{{.+}}, <2 x float> noundef %{{.+}})
 
 // LLVMCIR: %[[COERCED:.*]] = call <2 x float> @__divsc3(float %{{.+}}, float %{{.+}}, float %{{.+}}, float %{{.+}})
 // LLVMCIR: store <2 x float> %[[COERCED]], ptr %[[SLOT:.+]], align 8
-// LLVMCIR: load { float, float }, ptr %[[SLOT]], align 4
+// LLVMCIR: call void @llvm.memcpy.p0.p0.i64(ptr align 4 %{{.+}}, ptr align 4 %[[SLOT]], i64 8, i1 false)
 // OGCG: call <2 x float> @__divsc3(float noundef %{{.+}}, float noundef %{{.+}}, float noundef %{{.+}}, float noundef %{{.+}})
 
 float _Complex mulf(float _Complex a, float _Complex b) { return a * b; }

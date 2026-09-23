@@ -39,8 +39,7 @@ auto three_way_strong(int x, int y) {
 // AFTER-NEXT:   cir.return %{{.+}} : !rec_std3A3A__13A3Astrong_ordering{{.*}}
 
 //      FINAL:   cir.func {{.*}} @_Z16three_way_strongii{{.*}} -> !s8i
-//      FINAL:   %[[RETVAL:.*]] = cir.load %{{.+}} : !cir.ptr<!rec_std3A3A__13A3Astrong_ordering>, !rec_std3A3A__13A3Astrong_ordering
-// FINAL-NEXT:   cir.store %[[RETVAL]], %[[COERCE:.*]] : !rec_std3A3A__13A3Astrong_ordering, !cir.ptr<!rec_std3A3A__13A3Astrong_ordering>
+//      FINAL:   cir.copy %[[RETVAL:.*]] to %[[COERCE:.*]] : !cir.ptr<!rec_std3A3A__13A3Astrong_ordering>
 // FINAL-NEXT:   %[[COERCE_PTR:.*]] = cir.cast bitcast %[[COERCE]] : !cir.ptr<!rec_std3A3A__13A3Astrong_ordering> -> !cir.ptr<!s8i>
 // FINAL-NEXT:   %[[COERCED:.*]] = cir.load %[[COERCE_PTR]] : !cir.ptr<!s8i>, !s8i
 // FINAL-NEXT:   cir.return %[[COERCED]] : !s8i
@@ -60,8 +59,7 @@ auto three_way_strong(int x, int y) {
 // LLVM-NEXT:   %[[RES:.*]] = select i1 %[[CMP_EQ]], i8 0, i8 %[[SEL_LT_GT]]
 // LLVM-NEXT:   %[[VALUE_GEP:.*]] = getelementptr inbounds nuw %"class.std::__1::strong_ordering", ptr %[[RETVAL]], i32 0, i32 0
 // LLVM-NEXT:   store i8 %[[RES]], ptr %[[VALUE_GEP]], align 1
-// LLVM-NEXT:   %[[RETVAL_LOAD:.*]] = load %"class.std::__1::strong_ordering", ptr %[[RETVAL]], align 1
-// LLVM-NEXT:   store %"class.std::__1::strong_ordering" %[[RETVAL_LOAD]], ptr %[[COERCE]], align 1
+// LLVM-NEXT:   call void @llvm.memcpy.p0.p0.i64(ptr align 1 %[[COERCE]], ptr align 1 %[[RETVAL]], i64 1, i1 false)
 // LLVM-NEXT:   %[[COERCED:.*]] = load i8, ptr %[[COERCE]], align 1
 // LLVM-NEXT:   ret i8 %[[COERCED]]
 
@@ -97,8 +95,7 @@ auto three_way_partial(float x, float y) {
 // AFTER-NEXT:   cir.return %{{.+}} : !rec_std3A3A__13A3Apartial_ordering{{.*}}
 
 //      FINAL:   cir.func {{.*}} @_Z17three_way_partialff{{.*}} -> !s8i
-//      FINAL:   %[[RETVAL:.*]] = cir.load %{{.+}} : !cir.ptr<!rec_std3A3A__13A3Apartial_ordering>, !rec_std3A3A__13A3Apartial_ordering
-// FINAL-NEXT:   cir.store %[[RETVAL]], %[[COERCE:.*]] : !rec_std3A3A__13A3Apartial_ordering, !cir.ptr<!rec_std3A3A__13A3Apartial_ordering>
+//      FINAL:   cir.copy %[[RETVAL:.*]] to %[[COERCE:.*]] : !cir.ptr<!rec_std3A3A__13A3Apartial_ordering>
 // FINAL-NEXT:   %[[COERCE_PTR:.*]] = cir.cast bitcast %[[COERCE]] : !cir.ptr<!rec_std3A3A__13A3Apartial_ordering> -> !cir.ptr<!s8i>
 // FINAL-NEXT:   %[[COERCED:.*]] = cir.load %[[COERCE_PTR]] : !cir.ptr<!s8i>, !s8i
 // FINAL-NEXT:   cir.return %[[COERCED]] : !s8i
@@ -120,8 +117,7 @@ auto three_way_partial(float x, float y) {
 // LLVM-NEXT:   %[[RES:.*]] = select i1 %[[CMP_LT]], i8 -1, i8 %[[SEL_GT_EQUN]]
 // LLVM-NEXT:   %[[VALUE_GEP:.*]] = getelementptr inbounds nuw %"class.std::__1::partial_ordering", ptr %[[RETVAL]], i32 0, i32 0
 // LLVM-NEXT:   store i8 %[[RES]], ptr %[[VALUE_GEP]], align 1
-// LLVM-NEXT:   %[[RETVAL_LOAD:.*]] = load %"class.std::__1::partial_ordering", ptr %[[RETVAL]], align 1
-// LLVM-NEXT:   store %"class.std::__1::partial_ordering" %[[RETVAL_LOAD]], ptr %[[COERCE]], align 1
+// LLVM-NEXT:   call void @llvm.memcpy.p0.p0.i64(ptr align 1 %[[COERCE]], ptr align 1 %[[RETVAL]], i64 1, i1 false)
 // LLVM-NEXT:   %[[COERCED:.*]] = load i8, ptr %[[COERCE]], align 1
 // LLVM-NEXT:   ret i8 %[[COERCED]]
 
@@ -204,8 +200,7 @@ void use_pseudo_ordering(HasMember m1, HasMember m2) {
   // LLVM:   store %struct.HasMember poison, ptr %[[M2_ALLOCA]]
   // LLVM:   %[[CALL_RES:.*]] = call i8 @_ZNK9HasMemberssERKS_(ptr {{.*}}%[[M1_ALLOCA]], ptr {{.*}}%[[M2_ALLOCA]])
   // LLVM:   store i8 %[[CALL_RES]], ptr %[[RETVAL]]
-  // LLVM:   %[[RETVAL_LOAD:.*]] = load %"class.std::__1::strong_ordering", ptr %[[RETVAL]]
-  // LLVM:   store %"class.std::__1::strong_ordering" %[[RETVAL_LOAD]], ptr %[[G_ALLOCA]]
+  // LLVM:   call void @llvm.memcpy.p0.p0.i64(ptr align 1 %[[G_ALLOCA]], ptr align 1 %[[RETVAL]], i64 1, i1 false)
   // LLVM:   ret void
   // LLVM: }
 
@@ -253,16 +248,14 @@ void use_pseudo_ordering(HasMember m1, HasMember m2) {
   // LLVM: [[COPY_BLOCK]]:
   // LLVM:   call void @llvm.memcpy.p0.p0.i64(ptr align 1 %[[CMP_COPY]], ptr align 1 %[[CMP_RES]], i64 1, i1 false)
   // LLVM:   call void @llvm.memcpy.p0.p0.i64(ptr align 1 %[[CMP_TEMP]], ptr align 1 %[[CMP_COPY]], i64 1, i1 false)
-  // LLVM:   %[[CMP_TEMP_LOAD:.*]] = load %"class.std::__1::strong_ordering", ptr %[[CMP_TEMP]]
-  // LLVM:   store %"class.std::__1::strong_ordering" %[[CMP_TEMP_LOAD]], ptr %[[VALUE_SLOT]]
+  // LLVM:   call void @llvm.memcpy.p0.p0.i64(ptr align 1 %[[VALUE_SLOT]], ptr align 1 %[[CMP_TEMP]], i64 1, i1 false)
   // LLVM:   %[[CMP_I8:.*]] = load i8, ptr %[[VALUE_SLOT]]
   // LLVM:   %[[SO_NE_RES:.*]] = call noundef zeroext i1 @_ZNSt3__1neENS_15strong_orderingEMNS_19_CmpUnspecifiedTypeEFvvE(i8 %[[CMP_I8]], i64 0, i64 0)
   // LLVM:   br i1 %[[SO_NE_RES]], label %[[SO_NE_RES_TRUE:.*]], label %[[SO_NE_RES_FALSE:.*]]
   //
   // LLVM: [[SO_NE_RES_TRUE]]:
   // LLVM:   call void @llvm.memcpy.p0.p0.i64(ptr align 1 %[[RESULT_SLOT]], ptr align 1 %[[CMP_COPY]], i64 1, i1 false)
-  // LLVM:   %[[RESULT_TRUE:.*]] = load %"class.std::__1::strong_ordering", ptr %[[RESULT_SLOT]]
-  // LLVM:   store %"class.std::__1::strong_ordering" %[[RESULT_TRUE]], ptr %[[RET_SLOT_TRUE]]
+  // LLVM:   call void @llvm.memcpy.p0.p0.i64(ptr align 1 %[[RET_SLOT_TRUE]], ptr align 1 %[[RESULT_SLOT]], i64 1, i1 false)
   // LLVM:   %[[RES_TRUE:.*]] = load i8, ptr %[[RET_SLOT_TRUE]]
   // LLVM:   ret i8 %[[RES_TRUE]]
   //
@@ -271,8 +264,7 @@ void use_pseudo_ordering(HasMember m1, HasMember m2) {
   //
   // LLVM: [[SO_NE_RES_FALSE_CTD]]:
   // LLVM:   call void @llvm.memcpy.p0.p0.i64(ptr align 1 %[[RESULT_SLOT]], ptr align 1 @_ZNSt3__115strong_ordering5equalE, i64 1, i1 false)
-  // LLVM:   %[[RESULT_FALSE:.*]] = load %"class.std::__1::strong_ordering", ptr %[[RESULT_SLOT]]
-  // LLVM:   store %"class.std::__1::strong_ordering" %[[RESULT_FALSE]], ptr %[[RET_SLOT_FALSE]]
+  // LLVM:   call void @llvm.memcpy.p0.p0.i64(ptr align 1 %[[RET_SLOT_FALSE]], ptr align 1 %[[RESULT_SLOT]], i64 1, i1 false)
   // LLVM:   %[[RES_FALSE:.*]] = load i8, ptr %[[RET_SLOT_FALSE]]
   // LLVM:   ret i8 %[[RES_FALSE]]
   // LLVM: }

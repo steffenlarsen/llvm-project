@@ -60,8 +60,7 @@ extern "C" Trivial ret_trivial() { return {}; }
   // CIR: %[[GET_A:.*]] = cir.get_member %[[RET_ALLOCA]][0] {name = "a"}
   // CIR: %[[ZERO:.*]] = cir.const #cir.int<0>
   // CIR: cir.store{{.*}} %[[ZERO]], %[[GET_A]]
-  // CIR: %[[TRIVIAL:.*]] = cir.load %[[RET_ALLOCA]] : !cir.ptr<!rec_Trivial>, !rec_Trivial
-  // CIR: cir.store %[[TRIVIAL]], %[[COERCE]] : !rec_Trivial, !cir.ptr<!rec_Trivial>
+  // CIR: cir.copy %[[RET_ALLOCA]] to %[[COERCE]] : !cir.ptr<!rec_Trivial>
   // CIR: %[[COERCE_I32:.*]] = cir.cast bitcast %[[COERCE]] : !cir.ptr<!rec_Trivial> -> !cir.ptr<!s32i>
   // CIR: %[[RET:.*]] = cir.load %[[COERCE_I32]] : !cir.ptr<!s32i>, !s32i
   // CIR: cir.return %[[RET]] : !s32i
@@ -70,8 +69,7 @@ extern "C" Trivial ret_trivial() { return {}; }
   // LLVMCIR: %[[COERCE:.*]] = alloca %union.Trivial
   // LLVM: %[[RET_ALLOCA:.*]] = alloca %union.Trivial
   // LLVM: store i32 0, ptr %[[RET_ALLOCA]]
-  // LLVMCIR: %[[TRIVIAL:.*]] = load %union.Trivial, ptr %[[RET_ALLOCA]]
-  // LLVMCIR: store %union.Trivial %[[TRIVIAL]], ptr %[[COERCE]]
+  // LLVMCIR: call void @llvm.memcpy.p0.p0.i64(ptr align 4 %[[COERCE]], ptr align 4 %[[RET_ALLOCA]], i64 4, i1 false)
   // LLVMCIR: %[[RET:.*]] = load i32, ptr %[[COERCE]]
   // OGCG: %[[COERCE_DIVE:.*]] = getelementptr inbounds nuw %union.Trivial, ptr %[[RET_ALLOCA]], i32 0, i32 0
   // OGCG: %[[RET:.*]] = load i32, ptr %[[COERCE_DIVE]]

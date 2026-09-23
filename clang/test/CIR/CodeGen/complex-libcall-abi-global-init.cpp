@@ -16,15 +16,13 @@ float _Complex g = a / b;
 // CIR: %[[COERCED:.*]] = cir.call @__divsc3({{.*}}) : (!cir.float, !cir.float, !cir.float, !cir.float) -> !cir.vector<2 x !cir.float>
 // CIR: cir.store %[[COERCED]], %[[SLOT]] : !cir.vector<2 x !cir.float>, !cir.ptr<!cir.vector<2 x !cir.float>>
 // CIR: %[[SLOT_PTR:.*]] = cir.cast bitcast %[[SLOT]] : !cir.ptr<!cir.vector<2 x !cir.float>> -> !cir.ptr<!cir.complex<!cir.float>>
-// CIR: %[[RESULT:.*]] = cir.load %[[SLOT_PTR]] : !cir.ptr<!cir.complex<!cir.float>>, !cir.complex<!cir.float>
-// CIR: cir.store{{.*}} %[[RESULT]], %[[G]] : !cir.complex<!cir.float>, !cir.ptr<!cir.complex<!cir.float>>
+// CIR: cir.copy %[[SLOT_PTR]] to %[[G]] : !cir.ptr<!cir.complex<!cir.float>>
 
 // LLVM-LABEL: define internal void @__cxx_global_var_init()
 // LLVMCIR: %[[SLOT:.+]] = alloca <2 x float>, align 8
 // LLVMCIR: %[[COERCED:.*]] = call <2 x float> @__divsc3(float %{{.+}}, float %{{.+}}, float %{{.+}}, float %{{.+}})
 // LLVMCIR: store <2 x float> %[[COERCED]], ptr %[[SLOT]], align 8
-// LLVMCIR: %[[RESULT:.+]] = load { float, float }, ptr %[[SLOT]], align 4
-// LLVMCIR: store { float, float } %[[RESULT]], ptr @g, align 4
+// LLVMCIR: call void @llvm.memcpy.p0.p0.i64(ptr align 4 @g, ptr align 4 %[[SLOT]], i64 8, i1 false)
 
 // OGCG: call noundef <2 x float> @__divsc3(float noundef %{{.+}}, float noundef %{{.+}}, float noundef %{{.+}}, float noundef %{{.+}})
 

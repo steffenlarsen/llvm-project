@@ -46,13 +46,11 @@ union Union toUnionAssign() {
   // LLVM: store i32 42, ptr %[[RET_ALLOCA]]
   // OGCG: store i32 42, ptr %[[RET_ALLOCA]]
   return u;
-  // CIR: %[[LOAD:.*]] = cir.load %[[RET_ALLOCA]] : !cir.ptr<!rec_Union>, !rec_Union
-  // CIR: cir.store %[[LOAD]], %[[COERCE]] : !rec_Union, !cir.ptr<!rec_Union>
+  // CIR: cir.copy %[[RET_ALLOCA]] to %[[COERCE]] : !cir.ptr<!rec_Union>
   // CIR: %[[COERCE_TO_INT:.*]] = cir.cast bitcast %[[COERCE]] : !cir.ptr<!rec_Union> -> !cir.ptr<!s32i>
   // CIR: %[[RET:.*]] = cir.load %[[COERCE_TO_INT]] : !cir.ptr<!s32i>, !s32i
   // CIR: cir.return %[[RET]] : !s32i
-  // LLVM: %[[LOAD:.*]] = load %union.Union, ptr %[[RET_ALLOCA]]
-  // LLVM: store %union.Union %[[LOAD]], ptr %[[COERCE]]
+  // LLVM: call void @llvm.memcpy.p0.p0.i64(ptr align 4 %[[COERCE]], ptr align 4 %[[RET_ALLOCA]], i64 4, i1 false)
   // LLVM: %[[RET:.*]] = load i32, ptr %[[COERCE]]
   // LLVM: ret i32 %[[RET]]
   // OGCG: %[[DIVE:.*]] = getelementptr inbounds nuw %union.Union, ptr %[[RET_ALLOCA]], i32 0, i32 0

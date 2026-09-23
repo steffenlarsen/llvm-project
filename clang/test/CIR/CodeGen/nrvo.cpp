@@ -27,8 +27,7 @@ struct S f1() {
 // CIR-NEXT:   %[[COERCE:.*]] = cir.alloca "coerce" {{.*}} : !cir.ptr<!rec_S>
 // CIR-NEXT:   %[[RETVAL:.*]] = cir.alloca "__retval" {{.*}} init : !cir.ptr<!rec_S>
 // CIR-NEXT:   cir.call @_ZN1SC1Ev(%[[RETVAL]]) : (!cir.ptr<!rec_S> {{.*}}) -> ()
-// CIR-NEXT:   %[[RET:.*]] = cir.load %[[RETVAL]] : !cir.ptr<!rec_S>, !rec_S
-// CIR-NEXT:   cir.store %[[RET]], %[[COERCE]] : !rec_S, !cir.ptr<!rec_S>
+// CIR-NEXT:   cir.copy %[[RETVAL]] to %[[COERCE]] : !cir.ptr<!rec_S>
 // CIR-NEXT:   %[[SLOT:.*]] = cir.cast bitcast %[[COERCE]] : !cir.ptr<!rec_S> -> !cir.ptr<!u64i>
 // CIR-NEXT:   %[[COERCED:.*]] = cir.load %[[SLOT]] : !cir.ptr<!u64i>, !u64i
 // CIR-NEXT:   cir.return %[[COERCED]]
@@ -39,8 +38,7 @@ struct S f1() {
 // CIR-NOELIDE-NEXT:   %[[S:.*]] = cir.alloca "s" {{.*}} init : !cir.ptr<!rec_S>
 // CIR-NOELIDE-NEXT:   cir.call @_ZN1SC1Ev(%[[S]]) : (!cir.ptr<!rec_S> {{.*}}) -> ()
 // CIR-NOELIDE-NEXT:   cir.copy %[[S]] align(4) to %[[RETVAL]] align(4) : !cir.ptr<!rec_S>
-// CIR-NOELIDE-NEXT:   %[[RET:.*]] = cir.load %[[RETVAL]] : !cir.ptr<!rec_S>, !rec_S
-// CIR-NOELIDE-NEXT:   cir.store %[[RET]], %[[COERCE]] : !rec_S, !cir.ptr<!rec_S>
+// CIR-NOELIDE-NEXT:   cir.copy %[[RETVAL]] to %[[COERCE]] : !cir.ptr<!rec_S>
 // CIR-NOELIDE-NEXT:   %[[SLOT:.*]] = cir.cast bitcast %[[COERCE]] : !cir.ptr<!rec_S> -> !cir.ptr<!u64i>
 // CIR-NOELIDE-NEXT:   %[[COERCED:.*]] = cir.load %[[SLOT]] : !cir.ptr<!u64i>, !u64i
 // CIR-NOELIDE-NEXT:   cir.return %[[COERCED]]
@@ -49,8 +47,7 @@ struct S f1() {
 // LLVM-NEXT:   %[[COERCE:.*]] = alloca %struct.S
 // LLVM-NEXT:   %[[RETVAL:.*]] = alloca %struct.S
 // LLVM-NEXT:   call void @_ZN1SC1Ev(ptr {{.*}} %[[RETVAL]])
-// LLVM-NEXT:   %[[TMP:.*]] = load %struct.S, ptr %[[RETVAL]]
-// LLVM-NEXT:   store %struct.S %[[TMP]], ptr %[[COERCE]]
+// LLVM-NEXT:   call void @llvm.memcpy.p0.p0.i64(ptr align 4 %[[COERCE]], ptr align 4 %[[RETVAL]], i64 8, i1 false)
 // LLVM-NEXT:   %[[RET:.*]] = load i64, ptr %[[COERCE]]
 // LLVM-NEXT:   ret i64 %[[RET]]
 

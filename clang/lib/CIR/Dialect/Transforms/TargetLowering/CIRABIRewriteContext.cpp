@@ -325,12 +325,23 @@ static uint64_t coercionByteSize(mlir::Type ty, const mlir::DataLayout &dl) {
 /// Any operations the helper creates are appended to \p createdOps so the
 /// caller can pass them to replaceAllUsesExcept and avoid clobbering the
 /// store's value operand when later rewiring the source value.
+///
+/// \p srcAddr, when non-null, is the address of an existing object of type
+/// \p src's type (typically \p src's own defining load's address).  When
+/// given, the slot is filled with a cir.copy from that address instead of a
+/// store of \p src: some record types are ABI-classified as Direct with
+/// coercion yet still reduce to a single register-sized LLVM type such as
+/// x86_fp80 (e.g. a union with a long double member), and materializing such
+/// a value as an SSA register and storing it moves it through the x87 FPU
+/// (fldt/fstpt), which is not bit-preserving for non-float bit patterns.
+/// Copying the bytes directly from \p srcAddr avoids ever materializing that
+/// SSA value.
 mlir::Value emitCoercionToMemory(mlir::OpBuilder &builder, mlir::Location loc,
                                  mlir::Type dstTy, mlir::Value src,
                                  mlir::Block *slotBlock,
                                  const mlir::DataLayout &dl,
                                  SmallPtrSetImpl<mlir::Operation *> &createdOps,
-                                 unsigned offset) {
+                                 unsigned offset, mlir::Value srcAddr = {}) {
   mlir::Type srcTy = src.getType();
   assert(srcTy != dstTy &&
          "emitCoercion callers must pre-check that the types differ");
@@ -398,10 +409,17 @@ mlir::Value emitCoercionToMemory(mlir::OpBuilder &builder, mlir::Location loc,
     return cast;
   };
 
-  // Store through a source-typed view of the slot.
+  // Fill the slot through a source-typed view: a cir.copy from srcAddr when
+  // given, matching bytes directly without ever materializing src as an SSA
+  // value, or a plain store of src otherwise.
   mlir::Value srcSlot = slotView(srcTy, srcPtrTy);
-  auto store = cir::StoreOp::create(builder, loc, src, srcSlot);
-  createdOps.insert(store);
+  if (srcAddr) {
+    auto copy = cir::CopyOp::create(builder, loc, srcSlot, srcAddr, {}, {});
+    createdOps.insert(copy);
+  } else {
+    auto store = cir::StoreOp::create(builder, loc, src, srcSlot);
+    createdOps.insert(store);
+  }
 
   // Return a destination-typed view of the slot.
   return slotView(dstTy, dstPtrTy);
@@ -414,9 +432,9 @@ mlir::Value emitCoercion(mlir::OpBuilder &builder, mlir::Location loc,
                          mlir::Type dstTy, mlir::Value src,
                          mlir::Block *slotBlock, const mlir::DataLayout &dl,
                          SmallPtrSetImpl<mlir::Operation *> &createdOps,
-                         unsigned offset) {
-  mlir::Value dstSlot = emitCoercionToMemory(builder, loc, dstTy, src,
-                                             slotBlock, dl, createdOps, offset);
+                         unsigned offset, mlir::Value srcAddr = {}) {
+  mlir::Value dstSlot = emitCoercionToMemory(
+      builder, loc, dstTy, src, slotBlock, dl, createdOps, offset, srcAddr);
   auto load = cir::LoadOp::create(builder, loc, dstSlot);
   createdOps.insert(load);
   return load;
@@ -427,9 +445,10 @@ mlir::Value emitCoercion(mlir::OpBuilder &builder, mlir::Location loc,
 mlir::Value emitCoercion(mlir::OpBuilder &builder, mlir::Location loc,
                          mlir::Type dstTy, mlir::Value src,
                          mlir::Block *slotBlock, const mlir::DataLayout &dl,
-                         unsigned offset) {
+                         unsigned offset, mlir::Value srcAddr = {}) {
   SmallPtrSet<mlir::Operation *, 4> ignored;
-  return emitCoercion(builder, loc, dstTy, src, slotBlock, dl, ignored, offset);
+  return emitCoercion(builder, loc, dstTy, src, slotBlock, dl, ignored, offset,
+                      srcAddr);
 }
 
 /// The block a coercion slot's alloca belongs at the start of.
@@ -454,6 +473,11 @@ mlir::Block *coercionSlotBlock(mlir::Operation *op) {
   return &region->front();
 }
 
+/// \p recordVal's defining load, if it is simple and its address resolves to
+/// an alloca.  Null otherwise.  Declared here (defined below, alongside
+/// maybeGetSimpleLoad) so insertReturnCoercion can use it.
+static cir::LoadOp getWholeRecordLoad(mlir::Value recordVal);
+
 /// Insert coercion before each cir.return so the returned value matches the
 /// new (coerced) return type.
 void insertReturnCoercion(mlir::FunctionOpInterface funcOp,
@@ -469,10 +493,22 @@ void insertReturnCoercion(mlir::FunctionOpInterface funcOp,
     if (origVal.getType() == coercedRetTy)
       continue;
     builder.setInsertionPoint(r);
-    mlir::Value coerced =
-        emitCoercion(builder, r.getLoc(), coercedRetTy, origVal,
-                     &funcOp->getRegion(0).front(), dl, offset);
+    // When the returned value is a simple whole-record load from an alloca,
+    // copy its bytes directly into the coercion slot instead of
+    // materializing the whole record as an SSA value and storing it there:
+    // some record types are ABI-classified as Direct with coercion yet still
+    // reduce to a single register-sized LLVM type such as x86_fp80 (e.g. a
+    // union with a long double member), and the backend moves such a value
+    // through the x87 FPU (fldt/fstpt), which is not bit-preserving for
+    // non-float bit patterns.
+    cir::LoadOp srcLoad = getWholeRecordLoad(origVal);
+    mlir::Value coerced = emitCoercion(
+        builder, r.getLoc(), coercedRetTy, origVal,
+        &funcOp->getRegion(0).front(), dl, offset,
+        srcLoad ? srcLoad.getAddr() : mlir::Value{});
     r->setOperand(0, coerced);
+    if (srcLoad && srcLoad->use_empty())
+      srcLoad.erase();
   }
 }
 
@@ -800,14 +836,23 @@ void insertArgCoercion(
         if (destAlloca)
           pendingParamSlots.emplace_back(destAlloca, blockArg);
       } else {
-        // byval: load the incoming pointer so the body sees a T value (and
-        // any CIRGen param-slot store becomes a local copy of that value).
+        // byval: the incoming pointer is already the callee's own private
+        // copy, so copy its bytes straight into the CIRGen param-spill slot
+        // rather than loading the whole record into an SSA value and
+        // storing it there: some record types are ABI-classified as byval
+        // yet still reduce to a single register-sized LLVM type such as
+        // x86_fp80 (e.g. a union with a long double member), and the
+        // backend moves such a value through the x87 FPU (fldt/fstpt),
+        // which is not bit-preserving for non-float bit patterns.
+        auto [paramStore, destAlloca] = findParamSpill(blockArg);
         blockArg.setType(ptrTy);
 
-        builder.setInsertionPointToStart(&entry);
-        auto loadOp = cir::LoadOp::create(builder, funcOp.getLoc(), blockArg);
-        SmallPtrSet<mlir::Operation *, 1> loadOps = {loadOp};
-        blockArg.replaceAllUsesExcept(loadOp.getResult(), loadOps);
+        if (paramStore) {
+          builder.setInsertionPoint(paramStore);
+          cir::CopyOp::create(builder, funcOp.getLoc(), destAlloca, blockArg,
+                              {}, {});
+          paramStore.erase();
+        }
       }
     }
     // Ignore, Extend, and Direct-without-coerce need no block-level changes.
@@ -1370,8 +1415,21 @@ CIRABIRewriteContext::rewriteCallSite(mlir::Operation *callOp,
                           deadRecordLoads);
     } else if (ac.kind == ArgKind::Direct && ac.coercedType &&
                arg.getType() != ac.coercedType) {
+      // When arg is a simple whole-record load from an alloca, copy bytes
+      // directly from that alloca into the coercion slot instead of
+      // materializing the whole record as an SSA value and storing it
+      // there: some record types are ABI-classified as Direct with
+      // coercion (passed in registers) yet still reduce to a single
+      // register-sized LLVM type such as x86_fp80 (e.g. a union with a
+      // long double member), and the backend moves such a value through
+      // the x87 FPU (fldt/fstpt), which is not bit-preserving for
+      // non-float bit patterns.
+      cir::LoadOp srcLoad = getWholeRecordLoad(arg);
       arg = emitCoercion(builder, call.getLoc(), ac.coercedType, arg, slotBlock,
-                         dl, ac.directOffset);
+                         dl, ac.directOffset,
+                         srcLoad ? srcLoad.getAddr() : mlir::Value{});
+      if (srcLoad)
+        deadRecordLoads.push_back(srcLoad);
       newArgs.push_back(arg);
     } else if (ac.kind == ArgKind::Indirect) {
       // byval hands the callee its own copy.  Without byval the argument must
@@ -1402,7 +1460,23 @@ CIRABIRewriteContext::rewriteCallSite(mlir::Operation *callOp,
       auto slot = cir::AllocaOp::create(
           builder, call.getLoc(), ptrTy, builder.getStringAttr("byval"),
           builder.getI64IntegerAttr(ac.indirectAlign.value()));
-      cir::StoreOp::create(builder, call.getLoc(), arg, slot);
+      // When the argument is a simple whole-record load from an alloca, copy
+      // bytes directly from that alloca instead of materializing the whole
+      // record as an SSA value and storing it back: some record types that
+      // are ABI-classified as memory (byval) still reduce to a single
+      // register-sized LLVM type such as x86_fp80 (e.g. a union with a long
+      // double member), and the backend moves such values through the x87
+      // FPU (fldt/fstpt), which is not bit-preserving for non-float bit
+      // patterns.
+      if (cir::LoadOp srcLoad = getWholeRecordLoad(arg)) {
+        cir::AllocaOp srcAlloca = cir::getUnderlyingAlloca(srcLoad.getAddr());
+        cir::CopyOp::create(builder, call.getLoc(), slot, srcLoad.getAddr(),
+                            builder.getI64IntegerAttr(ac.indirectAlign.value()),
+                            builder.getI64IntegerAttr(srcAlloca.getAlignment()));
+        deadRecordLoads.push_back(srcLoad);
+      } else {
+        cir::StoreOp::create(builder, call.getLoc(), arg, slot);
+      }
       newArgs.push_back(slot);
     } else {
       newArgs.push_back(arg);
@@ -1445,10 +1519,35 @@ CIRABIRewriteContext::rewriteCallSite(mlir::Operation *callOp,
   // emit a coercion back to the original type for the call's existing uses.
   if (returnNeedsCoercion) {
     builder.setInsertionPointAfter(newCall);
-    mlir::Value coercedBack =
-        emitCoercion(builder, call.getLoc(), origRetTy, newCall.getResult(),
-                     slotBlock, dl, fc.returnInfo.directOffset);
-    call.getResult().replaceAllUsesWith(coercedBack);
+    // When the only consumer of the coerced-back value is a bare store into
+    // memory (e.g. CIRGenCall's emitAggregateStore for a TEK_Aggregate
+    // return), copy bytes directly from the coercion slot to that
+    // destination instead of loading the whole record back into an SSA
+    // value and storing it again: some record types are ABI-classified as
+    // Direct with coercion yet still reduce to a single register-sized LLVM
+    // type such as x86_fp80 (e.g. a union with a long double member), and
+    // the backend moves such a value through the x87 FPU (fldt/fstpt),
+    // which is not bit-preserving for non-float bit patterns.
+    cir::StoreOp destStore;
+    if (call.getResult().hasOneUse())
+      destStore =
+          mlir::dyn_cast<cir::StoreOp>(*call.getResult().getUsers().begin());
+    if (destStore && destStore.getValue() == call.getResult() &&
+        !destStore.getIsVolatile() && !destStore.getMemOrder()) {
+      SmallPtrSet<mlir::Operation *, 4> coercionOps;
+      mlir::Value coerceSlot = emitCoercionToMemory(
+          builder, call.getLoc(), origRetTy, newCall.getResult(), slotBlock,
+          dl, coercionOps, fc.returnInfo.directOffset);
+      builder.setInsertionPoint(destStore);
+      cir::CopyOp::create(builder, call.getLoc(), destStore.getAddr(),
+                          coerceSlot, {}, {});
+      destStore.erase();
+    } else {
+      mlir::Value coercedBack =
+          emitCoercion(builder, call.getLoc(), origRetTy, newCall.getResult(),
+                       slotBlock, dl, fc.returnInfo.directOffset);
+      call.getResult().replaceAllUsesWith(coercedBack);
+    }
   }
 
   // Layer llvm.signext / llvm.zeroext onto the new call's arg_attrs and

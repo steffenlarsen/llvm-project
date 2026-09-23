@@ -163,8 +163,7 @@ constexpr int arr5[2](2);
 // LLVMCIR:      [[COERCE:%.*]] = alloca [[STRUCT_A]], align 8
 // LLVM:         [[RETVAL:%.*]] = alloca [[STRUCT_A]], align 8
 // LLVM-NEXT:    call void @llvm.memcpy.p0.p0.i64(ptr align 8 [[RETVAL]], ptr align 8 [[A1]], i64 16, i1 false)
-// LLVMCIR-NEXT: [[REC:%.*]] = load [[STRUCT_A]], ptr [[RETVAL]], align 8
-// LLVMCIR-NEXT: store [[STRUCT_A]] [[REC]], ptr [[COERCE]], align 8
+// LLVMCIR-NEXT: call void @llvm.memcpy.p0.p0.i64(ptr align 8 [[COERCE]], ptr align 8 [[RETVAL]], i64 16, i1 false)
 // LLVMCIR-NEXT: [[TMP_0:%.*]] = load { i8, double }, ptr [[COERCE]], align 8
 // OGCG-NEXT:    [[TMP_0:%.*]] = load { i8, double }, ptr [[RETVAL]], align 8
 // LLVM-NEXT:    ret { i8, double } [[TMP_0]]
@@ -251,8 +250,7 @@ void foo4() {
 // LLVMCIR:      [[COERCE:%.*]] = alloca [[UNION_U]], align 8
 // LLVM:         [[RETVAL:%.*]] = alloca [[UNION_U]], align 8
 // LLVM-NEXT:    call void @llvm.memcpy.p0.p0.i64(ptr align 8 [[RETVAL]], ptr align 8 [[U1]], i64 16, i1 false)
-// LLVMCIR-NEXT: [[REC:%.*]] = load [[UNION_U]], ptr [[RETVAL]], align 8
-// LLVMCIR-NEXT: store [[UNION_U]] [[REC]], ptr [[COERCE]], align 8
+// LLVMCIR-NEXT: call void @llvm.memcpy.p0.p0.i64(ptr align 8 [[COERCE]], ptr align 8 [[RETVAL]], i64 16, i1 false)
 // LLVMCIR-NEXT: [[TMP_0:%.*]] = load { i64, double }, ptr [[COERCE]], align 8
 // OGCG-NEXT:    [[DIVE:%.*]] = getelementptr inbounds nuw [[UNION_U]], ptr [[RETVAL]], i32 0, i32 0
 // OGCG-NEXT:    [[TMP_0:%.*]] = load { i64, double }, ptr [[DIVE]], align 8
@@ -271,8 +269,7 @@ U foo5() {
 // LLVMCIR:      [[A:%.*]] = alloca [[STRUCT_A]], align 8
 // LLVMCIR-NEXT: [[RETVAL:%.*]] = alloca [[UNION_U]], align 8
 // LLVMCIR:      call void @llvm.memcpy.p0.p0.i64(ptr align 8 [[RETVAL]], ptr align 8 [[A]], i64 16, i1 false)
-// LLVMCIR-NEXT: [[REC:%.*]] = load [[UNION_U]], ptr [[RETVAL]], align 8
-// LLVMCIR-NEXT: store [[UNION_U]] [[REC]], ptr [[COERCE]], align 8
+// LLVMCIR-NEXT: call void @llvm.memcpy.p0.p0.i64(ptr align 8 [[COERCE]], ptr align 8 [[RETVAL]], i64 16, i1 false)
 // LLVMCIR-NEXT: [[TMP_0:%.*]] = load { i64, double }, ptr [[COERCE]], align 8
 // OGCG:         [[RETVAL:%.*]] = alloca [[UNION_U]], align 8
 // OGCG-NEXT:    [[A:%.*]] = alloca [[STRUCT_A]], align 8
@@ -480,8 +477,7 @@ void foo12(int a, int b) {
 // LLVMCIR:      [[COERCE:%.*]] = alloca [[STRUCT_A]], align 8
 // LLVM:         [[RETVAL:%.*]] = alloca [[STRUCT_A]], align 8
 // LLVM-NEXT:    call void @llvm.memcpy.p0.p0.i64(ptr align 8 [[RETVAL]], ptr align 8 [[A2]], i64 16, i1 false)
-// LLVMCIR-NEXT: [[REC:%.*]] = load [[STRUCT_A]], ptr [[RETVAL]], align 8
-// LLVMCIR-NEXT: store [[STRUCT_A]] [[REC]], ptr [[COERCE]], align 8
+// LLVMCIR-NEXT: call void @llvm.memcpy.p0.p0.i64(ptr align 8 [[COERCE]], ptr align 8 [[RETVAL]], i64 16, i1 false)
 // LLVMCIR-NEXT: [[TMP_0:%.*]] = load { i8, double }, ptr [[COERCE]], align 8
 // OGCG-NEXT:    [[TMP_0:%.*]] = load { i8, double }, ptr [[RETVAL]], align 8
 // LLVM-NEXT:    ret { i8, double } [[TMP_0]]

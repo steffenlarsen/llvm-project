@@ -63,8 +63,7 @@ void cxx_rewritten_binary_operator_complex_expr() {
 // CIR: %[[RESULT:.*]] = cir.call @_ZNK22SpaceshipComplexResultltEi(%[[TMP_ADDR]], %[[CONST_0]]) : (!cir.ptr<!rec_SpaceshipComplexResult> {llvm.align = 1 : i64, llvm.dereferenceable = 1 : i64, llvm.nonnull, llvm.noundef}, !s32i {llvm.noundef}) -> (!u64i {llvm.noundef})
 // CIR: cir.store %[[RESULT]], %[[R_SLOT:.*]] : !u64i, !cir.ptr<!u64i>
 // CIR: %[[R_PTR:.*]] = cir.cast bitcast %[[R_SLOT]] : !cir.ptr<!u64i> -> !cir.ptr<!cir.complex<!s32i>>
-// CIR: %[[R_CPLX:.*]] = cir.load %[[R_PTR]] : !cir.ptr<!cir.complex<!s32i>>, !cir.complex<!s32i>
-// CIR: cir.store {{.*}} %[[R_CPLX]], %[[R_ADDR]] : !cir.complex<!s32i>, !cir.ptr<!cir.complex<!s32i>>
+// CIR: cir.copy %[[R_PTR]] to %[[R_ADDR]] : !cir.ptr<!cir.complex<!s32i>>
 
 // The difference between LLVM and OGCG is due to missing ABI lowering.
 
@@ -75,8 +74,7 @@ void cxx_rewritten_binary_operator_complex_expr() {
 // LLVM: call void @_ZNK11ComplexItemssERKS_(ptr noundef nonnull align 1 dereferenceable(1) %[[A_ADDR]], ptr noundef nonnull align 1 dereferenceable(1) %[[B_ADDR]])
 // LLVM: %[[RESULT:.*]] = call noundef i64 @_ZNK22SpaceshipComplexResultltEi(ptr noundef nonnull align 1 dereferenceable(1) %[[TMP_ADDR]], i32 noundef 0)
 // LLVM: store i64 %[[RESULT]], ptr %[[R_SLOT:.*]], align 8
-// LLVM: %[[R_CPLX:.*]] = load { i32, i32 }, ptr %[[R_SLOT]], align 4
-// LLVM: store { i32, i32 } %[[R_CPLX]], ptr %[[R_ADDR]], align 4
+// LLVM: call void @llvm.memcpy.p0.p0.i64(ptr align 4 %[[R_ADDR]], ptr align 4 %[[R_SLOT]], i64 8, i1 false)
 
 // OGCG: %[[A_ADDR:.*]] = alloca %struct.ComplexItem, align 1
 // OGCG: %[[B_ADDR:.*]] = alloca %struct.ComplexItem, align 1
@@ -124,8 +122,7 @@ void cxx_rewritten_binary_operator_aggr_expr() {
 // CIR: %[[RESULT:.*]] = cir.call @_ZNK15SpaceshipResultltEi(%[[TMP_ADDR]], %[[CONST_0]]) : (!cir.ptr<!rec_SpaceshipResult> {llvm.align = 1 : i64, llvm.dereferenceable = 1 : i64, llvm.nonnull, llvm.noundef}, !s32i {llvm.noundef}) -> !s32i
 // CIR: cir.store %[[RESULT]], %[[R_SLOT:.*]] : !s32i, !cir.ptr<!s32i>
 // CIR: %[[R_PTR:.*]] = cir.cast bitcast %[[R_SLOT]] : !cir.ptr<!s32i> -> !cir.ptr<!rec_Result>
-// CIR: %[[R_VAL:.*]] = cir.load %[[R_PTR]] : !cir.ptr<!rec_Result>, !rec_Result
-// CIR: cir.store {{.*}} %[[R_VAL]], %[[R_ADDR]] : !rec_Result, !cir.ptr<!rec_Result>
+// CIR: cir.copy %[[R_PTR]] to %[[R_ADDR]] : !cir.ptr<!rec_Result>
 
 // The difference between LLVM and OGCG is due to missing ABI lowering.
 
@@ -137,8 +134,7 @@ void cxx_rewritten_binary_operator_aggr_expr() {
 // LLVM: store %struct.SpaceshipResult poison, ptr %[[TMP_ADDR]], align 1
 // LLVM: %[[RESULT:.*]] = call i32 @_ZNK15SpaceshipResultltEi(ptr noundef nonnull align 1 dereferenceable(1) %[[TMP_ADDR]], i32 noundef 0)
 // LLVM: store i32 %[[RESULT]], ptr %[[R_SLOT:.*]], align 4
-// LLVM: %[[R_VAL:.*]] = load %struct.Result, ptr %[[R_SLOT]], align 4
-// LLVM: store %struct.Result %[[R_VAL]], ptr %[[R_ADDR]], align 4
+// LLVM: call void @llvm.memcpy.p0.p0.i64(ptr align 4 %[[R_ADDR]], ptr align 4 %[[R_SLOT]], i64 4, i1 false)
 
 // OGCG: %[[A_ADDR:.*]] = alloca %struct.Item, align 1
 // OGCG: %[[B_ADDR:.*]] = alloca %struct.Item, align 1

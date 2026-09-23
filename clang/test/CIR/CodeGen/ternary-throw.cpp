@@ -1044,8 +1044,7 @@ void test_agg_arg_throw(bool c) {
 // CIR:     cir.get_member %[[TMP]][0] {name = "x"}
 // CIR:     cir.get_member %[[TMP]][1] {name = "y"}
 // CIR:   }
-// CIR:   %[[AGG:.*]] = cir.load{{.*}} %[[TMP]] : !cir.ptr<!rec_Agg>, !rec_Agg
-// CIR:   cir.store %[[AGG]], %[[COERCE]] : !rec_Agg, !cir.ptr<!rec_Agg>
+// CIR:   cir.copy %[[TMP]] to %[[COERCE]] : !cir.ptr<!rec_Agg>
 // CIR:   %[[COERCE_PTR:.*]] = cir.cast bitcast %[[COERCE]] : !cir.ptr<!rec_Agg> -> !cir.ptr<!u64i>
 // CIR:   %[[ARG:.*]] = cir.load %[[COERCE_PTR]] : !cir.ptr<!u64i>, !u64i
 // CIR:   cir.call @_Z4take3Agg(%[[ARG]]) : (!u64i) -> ()

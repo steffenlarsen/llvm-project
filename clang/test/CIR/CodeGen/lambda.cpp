@@ -165,8 +165,7 @@ auto g() {
 // CIR:   cir.store{{.*}} %[[TWELVE]], %[[I_ADDR]] : !s32i, !cir.ptr<!s32i>
 // CIR:   %[[I_ADDR_ADDR:.*]] = cir.get_member %[[RETVAL]][0] {name = "i"} : !cir.ptr<![[REC_LAM_G]]> -> !cir.ptr<!cir.ptr<!s32i>>
 // CIR:   cir.store{{.*}} %[[I_ADDR]], %[[I_ADDR_ADDR]] : !cir.ptr<!s32i>, !cir.ptr<!cir.ptr<!s32i>>
-// CIR:   %[[LAM:.*]] = cir.load{{.*}} %[[RETVAL]] : !cir.ptr<![[REC_LAM_G]]>, ![[REC_LAM_G]]
-// CIR:   cir.store %[[LAM]], %[[COERCE]] : ![[REC_LAM_G]], !cir.ptr<![[REC_LAM_G]]>
+// CIR:   cir.copy %[[RETVAL]] to %[[COERCE]] : !cir.ptr<![[REC_LAM_G]]>
 // CIR:   %[[COERCE_PTR:.*]] = cir.cast bitcast %[[COERCE]] : !cir.ptr<![[REC_LAM_G]]> -> !cir.ptr<!cir.ptr<!void>>
 // CIR:   %[[RET:.*]] = cir.load %[[COERCE_PTR]] : !cir.ptr<!cir.ptr<!void>>, !cir.ptr<!void>
 // CIR:   cir.return %[[RET]] : !cir.ptr<!void>
@@ -178,8 +177,7 @@ auto g() {
 // LLVM:   store i32 12, ptr %[[I]]
 // LLVM:   %[[I_ADDR:.*]] = getelementptr inbounds nuw %[[REC_LAM_G]], ptr %[[RETVAL]], i32 0, i32 0
 // LLVM:   store ptr %[[I]], ptr %[[I_ADDR]]
-// LLVM:   %[[LAM:.*]] = load %[[REC_LAM_G]], ptr %[[RETVAL]]
-// LLVM:   store %[[REC_LAM_G]] %[[LAM]], ptr %[[COERCE]]
+// LLVM:   call void @llvm.memcpy.p0.p0.i64(ptr align 8 %[[COERCE]], ptr align 8 %[[RETVAL]], i64 8, i1 false)
 // LLVM:   %[[RET:.*]] = load ptr, ptr %[[COERCE]]
 // LLVM:   ret ptr %[[RET]]
 
@@ -211,8 +209,7 @@ auto g2() {
 // CIR:   cir.store{{.*}} %[[TWELVE]], %[[I_ADDR]] : !s32i, !cir.ptr<!s32i>
 // CIR:   %[[I_ADDR_ADDR:.*]] = cir.get_member %[[RETVAL]][0] {name = "i"} : !cir.ptr<![[REC_LAM_G2]]> -> !cir.ptr<!cir.ptr<!s32i>>
 // CIR:   cir.store{{.*}} %[[I_ADDR]], %[[I_ADDR_ADDR]] : !cir.ptr<!s32i>, !cir.ptr<!cir.ptr<!s32i>>
-// CIR:   %[[LAM:.*]] = cir.load{{.*}} %[[RETVAL]] : !cir.ptr<![[REC_LAM_G2]]>, ![[REC_LAM_G2]]
-// CIR:   cir.store %[[LAM]], %[[COERCE]] : ![[REC_LAM_G2]], !cir.ptr<![[REC_LAM_G2]]>
+// CIR:   cir.copy %[[RETVAL]] to %[[COERCE]] : !cir.ptr<![[REC_LAM_G2]]>
 // CIR:   %[[COERCE_PTR:.*]] = cir.cast bitcast %[[COERCE]] : !cir.ptr<![[REC_LAM_G2]]> -> !cir.ptr<!cir.ptr<!void>>
 // CIR:   %[[RET:.*]] = cir.load %[[COERCE_PTR]] : !cir.ptr<!cir.ptr<!void>>, !cir.ptr<!void>
 // CIR:   cir.return %[[RET]] : !cir.ptr<!void>
@@ -224,8 +221,7 @@ auto g2() {
 // LLVM:   store i32 12, ptr %[[I]]
 // LLVM:   %[[I_ADDR:.*]] = getelementptr inbounds nuw %[[REC_LAM_G]], ptr %[[RETVAL]], i32 0, i32 0
 // LLVM:   store ptr %[[I]], ptr %[[I_ADDR]]
-// LLVM:   %[[LAM:.*]] = load %[[REC_LAM_G]], ptr %[[RETVAL]]
-// LLVM:   store %[[REC_LAM_G]] %[[LAM]], ptr %[[COERCE]]
+// LLVM:   call void @llvm.memcpy.p0.p0.i64(ptr align 8 %[[COERCE]], ptr align 8 %[[RETVAL]], i64 8, i1 false)
 // LLVM:   %[[RET:.*]] = load ptr, ptr %[[COERCE]]
 // LLVM:   ret ptr %[[RET]]
 
@@ -250,8 +246,7 @@ int f() {
 // CIR:   %[[G2:.*]] = cir.call @_Z2g2v() : () -> !cir.ptr<!void>
 // CIR:   cir.store %[[G2]], %[[COERCE]] : !cir.ptr<!void>, !cir.ptr<!cir.ptr<!void>>
 // CIR:   %[[COERCE_REC:.*]] = cir.cast bitcast %[[COERCE]] : !cir.ptr<!cir.ptr<!void>> -> !cir.ptr<![[REC_LAM_G2]]>
-// CIR:   %[[LAM:.*]] = cir.load %[[COERCE_REC]] : !cir.ptr<![[REC_LAM_G2]]>, ![[REC_LAM_G2]]
-// CIR:   cir.store{{.*}} %[[LAM]], %[[TMP]]
+// CIR:   cir.copy %[[COERCE_REC]] to %[[TMP]] : !cir.ptr<![[REC_LAM_G2]]>
 // CIR:   %[[RESULT:.*]] = cir.call @_ZZ2g2vENK3$_0clEv(%[[TMP]])
 // CIR:   cir.store{{.*}} %[[RESULT]], %[[RETVAL]]
 // CIR:   %[[RET:.*]] = cir.load{{.*}} %[[RETVAL]]
@@ -281,8 +276,7 @@ int f() {
 // LLVM:   %[[TMP:.*]] = alloca %[[REC_LAM_G2:[^,]*]],
 // LLVM:   %[[G2:.*]] = call ptr @_Z2g2v()
 // LLVM:   store ptr %[[G2]], ptr %[[COERCE]]
-// LLVM:   %[[LAM:.*]] = load %[[REC_LAM_G2]], ptr %[[COERCE]]
-// LLVM:   store %[[REC_LAM_G2]] %[[LAM]], ptr %[[TMP]]
+// LLVM:   call void @llvm.memcpy.p0.p0.i64(ptr align 8 %[[TMP]], ptr align 8 %[[COERCE]], i64 8, i1 false)
 // LLVM:   %[[RESULT:.*]] = call {{.*}}i32 @"_ZZ2g2vENK3$_0clEv"(ptr {{.*}} %[[TMP]])
 // LLVM:   store i32 %[[RESULT]], ptr %[[RETVAL]]
 // LLVM:   %[[RET:.*]] = load i32, ptr %[[RETVAL]]

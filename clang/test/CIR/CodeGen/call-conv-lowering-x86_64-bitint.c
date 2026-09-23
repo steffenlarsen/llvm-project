@@ -17,9 +17,10 @@ void take_wide(_BitInt(200) x) {}
 // LLVM-LABEL: define dso_local void @take_wide(
 // LLVM-SAME:     ptr noundef byval(i256) align 8 %[[ARG:[0-9]+]])
 // OGCG:          %[[SLOT:.+]] = alloca i256, align 8
-// LLVM:          %[[WIDE:.+]] = load i256, ptr %[[ARG]], align 8
-// LLVM-NEXT:     %[[NARROW:.+]] = trunc i256 %[[WIDE]] to i200
-// LLVMCIR-NEXT:  %[[SLOT:.+]] = alloca i256, align 8
-// LLVM-NEXT:     %[[EXT:.+]] = sext i200 %[[NARROW]] to i256
-// LLVM-NEXT:     store i256 %[[EXT]], ptr %[[SLOT]], align 8
+// OGCG-NEXT:     %[[WIDE:.+]] = load i256, ptr %[[ARG]], align 8
+// OGCG-NEXT:     %[[NARROW:.+]] = trunc i256 %[[WIDE]] to i200
+// OGCG-NEXT:     %[[EXT:.+]] = sext i200 %[[NARROW]] to i256
+// OGCG-NEXT:     store i256 %[[EXT]], ptr %[[SLOT]], align 8
+// LLVMCIR:       %[[SLOT:.+]] = alloca i256, align 8
+// LLVMCIR-NEXT:  call void @llvm.memcpy.p0.p0.i64(ptr align 16 %[[SLOT]], ptr align 16 %[[ARG]], i64 32, i1 false)
 // LLVM-NEXT:     ret void

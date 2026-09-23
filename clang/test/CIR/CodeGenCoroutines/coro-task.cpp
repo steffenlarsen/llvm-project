@@ -760,8 +760,7 @@ folly::coro::Task<int __complex__> complex_co_await() noexcept {
 // CIR:         %[[RESUME_VAL:.*]] = cir.call @_ZN5folly4coro4TaskICiE12await_resumeEv(%[[COMPLEX_ADDR]]) : (!cir.ptr<!rec_folly3A3Acoro3A3ATask3C_Complex_int3E> {llvm.align = 1 : i64, llvm.dereferenceable = 1 : i64, llvm.nonnull, llvm.noundef}) -> (!u64i {llvm.noundef})
 // CIR:         cir.store %[[RESUME_VAL]], %[[COERCE_ADDR]] : !u64i, !cir.ptr<!u64i>
 // CIR:         %[[COERCE_CAST:.*]] = cir.cast bitcast %[[COERCE_ADDR]] : !cir.ptr<!u64i> -> !cir.ptr<!cir.complex<!s32i>>
-// CIR:         %[[RESUME_COMPLEX:.*]] = cir.load %[[COERCE_CAST]] : !cir.ptr<!cir.complex<!s32i>>, !cir.complex<!s32i>
-// CIR:         cir.store %[[RESUME_COMPLEX]], %[[RESUME_VAL_ADDR]] : !cir.complex<!s32i>, !cir.ptr<!cir.complex<!s32i>>
+// CIR:         cir.copy %[[COERCE_CAST]] to %[[RESUME_VAL_ADDR]] : !cir.ptr<!cir.complex<!s32i>>
 // CIR:       },)
 // CIR:       %[[V:.*]] = cir.load %[[RESUME_VAL_ADDR]] : !cir.ptr<!cir.complex<!s32i>>, !cir.complex<!s32i>
 // CIR:       cir.yield
