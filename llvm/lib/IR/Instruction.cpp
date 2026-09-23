@@ -16,7 +16,7 @@
 #include "llvm/IR/AttributeMask.h"
 #include "llvm/IR/Attributes.h"
 #include "llvm/IR/Constants.h"
-#include "llvm/IR/IROptionsOptInfos.h"
+#include "llvm/IR/IROptions.h"
 #include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"
@@ -29,16 +29,13 @@
 #include "llvm/IR/Type.h"
 #include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/Compiler.h"
-#include "llvm/Support/OptionsContext.h"
 using namespace llvm;
-using namespace llvm::clv2;
 
 // FIXME: Flag used for an ablation performance test, Issue #147390. Placing it
 // here because referencing IR should be feasible from anywhere. Will be
 // removed after the ablation test.
 bool llvm::getProfcheckDisableMetadataFixes(const LLVMContext &Ctx) {
-  return getOptValIfSpecified<&IROptsReg, &IR_ProfcheckDisableMetadataFixes>(
-      Ctx.getOptionsContext(), false);
+  return Ctx.getOptions<IROptions>().IR_ProfcheckDisableMetadataFixes;
 }
 
 InsertPosition::InsertPosition(BasicBlock *InsertAtEnd)
@@ -218,7 +215,7 @@ void Instruction::moveBeforePreserving(BasicBlock &BB,
 }
 
 void Instruction::moveBeforeImpl(BasicBlock &BB, InstListType::iterator I,
-                              bool Preserve) {
+                                 bool Preserve) {
   assert(I == BB.end() || I->getParent() == &BB);
   bool InsertAtHead = I.getHeadBit();
 
@@ -822,87 +819,155 @@ void Instruction::andIRFlags(const Value *V) {
 const char *Instruction::getOpcodeName(unsigned OpCode) {
   switch (OpCode) {
   // Terminators
-  case Ret:    return "ret";
-  case UncondBr: return "br";
-  case CondBr: return "br";
-  case Switch: return "switch";
-  case IndirectBr: return "indirectbr";
-  case Invoke: return "invoke";
-  case Resume: return "resume";
-  case Unreachable: return "unreachable";
-  case CleanupRet: return "cleanupret";
-  case CatchRet: return "catchret";
-  case CatchPad: return "catchpad";
-  case CatchSwitch: return "catchswitch";
-  case CallBr: return "callbr";
+  case Ret:
+    return "ret";
+  case UncondBr:
+    return "br";
+  case CondBr:
+    return "br";
+  case Switch:
+    return "switch";
+  case IndirectBr:
+    return "indirectbr";
+  case Invoke:
+    return "invoke";
+  case Resume:
+    return "resume";
+  case Unreachable:
+    return "unreachable";
+  case CleanupRet:
+    return "cleanupret";
+  case CatchRet:
+    return "catchret";
+  case CatchPad:
+    return "catchpad";
+  case CatchSwitch:
+    return "catchswitch";
+  case CallBr:
+    return "callbr";
 
   // Standard unary operators...
-  case FNeg: return "fneg";
+  case FNeg:
+    return "fneg";
 
   // Standard binary operators...
-  case Add: return "add";
-  case FAdd: return "fadd";
-  case Sub: return "sub";
-  case FSub: return "fsub";
-  case Mul: return "mul";
-  case FMul: return "fmul";
-  case UDiv: return "udiv";
-  case SDiv: return "sdiv";
-  case FDiv: return "fdiv";
-  case URem: return "urem";
-  case SRem: return "srem";
-  case FRem: return "frem";
+  case Add:
+    return "add";
+  case FAdd:
+    return "fadd";
+  case Sub:
+    return "sub";
+  case FSub:
+    return "fsub";
+  case Mul:
+    return "mul";
+  case FMul:
+    return "fmul";
+  case UDiv:
+    return "udiv";
+  case SDiv:
+    return "sdiv";
+  case FDiv:
+    return "fdiv";
+  case URem:
+    return "urem";
+  case SRem:
+    return "srem";
+  case FRem:
+    return "frem";
 
   // Logical operators...
-  case And: return "and";
-  case Or : return "or";
-  case Xor: return "xor";
+  case And:
+    return "and";
+  case Or:
+    return "or";
+  case Xor:
+    return "xor";
 
   // Memory instructions...
-  case Alloca:        return "alloca";
-  case Load:          return "load";
-  case Store:         return "store";
-  case AtomicCmpXchg: return "cmpxchg";
-  case AtomicRMW:     return "atomicrmw";
-  case Fence:         return "fence";
-  case GetElementPtr: return "getelementptr";
+  case Alloca:
+    return "alloca";
+  case Load:
+    return "load";
+  case Store:
+    return "store";
+  case AtomicCmpXchg:
+    return "cmpxchg";
+  case AtomicRMW:
+    return "atomicrmw";
+  case Fence:
+    return "fence";
+  case GetElementPtr:
+    return "getelementptr";
 
   // Convert instructions...
-  case Trunc:         return "trunc";
-  case ZExt:          return "zext";
-  case SExt:          return "sext";
-  case FPTrunc:       return "fptrunc";
-  case FPExt:         return "fpext";
-  case FPToUI:        return "fptoui";
-  case FPToSI:        return "fptosi";
-  case UIToFP:        return "uitofp";
-  case SIToFP:        return "sitofp";
-  case IntToPtr:      return "inttoptr";
-  case PtrToAddr:     return "ptrtoaddr";
-  case PtrToInt:      return "ptrtoint";
-  case BitCast:       return "bitcast";
-  case AddrSpaceCast: return "addrspacecast";
+  case Trunc:
+    return "trunc";
+  case ZExt:
+    return "zext";
+  case SExt:
+    return "sext";
+  case FPTrunc:
+    return "fptrunc";
+  case FPExt:
+    return "fpext";
+  case FPToUI:
+    return "fptoui";
+  case FPToSI:
+    return "fptosi";
+  case UIToFP:
+    return "uitofp";
+  case SIToFP:
+    return "sitofp";
+  case IntToPtr:
+    return "inttoptr";
+  case PtrToAddr:
+    return "ptrtoaddr";
+  case PtrToInt:
+    return "ptrtoint";
+  case BitCast:
+    return "bitcast";
+  case AddrSpaceCast:
+    return "addrspacecast";
 
   // Other instructions...
-  case ICmp:           return "icmp";
-  case FCmp:           return "fcmp";
-  case PHI:            return "phi";
-  case Select:         return "select";
-  case Call:           return "call";
-  case Shl:            return "shl";
-  case LShr:           return "lshr";
-  case AShr:           return "ashr";
-  case VAArg:          return "va_arg";
-  case ExtractElement: return "extractelement";
-  case InsertElement:  return "insertelement";
-  case ShuffleVector:  return "shufflevector";
-  case ExtractValue:   return "extractvalue";
-  case InsertValue:    return "insertvalue";
-  case LandingPad:     return "landingpad";
-  case CleanupPad:     return "cleanuppad";
-  case Freeze:         return "freeze";
+  case ICmp:
+    return "icmp";
+  case FCmp:
+    return "fcmp";
+  case PHI:
+    return "phi";
+  case Select:
+    return "select";
+  case Call:
+    return "call";
+  case Shl:
+    return "shl";
+  case LShr:
+    return "lshr";
+  case AShr:
+    return "ashr";
+  case VAArg:
+    return "va_arg";
+  case ExtractElement:
+    return "extractelement";
+  case InsertElement:
+    return "insertelement";
+  case ShuffleVector:
+    return "shufflevector";
+  case ExtractValue:
+    return "extractvalue";
+  case InsertValue:
+    return "insertvalue";
+  case LandingPad:
+    return "landingpad";
+  case CleanupPad:
+    return "cleanuppad";
+  case Freeze:
+    return "freeze";
 
-  default: return "<Invalid operator> ";
+  default:
+    return "<Invalid operator> ";
   }
 }
 
@@ -1041,18 +1106,18 @@ bool Instruction::isSameOperationAs(const Instruction *I,
 
   if (getOpcode() != I->getOpcode() ||
       getNumOperands() != I->getNumOperands() ||
-      (UseScalarTypes ?
-       getType()->getScalarType() != I->getType()->getScalarType() :
-       getType() != I->getType()))
+      (UseScalarTypes
+           ? getType()->getScalarType() != I->getType()->getScalarType()
+           : getType() != I->getType()))
     return false;
 
   // We have two instructions of identical opcode and #operands.  Check to see
   // if all operands are the same type
   for (unsigned i = 0, e = getNumOperands(); i != e; ++i)
-    if (UseScalarTypes ?
-        getOperand(i)->getType()->getScalarType() !=
-          I->getOperand(i)->getType()->getScalarType() :
-        getOperand(i)->getType() != I->getOperand(i)->getType())
+    if (UseScalarTypes
+            ? getOperand(i)->getType()->getScalarType() !=
+                  I->getOperand(i)->getType()->getScalarType()
+            : getOperand(i)->getType() != I->getOperand(i)->getType())
       return false;
 
   if (CheckCallTargets)
@@ -1135,7 +1200,8 @@ MemoryEffects Instruction::getMemoryEffects() const {
 
 bool Instruction::mayReadFromMemory() const {
   switch (getOpcode()) {
-  default: return false;
+  default:
+    return false;
   case Instruction::VAArg:
   case Instruction::Load:
   case Instruction::Fence: // FIXME: refine definition of mayReadFromMemory
@@ -1155,7 +1221,8 @@ bool Instruction::mayReadFromMemory() const {
 
 bool Instruction::mayWriteToMemory() const {
   switch (getOpcode()) {
-  default: return false;
+  default:
+    return false;
   case Instruction::Fence: // FIXME: refine definition of mayWriteToMemory
   case Instruction::Store:
   case Instruction::VAArg:
@@ -1231,7 +1298,8 @@ bool Instruction::isVolatile() const {
       if (auto *MI = dyn_cast<MemIntrinsic>(II))
         return MI->isVolatile();
       switch (II->getIntrinsicID()) {
-      default: break;
+      default:
+        break;
       case Intrinsic::matrix_column_major_load:
         return cast<ConstantInt>(II->getArgOperand(2))->isOne();
       case Intrinsic::matrix_column_major_store:
@@ -1394,9 +1462,7 @@ bool Instruction::isDebugOrPseudoInst() const {
   return isa<DbgInfoIntrinsic>(this) || isa<PseudoProbeInst>(this);
 }
 
-const DebugLoc &Instruction::getStableDebugLoc() const {
-  return getDebugLoc();
-}
+const DebugLoc &Instruction::getStableDebugLoc() const { return getDebugLoc(); }
 
 bool Instruction::isAssociative() const {
   if (auto *II = dyn_cast<IntrinsicInst>(this))
@@ -1515,9 +1581,9 @@ void Instruction::swapProfMetadata() {
 
 void Instruction::copyProfileAndDebugMetadata(const Instruction &SrcInst) {
   // TODO: Include additional metadata in the future if appropriate.
-  static const unsigned SafeIDs[] = {
-      LLVMContext::MD_dbg, LLVMContext::MD_prof, LLVMContext::MD_memprof,
-      LLVMContext::MD_callsite};
+  static const unsigned SafeIDs[] = {LLVMContext::MD_dbg, LLVMContext::MD_prof,
+                                     LLVMContext::MD_memprof,
+                                     LLVMContext::MD_callsite};
   copyMetadata(SrcInst, SafeIDs);
 }
 

@@ -42,10 +42,9 @@
 #include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Scalar/LoopPassManager.h"
-#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
+#include "llvm/Transforms/Scalar/ScalarOptions.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
@@ -60,14 +59,13 @@ using namespace llvm;
 STATISTIC(LoopsInterchanged, "Number of loops interchanged");
 
 static int getLoopInterchangeCostThreshold(const Function &F) {
-  return clv2::getOptValOr<&clv2::ScalarOptsReg,
-                           &clv2::SC_LoopInterchangeThreshold>(
-      F.getContext().getOptionsContext(), 0);
+  return F.getContext().getOptions<ScalarOptions>().SC_LoopInterchangeThreshold;
 }
 
 static unsigned int getMaxMemInstrRatio(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_LoopInterchangeMaxMemInstrCount>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_LoopInterchangeMaxMemInstrCount;
 }
 
 namespace {
@@ -96,35 +94,36 @@ enum class RuleTy {
 
 // Minimum loop depth supported.
 static unsigned int getMinLoopNestDepth(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_LoopInterchangeMinLoopNestDepth>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_LoopInterchangeMinLoopNestDepth;
 }
 
 // Maximum loop depth supported.
 static unsigned int getMaxLoopNestDepth(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_LoopInterchangeMaxLoopNestDepth>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_LoopInterchangeMaxLoopNestDepth;
 }
 
 static SmallVector<RuleTy, 4> getProfitabilities(const Function &F) {
-  if (auto *O = clv2::getView<&clv2::ScalarOptsReg>(
-          F.getContext().getOptionsContext())) {
-    const auto &V = O->get<&clv2::SC_LoopInterchangeProfitabilities>();
-    if (!V.empty()) {
-      SmallVector<RuleTy, 4> Result;
-      for (auto E : V)
-        Result.push_back(static_cast<RuleTy>(E));
-      return Result;
-    }
+  const auto &V = F.getContext()
+                      .getOptions<ScalarOptions>()
+                      .SC_LoopInterchangeProfitabilities;
+  if (!V.empty()) {
+    SmallVector<RuleTy, 4> Result;
+    for (auto E : V)
+      Result.push_back(static_cast<RuleTy>(E));
+    return Result;
   }
   return {RuleTy::PerInstrOrderCost, RuleTy::ForVectorization};
 }
 
 // Support for the inner-loop reduction pattern.
 static bool getEnableReduction2Memory(const Function &F) {
-  return clv2::getOptValOr<&clv2::ScalarOptsReg,
-                           &clv2::SC_LoopInterchangeReductionToMem>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_LoopInterchangeReductionToMem;
 }
 
 #ifndef NDEBUG

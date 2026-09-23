@@ -19,14 +19,12 @@
 #include "llvm/MC/MCSectionELF.h"
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/MC/MCValue.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/AArch64/AArch64OptionsOptInfos.h"
+#include "llvm/Target/AArch64/AArch64Options.h"
 using namespace llvm;
 using namespace dwarf;
 
-static bool getEmitAArch64DebugTLSLocation(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::AArch64OptsReg,
-                           &clv2::A64_EmitDebugTLSLocation>(Ctx, false);
+static bool getEmitAArch64DebugTLSLocation() {
+  return AArch64Options::Current.A64_EmitDebugTLSLocation;
 }
 
 void AArch64_ELFTargetObjectFile::Initialize(MCContext &Ctx,
@@ -34,8 +32,7 @@ void AArch64_ELFTargetObjectFile::Initialize(MCContext &Ctx,
   TargetLoweringObjectFileELF::Initialize(Ctx, TM);
   PLTPCRelativeSpecifier = AArch64::S_PLT;
   SupportIndirectSymViaGOTPCRel = true;
-  SupportDebugThreadLocalLocation =
-      getEmitAArch64DebugTLSLocation(TM.getOptionsContext());
+  SupportDebugThreadLocalLocation = getEmitAArch64DebugTLSLocation();
 
   // Make sure the implicitly created empty .text section has the
   // SHF_AARCH64_PURECODE flag set if the "+execute-only" target feature is
@@ -106,7 +103,7 @@ MCSymbol *AArch64_MachoTargetObjectFile::getCFIPersonalitySymbol(
 const MCExpr *AArch64_MachoTargetObjectFile::getIndirectSymViaGOTPCRel(
     const GlobalValue *GV, const MCSymbol *Sym, const MCValue &MV,
     int64_t Offset, MachineModuleInfo *MMI, MCStreamer &Streamer) const {
-  assert((Offset+MV.getConstant() == 0) &&
+  assert((Offset + MV.getConstant() == 0) &&
          "Arch64 does not support GOT PC rel with extra offset");
   // On ARM64 Darwin, we can reference symbols with foo@GOT-., which
   // is an indirect pc-relative reference.

@@ -6,61 +6,27 @@
 //
 //===----------------------------------------------------------------------===//
 
-include "llvm/Support/CLV2Options.td"
+include "llvm/Option/OptParser.td"
 
-def MSP430OptsReg : Registry<"llvm::msp430_opts"> {
-  // Getter bodies are compiled once, in MSP430OptionsGetters.cpp.
-  let OutOfLineGetters = 1;
-}
+def MSP430Options : OptionsStruct<"llvm"> {}
 
-//===----------------------------------------------------------------------===//
-// MSP430HWMult enum
-//===----------------------------------------------------------------------===//
+def MSP430HWMultEnum : OptionEnum<"MSP430HWMult", [
+    EnumMember<"NoHWMult", "none">,
+    EnumMember<"HWMult16", "16bit">,
+    EnumMember<"HWMult32", "32bit">,
+    EnumMember<"HWMultF5", "f5series">]>;
 
-def MSP430HWMultNoHWMult : EnumValue<"none", "Do not use hardware multiplier"> {
-  let CppName = "NoHWMult";
-}
-def MSP430HWMultHWMult16 : EnumValue<"16bit", "Use 16-bit hardware multiplier"> {
-  let CppName = "HWMult16";
-}
-def MSP430HWMultHWMult32 : EnumValue<"32bit", "Use 32-bit hardware multiplier"> {
-  let CppName = "HWMult32";
-}
-def MSP430HWMultHWMultF5 : EnumValue<"f5series", "Use F5 series hardware multiplier"> {
-  let CppName = "HWMultF5";
-}
-
-def MSP430HWMultEnum : EnumType<"MSP430HWMult",
-    [MSP430HWMultNoHWMult, MSP430HWMultHWMult16,
-     MSP430HWMultHWMult32, MSP430HWMultHWMultF5]>;
-
-//===----------------------------------------------------------------------===//
-// Options
-//===----------------------------------------------------------------------===//
-
-def MSP430_HWMultMode : Option<
-    "mhwmult",
+defm MSP430_HWMultMode : EnumField<
+    "mhwmult", MSP430HWMultEnum, "MSP430HWMult::NoHWMult",
     "Hardware multiplier use mode for MSP430",
-    "MSP430HWMult"> {
-  let Registry = MSP430OptsReg;
-  let Default = "none";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def MSP430_NoLegalImmediate : Option<
-    "msp430-no-legal-immediate",
+defm MSP430_NoLegalImmediate : BoolField<
+    "msp430-no-legal-immediate", "false",
     "Enable non legal immediates (for testing purposes only)",
-    "bool"> {
-  let Registry = MSP430OptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def MSP430_BranchSelectEnabled : Option<
-    "msp430-branch-select",
+defm MSP430_BranchSelectEnabled : BoolField<
+    "msp430-branch-select", "true",
     "Expand out of range branches",
-    "bool"> {
-  let Registry = MSP430OptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;

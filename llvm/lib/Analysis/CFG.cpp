@@ -12,14 +12,12 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Analysis/CFG.h"
-#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
+#include "llvm/Analysis/AnalysisOptions.h"
 #include "llvm/Analysis/CycleAnalysis.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/IntrinsicInst.h"
-#include "llvm/Support/CommandLineCompat.h"
-#include "llvm/Support/OptionsContext.h"
 
 using namespace llvm;
 
@@ -28,8 +26,8 @@ using namespace llvm;
 // repeatedly used by clients of this analysis (such as captureTracking).
 unsigned DefaultMaxBBsToExplore = 32;
 
-static unsigned getDefaultMaxBBsToExplore(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::AN_DefaultMaxBBsToExplore>(Ctx);
+static unsigned getDefaultMaxBBsToExplore(const AnalysisOptions &Opts) {
+  return Opts.AN_DefaultMaxBBsToExplore;
 }
 
 /// FindFunctionBackedges - Analyze the specified function to find all of the
@@ -37,8 +35,10 @@ static unsigned getDefaultMaxBBsToExplore(const clv2::OptionsContext &Ctx) {
 /// (compared to computing dominators and loop info) analysis.
 ///
 /// The output is added to Result, as pairs of <from,to> edge info.
-void llvm::FindFunctionBackedges(const Function &F,
-     SmallVectorImpl<std::pair<const BasicBlock*,const BasicBlock*> > &Result) {
+void llvm::FindFunctionBackedges(
+    const Function &F,
+    SmallVectorImpl<std::pair<const BasicBlock *, const BasicBlock *>>
+        &Result) {
   const BasicBlock *BB = &F.getEntryBlock();
 
   // In the DFS traversal, we maintain three states: unvisited, visited in the
@@ -92,12 +92,12 @@ void llvm::FindFunctionBackedges(const Function &F,
 /// successors.  It is an error to call this with a block that is not a
 /// successor.
 unsigned llvm::GetSuccessorNumber(const BasicBlock *BB,
-    const BasicBlock *Succ) {
+                                  const BasicBlock *Succ) {
   const Instruction *Term = BB->getTerminator();
 #ifndef NDEBUG
   unsigned e = Term->getNumSuccessors();
 #endif
-  for (unsigned i = 0; ; ++i) {
+  for (unsigned i = 0;; ++i) {
     assert(i != e && "Didn't find edge?");
     if (Term->getSuccessor(i) == Succ)
       return i;
@@ -116,7 +116,8 @@ bool llvm::isCriticalEdge(const Instruction *TI, unsigned SuccNum,
 bool llvm::isCriticalEdge(const Instruction *TI, const BasicBlock *Dest,
                           bool AllowIdenticalEdges) {
   assert(TI->isTerminator() && "Must be a terminator to have successors!");
-  if (TI->getNumSuccessors() == 1) return false;
+  if (TI->getNumSuccessors() == 1)
+    return false;
 
   assert(is_contained(predecessors(Dest), TI->getParent()) &&
          "No edge between TI's block and Dest.");
@@ -126,7 +127,7 @@ bool llvm::isCriticalEdge(const Instruction *TI, const BasicBlock *Dest,
   // If there is more than one predecessor, this is a critical edge...
   assert(I != E && "No preds, but we have an edge to the block?");
   const BasicBlock *FirstPred = *I;
-  ++I;        // Skip one edge due to the incoming arc from TI.
+  ++I; // Skip one edge due to the incoming arc from TI.
   if (!AllowIdenticalEdges)
     return I != E;
 
@@ -208,10 +209,10 @@ static bool isReachableImpl(SmallVectorImpl<BasicBlock *> &Worklist,
 
   const Function *Fn =
       Worklist.empty() ? nullptr : Worklist.front()->getParent();
-  unsigned Limit =
-      Fn ? getDefaultMaxBBsToExplore(Fn->getContext().getOptionsContext())
-         : DefaultMaxBBsToExplore;
-  SmallPtrSet<const BasicBlock*, 32> Visited;
+  unsigned Limit = Fn ? getDefaultMaxBBsToExplore(
+                            Fn->getContext().getOptions<AnalysisOptions>())
+                      : DefaultMaxBBsToExplore;
+  SmallPtrSet<const BasicBlock *, 32> Visited;
   do {
     BasicBlock *BB = Worklist.pop_back_val();
     if (!Visited.insert(BB).second)
@@ -334,8 +335,8 @@ bool llvm::isPotentiallyReachable(
     }
   }
 
-  SmallVector<BasicBlock*, 32> Worklist;
-  Worklist.push_back(const_cast<BasicBlock*>(A));
+  SmallVector<BasicBlock *, 32> Worklist;
+  Worklist.push_back(const_cast<BasicBlock *>(A));
 
   return isPotentiallyReachableFromMany(Worklist, B, ExclusionSet, DT, LI, CI);
 }
@@ -380,7 +381,7 @@ bool llvm::isPotentiallyReachable(
       return false;
 
     // Otherwise, continue doing the normal per-BB CFG walk.
-    SmallVector<BasicBlock*, 32> Worklist;
+    SmallVector<BasicBlock *, 32> Worklist;
     Worklist.append(succ_begin(BB), succ_end(BB));
     if (Worklist.empty()) {
       // We've proven that there's no path!

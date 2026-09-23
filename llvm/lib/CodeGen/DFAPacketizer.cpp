@@ -25,7 +25,7 @@
 #include "llvm/CodeGen/DFAPacketizer.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Analysis/AliasAnalysis.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsSched1.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGen/MachineInstrBundle.h"
@@ -33,22 +33,22 @@
 #include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/LLVMContext.h"
 #include "llvm/MC/MCInstrDesc.h"
-#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <cassert>
 #include <iterator>
 #include <memory>
+#include <optional>
 
 using namespace llvm;
 
 #define DEBUG_TYPE "packets"
 
-static unsigned getDfaInstrLimit(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_DfaInstrLimit>(Ctx);
+static std::optional<unsigned> getDfaInstrLimit(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenSched1Options>().CGPASS_DfaInstrLimit;
 }
 
 static unsigned InstrCount = 0;
@@ -174,15 +174,12 @@ void VLIWPacketizerList::PacketizeMIs(MachineBasicBlock *MBB,
     MIToSUnit[SU.getInstr()] = &SU;
 
   const Function *F = &MF.getFunction();
-  bool LimitPresent =
-      false || clv2::wasOptSpecified<&clv2::CGPassSched1Reg,
-                                     &clv2::CGPASS_DfaInstrLimit>(
-                   F->getContext().getOptionsContext());
+  std::optional<unsigned> DfaInstrLimit = getDfaInstrLimit(F->getContext());
 
   // The main packetizer loop.
   for (; BeginItr != EndItr; ++BeginItr) {
-    if (LimitPresent) {
-      if (InstrCount >= getDfaInstrLimit(F->getContext().getOptionsContext())) {
+    if (DfaInstrLimit) {
+      if (InstrCount >= *DfaInstrLimit) {
         EndItr = BeginItr;
         break;
       }

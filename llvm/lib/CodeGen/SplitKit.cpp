@@ -14,7 +14,7 @@
 #include "SplitKit.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/Statistic.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsRegAlloc.h"
 #include "llvm/CodeGen/LiveRangeEdit.h"
 #include "llvm/CodeGen/MachineBlockFrequencyInfo.h"
 #include "llvm/CodeGen/MachineDominators.h"
@@ -31,12 +31,11 @@
 #include "llvm/Config/llvm-config.h"
 #include "llvm/IR/DebugLoc.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/LLVMContext.h"
 #include "llvm/Support/Allocator.h"
 #include "llvm/Support/BlockFrequency.h"
-#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <cassert>
@@ -48,9 +47,9 @@ using namespace llvm;
 
 #define DEBUG_TYPE "regalloc"
 
-static bool getEnableSplitLoopivHeuristic(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_EnableSplitLoopivHeuristic>(
-      Ctx);
+static bool getEnableSplitLoopivHeuristic(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenRegAllocOptions>()
+      .CGPASS_EnableSplitLoopivHeuristic;
 }
 
 STATISTIC(NumFinished, "Number of splits finished");
@@ -300,8 +299,7 @@ void SplitAnalysis::calcLiveBlockInfo() {
       MFI = LIS.getMBBFromIndex(LVI->start)->getIterator();
   }
 
-  LooksLikeLoopIV = getEnableSplitLoopivHeuristic(
-                        MF.getFunction().getContext().getOptionsContext()) &&
+  LooksLikeLoopIV = getEnableSplitLoopivHeuristic(MF.getFunction().getContext()) &&
                     UseBlocks.size() == 2 &&
                     any_of(UseBlocks, [this](BlockInfo &BI) {
                       MachineLoop *L = Loops.getLoopFor(BI.MBB);

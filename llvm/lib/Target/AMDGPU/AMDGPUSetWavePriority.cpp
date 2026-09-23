@@ -19,16 +19,16 @@
 #include "llvm/ADT/PostOrderIterator.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachinePassManager.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/AMDGPU/AMDGPUOptionsOptInfos.h"
+#include "llvm/Target/AMDGPU/AMDGPUOptions.h"
 
 using namespace llvm;
 
 #define DEBUG_TYPE "amdgpu-set-wave-priority"
 
 static unsigned getDefaultVALUInstsThreshold(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AMDGPU_DefaultVALUInstsThreshold>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<AMDGPUOptions>()
+      .AMDGPU_DefaultVALUInstsThreshold;
 }
 
 namespace {

@@ -29,21 +29,14 @@
 
 #include "SystemZHazardRecognizer.h"
 #include "llvm/ADT/Statistic.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/SystemZ/SystemZOptionsOptInfos.h"
+#include "llvm/Target/SystemZ/SystemZOptions.h"
 
 using namespace llvm;
 
 #define DEBUG_TYPE "machine-scheduler"
 
-// This is the limit of processor resource usage at which the
-// scheduler should try to look for other instructions (not using the
-// critical resource).
-static int ProcResCostLim = 8;
-
 static int getProcResCostLim(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SZ_ProcResCostLim>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<SystemZOptions>().SZ_ProcResCostLim;
 }
 
 unsigned SystemZHazardRecognizer::

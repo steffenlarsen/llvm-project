@@ -25,10 +25,9 @@
 #include "llvm/CodeGen/ScheduleDAGInstrs.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/IntrinsicsHexagon.h"
-#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
+#include "llvm/Target/Hexagon/HexagonOptions.h"
 #include "llvm/Target/TargetMachine.h"
 #include <algorithm>
 #include <cassert>
@@ -47,8 +46,7 @@ HexagonSubtarget::HexagonSubtarget(const Triple &TT, StringRef CPU,
     : HexagonGenSubtargetInfo(TT, CPU, /*TuneCPU*/ CPU, FS,
                               TM.getOptionsContext()),
       OptLevel(TM.getOptLevel()),
-      CPUString(std::string(
-          Hexagon_MC::selectHexagonCPU(CPU, TM.getOptionsContext()))),
+      CPUString(std::string(Hexagon_MC::selectHexagonCPU(CPU))),
       TargetTriple(TT), InstrInfo((setTargetMachine(&TM),
                                    initializeSubtargetDependencies(CPU, FS))),
       TLInfo(TM, *this), InstrItins(getInstrItineraryForCPU(CPUString)) {
@@ -140,26 +138,21 @@ HexagonSubtarget::initializeSubtargetDependencies(StringRef CPU, StringRef FS) {
     LLVM_DEBUG(
         dbgs() << "Behavior is undefined for simultaneous qfloat and ieee hvx codegen...");
 
-  if (clv2::wasOptSpecified<&clv2::HexagonOptsReg,
-                            &clv2::HEX_OverrideLongCalls>(getOptionsContext()))
-    UseLongCalls =
-        clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_OverrideLongCalls>(
-            getOptionsContext(), false);
+  const HexagonOptions &Opts = HexagonOptions::Current;
+  if (Opts.HEX_OverrideLongCalls)
+    UseLongCalls = *Opts.HEX_OverrideLongCalls;
 
-  UseBSBScheduling =
-      hasV60Ops() &&
-      clv2::getOptValOrDefault<&clv2::HEX_EnableBSBSched>(getOptionsContext());
+  UseBSBScheduling = hasV60Ops() && Opts.HEX_EnableBSBSched.value_or(true);
 
   if (isTinyCore()) {
     // Tiny core has a single thread, so back-to-back scheduling is enabled by
     // default.
-    if (!clv2::wasOptSpecified<&clv2::HexagonOptsReg,
-                               &clv2::HEX_EnableBSBSched>(getOptionsContext()))
+    if (!Opts.HEX_EnableBSBSched)
       UseBSBScheduling = false;
   }
 
   FeatureBitset FeatureBits = getFeatureBits();
-  if (HexagonDisableDuplex)
+  if (Opts.HEX_DisableDuplex)
     setFeatureBits(FeatureBits.reset(Hexagon::FeatureDuplex));
   setFeatureBits(Hexagon_MC::completeHVXFeatures(FeatureBits));
 
@@ -353,10 +346,7 @@ void HexagonSubtarget::CallMutation::apply(ScheduleDAGInstrs *DAGInstrs) {
     else if (DAG->SUnits[su].getInstr()->isCompare() && LastSequentialCall)
       DAG->addEdge(&DAG->SUnits[su], SDep(LastSequentialCall, SDep::Barrier));
     // Look for call and tfri* instructions.
-    else if (clv2::getOptValOr<&clv2::HexagonOptsReg,
-                               &clv2::HEX_SchedPredsCloser>(
-                 DAG->MF.getFunction().getContext().getOptionsContext(),
-                 true) &&
+    else if (HexagonOptions::Current.HEX_SchedPredsCloser &&
              LastSequentialCall && su > 1 && su < e - 1 &&
              shouldTFRICallBind(HII, DAG->SUnits[su], DAG->SUnits[su + 1]))
       DAG->addEdge(&DAG->SUnits[su], SDep(&DAG->SUnits[su-1], SDep::Barrier));
@@ -374,10 +364,7 @@ void HexagonSubtarget::CallMutation::apply(ScheduleDAGInstrs *DAGInstrs) {
     // needed. This code inserts a Barrier dependence between 3 & 4 to prevent
     // this.
     // The code below checks for all the physical registers, not just R0/D0/V0.
-    else if (clv2::getOptValOr<&clv2::HexagonOptsReg,
-                               &clv2::HEX_SchedRetvalOptimization>(
-                 DAG->MF.getFunction().getContext().getOptionsContext(),
-                 true)) {
+    else if (HexagonOptions::Current.HEX_SchedRetvalOptimization) {
       const MachineInstr *MI = DAG->SUnits[su].getInstr();
       if (MI->isCopy() && MI->getOperand(1).getReg().isPhysical()) {
         // %vregX = COPY %r0
@@ -410,9 +397,7 @@ void HexagonSubtarget::CallMutation::apply(ScheduleDAGInstrs *DAGInstrs) {
 }
 
 void HexagonSubtarget::BankConflictMutation::apply(ScheduleDAGInstrs *DAG) {
-  if (!clv2::getOptValOr<&clv2::HexagonOptsReg,
-                         &clv2::HEX_EnableCheckBankConflict>(
-          DAG->MF.getFunction().getContext().getOptionsContext(), true))
+  if (!HexagonOptions::Current.HEX_EnableCheckBankConflict)
     return;
 
   const auto &HII = static_cast<const HexagonInstrInfo&>(*DAG->TII);
@@ -535,9 +520,7 @@ void HexagonSubtarget::adjustSchedDependency(
   // Try to schedule uses near definitions to generate .cur.
   ExclSrc.clear();
   ExclDst.clear();
-  if (clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_EnableDotCurSched>(
-          SrcInst->getMF()->getFunction().getContext().getOptionsContext(),
-          true) &&
+  if (HexagonOptions::Current.HEX_EnableDotCurSched &&
       QII->isToBeScheduledASAP(*SrcInst, *DstInst) &&
       isBestZeroLatency(Src, Dst, QII, ExclSrc, ExclDst)) {
     Dep.setLatency(0);
@@ -550,6 +533,7 @@ void HexagonSubtarget::adjustSchedDependency(
 }
 
 void HexagonSubtarget::getPostRAMutations(
+    const MachineFunction &MF,
     std::vector<std::unique_ptr<ScheduleDAGMutation>> &Mutations) const {
   Mutations.push_back(std::make_unique<UsrOverflowMutation>());
   Mutations.push_back(std::make_unique<HVXMemLatencyMutation>());
@@ -566,19 +550,14 @@ void HexagonSubtarget::getSMSMutations(
 void HexagonSubtarget::anchor() {}
 
 bool HexagonSubtarget::enableMachineScheduler() const {
-  if (clv2::wasOptSpecified<&clv2::HexagonOptsReg,
-                            &clv2::HEX_DisableHexagonMISched>(
-          getOptionsContext()))
-    return !clv2::getOptValOr<&clv2::HexagonOptsReg,
-                              &clv2::HEX_DisableHexagonMISched>(
-        getOptionsContext(), false);
+  if (const std::optional<bool> &Disable =
+          HexagonOptions::Current.HEX_DisableHexagonMISched)
+    return !*Disable;
   return true;
 }
 
 bool HexagonSubtarget::usePredicatedCalls() const {
-  return clv2::getOptValOr<&clv2::HexagonOptsReg,
-                           &clv2::HEX_EnablePredicatedCalls>(
-      getOptionsContext(), false);
+  return HexagonOptions::Current.HEX_EnablePredicatedCalls;
 }
 
 int HexagonSubtarget::updateLatency(MachineInstr &SrcInst,

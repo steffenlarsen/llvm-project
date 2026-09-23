@@ -82,9 +82,7 @@
 #include <utility>
 #include <vector>
 
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
-#include "llvm/Support/CommandLineV2.h"
-#include "llvm/Support/OptionsContext.h"
+#include "llvm/CodeGen/CodeGenPassOptionsSelDAG.h"
 
 using namespace llvm;
 using namespace llvm::SDPatternMatch;
@@ -106,20 +104,20 @@ void SelectionDAG::DAGNodeInsertedListener::anchor() {}
 
 #define DEBUG_TYPE "selectiondag"
 
-static bool getEnableMemcpyDagOpt(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_EnableMemcpyDagOpt>(Ctx);
+static bool getEnableMemcpyDagOpt(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenSelDAGOptions>().CGPASS_EnableMemcpyDagOpt;
 }
 
-static int getLdstmemcpyGlueMax(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_LdstmemcpyGlueMax>(Ctx);
+static int getLdstmemcpyGlueMax(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenSelDAGOptions>().CGPASS_LdstmemcpyGlueMax;
 }
 
-static unsigned getHasPredecessorMaxSteps(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_HasPredecessorMaxSteps>(Ctx);
+static unsigned getHasPredecessorMaxSteps(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenSelDAGOptions>().CGPASS_HasPredecessorMaxSteps;
 }
 
-static int getVScaleUnrollLimit(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_VScaleUnrollLimit>(Ctx);
+static int getVScaleUnrollLimit(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenSelDAGOptions>().CGPASS_VScaleUnrollLimit;
 }
 
 static void NewSDValueDbgMsg(SDValue V, StringRef Msg, SelectionDAG *G) {
@@ -127,7 +125,7 @@ static void NewSDValueDbgMsg(SDValue V, StringRef Msg, SelectionDAG *G) {
 }
 
 unsigned SelectionDAG::getHasPredecessorMaxSteps() const {
-  return ::getHasPredecessorMaxSteps(TM.getOptionsContext());
+  return ::getHasPredecessorMaxSteps(getMachineFunction().getFunction().getContext());
 }
 
 //===----------------------------------------------------------------------===//
@@ -9637,9 +9635,9 @@ getMemcpyLoadsAndStores(SelectionDAG &DAG, const SDLoc &dl, SDValue Chain,
 
   const Function &F = DAG.getMachineFunction().getFunction();
   unsigned GluedLdStLimit =
-      getLdstmemcpyGlueMax(F.getContext().getOptionsContext()) == 0
+      getLdstmemcpyGlueMax(F.getContext()) == 0
           ? TLI.getMaxGluedStoresPerMemcpy()
-          : getLdstmemcpyGlueMax(F.getContext().getOptionsContext());
+          : getLdstmemcpyGlueMax(F.getContext());
   unsigned NumLdStInMemcpy = OutStoreChains.size();
 
   if (NumLdStInMemcpy) {
@@ -9647,7 +9645,7 @@ getMemcpyLoadsAndStores(SelectionDAG &DAG, const SDLoc &dl, SDValue Chain,
     // of constants. In such a case, we won't have loads and stores, but
     // just stores. In the absence of loads, there is nothing to gang up.
     if ((GluedLdStLimit <= 1) ||
-        !getEnableMemcpyDagOpt(F.getContext().getOptionsContext())) {
+        !getEnableMemcpyDagOpt(F.getContext())) {
       // If target does not care, just leave as it.
       for (unsigned i = 0; i < NumLdStInMemcpy; ++i) {
         OutChains.push_back(OutLoadChains[i]);
@@ -15309,7 +15307,7 @@ unsigned SelectionDAG::getMaxRuntimeNumElements(EVT VT) const {
   const Function &F = MF.getFunction();
 
   APInt MaxVScale = getVScaleRange(&F, sizeof(unsigned) * 8).getUnsignedMax();
-  if (MaxVScale.ugt(getVScaleUnrollLimit(F.getContext().getOptionsContext())))
+  if (MaxVScale.ugt(getVScaleUnrollLimit(F.getContext())))
     return 0;
 
   bool Overflow;

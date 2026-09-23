@@ -18,15 +18,13 @@
 
 namespace llvm {
 
-namespace clv2 {
-class OptionsContext;
-} // namespace clv2
+class LLVMContext;
 
 /// Note that you have to add:
 ///   DAG.addMutation(createPowerPCMacroFusionDAGMutation());
 /// to PPCTargetMachine::createMachineScheduler() to have an effect.
 std::unique_ptr<ScheduleDAGMutation>
-createPowerPCMacroFusionDAGMutation(const clv2::OptionsContext &Ctx);
+createPowerPCMacroFusionDAGMutation(const LLVMContext &Ctx);
 } // llvm
 
 #endif // LLVM_LIB_TARGET_POWERPC_PPCMACROFUSION_H

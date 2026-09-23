@@ -22,7 +22,8 @@
 #include "llvm/Analysis/TypeBasedAliasAnalysis.h"
 #include "llvm/CodeGen/BasicBlockSectionsProfileReader.h"
 #include "llvm/CodeGen/CSEConfigBase.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsSched1.h"
+#include "llvm/CodeGen/CodeGenPassOptionsSched2.h"
 #include "llvm/CodeGen/CodeGenTargetMachineImpl.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachinePassRegistry.h"
@@ -30,6 +31,7 @@
 #include "llvm/CodeGen/RegAllocRegistry.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/IRPrintingPasses.h"
+#include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/PassInstrumentation.h"
 #include "llvm/IR/Verifier.h"
@@ -100,391 +102,386 @@ static const int CodegenTriggerCrashRegistered = [] {
   return 0;
 }();
 
-static bool getEnableIpra(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_EnableIpra>(Ctx);
+// TargetPassConfig is reached both from places with a real Function/Module
+// (and thus LLVMContext) in scope and from pipeline-construction-time code
+// that only has a TargetMachine. Fall back to the process-wide default in
+// the latter case; see TargetLoweringBase.cpp's getSched1Options for the
+// same pattern and its rationale.
+static const CodeGenSched1Options &getSched1Options(const LLVMContext *Ctx) {
+  return Ctx ? Ctx->getOptions<CodeGenSched1Options>()
+             : CodeGenSched1Options::Current;
 }
 
-static cl::boolOrDefault
-getVerifyMachineinstrs(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::CGPassSched1Reg,
-                           &clv2::CGPASS_VerifyMachineinstrs>(
-      Ctx, cl::boolOrDefault::BOU_UNSET);
+// Same rationale as getSched1Options above, for the Sched2 registry.
+static const CodeGenSched2Options &getSched2Options(const LLVMContext *Ctx) {
+  return Ctx ? Ctx->getOptions<CodeGenSched2Options>()
+             : CodeGenSched2Options::Current;
+}
+
+static std::optional<bool> getEnableIpra(const LLVMContext *Ctx) {
+  return getSched1Options(Ctx).CGPASS_EnableIpra;
+}
+
+static std::optional<bool> getVerifyMachineinstrs(const LLVMContext *Ctx) {
+  return getSched1Options(Ctx).CGPASS_VerifyMachineinstrs;
 }
 
 static bool
-getDisableAtexitBasedGlobalDtorLowering(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<
-      &clv2::CGPASS_DisableAtexitBasedGlobalDtorLowering>(Ctx);
+getDisableAtexitBasedGlobalDtorLowering(const LLVMContext *Ctx) {
+  return getSched1Options(Ctx).CGPASS_DisableAtexitBasedGlobalDtorLowering;
 }
 
-static cl::boolOrDefault
-getDebugifyAndStripAllSafe(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::CGPassSched1Reg,
-                           &clv2::CGPASS_DebugifyAndStripAllSafe>(
-      Ctx, cl::boolOrDefault::BOU_UNSET);
+static std::optional<bool> getDebugifyAndStripAllSafe(const LLVMContext *Ctx) {
+  return getSched1Options(Ctx).CGPASS_DebugifyAndStripAllSafe;
 }
 
-static cl::boolOrDefault
-getDebugifyCheckAndStripAllSafe(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::CGPassSched1Reg,
-                           &clv2::CGPASS_DebugifyCheckAndStripAllSafe>(
-      Ctx, cl::boolOrDefault::BOU_UNSET);
+static std::optional<bool>
+getDebugifyCheckAndStripAllSafe(const LLVMContext *Ctx) {
+  return getSched1Options(Ctx).CGPASS_DebugifyCheckAndStripAllSafe;
 }
 
-static cl::boolOrDefault getFastIsel(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::CGPassSched1Reg, &clv2::CGPASS_FastIsel>(
-      Ctx, cl::boolOrDefault::BOU_UNSET);
+static std::optional<bool> getFastIsel(const LLVMContext *Ctx) {
+  return getSched1Options(Ctx).CGPASS_FastIsel;
 }
 
-static cl::boolOrDefault getGlobalIsel(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::CGPassSched1Reg, &clv2::CGPASS_GlobalIsel>(
-      Ctx, cl::boolOrDefault::BOU_UNSET);
+static std::optional<bool> getGlobalIsel(const LLVMContext *Ctx) {
+  return getSched1Options(Ctx).CGPASS_GlobalIsel;
 }
 
-static bool getPrintAfterIsel(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_PrintAfterIsel>(Ctx);
+static bool getPrintAfterIsel(const LLVMContext *Ctx) {
+  return getSched1Options(Ctx).CGPASS_PrintAfterIsel;
 }
 
-static bool getDisableExpandReductions(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_DisableExpandReductions>(Ctx);
+static bool getDisableExpandReductions(const LLVMContext *Ctx) {
+  return getSched1Options(Ctx).CGPASS_DisableExpandReductions;
 }
 
-static bool getEnableGcEmptyBasicBlocks(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_EnableGcEmptyBasicBlocks>(Ctx);
+static bool getEnableGcEmptyBasicBlocks(const LLVMContext *Ctx) {
+  return getSched1Options(Ctx).CGPASS_EnableGcEmptyBasicBlocks;
 }
 
-static std::string getFsProfileFile(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::CGPassSched1Reg, &clv2::CGPASS_FsProfileFile>(
-      Ctx, std::string{});
+static std::string getFsProfileFile(const LLVMContext *Ctx) {
+  return getSched1Options(Ctx).CGPASS_FsProfileFile;
 }
 
-static bool getDisablePostRa(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_DisablePostRa>(Ctx);
+static bool getDisablePostRa(const LLVMContext *Ctx) {
+  return getSched1Options(Ctx).CGPASS_DisablePostRa;
 }
 
-static bool getDisableBranchFold(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_DisableBranchFold>(Ctx);
+static bool getDisableBranchFold(const LLVMContext *Ctx) {
+  return getSched1Options(Ctx).CGPASS_DisableBranchFold;
 }
 
-static bool getDisableTailDuplicate(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_DisableTailDuplicate>(Ctx);
+static bool getDisableTailDuplicate(const LLVMContext *Ctx) {
+  return getSched1Options(Ctx).CGPASS_DisableTailDuplicate;
 }
 
-static bool getDisableEarlyTaildup(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_DisableEarlyTaildup>(Ctx);
+static bool getDisableEarlyTaildup(const LLVMContext *Ctx) {
+  return getSched1Options(Ctx).CGPASS_DisableEarlyTaildup;
 }
 
-static bool getDisableBlockPlacement(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_DisableBlockPlacement>(Ctx);
+static bool getDisableBlockPlacement(const LLVMContext *Ctx) {
+  return getSched2Options(Ctx).CGPASS_DisableBlockPlacement;
 }
 
-static bool getEnableBlockPlacementStats(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_EnableBlockPlacementStats>(Ctx);
+static bool getEnableBlockPlacementStats(const LLVMContext *Ctx) {
+  return getSched2Options(Ctx).CGPASS_EnableBlockPlacementStats;
 }
 
-static bool getDisableSsc(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_DisableSsc>(Ctx);
+static bool getDisableSsc(const LLVMContext *Ctx) {
+  return getSched2Options(Ctx).CGPASS_DisableSsc;
 }
 
-static bool getDisableMachineDce(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_DisableMachineDce>(Ctx);
+static bool getDisableMachineDce(const LLVMContext *Ctx) {
+  return getSched2Options(Ctx).CGPASS_DisableMachineDce;
 }
 
-static bool getDisableEarlyIfcvt(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_DisableEarlyIfcvt>(Ctx);
+static bool getDisableEarlyIfcvt(const LLVMContext *Ctx) {
+  return getSched2Options(Ctx).CGPASS_DisableEarlyIfcvt;
 }
 
-static bool getDisableMachineLicm(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_DisableMachineLicm>(Ctx);
+static bool getDisableMachineLicm(const LLVMContext *Ctx) {
+  return getSched2Options(Ctx).CGPASS_DisableMachineLicm;
 }
 
-static bool getDisableMachineCse(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_DisableMachineCse>(Ctx);
+static bool getDisableMachineCse(const LLVMContext *Ctx) {
+  return getSched2Options(Ctx).CGPASS_DisableMachineCse;
 }
 
-static bool getDisablePostraMachineLicm(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_DisablePostraMachineLicm>(Ctx);
+static bool getDisablePostraMachineLicm(const LLVMContext *Ctx) {
+  return getSched2Options(Ctx).CGPASS_DisablePostraMachineLicm;
 }
 
-static bool getDisableMachineSink(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_DisableMachineSink>(Ctx);
+static bool getDisableMachineSink(const LLVMContext *Ctx) {
+  return getSched2Options(Ctx).CGPASS_DisableMachineSink;
 }
 
-static bool getDisablePostraMachineSink(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_DisablePostraMachineSink>(Ctx);
+static bool getDisablePostraMachineSink(const LLVMContext *Ctx) {
+  return getSched2Options(Ctx).CGPASS_DisablePostraMachineSink;
 }
 
-static bool getDisableLsr(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_DisableLsr>(Ctx);
+static bool getDisableLsr(const LLVMContext *Ctx) {
+  return getSched2Options(Ctx).CGPASS_DisableLsr;
 }
 
-static bool getDisableConstantHoisting(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_DisableConstantHoisting>(Ctx);
+static bool getDisableConstantHoisting(const LLVMContext *Ctx) {
+  return getSched2Options(Ctx).CGPASS_DisableConstantHoisting;
 }
 
-static bool getDisableCgp(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_DisableCgp>(Ctx);
+static bool getDisableCgp(const LLVMContext *Ctx) {
+  return getSched2Options(Ctx).CGPASS_DisableCgp;
 }
 
-static bool getDisableCopyprop(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_DisableCopyprop>(Ctx);
+static bool getDisableCopyprop(const LLVMContext *Ctx) {
+  return getSched2Options(Ctx).CGPASS_DisableCopyprop;
 }
 
-static bool getDisablePartialLibcallInlining(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_DisablePartialLibcallInlining>(
-      Ctx);
+static bool getDisablePartialLibcallInlining(const LLVMContext *Ctx) {
+  return getSched2Options(Ctx).CGPASS_DisablePartialLibcallInlining;
 }
 
-static bool getEnableImplicitNullChecks(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_EnableImplicitNullChecks>(Ctx);
+static bool getEnableImplicitNullChecks(const LLVMContext *Ctx) {
+  return getSched2Options(Ctx).CGPASS_EnableImplicitNullChecks;
 }
 
-static bool getPrintIselInput(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_PrintIselInput>(Ctx);
+static bool getPrintIselInput(const LLVMContext *Ctx) {
+  return getSched2Options(Ctx).CGPASS_PrintIselInput;
 }
 
-static bool getEnableGlobalMergeFunc(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_EnableGlobalMergeFunc>(Ctx);
+static bool getEnableGlobalMergeFunc(const LLVMContext *Ctx) {
+  return getSched2Options(Ctx).CGPASS_EnableGlobalMergeFunc;
 }
 
-static bool getDisableCfiFixup(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_DisableCfiFixup>(Ctx);
+static bool getDisableCfiFixup(const LLVMContext *Ctx) {
+  return getSched2Options(Ctx).CGPASS_DisableCfiFixup;
 }
 
-static bool getDisableRaFsprofileLoader(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_DisableRaFsprofileLoader>(Ctx);
+static bool getDisableRaFsprofileLoader(const LLVMContext *Ctx) {
+  return getSched2Options(Ctx).CGPASS_DisableRaFsprofileLoader;
 }
 
-static bool getDisableLayoutFsprofileLoader(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_DisableLayoutFsprofileLoader>(
-      Ctx);
+static bool getDisableLayoutFsprofileLoader(const LLVMContext *Ctx) {
+  return getSched2Options(Ctx).CGPASS_DisableLayoutFsprofileLoader;
 }
 
-static std::string getFsRemappingFile(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::CGPassSched2Reg,
-                           &clv2::CGPASS_FsRemappingFile>(Ctx, std::string{});
+static std::string getFsRemappingFile(const LLVMContext *Ctx) {
+  return getSched2Options(Ctx).CGPASS_FsRemappingFile;
 }
 
-static bool getMischedPostra(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_MischedPostra>(Ctx);
+static bool getMischedPostra(const LLVMContext *Ctx) {
+  return getSched2Options(Ctx).CGPASS_MischedPostra;
 }
 
-static bool getEarlyLiveIntervals(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_EarlyLiveIntervals>(Ctx);
+static bool getEarlyLiveIntervals(const LLVMContext *Ctx) {
+  return getSched2Options(Ctx).CGPASS_EarlyLiveIntervals;
 }
 
-static bool getDisableReplaceWithVecLib(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_DisableReplaceWithVecLib>(Ctx);
+static bool getDisableReplaceWithVecLib(const LLVMContext *Ctx) {
+  return getSched2Options(Ctx).CGPASS_DisableReplaceWithVecLib;
 }
 
-static std::string getStartAfter(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::CGPassSched2Reg, &clv2::CGPASS_StartAfter>(
-      Ctx, std::string{});
+static std::string getStartAfter(const LLVMContext *Ctx) {
+  return getSched2Options(Ctx).CGPASS_StartAfter;
 }
 
-static std::string getStartBefore(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::CGPassSched2Reg, &clv2::CGPASS_StartBefore>(
-      Ctx, std::string{});
+static std::string getStartBefore(const LLVMContext *Ctx) {
+  return getSched2Options(Ctx).CGPASS_StartBefore;
 }
 
-static std::string getStopAfter(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::CGPassSched2Reg, &clv2::CGPASS_StopAfter>(
-      Ctx, std::string{});
+static std::string getStopAfter(const LLVMContext *Ctx) {
+  return getSched2Options(Ctx).CGPASS_StopAfter;
 }
 
-static std::string getStopBefore(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::CGPassSched2Reg, &clv2::CGPASS_StopBefore>(
-      Ctx, std::string{});
+static std::string getStopBefore(const LLVMContext *Ctx) {
+  return getSched2Options(Ctx).CGPASS_StopBefore;
 }
 
-static bool getEnableSplitMachineFunctions(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_EnableSplitMachineFunctions>(
-      Ctx);
+static bool getEnableSplitMachineFunctions(const LLVMContext *Ctx) {
+  return getSched2Options(Ctx).CGPASS_EnableSplitMachineFunctions;
 }
 
-static bool getDisableSelectOptimize(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_DisableSelectOptimize>(Ctx);
+static bool getDisableSelectOptimize(const LLVMContext *Ctx) {
+  return getSched2Options(Ctx).CGPASS_DisableSelectOptimize;
 }
 
-static bool getSplitStaticData(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_SplitStaticData>(Ctx);
+static bool getSplitStaticData(const LLVMContext *Ctx) {
+  return getSched2Options(Ctx).CGPASS_SplitStaticData;
 }
 
-static bool getBasicBlockSectionMatchInfer(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_BasicBlockSectionMatchInfer>(
-      Ctx);
+static bool getBasicBlockSectionMatchInfer(const LLVMContext *Ctx) {
+  return getSched2Options(Ctx).CGPASS_BasicBlockSectionMatchInfer;
 }
 
 // Read each value from the override when a tool installed one, otherwise from
 // the parsed options.
 
-static std::string getStartAfterName(const clv2::OptionsContext &Ctx) {
+static std::string getStartAfterName(const LLVMContext *Ctx) {
   return TPCOverride ? TPCOverride->StartAfter : getStartAfter(Ctx);
 }
-static std::string getStartBeforeName(const clv2::OptionsContext &Ctx) {
+static std::string getStartBeforeName(const LLVMContext *Ctx) {
   return TPCOverride ? TPCOverride->StartBefore : getStartBefore(Ctx);
 }
-static std::string getStopAfterName(const clv2::OptionsContext &Ctx) {
+static std::string getStopAfterName(const LLVMContext *Ctx) {
   return TPCOverride ? TPCOverride->StopAfter : getStopAfter(Ctx);
 }
-static std::string getStopBeforeName(const clv2::OptionsContext &Ctx) {
+static std::string getStopBeforeName(const LLVMContext *Ctx) {
   return TPCOverride ? TPCOverride->StopBefore : getStopBefore(Ctx);
 }
 
 // For bool fields the override wins when true; the parsed value is the
 // fallback.
 
-static bool getEffectivePrintAfterISel(const clv2::OptionsContext &Ctx) {
+static bool getEffectivePrintAfterISel(const LLVMContext *Ctx) {
   return TPCOverride ? TPCOverride->PrintAfterISel || getPrintAfterIsel(Ctx)
                      : getPrintAfterIsel(Ctx);
 }
-static cl::boolOrDefault
-getEffectiveVerifyMachineCode(const clv2::OptionsContext &Ctx) {
-  if (!TPCOverride)
-    return getVerifyMachineinstrs(Ctx);
-  if (TPCOverride->VerifyMachineCode)
-    return *TPCOverride->VerifyMachineCode ? cl::boolOrDefault::BOU_TRUE
-                                           : cl::boolOrDefault::BOU_FALSE;
+static std::optional<bool>
+getEffectiveVerifyMachineCode(const LLVMContext *Ctx) {
+  if (TPCOverride && TPCOverride->VerifyMachineCode)
+    return TPCOverride->VerifyMachineCode;
   return getVerifyMachineinstrs(Ctx); // sink-forwarded cl::opt fallback
 }
-static cl::boolOrDefault
-getEffectiveDebugifyAndStripAll(const clv2::OptionsContext &Ctx) {
-  if (!TPCOverride)
-    return getDebugifyAndStripAllSafe(Ctx);
-  if (TPCOverride->DebugifyAndStripAll)
-    return *TPCOverride->DebugifyAndStripAll ? cl::boolOrDefault::BOU_TRUE
-                                             : cl::boolOrDefault::BOU_FALSE;
+static std::optional<bool>
+getEffectiveDebugifyAndStripAll(const LLVMContext *Ctx) {
+  if (TPCOverride && TPCOverride->DebugifyAndStripAll)
+    return TPCOverride->DebugifyAndStripAll;
   return getDebugifyAndStripAllSafe(Ctx);
 }
-static cl::boolOrDefault
-getEffectiveDebugifyCheckAndStripAll(const clv2::OptionsContext &Ctx) {
-  if (!TPCOverride)
-    return getDebugifyCheckAndStripAllSafe(Ctx);
-  if (TPCOverride->DebugifyCheckAndStripAll)
-    return *TPCOverride->DebugifyCheckAndStripAll
-               ? cl::boolOrDefault::BOU_TRUE
-               : cl::boolOrDefault::BOU_FALSE;
+static std::optional<bool>
+getEffectiveDebugifyCheckAndStripAll(const LLVMContext *Ctx) {
+  if (TPCOverride && TPCOverride->DebugifyCheckAndStripAll)
+    return TPCOverride->DebugifyCheckAndStripAll;
   return getDebugifyCheckAndStripAllSafe(Ctx);
 }
 static bool
-getEffectiveDisableReplaceWithVecLib(const clv2::OptionsContext &Ctx) {
+getEffectiveDisableReplaceWithVecLib(const LLVMContext *Ctx) {
   return TPCOverride ? getDisableReplaceWithVecLib(Ctx)
                      : getDisableReplaceWithVecLib(Ctx);
 }
 static bool
-getEffectiveDisableExpandReductions(const clv2::OptionsContext &Ctx) {
+getEffectiveDisableExpandReductions(const LLVMContext *Ctx) {
   return TPCOverride ? TPCOverride->DisableExpandReductions ||
                            getDisableExpandReductions(Ctx)
                      : getDisableExpandReductions(Ctx);
 }
-static bool getEffectiveDisableSelectOptimize(const clv2::OptionsContext &Ctx) {
+static bool getEffectiveDisableSelectOptimize(const LLVMContext *Ctx) {
   return TPCOverride ? TPCOverride->DisableSelectOptimize ||
                            getDisableSelectOptimize(Ctx)
                      : getDisableSelectOptimize(Ctx);
 }
 static bool
-getEffectiveEnableMachineFunctionSplitter(const clv2::OptionsContext &Ctx) {
+getEffectiveEnableMachineFunctionSplitter(const LLVMContext *Ctx) {
   return TPCOverride ? TPCOverride->EnableMachineFunctionSplitter ||
                            getEnableSplitMachineFunctions(Ctx)
                      : getEnableSplitMachineFunctions(Ctx);
 }
-static bool getEffectiveSplitStaticData(const clv2::OptionsContext &Ctx) {
+static bool getEffectiveSplitStaticData(const LLVMContext *Ctx) {
   return TPCOverride ? TPCOverride->SplitStaticData || getSplitStaticData(Ctx)
                      : getSplitStaticData(Ctx);
 }
-static bool getEffectiveEmitBBHash(const clv2::OptionsContext &Ctx) {
-  bool Val =
-      clv2::getOptValOr<&clv2::CGPassSched2Reg, &clv2::CGPASS_EmitBbHash>(
-          Ctx, false);
+static bool getEffectiveEmitBBHash(const LLVMContext *Ctx) {
+  bool Val = getSched2Options(Ctx).CGPASS_EmitBbHash;
   return TPCOverride ? TPCOverride->EmitBBHash || Val : Val;
 }
 static bool
-getEffectiveBasicBlockSectionMatchInfer(const clv2::OptionsContext &Ctx) {
+getEffectiveBasicBlockSectionMatchInfer(const LLVMContext *Ctx) {
   return TPCOverride ? TPCOverride->BasicBlockSectionMatchInfer ||
                            getBasicBlockSectionMatchInfer(Ctx)
                      : getBasicBlockSectionMatchInfer(Ctx);
 }
-static bool getEffectiveDisableLSR(const clv2::OptionsContext &Ctx) {
+static bool getEffectiveDisableLSR(const LLVMContext *Ctx) {
   return TPCOverride ? TPCOverride->DisableLSR || getDisableLsr(Ctx)
                      : getDisableLsr(Ctx);
 }
 static bool
-getEffectiveDisableConstantHoisting(const clv2::OptionsContext &Ctx) {
+getEffectiveDisableConstantHoisting(const LLVMContext *Ctx) {
   return TPCOverride ? TPCOverride->DisableConstantHoisting ||
                            getDisableConstantHoisting(Ctx)
                      : getDisableConstantHoisting(Ctx);
 }
-static bool getEffectiveDisableCGP(const clv2::OptionsContext &Ctx) {
+static bool getEffectiveDisableCGP(const LLVMContext *Ctx) {
   return TPCOverride ? TPCOverride->DisableCGP || getDisableCgp(Ctx)
                      : getDisableCgp(Ctx);
 }
 static bool
-getEffectiveDisablePartialLibcallInlining(const clv2::OptionsContext &Ctx) {
+getEffectiveDisablePartialLibcallInlining(const LLVMContext *Ctx) {
   return TPCOverride ? TPCOverride->DisablePartialLibcallInlining ||
                            getDisablePartialLibcallInlining(Ctx)
                      : getDisablePartialLibcallInlining(Ctx);
 }
-static bool getEffectivePrintISelInput(const clv2::OptionsContext &Ctx) {
+static bool getEffectivePrintISelInput(const LLVMContext *Ctx) {
   return TPCOverride ? TPCOverride->PrintISelInput || getPrintIselInput(Ctx)
                      : getPrintIselInput(Ctx);
 }
 static bool
-getEffectiveDisableRAFSProfileLoader(const clv2::OptionsContext &Ctx) {
+getEffectiveDisableRAFSProfileLoader(const LLVMContext *Ctx) {
   return TPCOverride ? TPCOverride->DisableRAFSProfileLoader ||
                            getDisableRaFsprofileLoader(Ctx)
                      : getDisableRaFsprofileLoader(Ctx);
 }
 static bool
-getEffectiveDisableLayoutFSProfileLoader(const clv2::OptionsContext &Ctx) {
+getEffectiveDisableLayoutFSProfileLoader(const LLVMContext *Ctx) {
   return TPCOverride ? TPCOverride->DisableLayoutFSProfileLoader ||
                            getDisableLayoutFsprofileLoader(Ctx)
                      : getDisableLayoutFsprofileLoader(Ctx);
 }
 static bool
-getEffectiveEnableImplicitNullChecks(const clv2::OptionsContext &Ctx) {
+getEffectiveEnableImplicitNullChecks(const LLVMContext *Ctx) {
   return TPCOverride ? TPCOverride->EnableImplicitNullChecks ||
                            getEnableImplicitNullChecks(Ctx)
                      : getEnableImplicitNullChecks(Ctx);
 }
-static bool getEffectiveMISchedPostRA(const clv2::OptionsContext &Ctx) {
+static bool getEffectiveMISchedPostRA(const LLVMContext *Ctx) {
   return TPCOverride ? TPCOverride->MISchedPostRA || getMischedPostra(Ctx)
                      : getMischedPostra(Ctx);
 }
-static bool getEffectiveEnableGCEmptyBlocks(const clv2::OptionsContext &Ctx) {
+static bool getEffectiveEnableGCEmptyBlocks(const LLVMContext *Ctx) {
   return TPCOverride ? TPCOverride->EnableGCEmptyBlocks ||
                            getEnableGcEmptyBasicBlocks(Ctx)
                      : getEnableGcEmptyBasicBlocks(Ctx);
 }
-static bool getEffectiveEarlyLiveIntervals(const clv2::OptionsContext &Ctx) {
+static bool getEffectiveEarlyLiveIntervals(const LLVMContext *Ctx) {
   return TPCOverride
              ? TPCOverride->EarlyLiveIntervals || getEarlyLiveIntervals(Ctx)
              : getEarlyLiveIntervals(Ctx);
 }
 static bool
-getEffectiveEnableBlockPlacementStats(const clv2::OptionsContext &Ctx) {
+getEffectiveEnableBlockPlacementStats(const LLVMContext *Ctx) {
   return TPCOverride ? TPCOverride->EnableBlockPlacementStats ||
                            getEnableBlockPlacementStats(Ctx)
                      : getEnableBlockPlacementStats(Ctx);
 }
-static bool getEffectiveDisableCFIFixup(const clv2::OptionsContext &Ctx) {
+static bool getEffectiveDisableCFIFixup(const LLVMContext *Ctx) {
   return TPCOverride ? TPCOverride->DisableCFIFixup || getDisableCfiFixup(Ctx)
                      : getDisableCfiFixup(Ctx);
 }
-static RunOutliner
-getEnableMachineOutlinerOption(const clv2::OptionsContext &Ctx) {
+static RunOutliner getEnableMachineOutlinerOption(const LLVMContext *Ctx) {
+  // CGRunOutliner's enumerators match llvm::RunOutliner's exactly
+  // (TargetDefault=0, AlwaysOutline=1, OptimisticPGO=2, ConservativePGO=3,
+  // NeverOutline=4), so the cast is safe.
   return static_cast<RunOutliner>(
-      clv2::getOptValOr<&clv2::CGPassSched1Reg,
-                        &clv2::CGPASS_EnableMachineOutliner>(
-          Ctx, RunOutliner::TargetDefault));
+      getSched1Options(Ctx).CGPASS_EnableMachineOutliner);
 }
-static GlobalISelAbortMode
-getGlobalIselAbortMode(const clv2::OptionsContext &Ctx) {
-  return static_cast<GlobalISelAbortMode>(
-      clv2::getOptValOr<&clv2::CGPassSched1Reg, &clv2::CGPASS_GlobalISelAbort>(
-          Ctx, GlobalISelAbortMode::Disable));
+// CGGlobalISelAbortMode has an extra leading TargetDefault enumerator that
+// llvm::GlobalISelAbortMode lacks, so the two enums are NOT value-compatible
+// -- map explicitly rather than casting. Returns std::nullopt when the
+// option was left at its target-default (i.e. not specified).
+static std::optional<GlobalISelAbortMode>
+getGlobalIselAbortMode(const LLVMContext *Ctx) {
+  switch (getSched1Options(Ctx).CGPASS_GlobalISelAbort) {
+  case CGGlobalISelAbortMode::TargetDefault:
+    return std::nullopt;
+  case CGGlobalISelAbortMode::Disable:
+    return GlobalISelAbortMode::Disable;
+  case CGGlobalISelAbortMode::Enable:
+    return GlobalISelAbortMode::Enable;
+  case CGGlobalISelAbortMode::DisableWithDiag:
+    return GlobalISelAbortMode::DisableWithDiag;
+  }
+  llvm_unreachable("all CGGlobalISelAbortMode cases handled");
 }
 static RunOutliner
-getEffectiveEnableMachineOutliner(const clv2::OptionsContext &Ctx) {
+getEffectiveEnableMachineOutliner(const LLVMContext *Ctx) {
   if (!TPCOverride)
     return RunOutliner(getEnableMachineOutlinerOption(Ctx));
   // If TPCOverride has a non-default (non-TargetDefault) value, use it;
@@ -493,104 +490,97 @@ getEffectiveEnableMachineOutliner(const clv2::OptionsContext &Ctx) {
     return TPCOverride->EnableMachineOutliner;
   return RunOutliner(getEnableMachineOutlinerOption(Ctx));
 }
-static bool getEffectiveEnableGlobalMergeFunc(const clv2::OptionsContext &Ctx) {
+static bool getEffectiveEnableGlobalMergeFunc(const LLVMContext *Ctx) {
   return TPCOverride ? TPCOverride->EnableGlobalMergeFunc ||
                            getEnableGlobalMergeFunc(Ctx)
                      : getEnableGlobalMergeFunc(Ctx);
 }
 static bool getEffectiveDisableAtExitBasedGlobalDtorLowering(
-    const clv2::OptionsContext &Ctx) {
+    const LLVMContext *Ctx) {
   return TPCOverride ? TPCOverride->DisableAtExitBasedGlobalDtorLowering ||
                            getDisableAtexitBasedGlobalDtorLowering(Ctx)
                      : getDisableAtexitBasedGlobalDtorLowering(Ctx);
 }
-static bool getEffectiveDisablePostRASched(const clv2::OptionsContext &Ctx) {
+static bool getEffectiveDisablePostRASched(const LLVMContext *Ctx) {
   return TPCOverride ? TPCOverride->DisablePostRASched || getDisablePostRa(Ctx)
                      : getDisablePostRa(Ctx);
 }
-static bool getEffectiveDisableBranchFold(const clv2::OptionsContext &Ctx) {
+static bool getEffectiveDisableBranchFold(const LLVMContext *Ctx) {
   return TPCOverride
              ? TPCOverride->DisableBranchFold || getDisableBranchFold(Ctx)
              : getDisableBranchFold(Ctx);
 }
-static bool getEffectiveDisableTailDuplicate(const clv2::OptionsContext &Ctx) {
+static bool getEffectiveDisableTailDuplicate(const LLVMContext *Ctx) {
   return TPCOverride
              ? TPCOverride->DisableTailDuplicate || getDisableTailDuplicate(Ctx)
              : getDisableTailDuplicate(Ctx);
 }
-static bool getEffectiveDisableEarlyTailDup(const clv2::OptionsContext &Ctx) {
+static bool getEffectiveDisableEarlyTailDup(const LLVMContext *Ctx) {
   return TPCOverride
              ? TPCOverride->DisableEarlyTailDup || getDisableEarlyTaildup(Ctx)
              : getDisableEarlyTaildup(Ctx);
 }
-static bool getEffectiveDisableBlockPlacement(const clv2::OptionsContext &Ctx) {
+static bool getEffectiveDisableBlockPlacement(const LLVMContext *Ctx) {
   return TPCOverride ? TPCOverride->DisableBlockPlacement ||
                            getDisableBlockPlacement(Ctx)
                      : getDisableBlockPlacement(Ctx);
 }
-static bool getEffectiveDisableSSC(const clv2::OptionsContext &Ctx) {
+static bool getEffectiveDisableSSC(const LLVMContext *Ctx) {
   return TPCOverride ? TPCOverride->DisableSSC || getDisableSsc(Ctx)
                      : getDisableSsc(Ctx);
 }
-static bool getEffectiveDisableMachineDCE(const clv2::OptionsContext &Ctx) {
+static bool getEffectiveDisableMachineDCE(const LLVMContext *Ctx) {
   return TPCOverride
              ? TPCOverride->DisableMachineDCE || getDisableMachineDce(Ctx)
              : getDisableMachineDce(Ctx);
 }
 static bool
-getEffectiveDisableEarlyIfConversion(const clv2::OptionsContext &Ctx) {
+getEffectiveDisableEarlyIfConversion(const LLVMContext *Ctx) {
   return TPCOverride ? TPCOverride->DisableEarlyIfConversion ||
                            getDisableEarlyIfcvt(Ctx)
                      : getDisableEarlyIfcvt(Ctx);
 }
-static bool getEffectiveDisableMachineLICM(const clv2::OptionsContext &Ctx) {
+static bool getEffectiveDisableMachineLICM(const LLVMContext *Ctx) {
   return TPCOverride
              ? TPCOverride->DisableMachineLICM || getDisableMachineLicm(Ctx)
              : getDisableMachineLicm(Ctx);
 }
-static bool getEffectiveDisableMachineCSE(const clv2::OptionsContext &Ctx) {
+static bool getEffectiveDisableMachineCSE(const LLVMContext *Ctx) {
   return TPCOverride
              ? TPCOverride->DisableMachineCSE || getDisableMachineCse(Ctx)
              : getDisableMachineCse(Ctx);
 }
 static bool
-getEffectiveDisablePostRAMachineLICM(const clv2::OptionsContext &Ctx) {
+getEffectiveDisablePostRAMachineLICM(const LLVMContext *Ctx) {
   return TPCOverride ? TPCOverride->DisablePostRAMachineLICM ||
                            getDisablePostraMachineLicm(Ctx)
                      : getDisablePostraMachineLicm(Ctx);
 }
-static bool getEffectiveDisableMachineSink(const clv2::OptionsContext &Ctx) {
+static bool getEffectiveDisableMachineSink(const LLVMContext *Ctx) {
   return TPCOverride
              ? TPCOverride->DisableMachineSink || getDisableMachineSink(Ctx)
              : getDisableMachineSink(Ctx);
 }
 static bool
-getEffectiveDisablePostRAMachineSink(const clv2::OptionsContext &Ctx) {
+getEffectiveDisablePostRAMachineSink(const LLVMContext *Ctx) {
   return TPCOverride ? TPCOverride->DisablePostRAMachineSink ||
                            getDisablePostraMachineSink(Ctx)
                      : getDisablePostraMachineSink(Ctx);
 }
-static bool getEffectiveDisableCopyProp(const clv2::OptionsContext &Ctx) {
+static bool getEffectiveDisableCopyProp(const LLVMContext *Ctx) {
   return TPCOverride ? TPCOverride->DisableCopyProp || getDisableCopyprop(Ctx)
                      : getDisableCopyprop(Ctx);
 }
-static cl::boolOrDefault
-getEffectiveFastISelOption(const clv2::OptionsContext &Ctx) {
-  if (!TPCOverride)
-    return getFastIsel(Ctx);
-  if (!TPCOverride->EnableFastISelOption)
-    return getFastIsel(Ctx);
-  return *TPCOverride->EnableFastISelOption ? cl::boolOrDefault::BOU_TRUE
-                                            : cl::boolOrDefault::BOU_FALSE;
+static std::optional<bool> getEffectiveFastISelOption(const LLVMContext *Ctx) {
+  if (TPCOverride && TPCOverride->EnableFastISelOption)
+    return TPCOverride->EnableFastISelOption;
+  return getFastIsel(Ctx);
 }
-static cl::boolOrDefault
-getEffectiveGlobalISelOption(const clv2::OptionsContext &Ctx) {
-  if (!TPCOverride)
-    return getGlobalIsel(Ctx);
-  if (!TPCOverride->EnableGlobalISelOption)
-    return getGlobalIsel(Ctx);
-  return *TPCOverride->EnableGlobalISelOption ? cl::boolOrDefault::BOU_TRUE
-                                              : cl::boolOrDefault::BOU_FALSE;
+static std::optional<bool>
+getEffectiveGlobalISelOption(const LLVMContext *Ctx) {
+  if (TPCOverride && TPCOverride->EnableGlobalISelOption)
+    return TPCOverride->EnableGlobalISelOption;
+  return getGlobalIsel(Ctx);
 }
 
 /// Allow standard passes to be disabled by command line options. This supports
@@ -618,48 +608,51 @@ static IdentifyingPassPtr applyDisable(IdentifyingPassPtr PassID,
 /// on where in the pipeline that pass is added.
 static IdentifyingPassPtr overridePass(AnalysisID StandardID,
                                        IdentifyingPassPtr TargetID,
-                                       const clv2::OptionsContext &Ctx) {
+                                       const LLVMContext *Sched1Ctx) {
   if (StandardID == &PostRASchedulerID)
-    return applyDisable(TargetID, getEffectiveDisablePostRASched(Ctx));
+    return applyDisable(TargetID, getEffectiveDisablePostRASched(Sched1Ctx));
 
   if (StandardID == &BranchFolderPassID)
-    return applyDisable(TargetID, getEffectiveDisableBranchFold(Ctx));
+    return applyDisable(TargetID, getEffectiveDisableBranchFold(Sched1Ctx));
 
   if (StandardID == &TailDuplicateLegacyID)
-    return applyDisable(TargetID, getEffectiveDisableTailDuplicate(Ctx));
+    return applyDisable(TargetID, getEffectiveDisableTailDuplicate(Sched1Ctx));
 
   if (StandardID == &EarlyTailDuplicateLegacyID)
-    return applyDisable(TargetID, getEffectiveDisableEarlyTailDup(Ctx));
+    return applyDisable(TargetID, getEffectiveDisableEarlyTailDup(Sched1Ctx));
 
   if (StandardID == &MachineBlockPlacementID)
-    return applyDisable(TargetID, getEffectiveDisableBlockPlacement(Ctx));
+    return applyDisable(TargetID, getEffectiveDisableBlockPlacement(Sched1Ctx));
 
   if (StandardID == &StackSlotColoringID)
-    return applyDisable(TargetID, getEffectiveDisableSSC(Ctx));
+    return applyDisable(TargetID, getEffectiveDisableSSC(Sched1Ctx));
 
   if (StandardID == &DeadMachineInstructionElimID)
-    return applyDisable(TargetID, getEffectiveDisableMachineDCE(Ctx));
+    return applyDisable(TargetID, getEffectiveDisableMachineDCE(Sched1Ctx));
 
   if (StandardID == &EarlyIfConverterLegacyID)
-    return applyDisable(TargetID, getEffectiveDisableEarlyIfConversion(Ctx));
+    return applyDisable(TargetID,
+                        getEffectiveDisableEarlyIfConversion(Sched1Ctx));
 
   if (StandardID == &EarlyMachineLICMID)
-    return applyDisable(TargetID, getEffectiveDisableMachineLICM(Ctx));
+    return applyDisable(TargetID, getEffectiveDisableMachineLICM(Sched1Ctx));
 
   if (StandardID == &MachineCSELegacyID)
-    return applyDisable(TargetID, getEffectiveDisableMachineCSE(Ctx));
+    return applyDisable(TargetID, getEffectiveDisableMachineCSE(Sched1Ctx));
 
   if (StandardID == &MachineLICMID)
-    return applyDisable(TargetID, getEffectiveDisablePostRAMachineLICM(Ctx));
+    return applyDisable(TargetID,
+                        getEffectiveDisablePostRAMachineLICM(Sched1Ctx));
 
   if (StandardID == &MachineSinkingLegacyID)
-    return applyDisable(TargetID, getEffectiveDisableMachineSink(Ctx));
+    return applyDisable(TargetID, getEffectiveDisableMachineSink(Sched1Ctx));
 
   if (StandardID == &PostRAMachineSinkingID)
-    return applyDisable(TargetID, getEffectiveDisablePostRAMachineSink(Ctx));
+    return applyDisable(TargetID,
+                        getEffectiveDisablePostRAMachineSink(Sched1Ctx));
 
   if (StandardID == &MachineCopyPropagationID)
-    return applyDisable(TargetID, getEffectiveDisableCopyProp(Ctx));
+    return applyDisable(TargetID, getEffectiveDisableCopyProp(Sched1Ctx));
 
   return TargetID;
 }
@@ -668,11 +661,12 @@ static IdentifyingPassPtr overridePass(AnalysisID StandardID,
 // before getting from TargetMachine.
 static std::string getFSProfileFile(const TargetMachine *TM) {
   assert(TM && "TargetMachine must not be null");
-  // Prefer the override; fall back to the parsed value.
-  auto &Ctx = TM->getOptionsContext();
+  // Prefer the override; fall back to the parsed value. No Function/Module
+  // is reachable here, so fall back to the process-wide default (see
+  // getSched1Options).
   std::string FileName = (TPCOverride && !TPCOverride->FSProfileFile.empty())
                              ? TPCOverride->FSProfileFile
-                             : getFsProfileFile(Ctx);
+                             : getFsProfileFile(/*Ctx=*/nullptr);
   if (!FileName.empty())
     return FileName;
   const std::optional<PGOOptions> &PGOOpt = TM->getPGOOption();
@@ -685,10 +679,11 @@ static std::string getFSProfileFile(const TargetMachine *TM) {
 // precedence before getting from TargetMachine.
 static std::string getFSRemappingFile(const TargetMachine *TM) {
   assert(TM && "TargetMachine must not be null");
-  auto &Ctx = TM->getOptionsContext();
+  // No Function/Module is reachable here, so fall back to the process-wide
+  // default (see getSched1Options / getSched2Options).
   std::string FileName = (TPCOverride && !TPCOverride->FSRemappingFile.empty())
                              ? TPCOverride->FSRemappingFile
-                             : getFsRemappingFile(Ctx);
+                             : getFsRemappingFile(/*Ctx=*/nullptr);
   if (!FileName.empty())
     return FileName;
   const std::optional<PGOOptions> &PGOOpt = TM->getPGOOption();
@@ -779,7 +774,9 @@ getPassNameAndInstanceNum(StringRef PassName) {
 }
 
 void TargetPassConfig::setStartStopPasses() {
-  auto &Ctx = TM->getOptionsContext();
+  // No Function/Module is reachable at pipeline-construction time; fall back
+  // to the process-wide default (see getSched1Options / getSched2Options).
+  const LLVMContext *Ctx = nullptr;
   std::string StartBeforeStr = getStartBeforeName(Ctx);
   StringRef StartBeforeName;
   std::tie(StartBeforeName, StartBeforeInstanceNum) =
@@ -814,136 +811,96 @@ void TargetPassConfig::setStartStopPasses() {
 }
 
 CGPassBuilderOption
-llvm::getCGPassBuilderOption(const clv2::OptionsContext &Ctx) {
+llvm::getCGPassBuilderOption(const clv2::OptionsContext &Ctx,
+                              const LLVMContext *Sched1Ctx) {
   // Start from TPCOverride if a clv2-migrated tool called setTPCValues(), or
   // from a default-constructed struct otherwise.
   CGPassBuilderOption Opt = TPCOverride ? *TPCOverride : CGPassBuilderOption{};
 
-  // When TPCOverride is set, a clv2-migrated tool already parsed these options
-  // via the tool's OptionParser — don't let the CGPass runtime fallback
-  // registry (which has default/unparsed values) overwrite those correct
-  // values.
-  const bool UseCGPassFallback =
-      !TPCOverride &&
-      static_cast<const cgpass_opts::CGPassSched1RegOpts *>(nullptr);
-  // When an override is installed UseCGPassFallback is false, but options the
-  // user specified individually still have to be overlaid.
-#define SCHED1_WAS_SPECIFIED(Opt)                                              \
-  clv2::wasOptSpecified<&clv2::CGPassSched1Reg, &clv2::Opt>(Ctx)
+  // std::optional<bool>/sentinel-enum Sched1 fields directly encode whether
+  // the option was specified -- only overlay Opt when the field has a real
+  // value, so an unspecified option leaves whatever TPCOverride/default
+  // supplied untouched.
+  if (auto V = getFastIsel(Sched1Ctx))
+    Opt.EnableFastISelOption = *V;
+  if (auto V = getGlobalIselAbortMode(Sched1Ctx))
+    Opt.EnableGlobalISelAbort = *V;
+  if (auto V = getGlobalIsel(Sched1Ctx))
+    Opt.EnableGlobalISelOption = *V;
+  if (auto V = getEnableIpra(Sched1Ctx))
+    Opt.EnableIPRA = *V;
+  if (auto V = getVerifyMachineinstrs(Sched1Ctx))
+    Opt.VerifyMachineCode = *V;
+  if (auto V = getDebugifyAndStripAllSafe(Sched1Ctx))
+    Opt.DebugifyAndStripAll = *V;
+  if (auto V = getDebugifyCheckAndStripAllSafe(Sched1Ctx))
+    Opt.DebugifyCheckAndStripAll = *V;
 
-  // The cl::boolOrDefault getters below feed std::optional<bool> fields.
-  // boolOrDefault is an unscoped enum, so assigning one directly converts
-  // through its underlying value and maps BOU_FALSE to true. Map explicitly,
-  // and leave the field unset for BOU_UNSET so the getEffective* helpers can
-  // fall through to the option's own value.
-  if (false /*EnableFastISelOptionWasSpecified*/ || UseCGPassFallback ||
-      SCHED1_WAS_SPECIFIED(CGPASS_FastIsel)) {
-    auto V = getFastIsel(Ctx);
-    if (V != cl::boolOrDefault::BOU_UNSET)
-      Opt.EnableFastISelOption = (V == cl::boolOrDefault::BOU_TRUE);
-  }
-  if (false /*EnableGlobalISelAbortWasSpecified*/ || UseCGPassFallback ||
-      SCHED1_WAS_SPECIFIED(CGPASS_GlobalISelAbort))
-    Opt.EnableGlobalISelAbort = getGlobalIselAbortMode(Ctx);
-  if (false /*EnableGlobalISelOptionWasSpecified*/ || UseCGPassFallback ||
-      SCHED1_WAS_SPECIFIED(CGPASS_GlobalIsel)) {
-    auto V = getGlobalIsel(Ctx);
-    if (V != cl::boolOrDefault::BOU_UNSET)
-      Opt.EnableGlobalISelOption = (V == cl::boolOrDefault::BOU_TRUE);
-  }
-  if (false /*EnableIPRAWasSpecified*/ || UseCGPassFallback ||
-      SCHED1_WAS_SPECIFIED(CGPASS_EnableIpra))
-    Opt.EnableIPRA = getEnableIpra(Ctx);
-  if (false /*VerifyMachineCodeWasSpecified*/ || UseCGPassFallback ||
-      SCHED1_WAS_SPECIFIED(CGPASS_VerifyMachineinstrs)) {
-    auto V = getVerifyMachineinstrs(Ctx);
-    if (V != cl::boolOrDefault::BOU_UNSET)
-      Opt.VerifyMachineCode = (V == cl::boolOrDefault::BOU_TRUE);
-  }
-  if (false /*DisableAtExitBasedGlobalDtorLoweringWasSpecified*/ ||
-      UseCGPassFallback ||
-      SCHED1_WAS_SPECIFIED(CGPASS_DisableAtexitBasedGlobalDtorLowering))
-    Opt.DisableAtExitBasedGlobalDtorLowering =
-        getDisableAtexitBasedGlobalDtorLowering(Ctx);
-  if (false /*DisableExpandReductionsWasSpecified*/ || UseCGPassFallback ||
-      SCHED1_WAS_SPECIFIED(CGPASS_DisableExpandReductions))
-    Opt.DisableExpandReductions = getDisableExpandReductions(Ctx);
-  if (false /*PrintAfterISelWasSpecified*/ || UseCGPassFallback ||
-      SCHED1_WAS_SPECIFIED(CGPASS_PrintAfterIsel))
-    Opt.PrintAfterISel = getPrintAfterIsel(Ctx);
-  if (false /*FSProfileFileWasSpecified*/ || UseCGPassFallback ||
-      SCHED1_WAS_SPECIFIED(CGPASS_FsProfileFile))
-    Opt.FSProfileFile = getFsProfileFile(Ctx);
-  if (false /*EnableGCEmptyBlocksWasSpecified*/ || UseCGPassFallback ||
-      SCHED1_WAS_SPECIFIED(CGPASS_EnableGcEmptyBasicBlocks))
-    Opt.EnableGCEmptyBlocks = getEnableGcEmptyBasicBlocks(Ctx);
+  // Plain bool/string Sched1 fields have no per-option "specified" bit in the
+  // new schema (their .td default matches CGPassBuilderOption's own
+  // default), so overlay unconditionally -- same as the OR-in fields below.
+  Opt.DisableAtExitBasedGlobalDtorLowering |=
+      getDisableAtexitBasedGlobalDtorLowering(Sched1Ctx);
+  Opt.DisableExpandReductions |= getDisableExpandReductions(Sched1Ctx);
+  Opt.PrintAfterISel |= getPrintAfterIsel(Sched1Ctx);
+  Opt.FSProfileFile = getFsProfileFile(Sched1Ctx);
+  Opt.EnableGCEmptyBlocks |= getEnableGcEmptyBasicBlocks(Sched1Ctx);
 
   // Plain bool fields: OR-in so a true sink-forwarded value is never lost.
-  Opt.EarlyLiveIntervals |= getEarlyLiveIntervals(Ctx);
-  Opt.EnableBlockPlacementStats |= getEnableBlockPlacementStats(Ctx);
-  Opt.EnableGlobalMergeFunc |= getEnableGlobalMergeFunc(Ctx);
-  Opt.EnableImplicitNullChecks |= getEnableImplicitNullChecks(Ctx);
-  Opt.MISchedPostRA |= getMischedPostra(Ctx);
-  Opt.DisableLSR |= getDisableLsr(Ctx);
-  Opt.DisableConstantHoisting |= getDisableConstantHoisting(Ctx);
-  Opt.DisableCGP |= getDisableCgp(Ctx);
-  Opt.DisablePartialLibcallInlining |= getDisablePartialLibcallInlining(Ctx);
-  Opt.DisableSelectOptimize |= getDisableSelectOptimize(Ctx);
-  Opt.PrintISelInput |= getPrintIselInput(Ctx);
-  Opt.PrintRegUsage |=
-      clv2::getOptValOr<&clv2::CGPassSched2Reg, &clv2::CGPASS_PrintRegusage>(
-          Ctx, false);
-  Opt.DisableRAFSProfileLoader |= getDisableRaFsprofileLoader(Ctx);
-  Opt.DisableLayoutFSProfileLoader |= getDisableLayoutFsprofileLoader(Ctx);
-  Opt.DisableCFIFixup |= getDisableCfiFixup(Ctx);
-  Opt.EnableMachineFunctionSplitter |= getEnableSplitMachineFunctions(Ctx);
-  Opt.DisablePostRASched |= getDisablePostRa(Ctx);
-  Opt.DisableBranchFold |= getDisableBranchFold(Ctx);
-  Opt.DisableTailDuplicate |= getDisableTailDuplicate(Ctx);
-  Opt.DisableEarlyTailDup |= getDisableEarlyTaildup(Ctx);
-  Opt.DisableBlockPlacement |= getDisableBlockPlacement(Ctx);
-  Opt.DisableSSC |= getDisableSsc(Ctx);
-  Opt.DisableMachineDCE |= getDisableMachineDce(Ctx);
-  Opt.DisableEarlyIfConversion |= getDisableEarlyIfcvt(Ctx);
-  Opt.DisableMachineLICM |= getDisableMachineLicm(Ctx);
-  Opt.DisableMachineCSE |= getDisableMachineCse(Ctx);
-  Opt.DisablePostRAMachineLICM |= getDisablePostraMachineLicm(Ctx);
-  Opt.DisableMachineSink |= getDisableMachineSink(Ctx);
-  Opt.DisablePostRAMachineSink |= getDisablePostraMachineSink(Ctx);
-  Opt.DisableCopyProp |= getDisableCopyprop(Ctx);
-  Opt.SplitStaticData |= getSplitStaticData(Ctx);
-  Opt.BasicBlockSectionMatchInfer |= getBasicBlockSectionMatchInfer(Ctx);
-  Opt.EmitBBHash |=
-      clv2::getOptValOr<&clv2::CGPassSched2Reg, &clv2::CGPASS_EmitBbHash>(
-          Ctx, false);
+  // Sched2 has no context of its own in this signature; it shares Sched1Ctx
+  // (see the class comment on getSched2Options).
+  Opt.EarlyLiveIntervals |= getEarlyLiveIntervals(Sched1Ctx);
+  Opt.EnableBlockPlacementStats |= getEnableBlockPlacementStats(Sched1Ctx);
+  Opt.EnableGlobalMergeFunc |= getEnableGlobalMergeFunc(Sched1Ctx);
+  Opt.EnableImplicitNullChecks |= getEnableImplicitNullChecks(Sched1Ctx);
+  Opt.MISchedPostRA |= getMischedPostra(Sched1Ctx);
+  Opt.DisableLSR |= getDisableLsr(Sched1Ctx);
+  Opt.DisableConstantHoisting |= getDisableConstantHoisting(Sched1Ctx);
+  Opt.DisableCGP |= getDisableCgp(Sched1Ctx);
+  Opt.DisablePartialLibcallInlining |=
+      getDisablePartialLibcallInlining(Sched1Ctx);
+  Opt.DisableSelectOptimize |= getDisableSelectOptimize(Sched1Ctx);
+  Opt.PrintISelInput |= getPrintIselInput(Sched1Ctx);
+  Opt.PrintRegUsage |= getSched2Options(Sched1Ctx).CGPASS_PrintRegusage;
+  Opt.DisableRAFSProfileLoader |= getDisableRaFsprofileLoader(Sched1Ctx);
+  Opt.DisableLayoutFSProfileLoader |=
+      getDisableLayoutFsprofileLoader(Sched1Ctx);
+  Opt.DisableCFIFixup |= getDisableCfiFixup(Sched1Ctx);
+  Opt.EnableMachineFunctionSplitter |=
+      getEnableSplitMachineFunctions(Sched1Ctx);
+  Opt.DisablePostRASched |= getDisablePostRa(Sched1Ctx);
+  Opt.DisableBranchFold |= getDisableBranchFold(Sched1Ctx);
+  Opt.DisableTailDuplicate |= getDisableTailDuplicate(Sched1Ctx);
+  Opt.DisableEarlyTailDup |= getDisableEarlyTaildup(Sched1Ctx);
+  Opt.DisableBlockPlacement |= getDisableBlockPlacement(Sched1Ctx);
+  Opt.DisableSSC |= getDisableSsc(Sched1Ctx);
+  Opt.DisableMachineDCE |= getDisableMachineDce(Sched1Ctx);
+  Opt.DisableEarlyIfConversion |= getDisableEarlyIfcvt(Sched1Ctx);
+  Opt.DisableMachineLICM |= getDisableMachineLicm(Sched1Ctx);
+  Opt.DisableMachineCSE |= getDisableMachineCse(Sched1Ctx);
+  Opt.DisablePostRAMachineLICM |= getDisablePostraMachineLicm(Sched1Ctx);
+  Opt.DisableMachineSink |= getDisableMachineSink(Sched1Ctx);
+  Opt.DisablePostRAMachineSink |= getDisablePostraMachineSink(Sched1Ctx);
+  Opt.DisableCopyProp |= getDisableCopyprop(Sched1Ctx);
+  Opt.SplitStaticData |= getSplitStaticData(Sched1Ctx);
+  Opt.BasicBlockSectionMatchInfer |=
+      getBasicBlockSectionMatchInfer(Sched1Ctx);
+  Opt.EmitBBHash |= getSched2Options(Sched1Ctx).CGPASS_EmitBbHash;
 
   // EnableMachineOutliner is an enum, not a bool: only override when the
   // parsed value is not the target default.
   {
-    auto OutlinerVal = getEnableMachineOutlinerOption(Ctx);
+    auto OutlinerVal = getEnableMachineOutlinerOption(Sched1Ctx);
     if (OutlinerVal != RunOutliner::TargetDefault)
       Opt.EnableMachineOutliner = OutlinerVal;
   }
 
-  if (false /*DebugifyAndStripAllWasSpecified*/ || UseCGPassFallback ||
-      SCHED1_WAS_SPECIFIED(CGPASS_DebugifyAndStripAllSafe)) {
-    auto v = getDebugifyAndStripAllSafe(Ctx);
-    if (v != cl::boolOrDefault::BOU_UNSET)
-      Opt.DebugifyAndStripAll = (v == cl::boolOrDefault::BOU_TRUE);
-  }
-  if (false /*DebugifyCheckAndStripAllWasSpecified*/ || UseCGPassFallback ||
-      SCHED1_WAS_SPECIFIED(CGPASS_DebugifyCheckAndStripAllSafe)) {
-    auto v = getDebugifyCheckAndStripAllSafe(Ctx);
-    if (v != cl::boolOrDefault::BOU_UNSET)
-      Opt.DebugifyCheckAndStripAll = (v == cl::boolOrDefault::BOU_TRUE);
-  }
-
   // Start/stop pipeline control options: prefer TPCOverride if set.
   if (!TPCOverride) {
-    Opt.StartAfter = getStartAfter(Ctx);
-    Opt.StartBefore = getStartBefore(Ctx);
-    Opt.StopAfter = getStopAfter(Ctx);
-    Opt.StopBefore = getStopBefore(Ctx);
+    Opt.StartAfter = getStartAfter(Sched1Ctx);
+    Opt.StartBefore = getStartBefore(Sched1Ctx);
+    Opt.StopAfter = getStopAfter(Sched1Ctx);
+    Opt.StopBefore = getStopBefore(Sched1Ctx);
   }
 
   return Opt;
@@ -960,7 +917,7 @@ void llvm::registerCodeGenCallback(PassInstrumentationCallbacks &PIC,
 
 Expected<TargetPassConfig::StartStopInfo>
 TargetPassConfig::getStartStopInfo(PassInstrumentationCallbacks &PIC,
-                                   const clv2::OptionsContext &Ctx) {
+                                   const LLVMContext *Ctx) {
   std::string StartBeforeStr = getStartBeforeName(Ctx);
   auto [StartBefore, StartBeforeInstanceNum] =
       getPassNameAndInstanceNum(StartBeforeStr);
@@ -1014,37 +971,22 @@ TargetPassConfig::TargetPassConfig(TargetMachine &TM, PassManagerBase &PM)
   initializeBasicAAWrapperPassPass(PR);
   initializeAAResultsWrapperPassPass(PR);
 
-  auto &OptsCtx = TM.getOptionsContext();
+  // No Function/Module is reachable at TargetPassConfig construction time;
+  // fall back to the process-wide default (see getSched1Options).
+  const LLVMContext *Ctx = nullptr;
 
-  if (TPCOverride) {
-    if (TPCOverride->EnableIPRA)
-      TM.Options.EnableIPRA = *TPCOverride->EnableIPRA;
-    else if (false /*EnableIPRAWasSpecified*/ ||
-             clv2::wasOptSpecified<&clv2::CGPassSched1Reg,
-                                   &clv2::CGPASS_EnableIpra>(OptsCtx))
-      TM.Options.EnableIPRA =
-          getEnableIpra(OptsCtx); // forwarded via Sink by clv2 tools
-    else
-      TM.Options.EnableIPRA |= TM.useIPRA();
-    if (TPCOverride->EnableGlobalISelAbort)
-      TM.Options.GlobalISelAbort = *TPCOverride->EnableGlobalISelAbort;
-    else if (false /*EnableGlobalISelAbortWasSpecified*/ ||
-             clv2::wasOptSpecified<&clv2::CGPassSched1Reg,
-                                   &clv2::CGPASS_GlobalISelAbort>(OptsCtx))
-      TM.Options.GlobalISelAbort = getGlobalIselAbortMode(OptsCtx);
+  if (TPCOverride && TPCOverride->EnableIPRA) {
+    TM.Options.EnableIPRA = *TPCOverride->EnableIPRA;
+  } else if (auto V = getEnableIpra(Ctx)) {
+    TM.Options.EnableIPRA = *V; // forwarded via Sink by clv2 tools
   } else {
-    if (false /*EnableIPRAWasSpecified*/ ||
-        clv2::wasOptSpecified<&clv2::CGPassSched1Reg, &clv2::CGPASS_EnableIpra>(
-            OptsCtx)) {
-      TM.Options.EnableIPRA = getEnableIpra(OptsCtx);
-    } else {
-      // If not explicitly specified, use target default.
-      TM.Options.EnableIPRA |= TM.useIPRA();
-    }
-    if (false /*EnableGlobalISelAbortWasSpecified*/ ||
-        clv2::wasOptSpecified<&clv2::CGPassSched1Reg,
-                              &clv2::CGPASS_GlobalISelAbort>(OptsCtx))
-      TM.Options.GlobalISelAbort = getGlobalIselAbortMode(OptsCtx);
+    // If not explicitly specified, use target default.
+    TM.Options.EnableIPRA |= TM.useIPRA();
+  }
+  if (TPCOverride && TPCOverride->EnableGlobalISelAbort) {
+    TM.Options.GlobalISelAbort = *TPCOverride->EnableGlobalISelAbort;
+  } else if (auto V = getGlobalIselAbortMode(Ctx)) {
+    TM.Options.GlobalISelAbort = *V;
   }
 
   if (TM.Options.EnableIPRA)
@@ -1083,19 +1025,17 @@ TargetPassConfig::TargetPassConfig() : ImmutablePass(ID) {
                         "triple set?");
 }
 
-bool TargetPassConfig::willCompleteCodeGenPipeline(
-    const clv2::OptionsContext &Ctx) {
+bool TargetPassConfig::willCompleteCodeGenPipeline(const LLVMContext *Ctx) {
   return getStopBeforeName(Ctx).empty() && getStopAfterName(Ctx).empty();
 }
 
-bool TargetPassConfig::hasLimitedCodeGenPipeline(
-    const clv2::OptionsContext &Ctx) {
+bool TargetPassConfig::hasLimitedCodeGenPipeline(const LLVMContext *Ctx) {
   return !getStartBeforeName(Ctx).empty() || !getStartAfterName(Ctx).empty() ||
          !getStopBeforeName(Ctx).empty() || !getStopAfterName(Ctx).empty();
 }
 
-std::string TargetPassConfig::getLimitedCodeGenPipelineReason(
-    const clv2::OptionsContext &Ctx) {
+std::string
+TargetPassConfig::getLimitedCodeGenPipelineReason(const LLVMContext *Ctx) {
   if (!hasLimitedCodeGenPipeline(Ctx))
     return std::string();
   std::string Res;
@@ -1135,8 +1075,10 @@ IdentifyingPassPtr TargetPassConfig::getPassSubstitution(AnalysisID ID) const {
 
 bool TargetPassConfig::isPassSubstitutedOrOverridden(AnalysisID ID) const {
   IdentifyingPassPtr TargetID = getPassSubstitution(ID);
+  // No Function/Module is reachable at pipeline-construction time; fall back
+  // to the process-wide default (see getSched1Options).
   IdentifyingPassPtr FinalPtr =
-      overridePass(ID, TargetID, TM->getOptionsContext());
+      overridePass(ID, TargetID, /*Sched1Ctx=*/nullptr);
   return !FinalPtr.isValid() || FinalPtr.isInstance() || FinalPtr.getID() != ID;
 }
 
@@ -1201,7 +1143,7 @@ void TargetPassConfig::addPass(Pass *P) {
 AnalysisID TargetPassConfig::addPass(AnalysisID PassID) {
   IdentifyingPassPtr TargetID = getPassSubstitution(PassID);
   IdentifyingPassPtr FinalPtr =
-      overridePass(PassID, TargetID, TM->getOptionsContext());
+      overridePass(PassID, TargetID, /*Sched1Ctx=*/nullptr);
   if (!FinalPtr.isValid())
     return nullptr;
 
@@ -1225,16 +1167,20 @@ void TargetPassConfig::printAndVerify(const std::string &Banner) {
 }
 
 void TargetPassConfig::addPrintPass(const std::string &Banner) {
-  if (getEffectivePrintAfterISel(TM->getOptionsContext()))
+  // No Function/Module is reachable here; fall back to the process-wide
+  // default (see getSched1Options).
+  if (getEffectivePrintAfterISel(/*Sched1Ctx=*/nullptr))
     PM->add(createMachineFunctionPrinterPass(dbgs(), Banner));
 }
 
 void TargetPassConfig::addVerifyPass(const std::string &Banner) {
-  bool Verify = getEffectiveVerifyMachineCode(TM->getOptionsContext()) ==
-                cl::boolOrDefault::BOU_TRUE;
+  // No Function/Module is reachable here; fall back to the process-wide
+  // default (see getSched1Options).
+  std::optional<bool> VerifyOpt =
+      getEffectiveVerifyMachineCode(/*Sched1Ctx=*/nullptr);
+  bool Verify = VerifyOpt.value_or(false);
 #ifdef EXPENSIVE_CHECKS
-  if (getEffectiveVerifyMachineCode(TM->getOptionsContext()) ==
-      cl::boolOrDefault::BOU_UNSET)
+  if (!VerifyOpt)
     Verify = TM->isMachineVerifierClean();
 #endif
   if (Verify)
@@ -1254,22 +1200,24 @@ void TargetPassConfig::addCheckDebugPass() {
 }
 
 void TargetPassConfig::addMachinePrePasses(bool AllowDebugify) {
+  // No Function/Module is reachable here; fall back to the process-wide
+  // default (see getSched1Options).
+  const LLVMContext *Sched1Ctx = nullptr;
   if (AllowDebugify && DebugifyIsSafe &&
-      (getEffectiveDebugifyAndStripAll(TM->getOptionsContext()) ==
-           cl::boolOrDefault::BOU_TRUE ||
-       getEffectiveDebugifyCheckAndStripAll(TM->getOptionsContext()) ==
-           cl::boolOrDefault::BOU_TRUE))
+      (getEffectiveDebugifyAndStripAll(Sched1Ctx).value_or(false) ||
+       getEffectiveDebugifyCheckAndStripAll(Sched1Ctx).value_or(false)))
     addDebugifyPass();
 }
 
 void TargetPassConfig::addMachinePostPasses(const std::string &Banner) {
+  // No Function/Module is reachable here; fall back to the process-wide
+  // default (see getSched1Options).
+  const LLVMContext *Sched1Ctx = nullptr;
   if (DebugifyIsSafe) {
-    if (getEffectiveDebugifyCheckAndStripAll(TM->getOptionsContext()) ==
-        cl::boolOrDefault::BOU_TRUE) {
+    if (getEffectiveDebugifyCheckAndStripAll(Sched1Ctx).value_or(false)) {
       addCheckDebugPass();
       addStripDebugPass();
-    } else if (getEffectiveDebugifyAndStripAll(TM->getOptionsContext()) ==
-               cl::boolOrDefault::BOU_TRUE)
+    } else if (getEffectiveDebugifyAndStripAll(Sched1Ctx).value_or(false))
       addStripDebugPass();
   }
   addVerifyPass(Banner);
@@ -1293,7 +1241,9 @@ void TargetPassConfig::addIRPasses() {
     addPass(createBasicAAWrapperPass());
 
     // Run loop strength reduction before anything else.
-    if (!getEffectiveDisableLSR(TM->getOptionsContext())) {
+    // No Function/Module is reachable here; fall back to the process-wide
+    // default (see getSched2Options).
+    if (!getEffectiveDisableLSR(/*Sched1Ctx=*/nullptr)) {
       addPass(createCanonicalizeFreezeInLoopsPass());
       addPass(createLoopStrengthReducePass());
       if (EnableLoopTermFold)
@@ -1308,25 +1258,29 @@ void TargetPassConfig::addIRPasses() {
 
   // For MachO, lower @llvm.global_dtors into @llvm.global_ctors with
   // __cxa_atexit() calls to avoid emitting the deprecated __mod_term_func.
+  // No Function/Module is reachable here; fall back to the process-wide
+  // default (see getSched1Options).
   if (TM->getTargetTriple().isOSBinFormatMachO() &&
       !getEffectiveDisableAtExitBasedGlobalDtorLowering(
-          TM->getOptionsContext()))
+          /*Sched1Ctx=*/nullptr))
     addPass(createLowerGlobalDtorsLegacyPass());
 
   // Make sure that no unreachable blocks are instruction selected.
   addPass(createUnreachableBlockEliminationPass());
 
   // Prepare expensive constants for SelectionDAG.
+  // No Function/Module is reachable here; fall back to the process-wide
+  // default (see getSched2Options).
   if (getOptLevel() != CodeGenOptLevel::None &&
-      !getEffectiveDisableConstantHoisting(TM->getOptionsContext()))
+      !getEffectiveDisableConstantHoisting(/*Sched1Ctx=*/nullptr))
     addPass(createConstantHoistingPass());
 
   if (getOptLevel() != CodeGenOptLevel::None &&
-      !getEffectiveDisableReplaceWithVecLib(TM->getOptionsContext()))
+      !getEffectiveDisableReplaceWithVecLib(/*Sched1Ctx=*/nullptr))
     addPass(createReplaceWithVeclibLegacyPass());
 
   if (getOptLevel() != CodeGenOptLevel::None &&
-      !getEffectiveDisablePartialLibcallInlining(TM->getOptionsContext()))
+      !getEffectiveDisablePartialLibcallInlining(/*Sched1Ctx=*/nullptr))
     addPass(createPartiallyInlineLibCallsPass());
 
   // Instrument function entry after all inlining.
@@ -1339,15 +1293,19 @@ void TargetPassConfig::addIRPasses() {
 
   // Expand reduction intrinsics into shuffle sequences if the target wants to.
   // Allow disabling it for testing purposes.
-  if (!getEffectiveDisableExpandReductions(TM->getOptionsContext()))
+  // No Function/Module is reachable here; fall back to the process-wide
+  // default (see getSched1Options).
+  if (!getEffectiveDisableExpandReductions(/*Sched1Ctx=*/nullptr))
     addPass(createExpandReductionsPass());
 
   // Convert conditional moves to conditional jumps when profitable.
+  // No Function/Module is reachable here; fall back to the process-wide
+  // default (see getSched2Options).
   if (getOptLevel() != CodeGenOptLevel::None &&
-      !getEffectiveDisableSelectOptimize(TM->getOptionsContext()))
+      !getEffectiveDisableSelectOptimize(/*Sched1Ctx=*/nullptr))
     addPass(createSelectOptimizePass());
 
-  if (getEffectiveEnableGlobalMergeFunc(TM->getOptionsContext()))
+  if (getEffectiveEnableGlobalMergeFunc(/*Sched1Ctx=*/nullptr))
     addPass(createGlobalMergeFuncPass());
 
   if (TM->getTargetTriple().isOSWindows())
@@ -1405,8 +1363,10 @@ void TargetPassConfig::addPassesToHandleExceptions() {
 /// Add pass to prepare the LLVM IR for code generation. This should be done
 /// before exception handling preparation passes.
 void TargetPassConfig::addCodeGenPrepare() {
+  // No Function/Module is reachable here; fall back to the process-wide
+  // default (see getSched2Options).
   if (getOptLevel() != CodeGenOptLevel::None &&
-      !getEffectiveDisableCGP(TM->getOptionsContext()))
+      !getEffectiveDisableCGP(/*Sched1Ctx=*/nullptr))
     addPass(createCodeGenPrepareLegacyPass());
 }
 
@@ -1426,7 +1386,9 @@ void TargetPassConfig::addISelPrepare() {
   addPass(createSafeStackPass());
   addPass(createStackProtectorPass());
 
-  if (getEffectivePrintISelInput(TM->getOptionsContext()))
+  // No Function/Module is reachable here; fall back to the process-wide
+  // default (see getSched2Options).
+  if (getEffectivePrintISelInput(/*Sched1Ctx=*/nullptr))
     addPass(createPrintFunctionPass(
         dbgs(), "\n\n*** Final LLVM Code input to ISel ***\n"));
 
@@ -1440,21 +1402,22 @@ bool TargetPassConfig::addCoreISelPasses() {
   // Enable FastISel with -fast-isel, but allow that to be overridden.
   // Use getEffective*() so clv2-migrated tools (which set TPCOverride via
   // setTPCValues()) take effect even on the legacy pass manager path.
-  cl::boolOrDefault EffFastISel =
-      getEffectiveFastISelOption(TM->getOptionsContext());
-  cl::boolOrDefault EffGlobalISel =
-      getEffectiveGlobalISelOption(TM->getOptionsContext());
-  TM->setO0WantsFastISel(EffFastISel != cl::boolOrDefault::BOU_FALSE);
+  // No Function/Module is reachable here; fall back to the process-wide
+  // default (see getSched1Options).
+  std::optional<bool> EffFastISel =
+      getEffectiveFastISelOption(/*Sched1Ctx=*/nullptr);
+  std::optional<bool> EffGlobalISel =
+      getEffectiveGlobalISelOption(/*Sched1Ctx=*/nullptr);
+  TM->setO0WantsFastISel(EffFastISel != false);
 
   // Determine an instruction selector.
   enum class SelectorType { SelectionDAG, FastISel, GlobalISel };
   SelectorType Selector;
 
-  if (EffFastISel == cl::boolOrDefault::BOU_TRUE)
+  if (EffFastISel == true)
     Selector = SelectorType::FastISel;
-  else if (EffGlobalISel == cl::boolOrDefault::BOU_TRUE ||
-           (TM->Options.EnableGlobalISel &&
-            EffGlobalISel != cl::boolOrDefault::BOU_FALSE))
+  else if (EffGlobalISel == true ||
+           (TM->Options.EnableGlobalISel && EffGlobalISel != false))
     Selector = SelectorType::GlobalISel;
   else if (TM->getOptLevel() == CodeGenOptLevel::None &&
            TM->getO0WantsFastISel())
@@ -1641,8 +1604,10 @@ void TargetPassConfig::addMachinePasses() {
     addPass(createMIRAddFSDiscriminatorsPass(
         sampleprof::FSDiscriminatorPass::Pass1));
     const std::string ProfileFile = getFSProfileFile(TM);
+    // No Function/Module is reachable here; fall back to the process-wide
+    // default (see getSched2Options).
     if (!ProfileFile.empty() &&
-        !getEffectiveDisableRAFSProfileLoader(TM->getOptionsContext()))
+        !getEffectiveDisableRAFSProfileLoader(/*Sched1Ctx=*/nullptr))
       addPass(createMIRProfileLoaderPass(ProfileFile, getFSRemappingFile(TM),
                                          sampleprof::FSDiscriminatorPass::Pass1,
                                          nullptr));
@@ -1683,7 +1648,9 @@ void TargetPassConfig::addMachinePasses() {
   // Run pre-sched2 passes.
   addPreSched2();
 
-  if (getEffectiveEnableImplicitNullChecks(TM->getOptionsContext()))
+  // No Function/Module is reachable here; fall back to the process-wide
+  // default (see getSched2Options).
+  if (getEffectiveEnableImplicitNullChecks(/*Sched1Ctx=*/nullptr))
     addPass(&ImplicitNullChecksID);
 
   // Second pass scheduler.
@@ -1691,7 +1658,9 @@ void TargetPassConfig::addMachinePasses() {
   // point.
   if (getOptLevel() != CodeGenOptLevel::None &&
       !TM->targetSchedulesPostRAScheduling()) {
-    if (getEffectiveMISchedPostRA(TM->getOptionsContext()))
+    // No Function/Module is reachable here; fall back to the process-wide
+    // default (see getSched2Options).
+    if (getEffectiveMISchedPostRA(/*Sched1Ctx=*/nullptr))
       addPass(&PostMachineSchedulerID);
     else
       addPass(&PostRASchedulerID);
@@ -1726,27 +1695,31 @@ void TargetPassConfig::addMachinePasses() {
   addPass(&LiveDebugValuesID);
   addPass(&MachineSanitizerBinaryMetadataID);
 
+  // No Function/Module is reachable here; fall back to the process-wide
+  // default (see getSched1Options).
   if (TM->Options.EnableMachineOutliner &&
       getOptLevel() != CodeGenOptLevel::None &&
-      getEffectiveEnableMachineOutliner(TM->getOptionsContext()) !=
+      getEffectiveEnableMachineOutliner(/*Sched1Ctx=*/nullptr) !=
           RunOutliner::NeverOutline) {
-    if (getEffectiveEnableMachineOutliner(TM->getOptionsContext()) !=
+    if (getEffectiveEnableMachineOutliner(/*Sched1Ctx=*/nullptr) !=
             RunOutliner::TargetDefault ||
         TM->Options.SupportsDefaultOutlining)
       addPass(createMachineOutlinerPass(
-          getEffectiveEnableMachineOutliner(TM->getOptionsContext())));
+          getEffectiveEnableMachineOutliner(/*Sched1Ctx=*/nullptr)));
   }
 
-  if (getEffectiveEnableGCEmptyBlocks(TM->getOptionsContext()))
+  if (getEffectiveEnableGCEmptyBlocks(/*Sched1Ctx=*/nullptr))
     addPass(llvm::createGCEmptyBasicBlocksLegacyPass());
 
   if (getEnableFSDiscriminator(TM->getOptionsContext()))
     addPass(createMIRAddFSDiscriminatorsPass(
         sampleprof::FSDiscriminatorPass::PassLast));
 
+  // No Function/Module is reachable here; fall back to the process-wide
+  // default (see getSched2Options).
   if (TM->Options.EnableMachineFunctionSplitter ||
-      getEffectiveEnableMachineFunctionSplitter(TM->getOptionsContext()) ||
-      getEffectiveSplitStaticData(TM->getOptionsContext()) ||
+      getEffectiveEnableMachineFunctionSplitter(/*Sched1Ctx=*/nullptr) ||
+      getEffectiveSplitStaticData(/*Sched1Ctx=*/nullptr) ||
       TM->Options.EnableStaticDataPartitioning) {
     const std::string ProfileFile = getFSProfileFile(TM);
     if (!ProfileFile.empty()) {
@@ -1769,11 +1742,13 @@ void TargetPassConfig::addMachinePasses() {
   // feature takes precedence. This means functions eligible for
   // basic-block-sections optimizations (`=all`, or `=list=` with function
   // included in the list profile) will get that optimization instead.
+  // No Function/Module is reachable here; fall back to the process-wide
+  // default (see getSched2Options).
   if (TM->Options.EnableMachineFunctionSplitter ||
-      getEffectiveEnableMachineFunctionSplitter(TM->getOptionsContext()))
+      getEffectiveEnableMachineFunctionSplitter(/*Sched1Ctx=*/nullptr))
     addPass(createMachineFunctionSplitterPass());
 
-  if (getEffectiveSplitStaticData(TM->getOptionsContext()) ||
+  if (getEffectiveSplitStaticData(/*Sched1Ctx=*/nullptr) ||
       TM->Options.EnableStaticDataPartitioning) {
     // The static data splitter pass is a machine function pass. and
     // static data annotator pass is a module-wide pass. See the file comment
@@ -1785,13 +1760,15 @@ void TargetPassConfig::addMachinePasses() {
   // address map (or both).
   if (TM->getBBSectionsType() != llvm::BasicBlockSection::None ||
       TM->Options.BBAddrMap) {
-    if (getEffectiveEmitBBHash(TM->getOptionsContext()) ||
-        getEffectiveBasicBlockSectionMatchInfer(TM->getOptionsContext()))
+    // No Function/Module is reachable here; fall back to the process-wide
+    // default (see getSched2Options).
+    if (getEffectiveEmitBBHash(/*Sched1Ctx=*/nullptr) ||
+        getEffectiveBasicBlockSectionMatchInfer(/*Sched1Ctx=*/nullptr))
       addPass(llvm::createMachineBlockHashInfoPass());
     if (TM->getBBSectionsType() == llvm::BasicBlockSection::List) {
       addPass(llvm::createBasicBlockSectionsProfileReaderWrapperPass(
           TM->getBBSectionsFuncListBuf()));
-      if (getEffectiveBasicBlockSectionMatchInfer(TM->getOptionsContext()))
+      if (getEffectiveBasicBlockSectionMatchInfer(/*Sched1Ctx=*/nullptr))
         addPass(llvm::createBasicBlockMatchingAndInferencePass());
       else {
         addPass(llvm::createBasicBlockPathCloningPass());
@@ -1803,7 +1780,9 @@ void TargetPassConfig::addMachinePasses() {
 
   addPostBBSections();
 
-  if (!getEffectiveDisableCFIFixup(TM->getOptionsContext()) &&
+  // No Function/Module is reachable here; fall back to the process-wide
+  // default (see getSched2Options).
+  if (!getEffectiveDisableCFIFixup(/*Sched1Ctx=*/nullptr) &&
       TM->Options.EnableCFIFixup)
     addPass(createCFIFixupLegacy());
 
@@ -1988,7 +1967,9 @@ void TargetPassConfig::addOptimizedRegAlloc() {
   addPass(&PHIEliminationID);
 
   // Eventually, we want to run LiveIntervals before PHI elimination.
-  if (getEffectiveEarlyLiveIntervals(TM->getOptionsContext()))
+  // No Function/Module is reachable here; fall back to the process-wide
+  // default (see getSched2Options).
+  if (getEffectiveEarlyLiveIntervals(/*Sched1Ctx=*/nullptr))
     addPass(&LiveIntervalsID);
 
   addPass(&TwoAddressInstructionPassID);
@@ -2056,15 +2037,19 @@ void TargetPassConfig::addBlockPlacement() {
     addPass(createMIRAddFSDiscriminatorsPass(
         sampleprof::FSDiscriminatorPass::Pass2));
     const std::string ProfileFile = getFSProfileFile(TM);
+    // No Function/Module is reachable here; fall back to the process-wide
+    // default (see getSched2Options).
     if (!ProfileFile.empty() &&
-        !getEffectiveDisableLayoutFSProfileLoader(TM->getOptionsContext()))
+        !getEffectiveDisableLayoutFSProfileLoader(/*Sched1Ctx=*/nullptr))
       addPass(createMIRProfileLoaderPass(ProfileFile, getFSRemappingFile(TM),
                                          sampleprof::FSDiscriminatorPass::Pass2,
                                          nullptr));
   }
   if (addPass(&MachineBlockPlacementID)) {
     // Run a separate pass to collect block placement statistics.
-    if (getEffectiveEnableBlockPlacementStats(TM->getOptionsContext()))
+    // No Function/Module is reachable here; fall back to the process-wide
+    // default (see getSched2Options).
+    if (getEffectiveEnableBlockPlacementStats(/*Sched1Ctx=*/nullptr))
       addPass(&MachineBlockPlacementStatsID);
   }
 }

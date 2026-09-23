@@ -22,6 +22,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Analysis/AnalysisOptions.h"
 #include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/Analysis/CaptureTracking.h"
 #include "llvm/Analysis/ConstantFolding.h"
@@ -76,7 +77,7 @@
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/LockstepReverseIterator.h"
-#include "llvm/Transforms/Utils/UtilsOptionsOptInfos.h"
+#include "llvm/Transforms/Utils/UtilsOptions.h"
 #include "llvm/Transforms/Utils/ValueMapper.h"
 #include <algorithm>
 #include <cassert>
@@ -98,9 +99,9 @@ using namespace PatternMatch;
 
 namespace llvm {
 
-bool getRequireAndPreserveDomTree(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::TransformUtilsOptsReg,
-                           &clv2::TU_RequireAndPreserveDomTree>(Ctx, false);
+bool getRequireAndPreserveDomTree(const LLVMContext *Ctx) {
+  return (Ctx ? Ctx->getOptions<UtilsOptions>() : UtilsOptions::Current)
+      .TU_RequireAndPreserveDomTree;
 }
 
 // Chosen as 2 so as to be cheap, but still to have enough power to fold
@@ -108,102 +109,96 @@ bool getRequireAndPreserveDomTree(const clv2::OptionsContext &Ctx) {
 // To catch this, we need to fold a compare and a select, hence '2' being the
 // minimum reasonable default.
 static unsigned getPHINodeFoldingThreshold(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::TU_PHINodeFoldingThreshold>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<UtilsOptions>().TU_PHINodeFoldingThreshold;
 }
 
 static unsigned getTwoEntryPHINodeFoldingThreshold(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::TU_TwoEntryPHINodeFoldingThreshold>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<UtilsOptions>()
+      .TU_TwoEntryPHINodeFoldingThreshold;
 }
 
 static bool getHoistCommon(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::TU_HoistCommon>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<UtilsOptions>().TU_HoistCommon;
 }
 
 static bool getHoistLoadsWithCondFaulting(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::TU_HoistLoadsWithCondFaulting>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<UtilsOptions>()
+      .TU_HoistLoadsWithCondFaulting;
 }
 
 static bool getHoistStoresWithCondFaulting(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::TU_HoistStoresWithCondFaulting>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<UtilsOptions>()
+      .TU_HoistStoresWithCondFaulting;
 }
 
 static unsigned
 getHoistLoadsStoresWithCondFaultingThreshold(const Function &F) {
-  return clv2::getOptValOrDefault<
-      &clv2::TU_HoistLoadsStoresWithCondFaultingThreshold>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<UtilsOptions>()
+      .TU_HoistLoadsStoresWithCondFaultingThreshold;
 }
 
 static unsigned getHoistCommonSkipLimit(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::TU_HoistCommonSkipLimit>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<UtilsOptions>().TU_HoistCommonSkipLimit;
 }
 
 static bool getSinkCommon(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::TU_SinkCommon>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<UtilsOptions>().TU_SinkCommon;
 }
 
 static bool getHoistCondStores(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::TU_HoistCondStores>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<UtilsOptions>().TU_HoistCondStores;
 }
 
 static bool getMergeCondStores(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::TU_MergeCondStores>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<UtilsOptions>().TU_MergeCondStores;
 }
 
 static bool getMergeCondStoresAggressively(const Function &F) {
-  return clv2::getOptValIfSpecified<&clv2::TransformUtilsOptsReg,
-                                    &clv2::TU_MergeCondStoresAggressively>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext()
+      .getOptions<UtilsOptions>()
+      .TU_MergeCondStoresAggressively;
 }
 
 static bool getSpeculateOneExpensiveInst(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::TU_SpeculateOneExpensiveInst>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<UtilsOptions>().TU_SpeculateOneExpensiveInst;
 }
 
 static unsigned getMaxSpeculationDepth(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::TU_MaxSpeculationDepth>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<UtilsOptions>().TU_MaxSpeculationDepth;
 }
 
 static int getMaxSmallBlockSize(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::TU_MaxSmallBlockSize>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<UtilsOptions>().TU_MaxSmallBlockSize;
 }
 
 static unsigned getBranchFoldThreshold(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::TU_BranchFoldThreshold>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<UtilsOptions>().TU_BranchFoldThreshold;
 }
 
 static unsigned getBranchFoldToCommonDestVectorMultiplier(const Function &F) {
-  return clv2::getOptValOrDefault<
-      &clv2::TU_BranchFoldToCommonDestVectorMultiplier>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<UtilsOptions>()
+      .TU_BranchFoldToCommonDestVectorMultiplier;
 }
 
 static bool getEnableMergeCompatibleInvokes(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::TU_EnableMergeCompatibleInvokes>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<UtilsOptions>()
+      .TU_EnableMergeCompatibleInvokes;
 }
 
 static unsigned getMaxSwitchCasesPerResult(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::TU_MaxSwitchCasesPerResult>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<UtilsOptions>().TU_MaxSwitchCasesPerResult;
 }
 
 static unsigned getMaxJumpThreadingLiveBlocks(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::TU_MaxJumpThreadingLiveBlocks>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<UtilsOptions>()
+      .TU_MaxJumpThreadingLiveBlocks;
 }
 
 } // end namespace llvm
@@ -705,8 +700,7 @@ private:
                ((x & ~mask = y) <=> (x = y OR x = (y |  mask)))
         );
       */
-      if (match(ICI->getOperand(0),
-                m_And(m_Value(RHSVal), m_APInt(RHSC)))) {
+      if (match(ICI->getOperand(0), m_And(m_Value(RHSVal), m_APInt(RHSC)))) {
         APInt Mask = ~*RHSC;
         if (Mask.isPowerOf2() && (C->getValue() & ~Mask) == C->getValue()) {
           // If we already have a value for the switch, it has to match!
@@ -715,8 +709,7 @@ private:
 
           Vals.push_back(C);
           Vals.push_back(
-              ConstantInt::get(C->getContext(),
-                               C->getValue() | Mask));
+              ConstantInt::get(C->getContext(), C->getValue() | Mask));
           UsedICmps++;
           return true;
         }
@@ -728,8 +721,7 @@ private:
                ((x |  mask = y) <=> (x = y OR x = (y & ~mask)))
         );
       */
-      if (match(ICI->getOperand(0),
-                m_Or(m_Value(RHSVal), m_APInt(RHSC)))) {
+      if (match(ICI->getOperand(0), m_Or(m_Value(RHSVal), m_APInt(RHSC)))) {
         APInt Mask = *RHSC;
         if (Mask.isPowerOf2() && (C->getValue() | Mask) == C->getValue()) {
           // If we already have a value for the switch, it has to match!
@@ -737,8 +729,8 @@ private:
             return false;
 
           Vals.push_back(C);
-          Vals.push_back(ConstantInt::get(C->getContext(),
-                                          C->getValue() & ~Mask));
+          Vals.push_back(
+              ConstantInt::get(C->getContext(), C->getValue() & ~Mask));
           UsedICmps++;
           return true;
         }
@@ -1586,7 +1578,8 @@ static bool isSafeToHoistInstr(Instruction *I, unsigned Flags) {
   return true;
 }
 
-static bool passingValueIsAlwaysUndefined(Value *V, Instruction *I, bool PtrValueMayBeModified = false);
+static bool passingValueIsAlwaysUndefined(Value *V, Instruction *I,
+                                          bool PtrValueMayBeModified = false);
 
 /// Helper function for hoistCommonCodeFromSuccessors. Return true if identical
 /// instructions \p I1 and \p I2 can and should be hoisted.
@@ -2327,12 +2320,12 @@ static bool canSinkInstructions(
 // Assuming canSinkInstructions(Blocks) has returned true, sink the last
 // instruction of every block in Blocks to their common successor, commoning
 // into one instruction.
-static void sinkLastInstruction(ArrayRef<BasicBlock*> Blocks) {
+static void sinkLastInstruction(ArrayRef<BasicBlock *> Blocks) {
   auto *BBEnd = Blocks[0]->getTerminator()->getSuccessor(0);
 
   // canSinkInstructions returning true guarantees that every block has at
   // least one non-terminator instruction.
-  SmallVector<Instruction*,4> Insts;
+  SmallVector<Instruction *, 4> Insts;
   for (auto *BB : Blocks) {
     Instruction *I = BB->getTerminator();
     I = I->getPrevNode();
@@ -2341,7 +2334,7 @@ static void sinkLastInstruction(ArrayRef<BasicBlock*> Blocks) {
 
   // We don't need to do any more checking here; canSinkInstructions should
   // have done it all for us.
-  SmallVector<Value*, 4> NewOperands;
+  SmallVector<Value *, 4> NewOperands;
   Instruction *I0 = Insts.front();
   for (unsigned O = 0, E = I0->getNumOperands(); O != E; ++O) {
     // This check is different to that in canSinkInstructions. There, we
@@ -2464,7 +2457,7 @@ static bool sinkCommonCodeFromPredecessors(BasicBlock *BB,
   //         \     /
   //         [ end ]
   //
-  SmallVector<BasicBlock*,4> UnconditionalPreds;
+  SmallVector<BasicBlock *, 4> UnconditionalPreds;
   bool HaveNonUnconditionalPredecessors = false;
   for (auto *PredBB : predecessors(BB)) {
     auto *PredBr = dyn_cast<UncondBrInst>(PredBB->getTerminator());
@@ -2477,8 +2470,8 @@ static bool sinkCommonCodeFromPredecessors(BasicBlock *BB,
     return false;
 
   // We take a two-step approach to tail sinking. First we scan from the end of
-  // each block upwards in lockstep. If the n'th instruction from the end of each
-  // block can be sunk, those instructions are added to ValuesToSink and we
+  // each block upwards in lockstep. If the n'th instruction from the end of
+  // each block can be sunk, those instructions are added to ValuesToSink and we
   // carry on. If we can sink an instruction but need to PHI-merge some operands
   // (because they're not identical in each instruction) we add these to
   // PHIOperands.
@@ -2494,10 +2487,9 @@ static bool sinkCommonCodeFromPredecessors(BasicBlock *BB,
   }
 
   int ScanIdx = 0;
-  SmallPtrSet<Value*,4> InstructionsToSink;
+  SmallPtrSet<Value *, 4> InstructionsToSink;
   LockstepReverseIterator<true> LRI(UnconditionalPreds);
-  while (LRI.isValid() &&
-         canSinkInstructions(*LRI, PHIOperands)) {
+  while (LRI.isValid() && canSinkInstructions(*LRI, PHIOperands)) {
     LLVM_DEBUG(dbgs() << "SINK: instruction can be sunk: " << *(*LRI)[0]
                       << "\n");
     InstructionsToSink.insert_range(*LRI);
@@ -2654,8 +2646,8 @@ static bool sinkCommonCodeFromPredecessors(BasicBlock *BB,
   // many PHI instructions to be generated (currently only one PHI is allowed
   // per sunk instruction).
   //
-  // We can use InstructionsToSink to discount values needing PHI-merging that will
-  // actually be sunk in a later iteration. This allows us to be more
+  // We can use InstructionsToSink to discount values needing PHI-merging that
+  // will actually be sunk in a later iteration. This allows us to be more
   // aggressive in what we sink. This does allow a false positive where we
   // sink presuming a later value will also be sunk, but stop half way through
   // and never actually sink it which means we produce more PHIs than intended.
@@ -2905,8 +2897,9 @@ static void mergeCompatibleInvokesImpl(ArrayRef<InvokeInst *> Invokes,
       continue;
 
     // Form a PHI out of all the data ops under this index.
-    PHINode *PN = PHINode::Create(
-        U->getType(), /*NumReservedValues=*/Invokes.size(), "", MergedInvoke->getIterator());
+    PHINode *PN =
+        PHINode::Create(U->getType(), /*NumReservedValues=*/Invokes.size(), "",
+                        MergedInvoke->getIterator());
     for (InvokeInst *II : Invokes)
       PN->addIncoming(II->getOperand(U.getOperandNo()), II->getParent());
 
@@ -3133,9 +3126,8 @@ static bool validateAndCostRequiredSelects(BasicBlock *BB, BasicBlock *ThenBB,
                                            InstructionCost &Cost,
                                            const TargetTransformInfo &TTI) {
   TargetTransformInfo::TargetCostKind CostKind =
-    BB->getParent()->hasMinSize()
-    ? TargetTransformInfo::TCK_CodeSize
-    : TargetTransformInfo::TCK_SizeAndLatency;
+      BB->getParent()->hasMinSize() ? TargetTransformInfo::TCK_CodeSize
+                                    : TargetTransformInfo::TCK_SizeAndLatency;
 
   bool HaveRewritablePHIs = false;
   for (PHINode &PN : EndBB->phis()) {
@@ -3200,7 +3192,7 @@ static bool isProfitableToSpeculate(const CondBrInst *BI,
   BranchProbability BIEndProb =
       BranchProbability::getBranchProbability(EndWeight, TWeight + FWeight);
   BranchProbability Likely = TTI.getPredictableBranchThreshold(
-      BI->getFunction()->getContext().getOptionsContext());
+      BI->getFunction()->getContext().getOptions<AnalysisOptions>());
   return BIEndProb < Likely;
 }
 
@@ -3373,8 +3365,8 @@ bool SimplifyCFGOpt::speculativelyExecuteBB(CondBrInst *BI,
     Value *FalseV = SpeculatedStoreValue;
     if (Invert)
       std::swap(TrueV, FalseV);
-    Value *S = Builder.CreateSelect(
-        BrCond, TrueV, FalseV, "spec.store.select", BI);
+    Value *S =
+        Builder.CreateSelect(BrCond, TrueV, FalseV, "spec.store.select", BI);
     Sel = cast<Instruction>(S);
     SpeculatedStore->setOperand(0, S);
     SpeculatedStore->applyMergedLocation(BI->getDebugLoc(),
@@ -3877,7 +3869,7 @@ static bool foldTwoEntryPHINode(PHINode *PN, const TargetTransformInfo &TTI,
       BranchProbability BITrueProb =
           BranchProbability::getBranchProbability(TWeight, TWeight + FWeight);
       BranchProbability Likely = TTI.getPredictableBranchThreshold(
-          DomBI->getFunction()->getContext().getOptionsContext());
+          DomBI->getFunction()->getContext().getOptions<AnalysisOptions>());
       BranchProbability BIFalseProb = BITrueProb.getCompl();
       if (IfBlocks.size() == 1) {
         BranchProbability BIBBProb =
@@ -3993,7 +3985,7 @@ static bool foldTwoEntryPHINode(PHINode *PN, const TargetTransformInfo &TTI,
   // Move all 'aggressive' instructions, which are defined in the
   // conditional parts of the if's up to the dominating block.
   for (BasicBlock *IfBlock : IfBlocks)
-      hoistAllInstructionsInto(DomBlock, DomBI, IfBlock);
+    hoistAllInstructionsInto(DomBlock, DomBI, IfBlock);
 
   IRBuilder<NoFolder> Builder(DomBI);
   // Propagate fast-math-flags from phi nodes to replacement selects.
@@ -4085,7 +4077,7 @@ shouldFoldCondBranchesToCommonDestination(CondBrInst *BI, CondBrInst *PBI,
     PBITrueProb =
         BranchProbability::getBranchProbability(PTWeight, PTWeight + PFWeight);
     Likely = TTI->getPredictableBranchThreshold(
-        BI->getFunction()->getContext().getOptionsContext());
+        BI->getFunction()->getContext().getOptions<AnalysisOptions>());
   }
 
   if (PBI->getSuccessor(0) == BI->getSuccessor(0)) {
@@ -4241,8 +4233,8 @@ bool llvm::foldBranchToCommonDest(CondBrInst *BI, DomTreeUpdater *DTU,
                                   unsigned BonusInstThreshold) {
   BasicBlock *BB = BI->getParent();
   TargetTransformInfo::TargetCostKind CostKind =
-    BB->getParent()->hasMinSize() ? TargetTransformInfo::TCK_CodeSize
-                                  : TargetTransformInfo::TCK_SizeAndLatency;
+      BB->getParent()->hasMinSize() ? TargetTransformInfo::TCK_CodeSize
+                                    : TargetTransformInfo::TCK_SizeAndLatency;
 
   Instruction *Cond = dyn_cast<Instruction>(BI->getCondition());
 
@@ -4746,10 +4738,10 @@ static bool tryWidenCondBranchToCondBranch(CondBrInst *PBI, CondBrInst *BI,
   // Use lambda to lazily compute expensive condition after cheap ones.
   auto NoSideEffects = [](BasicBlock &BB) {
     return llvm::none_of(BB, [](const Instruction &I) {
-        return I.mayWriteToMemory() || I.mayHaveSideEffects();
-      });
+      return I.mayWriteToMemory() || I.mayHaveSideEffects();
+    });
   };
-  if (BI->getSuccessor(1) != IfFalseBB && // no inf looping
+  if (BI->getSuccessor(1) != IfFalseBB &&                    // no inf looping
       BI->getSuccessor(1)->getTerminatingDeoptimizeCall() && // profitability
       NoSideEffects(*BI->getParent())) {
     auto *OldSuccessor = BI->getSuccessor(1);
@@ -4761,7 +4753,7 @@ static bool tryWidenCondBranchToCondBranch(CondBrInst *PBI, CondBrInst *BI,
            {DominatorTree::Delete, BI->getParent(), OldSuccessor}});
     return true;
   }
-  if (BI->getSuccessor(0) != IfFalseBB && // no inf looping
+  if (BI->getSuccessor(0) != IfFalseBB &&                    // no inf looping
       BI->getSuccessor(0)->getTerminatingDeoptimizeCall() && // profitability
       NoSideEffects(*BI->getParent())) {
     auto *OldSuccessor = BI->getSuccessor(0);
@@ -4858,7 +4850,7 @@ static bool SimplifyCondBranchToCondBranch(CondBrInst *PBI, CondBrInst *BI,
         static_cast<uint64_t>(PredWeights[0]) + PredWeights[1]);
 
     BranchProbability Likely = TTI.getPredictableBranchThreshold(
-        BI->getFunction()->getContext().getOptionsContext());
+        BI->getFunction()->getContext().getOptions<AnalysisOptions>());
     if (CommonDestProb >= Likely)
       return false;
   }
@@ -6002,7 +5994,7 @@ bool SimplifyCFGOpt::simplifyUnreachable(UnreachableInst *UI) {
         TI->eraseFromParent();
         Changed = true;
       } else {
-        Value* Cond = BI->getCondition();
+        Value *Cond = BI->getCondition();
         assert(BI->getSuccessor(0) != BI->getSuccessor(1) &&
                "The destinations are guaranteed to be different here.");
         CallInst *Assumption;
@@ -6244,7 +6236,8 @@ bool SimplifyCFGOpt::turnSwitchRangeIntoICmp(SwitchInst *SI,
     return false; // More than two destinations.
   }
   if (!DestB)
-    return false; // All destinations are the same and the default is unreachable
+    return false; // All destinations are the same and the default is
+                  // unreachable
 
   assert(DestA && DestB &&
          "Single-destination switch should have been folded.");
@@ -6565,7 +6558,8 @@ static bool forwardSwitchConditionToPHI(SwitchInst *SI) {
     PHINode *Phi = ForwardingNode.first;
     SmallVectorImpl<int> &Indexes = ForwardingNode.second;
     // Check if it helps to fold PHI.
-    if (Indexes.size() < 2 && !llvm::is_contained(Phi->incoming_values(), SI->getCondition()))
+    if (Indexes.size() < 2 &&
+        !llvm::is_contained(Phi->incoming_values(), SI->getCondition()))
       continue;
 
     for (int Index : Indexes)
@@ -6578,7 +6572,8 @@ static bool forwardSwitchConditionToPHI(SwitchInst *SI) {
 
 /// Return true if the backend will be able to handle
 /// initializing an array of constants like C.
-static bool validLookupTableConstant(Constant *C, const TargetTransformInfo &TTI) {
+static bool validLookupTableConstant(Constant *C,
+                                     const TargetTransformInfo &TTI) {
   if (C->isThreadDependent())
     return false;
   if (C->isDLLImportDependent())
@@ -7281,7 +7276,7 @@ Value *SwitchReplacement::replaceSwitch(Value *Index, IRBuilder<> &Builder,
     // BitMap's bit width.
     ShiftAmt = Builder.CreateMul(
         ShiftAmt, ConstantInt::get(MapTy, BitMapElementTy->getBitWidth()),
-        "switch.shiftamt",/*HasNUW =*/true,/*HasNSW =*/true);
+        "switch.shiftamt", /*HasNUW =*/true, /*HasNSW =*/true);
 
     // Shift down.
     Value *DownShifted =
@@ -7934,11 +7929,11 @@ static bool reduceSwitchRange(SwitchInst *SI, IRBuilder<> &Builder,
   if (SI->getNumCases() < 4)
     return false;
 
-  // This transform is agnostic to the signedness of the input or case values. We
-  // can treat the case values as signed or unsigned. We can optimize more common
-  // cases such as a sequence crossing zero {-4,0,4,8} if we interpret case values
-  // as signed.
-  SmallVector<int64_t,4> Values;
+  // This transform is agnostic to the signedness of the input or case values.
+  // We can treat the case values as signed or unsigned. We can optimize more
+  // common cases such as a sequence crossing zero {-4,0,4,8} if we interpret
+  // case values as signed.
+  SmallVector<int64_t, 4> Values;
   for (const auto &C : SI->cases())
     Values.push_back(C.getCaseValue()->getValue().getSExtValue());
   llvm::sort(Values);
@@ -9092,7 +9087,8 @@ bool SimplifyCFGOpt::simplifyCondBranch(CondBrInst *BI, IRBuilder<> &Builder) {
 }
 
 /// Check if passing a value to an instruction will cause undefined behavior.
-static bool passingValueIsAlwaysUndefined(Value *V, Instruction *I, bool PtrValueMayBeModified) {
+static bool passingValueIsAlwaysUndefined(Value *V, Instruction *I,
+                                          bool PtrValueMayBeModified) {
   assert(V->getType() == I->getType() && "Mismatched types");
   Constant *C = dyn_cast<Constant>(V);
   if (!C)
@@ -9292,8 +9288,8 @@ static bool removeUndefIntroducingPredecessor(BasicBlock *BB,
 
           if (DTU)
             DTU->applyUpdates(
-                { { DominatorTree::Insert, Predecessor, Unreachable },
-                  { DominatorTree::Delete, Predecessor, BB } });
+                {{DominatorTree::Insert, Predecessor, Unreachable},
+                 {DominatorTree::Delete, Predecessor, BB}});
           return true;
         }
       }
@@ -9408,7 +9404,6 @@ bool SimplifyCFGOpt::run(BasicBlock *BB) {
 bool llvm::simplifyCFG(BasicBlock *BB, const TargetTransformInfo &TTI,
                        DomTreeUpdater *DTU, const SimplifyCFGOptions &Options,
                        ArrayRef<WeakVH> LoopHeaders) {
-  return SimplifyCFGOpt(TTI, DTU, BB->getDataLayout(), LoopHeaders,
-                        Options)
+  return SimplifyCFGOpt(TTI, DTU, BB->getDataLayout(), LoopHeaders, Options)
       .run(BB);
 }

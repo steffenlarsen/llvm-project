@@ -110,14 +110,14 @@ INITIALIZE_PASS_END(AMDGPUUnifyDivergentExitNodesLegacy, DEBUG_TYPE,
 
 void AMDGPUUnifyDivergentExitNodesLegacy::getAnalysisUsage(
     AnalysisUsage &AU) const {
-  if (getRequireAndPreserveDomTree(getOptionsContext()))
+  if (getRequireAndPreserveDomTree(nullptr))
     AU.addRequired<DominatorTreeWrapperPass>();
   AU.addRequired<PostDominatorTreeWrapperPass>();
   AU.addRequired<UniformityInfoWrapperPass>();
 
   // We preserve the non-critical-edgeness property
   AU.addPreservedID(BreakCriticalEdgesID);
-  if (getRequireAndPreserveDomTree(getOptionsContext()))
+  if (getRequireAndPreserveDomTree(nullptr))
     AU.addPreserved<DominatorTreeWrapperPass>();
 
   FunctionPass::getAnalysisUsage(AU);
@@ -358,7 +358,7 @@ bool AMDGPUUnifyDivergentExitNodesImpl::run(Function &F, DominatorTree *DT,
 
 bool AMDGPUUnifyDivergentExitNodesLegacy::runOnFunction(Function &F) {
   DominatorTree *DT = nullptr;
-  if (getRequireAndPreserveDomTree(getOptionsContext()))
+  if (getRequireAndPreserveDomTree(&F.getContext()))
     DT = &getAnalysis<DominatorTreeWrapperPass>().getDomTree();
   const auto &PDT =
       getAnalysis<PostDominatorTreeWrapperPass>().getPostDomTree();
@@ -372,7 +372,7 @@ PreservedAnalyses
 AMDGPUUnifyDivergentExitNodesPass::run(Function &F,
                                        FunctionAnalysisManager &AM) {
   DominatorTree *DT = nullptr;
-  if (getRequireAndPreserveDomTree(F.getContext().getOptionsContext()))
+  if (getRequireAndPreserveDomTree(&F.getContext()))
     DT = &AM.getResult<DominatorTreeAnalysis>(F);
 
   const auto &PDT = AM.getResult<PostDominatorTreeAnalysis>(F);

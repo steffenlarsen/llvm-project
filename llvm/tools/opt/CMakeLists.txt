@@ -40,6 +40,31 @@ add_llvm_library(LLVMOptDriver
   PARTIAL_SOURCES_INTENDED
   DEPENDS
   intrinsics_gen
+  AArch64OptParserTableGen
+  AMDGPUOptParserTableGen
+  BPFOptParserTableGen
+  BitcodeMemProfOptParserTableGen
+  CGDataOptParserTableGen
+  CodeGenAsmPrintOptParserTableGen
+  CodeGenCore1OptParserTableGen
+  CodeGenCore2OptParserTableGen
+  CodeGenGISelOptParserTableGen
+  CodeGenMachine1OptParserTableGen
+  CodeGenMachine2OptParserTableGen
+  CodeGenRegAllocOptParserTableGen
+  CodeGenSched1OptParserTableGen
+  CodeGenSched2OptParserTableGen
+  CodeGenSelDAGOptParserTableGen
+  HexagonOptParserTableGen
+  InstCombineOptParserTableGen
+  InstrumentationOptParserTableGen
+  IPOOptParserTableGen
+  ScalarOptParserTableGen
+  LTOOptParserTableGen
+  LoongArchOptParserTableGen
+  NVPTXOptParserTableGen
+  ProfileDataOptParserTableGen
+  UtilsOptParserTableGen
 )
 
 add_llvm_tool(opt

@@ -102,7 +102,7 @@
 #include "llvm/Analysis/TypeBasedAliasAnalysis.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/Analysis/AliasAnalysis.h"
-#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
+#include "llvm/Analysis/AnalysisOptions.h"
 #include "llvm/Analysis/MemoryLocation.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DataLayout.h"
@@ -116,7 +116,6 @@
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/OptionsContext.h"
 #include <cassert>
 #include <cstdint>
 
@@ -138,8 +137,7 @@ static bool isNewFormatTypeNode(const MDNode *N) {
 /// This is a simple wrapper around an MDNode which provides a higher-level
 /// interface by hiding the details of how alias analysis information is encoded
 /// in its operands.
-template<typename MDNodeTy>
-class TBAANodeImpl {
+template <typename MDNodeTy> class TBAANodeImpl {
   MDNodeTy *Node = nullptr;
 
 public:
@@ -190,8 +188,7 @@ using MutableTBAANode = TBAANodeImpl<MDNode>;
 /// This is a simple wrapper around an MDNode which provides a
 /// higher-level interface by hiding the details of how alias analysis
 /// information is encoded in its operands.
-template<typename MDNodeTy>
-class TBAAStructTagNodeImpl {
+template <typename MDNodeTy> class TBAAStructTagNodeImpl {
   /// This node should be created with createTBAAAccessTag().
   MDNodeTy *Node;
 
@@ -274,9 +271,7 @@ public:
   }
 
   /// getId - Return type identifier.
-  Metadata *getId() const {
-    return Node->getOperand(isNewFormat() ? 2 : 0);
-  }
+  Metadata *getId() const { return Node->getOperand(isNewFormat() ? 2 : 0); }
 
   unsigned getNumFields() const {
     unsigned FirstFieldOpNo = isNewFormat() ? 3 : 1;
@@ -456,7 +451,7 @@ bool MDNode::isTBAAVtableAccess() const {
   // For struct-path aware TBAA, we use the access type of the tag.
   TBAAStructTagNode Tag(this);
   TBAAStructTypeNode AccessType(Tag.getAccessType());
-  if(auto *Id = dyn_cast<MDString>(AccessType.getId()))
+  if (auto *Id = dyn_cast<MDString>(AccessType.getId()))
     if (Id->getString() == "vtable pointer")
       return true;
   return false;
@@ -468,7 +463,7 @@ static bool matchAccessTags(const MDNode *A, const MDNode *B,
 MDNode *MDNode::getMostGenericTBAA(MDNode *A, MDNode *B) {
   const MDNode *GenericTag;
   matchAccessTags(A, B, &GenericTag);
-  return const_cast<MDNode*>(GenericTag);
+  return const_cast<MDNode *>(GenericTag);
 }
 
 static const MDNode *getLeastCommonType(const MDNode *A, const MDNode *B) {
@@ -546,15 +541,13 @@ static const MDNode *createAccessTag(const MDNode *AccessType) {
     uint64_t AccessSize = UINT64_MAX;
     auto *SizeNode =
         ConstantAsMetadata::get(ConstantInt::get(Int64, AccessSize));
-    Metadata *Ops[] = {const_cast<MDNode*>(AccessType),
-                       const_cast<MDNode*>(AccessType),
-                       OffsetNode, SizeNode};
+    Metadata *Ops[] = {const_cast<MDNode *>(AccessType),
+                       const_cast<MDNode *>(AccessType), OffsetNode, SizeNode};
     return MDNode::get(AccessType->getContext(), Ops);
   }
 
-  Metadata *Ops[] = {const_cast<MDNode*>(AccessType),
-                     const_cast<MDNode*>(AccessType),
-                     OffsetNode};
+  Metadata *Ops[] = {const_cast<MDNode *>(AccessType),
+                     const_cast<MDNode *>(AccessType), OffsetNode};
   return MDNode::get(AccessType->getContext(), Ops);
 }
 
@@ -663,8 +656,8 @@ static bool matchAccessTags(const MDNode *A, const MDNode *B,
   }
 
   TBAAStructTagNode TagA(A), TagB(B);
-  const MDNode *CommonType = getLeastCommonType(TagA.getAccessType(),
-                                                TagB.getAccessType());
+  const MDNode *CommonType =
+      getLeastCommonType(TagA.getAccessType(), TagB.getAccessType());
 
   // If the final access types have different roots, they're part of different
   // potentially unrelated type systems, so we must be conservative.
@@ -696,10 +689,9 @@ bool TypeBasedAAResult::Aliases(const MDNode *A, const MDNode *B) const {
 }
 
 TypeBasedAAResult::TypeBasedAAResult(bool UsingTypeSanitizer,
-                                     const clv2::OptionsContext &Ctx)
+                                     const AnalysisOptions &Opts)
     : UsingTypeSanitizer(UsingTypeSanitizer),
-      ShouldUseTBAA(clv2::getOptValOrDefault<&clv2::AN_EnableTBAA>(Ctx) &&
-                    !UsingTypeSanitizer) {}
+      ShouldUseTBAA(Opts.AN_EnableTBAA && !UsingTypeSanitizer) {}
 
 bool TypeBasedAAResult::shouldUseTBAA() const { return ShouldUseTBAA; }
 
@@ -707,7 +699,7 @@ AnalysisKey TypeBasedAA::Key;
 
 TypeBasedAAResult TypeBasedAA::run(Function &F, FunctionAnalysisManager &AM) {
   return TypeBasedAAResult(F.hasFnAttribute(Attribute::SanitizeType),
-                           F.getContext().getOptionsContext());
+                           F.getContext().getOptions<AnalysisOptions>());
 }
 
 char TypeBasedAAWrapperPass::ID = 0;
@@ -721,8 +713,9 @@ ImmutablePass *llvm::createTypeBasedAAWrapperPass() {
 TypeBasedAAWrapperPass::TypeBasedAAWrapperPass() : ImmutablePass(ID) {}
 
 bool TypeBasedAAWrapperPass::doInitialization(Module &M) {
-  Result.reset(new TypeBasedAAResult(/*UsingTypeSanitizer=*/false,
-                                     M.getContext().getOptionsContext()));
+  Result.reset(
+      new TypeBasedAAResult(/*UsingTypeSanitizer=*/false,
+                            M.getContext().getOptions<AnalysisOptions>()));
   return false;
 }
 

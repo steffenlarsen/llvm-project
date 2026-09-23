@@ -23,10 +23,6 @@
 
 namespace llvm {
 
-namespace clv2 {
-class OptionsContext;
-}
-
 class DataLayout;
 class Value;
 class WeakTrackingVH;
@@ -45,6 +41,7 @@ class DomTreeUpdater;
 class Function;
 class Instruction;
 class InvokeInst;
+class LLVMContext;
 class LoadInst;
 class MDNode;
 class MemorySSAUpdater;
@@ -178,7 +175,9 @@ LLVM_ABI bool EliminateDuplicatePHINodes(BasicBlock *BB,
 /// It returns true if a modification was made, possibly deleting the basic
 /// block that was pointed to. LoopHeaders is an optional input parameter
 /// providing the set of loop headers that SimplifyCFG should not eliminate.
-LLVM_ABI bool getRequireAndPreserveDomTree(const clv2::OptionsContext &Ctx);
+/// \p Ctx is the LLVMContext to read the option from, or nullptr if none is
+/// available (in which case the process-wide default is used).
+LLVM_ABI bool getRequireAndPreserveDomTree(const LLVMContext *Ctx);
 LLVM_ABI bool simplifyCFG(BasicBlock *BB, const TargetTransformInfo &TTI,
                           DomTreeUpdater *DTU = nullptr,
                           const SimplifyCFGOptions &Options = {},

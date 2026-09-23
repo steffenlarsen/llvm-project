@@ -45,6 +45,7 @@ class DFAPacketizer;
 class InstrItineraryData;
 class LiveIntervals;
 class LiveVariables;
+class LLVMContext;
 class MachineCycleInfo;
 class MachineLoop;
 class MachineLoopInfo;
@@ -1839,7 +1840,7 @@ public:
 
   /// Provide a flag for disabling the PreRA hazard recognizer that targets may
   /// choose to honor.
-  LLVM_ABI bool usePreRAHazardRecognizer(const clv2::OptionsContext &Ctx) const;
+  LLVM_ABI bool usePreRAHazardRecognizer(const LLVMContext &Ctx) const;
 
   /// For a comparison instruction, return the source registers
   /// in SrcReg and SrcReg2 if having two register operands, and the value it

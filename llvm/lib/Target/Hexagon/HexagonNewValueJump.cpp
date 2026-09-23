@@ -45,9 +45,8 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
+#include "llvm/Target/Hexagon/HexagonOptions.h"
 #include <cassert>
 #include <cstdint>
 #include <iterator>
@@ -61,18 +60,15 @@ STATISTIC(NumNVJGenerated, "Number of New Value Jump Instructions created");
 static int DbgNVJCount = -1;
 
 static bool getDisablePacketizer(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_DisablePacketizer>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_DisablePacketizer;
 }
 
 static int getDbgNVJCount(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_DbgNVJCount>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_DbgNVJCount;
 }
 
 static bool getDisableNewValueJumps(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_DisableNewValueJumps>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_DisableNewValueJumps;
 }
 
 namespace {

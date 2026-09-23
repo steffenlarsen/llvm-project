@@ -14,7 +14,7 @@
 #include "llvm/IR/ModuleSummaryIndex.h"
 #include "llvm/ADT/SCCIterator.h"
 #include "llvm/ADT/Statistic.h"
-#include "llvm/IR/IROptionsOptInfos.h"
+#include "llvm/IR/IROptions.h"
 #include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/Path.h"
@@ -28,12 +28,17 @@ STATISTIC(ReadOnlyLiveGVars,
 STATISTIC(WriteOnlyLiveGVars,
           "Number of live global variables marked write only");
 
-static bool getPropagateAttrs(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::IR_PropagateAttrs>(Ctx);
+// These call sites only ever have a bare clv2::OptionsContext, with no
+// reachable LLVMContext, so this reads IROptions::Current directly (see the
+// analogous getOpts(const clv2::OptionsContext &) overload in
+// PrintPasses.cpp). The parameter is kept (unnamed) only for call-site
+// stability.
+static bool getPropagateAttrs(const clv2::OptionsContext &) {
+  return IROptions::Current.IR_PropagateAttrs;
 }
 
-static bool getImportConstantsWithRefs(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::IR_ImportConstantsWithRefs>(Ctx);
+static bool getImportConstantsWithRefs(const clv2::OptionsContext &) {
+  return IROptions::Current.IR_ImportConstantsWithRefs;
 }
 
 FunctionSummary FunctionSummary::ExternalNode =
@@ -522,7 +527,7 @@ static std::string fflagsToString(FunctionSummary::FFlags F) {
 }
 
 // Get string representation of function instruction count and flags.
-static std::string getSummaryAttributes(GlobalValueSummary* GVS) {
+static std::string getSummaryAttributes(GlobalValueSummary *GVS) {
   auto *FS = dyn_cast_or_null<FunctionSummary>(GVS);
   if (!FS)
     return "";
@@ -654,7 +659,8 @@ void ModuleSummaryIndex::exportToDot(
     OS << "    node [style=filled,fillcolor=lightblue];\n";
 
     auto &GVSMap = ModIt.second;
-    auto Draw = [&](GlobalValue::GUID IdFrom, GlobalValue::GUID IdTo, int Hotness) {
+    auto Draw = [&](GlobalValue::GUID IdFrom, GlobalValue::GUID IdTo,
+                    int Hotness) {
       if (!GVSMap.count(IdTo)) {
         CrossModuleEdges.push_back({ModId, Hotness, IdFrom, IdTo});
         return;

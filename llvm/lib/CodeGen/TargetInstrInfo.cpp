@@ -14,7 +14,7 @@
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/BinaryFormat/Dwarf.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsSched1.h"
 #include "llvm/CodeGen/MachineCombinerPattern.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
@@ -32,31 +32,30 @@
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/LLVMContext.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCInstrItineraries.h"
-#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/InterleavedRange.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
 
 using namespace llvm;
 
-static bool getDisableSchedHazard(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_DisableSchedHazard>(Ctx);
+static bool getDisableSchedHazard(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenSched1Options>().CGPASS_DisableSchedHazard;
 }
 
-static bool getAccReassoc(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_AccReassoc>(Ctx);
+static bool getAccReassoc(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenSched1Options>().CGPASS_AccReassoc;
 }
 
-static unsigned getAccMinDepth(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_AccMinDepth>(Ctx);
+static unsigned getAccMinDepth(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenSched1Options>().CGPASS_AccMinDepth;
 }
 
-static unsigned getAccMaxWidth(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_AccMaxWidth>(Ctx);
+static unsigned getAccMaxWidth(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenSched1Options>().CGPASS_AccMaxWidth;
 }
 
 TargetInstrInfo::~TargetInstrInfo() = default;
@@ -1053,8 +1052,7 @@ void TargetInstrInfo::getAccumulatorChain(
 /// ILP.
 bool TargetInstrInfo::getAccumulatorReassociationPatterns(
     MachineInstr &Root, SmallVectorImpl<unsigned> &Patterns) const {
-  if (!getAccReassoc(
-          Root.getMF()->getFunction().getContext().getOptionsContext()))
+  if (!getAccReassoc(Root.getMF()->getFunction().getContext()))
     return false;
 
   unsigned Opc = Root.getOpcode();
@@ -1076,9 +1074,7 @@ bool TargetInstrInfo::getAccumulatorReassociationPatterns(
   getAccumulatorChain(&Root, Chain);
 
   // Reject chains which are too short to be worth modifying.
-  if (Chain.size() <
-      getAccMinDepth(
-          Root.getMF()->getFunction().getContext().getOptionsContext()))
+  if (Chain.size() < getAccMinDepth(Root.getMF()->getFunction().getContext()))
     return false;
 
   // Check if the MBB this instruction is a part of contains any other chains.
@@ -1537,14 +1533,11 @@ void TargetInstrInfo::genAlternativeCodeSequence(
     SmallVector<Register, 32> ChainRegs;
     getAccumulatorChain(&Root, ChainRegs);
     unsigned int Depth = ChainRegs.size();
-    assert(getAccMaxWidth(MF.getFunction().getContext().getOptionsContext()) >
-               1 &&
-           "Max accumulator width set to illegal value");
-    unsigned int MaxWidth =
-        Log2_32(Depth) < getAccMaxWidth(
-                             MF.getFunction().getContext().getOptionsContext())
-            ? Log2_32(Depth)
-            : getAccMaxWidth(MF.getFunction().getContext().getOptionsContext());
+    const LLVMContext &Ctx = MF.getFunction().getContext();
+    assert(getAccMaxWidth(Ctx) > 1 && "Max accumulator width set to illegal value");
+    unsigned int MaxWidth = Log2_32(Depth) < getAccMaxWidth(Ctx)
+                                 ? Log2_32(Depth)
+                                 : getAccMaxWidth(Ctx);
 
     // Walk down the chain and rewrite it as a tree.
     for (auto IndexedReg : llvm::enumerate(llvm::reverse(ChainRegs))) {
@@ -1730,8 +1723,7 @@ bool TargetInstrInfo::isSchedulingBoundary(const MachineInstr &MI,
 
 // Provide a flag for disabling the PreRA hazard recognizer that targets may
 // choose to honor.
-bool TargetInstrInfo::usePreRAHazardRecognizer(
-    const clv2::OptionsContext &Ctx) const {
+bool TargetInstrInfo::usePreRAHazardRecognizer(const LLVMContext &Ctx) const {
   return !getDisableSchedHazard(Ctx);
 }
 

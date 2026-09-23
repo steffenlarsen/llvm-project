@@ -199,7 +199,7 @@
 #include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/TargetParser/Triple.h"
-#include "llvm/Transforms/Instrumentation/InstrumentationOptionsOptInfos.h"
+#include "llvm/Transforms/Instrumentation/InstrumentationOptions.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Instrumentation.h"
 #include "llvm/Transforms/Utils/Local.h"
@@ -238,28 +238,30 @@ static const size_t kNumberOfAccessSizes = 4;
 // ClShadowBase/ClOriginBase "was specified" is handled by
 // isClShadowBaseSpecified() / isClOriginBaseSpecified()
 
-#define MSAN_GETTER(VarName, DescName, Default)                                \
-  [[maybe_unused]] static auto get##VarName(const Function &F) {               \
-    if (auto *O = clv2::getView<&clv2::InstrumentationOptsReg>(                \
-            F.getContext().getOptionsContext()))                               \
-      if (O->specified<&clv2::DescName>())                                     \
-        return O->get<&clv2::DescName>();                                      \
-    return decltype(clv2::getView<&clv2::InstrumentationOptsReg>(              \
-                        F.getContext().getOptionsContext())                    \
-                        ->get<&clv2::DescName>())(Default);                    \
-  }                                                                            \
-  [[maybe_unused]] static auto get##VarName(const Module &M) {                 \
-    if (auto *O = clv2::getView<&clv2::InstrumentationOptsReg>(                \
-            M.getContext().getOptionsContext()))                               \
-      if (O->specified<&clv2::DescName>())                                     \
-        return O->get<&clv2::DescName>();                                      \
-    return decltype(clv2::getView<&clv2::InstrumentationOptsReg>(              \
-                        M.getContext().getOptionsContext())                    \
-                        ->get<&clv2::DescName>())(Default);                    \
+#define MSAN_GETTER(VarName, DescName, Default)                              \
+  [[maybe_unused]] static auto get##VarName(const Function &F) {             \
+    return F.getContext().getOptions<InstrumentationOptions>().DescName;     \
+  }                                                                          \
+  [[maybe_unused]] static auto get##VarName(const Module &M) {               \
+    return M.getContext().getOptions<InstrumentationOptions>().DescName;     \
   }
 
-MSAN_GETTER(ClTrackOrigins, INST_MsanTrackOrigins, 0)
-MSAN_GETTER(ClKeepGoing, INST_MsanKeepGoing, false)
+// Tristate options: unspecified reads as std::nullopt, so the literal
+// default is applied here instead of in the schema.
+#define MSAN_OPTIONAL_GETTER(VarName, DescName, Default)                     \
+  [[maybe_unused]] static auto get##VarName(const Function &F) {             \
+    return F.getContext()                                                   \
+        .getOptions<InstrumentationOptions>()                               \
+        .DescName.value_or(Default);                                        \
+  }                                                                          \
+  [[maybe_unused]] static auto get##VarName(const Module &M) {               \
+    return M.getContext()                                                   \
+        .getOptions<InstrumentationOptions>()                               \
+        .DescName.value_or(Default);                                        \
+  }
+
+MSAN_OPTIONAL_GETTER(ClTrackOrigins, INST_MsanTrackOrigins, 0)
+MSAN_OPTIONAL_GETTER(ClKeepGoing, INST_MsanKeepGoing, false)
 MSAN_GETTER(ClPoisonStack, INST_MsanPoisonStack, true)
 MSAN_GETTER(ClPoisonStackWithCall, INST_MsanPoisonStackWithCall, false)
 MSAN_GETTER(ClPoisonStackPattern, INST_MsanPoisonStackPattern, 0xff)
@@ -273,36 +275,35 @@ MSAN_GETTER(ClSwitchPrecision, INST_MsanSwitchPrecision, 99)
 MSAN_GETTER(ClHandleLifetimeIntrinsics, INST_MsanHandleLifetimeIntrinsics, true)
 MSAN_GETTER(ClHandleAsmConservative, INST_MsanHandleAsmConservative, true)
 MSAN_GETTER(ClCheckAccessAddress, INST_MsanCheckAccessAddress, true)
-MSAN_GETTER(ClEagerChecks, INST_MsanEagerChecks, false)
+MSAN_OPTIONAL_GETTER(ClEagerChecks, INST_MsanEagerChecks, false)
 MSAN_GETTER(ClDumpStrictInstructions, INST_MsanDumpStrictInstructions, false)
 MSAN_GETTER(ClDumpHeuristicInstructions, INST_MsanDumpHeuristicInstructions,
             false)
 MSAN_GETTER(ClInstrumentationWithCallThreshold,
             INST_MsanInstrumentationWithCallThreshold, 3500)
-MSAN_GETTER(ClEnableKmsan, INST_MsanKernel, false)
+MSAN_OPTIONAL_GETTER(ClEnableKmsan, INST_MsanKernel, false)
 MSAN_GETTER(ClDisableChecks, INST_MsanDisableChecks, false)
 MSAN_GETTER(ClCheckConstantShadow, INST_MsanCheckConstantShadow, true)
 MSAN_GETTER(ClWithComdat, INST_MsanWithComdat, false)
 MSAN_GETTER(ClAndMask, INST_MsanAndMask, 0)
 MSAN_GETTER(ClXorMask, INST_MsanXorMask, 0)
-MSAN_GETTER(ClShadowBase, INST_MsanShadowBase, 0)
-MSAN_GETTER(ClOriginBase, INST_MsanOriginBase, 0)
+MSAN_OPTIONAL_GETTER(ClShadowBase, INST_MsanShadowBase, 0)
+MSAN_OPTIONAL_GETTER(ClOriginBase, INST_MsanOriginBase, 0)
 MSAN_GETTER(ClDisambiguateWarning, INST_MsanDisambiguateWarning, 3)
 
 #undef MSAN_GETTER
+#undef MSAN_OPTIONAL_GETTER
 
-#define MSAN_SPECIFIED(VarName, DescName)                                      \
-  [[maybe_unused]] static bool is##VarName##Specified(const Function &F) {     \
-    if (auto *O = clv2::getView<&clv2::InstrumentationOptsReg>(                \
-            F.getContext().getOptionsContext()))                               \
-      return O->specified<&clv2::DescName>();                                  \
-    return false;                                                              \
-  }                                                                            \
-  [[maybe_unused]] static bool is##VarName##Specified(const Module &M) {       \
-    if (auto *O = clv2::getView<&clv2::InstrumentationOptsReg>(                \
-            M.getContext().getOptionsContext()))                               \
-      return O->specified<&clv2::DescName>();                                  \
-    return false;                                                              \
+#define MSAN_SPECIFIED(VarName, DescName)                                    \
+  [[maybe_unused]] static bool is##VarName##Specified(const Function &F) {   \
+    return F.getContext()                                                   \
+        .getOptions<InstrumentationOptions>()                               \
+        .DescName.has_value();                                              \
+  }                                                                          \
+  [[maybe_unused]] static bool is##VarName##Specified(const Module &M) {     \
+    return M.getContext()                                                   \
+        .getOptions<InstrumentationOptions>()                               \
+        .DescName.has_value();                                              \
   }
 
 MSAN_SPECIFIED(ClEnableKmsan, INST_MsanKernel)
@@ -676,21 +677,18 @@ MemorySanitizerOptions::MemorySanitizerOptions(int TO, bool R, bool K,
       EagerChecks(EagerChecks) {}
 
 static void applyMsanOverrides(MemorySanitizerOptions &Opts, const Module &M) {
-  if (auto *O = clv2::getView<&clv2::InstrumentationOptsReg>(
-          M.getContext().getOptionsContext())) {
-    if (O->specified<&clv2::INST_MsanKernel>())
-      Opts.Kernel = O->get<&clv2::INST_MsanKernel>();
-    if (O->specified<&clv2::INST_MsanTrackOrigins>())
-      Opts.TrackOrigins = O->get<&clv2::INST_MsanTrackOrigins>();
-    else if (Opts.Kernel)
-      Opts.TrackOrigins = 2;
-    if (O->specified<&clv2::INST_MsanKeepGoing>())
-      Opts.Recover = O->get<&clv2::INST_MsanKeepGoing>();
-    else if (Opts.Kernel)
-      Opts.Recover = true;
-    if (O->specified<&clv2::INST_MsanEagerChecks>())
-      Opts.EagerChecks = O->get<&clv2::INST_MsanEagerChecks>();
-  }
+  if (isClEnableKmsanSpecified(M))
+    Opts.Kernel = getClEnableKmsan(M);
+  if (isClTrackOriginsSpecified(M))
+    Opts.TrackOrigins = getClTrackOrigins(M);
+  else if (Opts.Kernel)
+    Opts.TrackOrigins = 2;
+  if (isClKeepGoingSpecified(M))
+    Opts.Recover = getClKeepGoing(M);
+  else if (Opts.Kernel)
+    Opts.Recover = true;
+  if (isClEagerChecksSpecified(M))
+    Opts.EagerChecks = getClEagerChecks(M);
 }
 
 PreservedAnalyses MemorySanitizerPass::run(Module &M,

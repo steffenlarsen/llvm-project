@@ -1,5 +1,3 @@
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
 //===- MemCpyOptimizer.cpp - Optimize use of memcpy and friends -----------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -55,7 +53,9 @@
 #include "llvm/IR/Value.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Transforms/Scalar/ScalarOptions.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include <algorithm>
 #include <cassert>

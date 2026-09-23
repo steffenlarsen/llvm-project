@@ -16,8 +16,6 @@ tablegen(LLVM LanaiGenSubtargetInfo.inc -gen-subtarget)
 add_public_tablegen_target(LanaiCommonTableGen)
 
 add_llvm_target(LanaiCodeGen
-  LanaiOptionsGetters.cpp
-  LanaiOptionsRegistration.cpp
   LanaiAsmPrinter.cpp
   LanaiCodeGenPassBuilder.cpp
   LanaiDelaySlotFiller.cpp
@@ -53,6 +51,9 @@ add_llvm_target(LanaiCodeGen
 
   ADD_TO_COMPONENT
   Lanai
+
+  DEPENDS
+  LanaiOptParserTableGen
   )
 
 add_subdirectory(AsmParser)

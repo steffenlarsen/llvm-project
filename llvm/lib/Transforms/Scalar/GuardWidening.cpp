@@ -1,5 +1,3 @@
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
 //===- GuardWidening.cpp - ---- Guard widening ----------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -58,6 +56,7 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/KnownBits.h"
 #include "llvm/Transforms/Scalar.h"
+#include "llvm/Transforms/Scalar/ScalarOptions.h"
 #include "llvm/Transforms/Utils/GuardUtils.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
 #include <functional>
@@ -71,8 +70,9 @@ STATISTIC(CondBranchEliminated, "Number of eliminated conditional branches");
 STATISTIC(FreezeAdded, "Number of freeze instruction introduced");
 
 static bool getWidenBranchGuards(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_GuardWideningWidenBranchGuards>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_GuardWideningWidenBranchGuards;
 }
 
 // Get the condition of \p I. It can either be a guard or a conditional branch.

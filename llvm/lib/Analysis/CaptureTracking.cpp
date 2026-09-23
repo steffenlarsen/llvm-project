@@ -19,7 +19,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/AliasAnalysis.h"
-#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
+#include "llvm/Analysis/AnalysisOptions.h"
 #include "llvm/Analysis/CFG.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/Argument.h"
@@ -29,15 +29,14 @@
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/Support/CommandLineCompat.h"
-#include "llvm/Support/OptionsContext.h"
 
 using namespace llvm;
 
 #define DEBUG_TYPE "capture-tracking"
 
-STATISTIC(NumCaptured,          "Number of pointers maybe captured");
-STATISTIC(NumNotCaptured,       "Number of pointers not captured");
-STATISTIC(NumCapturedBefore,    "Number of pointers maybe captured before");
+STATISTIC(NumCaptured, "Number of pointers maybe captured");
+STATISTIC(NumNotCaptured, "Number of pointers not captured");
+STATISTIC(NumCapturedBefore, "Number of pointers maybe captured before");
 STATISTIC(NumNotCapturedBefore, "Number of pointers not captured before");
 
 /// The default value for MaxUsesToExplore argument. It's relatively small to
@@ -47,15 +46,14 @@ STATISTIC(NumNotCapturedBefore, "Number of pointers not captured before");
 /// use it where possible. The caching version can use much higher limit or
 /// don't have this cap at all.
 
-static unsigned
-getDefaultMaxUsesToExploreImpl(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::AN_DefaultMaxUsesToExplore>(Ctx);
+static unsigned getDefaultMaxUsesToExploreImpl(const AnalysisOptions &Opts) {
+  return Opts.AN_DefaultMaxUsesToExplore;
 }
 
 unsigned llvm::getDefaultMaxUsesToExploreForCaptureTracking() {
   // No per-function context here; the descriptor's default is the same value
   // and is a compile-time constant.
-  return clv2::AN_DefaultMaxUsesToExplore.DefaultValue;
+  return AnalysisOptions::Current.AN_DefaultMaxUsesToExplore;
 }
 
 CaptureTracker::~CaptureTracker() = default;
@@ -410,9 +408,9 @@ void llvm::PointerMayBeCaptured(const Value *V, CaptureTracker *Tracker,
       F = I->getFunction();
     else if (auto *A = dyn_cast<Argument>(V))
       F = A->getParent();
-    MaxUsesToExplore =
-        F ? getDefaultMaxUsesToExploreImpl(F->getContext().getOptionsContext())
-          : clv2::AN_DefaultMaxUsesToExplore.DefaultValue;
+    MaxUsesToExplore = F ? getDefaultMaxUsesToExploreImpl(
+                               F->getContext().getOptions<AnalysisOptions>())
+                         : AnalysisOptions::Current.AN_DefaultMaxUsesToExplore;
   }
 
   SmallVector<const Use *, 20> Worklist;
@@ -423,7 +421,7 @@ void llvm::PointerMayBeCaptured(const Value *V, CaptureTracker *Tracker,
     for (const Use &U : V->uses()) {
       // If there are lots of uses, conservatively say that the value
       // is captured to avoid taking too much compile time.
-      if (Visited.size()  >= MaxUsesToExplore) {
+      if (Visited.size() >= MaxUsesToExplore) {
         Tracker->tooManyUses();
         return false;
       }

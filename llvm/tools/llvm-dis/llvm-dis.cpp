@@ -13,18 +13,21 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "llvm/Bitcode/BitcodeOptionsOptInfos.h"
+#include "llvm/Bitcode/BitcodeMemProfOptions.h"
+#include "llvm/Bitcode/BitcodeOptions.h"
 #include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/IR/AssemblyAnnotationWriter.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DebugInfo.h"
 #include "llvm/IR/DiagnosticInfo.h"
 #include "llvm/IR/DiagnosticPrinter.h"
+#include "llvm/IR/IROptions.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/ModuleSummaryIndex.h"
 #include "llvm/IR/Type.h"
+#include "llvm/Option/LibraryOptions.h"
 #include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/FileSystem.h"
@@ -32,6 +35,7 @@
 #include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/OptionsContext.h"
+#include "llvm/Support/PluginLoaderOptions.h"
 #include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/ToolOutputFile.h"
 #include "llvm/Support/WithColor.h"
@@ -72,15 +76,19 @@ static constexpr OptionInfo<bool> PrintThinLTOIndexOnly{
     "Only read thinlto index and print the index as LLVM assembly.",
     Init{false}, Hidden, Cat(DisCategory)};
 
-static constexpr OptionInfo<bool> PreserveLLUselist{
-    "preserve-ll-uselistorder",
-    "Preserve use-list order when writing LLVM assembly.", Hidden,
-    Cat(DisCategory)};
+// --preserve-ll-uselistorder comes from llvm::IROptions, which has migrated
+// off clv2 onto the new per-library OptTable struct design (see
+// llvm/include/llvm/Option/LibraryOptions.h); llvm-dis parses it out of argv
+// itself in main() below rather than declaring a local duplicate here.
+// AsmWriter's AssemblyWriter constructor already consults
+// llvm::IROptions::Current directly (see
+// isPreserveAssemblyUseListOrderSpecified / getPreserveAssemblyUseListOrder in
+// AsmWriter.cpp) whenever the flag was specified, overriding whatever default
+// llvm-dis passes to Module::print().
 
 static constexpr OptionsRegistry<&InputFilenames, &OutputFilename, &Force,
                                  &DontPrint, &SetImporting, &ShowAnnotations,
-                                 &MaterializeMetadata, &PrintThinLTOIndexOnly,
-                                 &PreserveLLUselist>
+                                 &MaterializeMetadata, &PrintThinLTOIndexOnly>
     DisToolReg;
 
 static void printDebugLoc(const DebugLoc &DL, formatted_raw_ostream &OS) {
@@ -175,10 +183,44 @@ int main(int argc, char **argv) {
 
   clv2::OptionParser P;
   P.add<&DisToolReg>();
-  P.add<&BitcodeOptsReg>();
   RegisterAllLLVMOptions(P);
   P.hideUnrelatedOptions({&DisCategory, &getColorCategory()});
-  auto OptsCtx = P.parse(argc, argv, "llvm .bc -> .ll disassembler\n");
+  std::vector<const char *> ArgsAfterPlugins =
+      loadPluginsAndStripArgs(argc, argv);
+
+  // llvm::BitcodeOptions, llvm::BitcodeMemProfOptions, and llvm::IROptions
+  // have migrated off clv2 onto the new per-library OptTable struct design
+  // (see llvm/include/llvm/Option/LibraryOptions.h) and are no longer among
+  // the clv2::OptionParser registries configured above. Parse them out of
+  // argv first, forwarding whatever none of them recognizes to the legacy
+  // clv2 parser unchanged.
+  SmallVector<const char *, 32> BitcodeOptsRest;
+  {
+    std::string BitcodeOptsErrs;
+    raw_string_ostream BitcodeOptsErrsOS(BitcodeOptsErrs);
+    if (Error Err =
+            opt::parseLibraryOptionsChain<BitcodeOptions, BitcodeMemProfOptions,
+                                          IROptions>(
+                ArrayRef<const char *>(ArgsAfterPlugins).drop_front(),
+                BitcodeOptsRest, BitcodeOptsErrsOS)) {
+      errs() << "llvm-dis: " << toString(std::move(Err)) << "\n";
+      return 1;
+    }
+    errs() << BitcodeOptsErrs;
+  }
+  // IROptions has no automatic apply step (unlike BitcodeOptions/
+  // BitcodeMemProfOptions, which are read on demand via Ctx.getOptions<T>());
+  // it must sync a couple of legacy globals (TimePassesIsEnabled/
+  // TimePassesPerRun and the OptBisect singleton) explicitly. See
+  // llvm/lib/IR/IROptions.cpp.
+  llvm::ir_opts::applyIROptions();
+  SmallVector<const char *, 32> ArgvAfterBitcodeOpts;
+  ArgvAfterBitcodeOpts.push_back(argv[0]);
+  ArgvAfterBitcodeOpts.append(BitcodeOptsRest.begin(), BitcodeOptsRest.end());
+
+  auto OptsCtx =
+      P.parse(static_cast<int>(ArgvAfterBitcodeOpts.size()),
+              ArgvAfterBitcodeOpts.data(), "llvm .bc -> .ll disassembler\n");
   auto *Opts = OptsCtx->getViewPtr<&DisToolReg>();
 
   auto Inputs = Opts->get<&InputFilenames>();
@@ -265,7 +307,7 @@ int main(int argc, char **argv) {
       if (!Opts->get<&DontPrint>()) {
         if (M) {
           M->renumberMetadataForAssembly();
-          M->print(Out->os(), Annotator.get(), Opts->get<&PreserveLLUselist>());
+          M->print(Out->os(), Annotator.get());
         }
         if (Index)
           Index->print(Out->os());

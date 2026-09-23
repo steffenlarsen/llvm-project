@@ -1,5 +1,3 @@
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
 //===- LoopFuse.cpp - Loop Fusion Pass ------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -59,8 +57,10 @@
 #include "llvm/IR/Verifier.h"
 #include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Scalar/LoopFuse.h"
+#include "llvm/Transforms/Scalar/ScalarOptions.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/CodeMoverUtils.h"
 #include "llvm/Transforms/Utils/LoopPeel.h"
@@ -107,19 +107,14 @@ enum FusionDependenceAnalysisChoice {
 
 static FusionDependenceAnalysisChoice
 getFusionDependenceAnalysis(const Function &F) {
-  if (auto *O = clv2::getView<&clv2::ScalarOptsReg>(
-          F.getContext().getOptionsContext()))
-    if (O->specified<&clv2::SC_LoopFusionDependenceAnalysis>()) {
-      auto V = O->get<&clv2::SC_LoopFusionDependenceAnalysis>();
-      return static_cast<FusionDependenceAnalysisChoice>(static_cast<int>(V));
-    }
-  return FUSION_DEPENDENCE_ANALYSIS_DA;
+  auto V = F.getContext()
+               .getOptions<ScalarOptions>()
+               .SC_LoopFusionDependenceAnalysis;
+  return static_cast<FusionDependenceAnalysisChoice>(static_cast<int>(V));
 }
 
 static unsigned getFusionPeelMaxCount(const Function &F) {
-  return clv2::getOptValOr<&clv2::ScalarOptsReg,
-                           &clv2::SC_LoopFusionPeelMaxCount>(
-      F.getContext().getOptionsContext(), 0);
+  return F.getContext().getOptions<ScalarOptions>().SC_LoopFusionPeelMaxCount;
 }
 
 #ifndef NDEBUG

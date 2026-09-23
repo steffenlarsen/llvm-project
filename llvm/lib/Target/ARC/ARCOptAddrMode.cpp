@@ -24,9 +24,8 @@
 #include "llvm/IR/Function.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/ARC/ARCOptionsOptInfos.h"
+#include "llvm/Target/ARC/ARCOptions.h"
 
 using namespace llvm;
 
@@ -39,8 +38,8 @@ namespace llvm {
 static unsigned ArcKillAddrMode = 0;
 
 static unsigned getArcKillAddrMode(const MachineFunction &MF) {
-  return clv2::getOptValOrDefault<&clv2::ARC_KillAddrMode>(
-      MF.getFunction().getContext().getOptionsContext());
+  return MF.getFunction().getContext().getOptions<ARCOptions>()
+      .ARC_KillAddrMode;
 }
 
 #define DUMP_BEFORE() ((getArcKillAddrMode(MF) & 0x0001) != 0)

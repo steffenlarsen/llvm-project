@@ -1,6 +1,4 @@
 add_llvm_component_library(LLVMInstCombine
-  InstCombineOptionsGetters.cpp
-  InstCombineOptionsRegistration.cpp
   InstructionCombining.cpp
   InstCombineOptions.cpp
   InstCombineAddSub.cpp
@@ -24,10 +22,12 @@ add_llvm_component_library(LLVMInstCombine
 
   DEPENDS
   intrinsics_gen
+  InstCombineOptParserTableGen
 
   LINK_COMPONENTS
   Analysis
   Core
+  Option
   Support
   TransformUtils
   )

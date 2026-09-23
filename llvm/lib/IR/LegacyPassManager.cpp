@@ -14,7 +14,7 @@
 #include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/IR/DiagnosticInfo.h"
-#include "llvm/IR/IROptionsOptInfos.h"
+#include "llvm/IR/IROptions.h"
 #include "llvm/IR/IRPrintingPasses.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/LegacyPassManagers.h"
@@ -46,30 +46,44 @@ using namespace llvm;
 
 namespace {
 // Different debug levels that can be enabled...
-enum PassDebugLevel { Disabled, Arguments, Structure, Executions, Details };
+// Named distinctly from llvm::PassDebugLevel (the -debug-pass IROptions
+// field's enum, generated from IROptions.td) to avoid an unqualified-name
+// ambiguity: this type's own name would otherwise collide with the
+// TableGen-generated `enum class llvm::PassDebugLevel` under the
+// `using namespace llvm;` above.
+enum LegacyPassDebugLevel {
+  Disabled,
+  Arguments,
+  Structure,
+  Executions,
+  Details
+};
 } // namespace
 
-static enum PassDebugLevel
-getPassDebuggingImpl(const clv2::OptionsContext &OptsCtx) {
-  if (auto *O = clv2::getView<&clv2::IROptsReg>(OptsCtx)) {
-    auto Val = O->get<&clv2::IR_PassDebugging>();
-    switch (Val) {
-    case clv2::PassDebugLevel::Disabled:
-      return Disabled;
-    case clv2::PassDebugLevel::Arguments:
-      return Arguments;
-    case clv2::PassDebugLevel::Structure:
-      return Structure;
-    case clv2::PassDebugLevel::Executions:
-      return Executions;
-    case clv2::PassDebugLevel::Details:
-      return Details;
-    }
+// PMTopLevelManager only ever plumbs a bare clv2::OptionsContext (see
+// setOptionsContext()/getOptionsContext() above) -- there is no reachable
+// LLVMContext to key an IROptions override off of here, so this reads
+// IROptions::Current directly, matching the analogous
+// getOpts(const clv2::OptionsContext &) overload in PrintPasses.cpp. The
+// parameter is kept (unnamed) only for call-site/ABI stability.
+static enum LegacyPassDebugLevel
+getPassDebuggingImpl(const clv2::OptionsContext &) {
+  switch (IROptions::Current.IR_PassDebugging) {
+  case llvm::PassDebugLevel::Disabled:
+    return Disabled;
+  case llvm::PassDebugLevel::Arguments:
+    return Arguments;
+  case llvm::PassDebugLevel::Structure:
+    return Structure;
+  case llvm::PassDebugLevel::Executions:
+    return Executions;
+  case llvm::PassDebugLevel::Details:
+    return Details;
   }
-  return Disabled;
+  llvm_unreachable("all PassDebugLevel cases handled");
 }
 
-static enum PassDebugLevel
+static enum LegacyPassDebugLevel
 getPassDebugging(const clv2::OptionsContext &OptsCtx) {
   return getPassDebuggingImpl(OptsCtx);
 }

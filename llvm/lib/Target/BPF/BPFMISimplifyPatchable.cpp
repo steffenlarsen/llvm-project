@@ -39,8 +39,7 @@
 #include "llvm/IR/Function.h"
 #include "llvm/IR/GlobalVariable.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/BPF/BPFOptionsOptInfos.h"
+#include "llvm/Target/BPF/BPFOptions.h"
 #include <set>
 
 using namespace llvm;
@@ -48,8 +47,7 @@ using namespace llvm;
 #define DEBUG_TYPE "bpf-mi-simplify-patchable"
 
 static bool getDisableCOREOptimization(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::BPF_DisableCOREOptimization>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<BPFOptions>().BPF_DisableCOREOptimization;
 }
 
 namespace {
@@ -179,8 +177,11 @@ void BPFMISimplifyPatchableImpl::checkADDrr(MachineRegisterInfo *MRI,
         continue;
     }
 
-    BuildMI(*DefInst->getParent(), *DefInst, DefInst->getDebugLoc(), TII->get(COREOp))
-        .add(DefInst->getOperand(0)).addImm(Opcode).add(*BaseOp)
+    BuildMI(*DefInst->getParent(), *DefInst, DefInst->getDebugLoc(),
+            TII->get(COREOp))
+        .add(DefInst->getOperand(0))
+        .addImm(Opcode)
+        .add(*BaseOp)
         .addGlobalAddress(GVal);
     DefInst->eraseFromParent();
   }

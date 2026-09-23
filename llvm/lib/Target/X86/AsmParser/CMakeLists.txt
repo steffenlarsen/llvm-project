@@ -10,4 +10,7 @@ add_llvm_component_library(LLVMX86AsmParser
 
   ADD_TO_COMPONENT
   X86
+
+  DEPENDS
+  X86OptParserTableGen
   )

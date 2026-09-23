@@ -20,8 +20,7 @@
 #include "SIMachineFunctionInfo.h"
 #include "llvm/CodeGen/MachineScheduler.h"
 #include "llvm/CodeGen/TargetOpcodes.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/AMDGPU/AMDGPUOptionsOptInfos.h"
+#include "llvm/Target/AMDGPU/AMDGPUOptions.h"
 
 using namespace llvm;
 using namespace llvm::AMDGPU;
@@ -29,23 +28,19 @@ using namespace llvm::AMDGPU;
 #define DEBUG_TYPE "igrouplp"
 
 static bool getEnableExactSolver(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AMDGPU_EnableExactSolver>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<AMDGPUOptions>().AMDGPU_EnableExactSolver;
 }
 
 static unsigned getCutoffForExact(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AMDGPU_CutoffForExact>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<AMDGPUOptions>().AMDGPU_CutoffForExact;
 }
 
 static uint64_t getMaxBranchesExplored(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AMDGPU_MaxBranchesExplored>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<AMDGPUOptions>().AMDGPU_MaxBranchesExplored;
 }
 
 static bool getUseCostHeur(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AMDGPU_UseCostHeur>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<AMDGPUOptions>().AMDGPU_UseCostHeur;
 }
 
 namespace {
@@ -67,7 +62,7 @@ enum class SchedGroupMask {
   TRANS = 1u << 10,
   LDSDMA = 1u << 11,
   ALL = ALU | VALU | SALU | MFMA | VMEM | VMEM_READ | VMEM_WRITE | DS |
-      DS_READ | DS_WRITE | TRANS | LDSDMA,
+        DS_READ | DS_WRITE | TRANS | LDSDMA,
   LLVM_MARK_AS_BITMASK_ENUM(/* LargestFlag = */ ALL)
 };
 
@@ -85,9 +80,8 @@ protected:
   std::optional<SmallVector<SUnit *, 4>> Cache;
 
 public:
-  virtual bool
-  apply(const SUnit *, const ArrayRef<SUnit *>,
-        SmallVectorImpl<SchedGroup> &) {
+  virtual bool apply(const SUnit *, const ArrayRef<SUnit *>,
+                     SmallVectorImpl<SchedGroup> &) {
     return true;
   };
 

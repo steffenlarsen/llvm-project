@@ -23,9 +23,8 @@
 #include "llvm/IR/Module.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Transforms/IPO.h"
-#include "llvm/Transforms/IPO/IPOOptionsOptInfos.h"
+#include "llvm/Transforms/IPO/IPOOptions.h"
 #include "llvm/Transforms/Utils/CtorUtils.h"
 #include "llvm/Transforms/Utils/GlobalStatus.h"
 
@@ -61,8 +60,7 @@ INITIALIZE_PASS(GlobalDCELegacyPass, "globaldce", "Dead Global Elimination",
 ModulePass *llvm::createGlobalDCEPass() { return new GlobalDCELegacyPass(); }
 
 static bool getClEnableVFE(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_ClEnableVFE>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_ClEnableVFE;
 }
 
 STATISTIC(NumAliases  , "Number of global aliases removed");

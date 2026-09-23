@@ -27,9 +27,8 @@
 #include "llvm/MC/SectionKind.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
+#include "llvm/Target/Hexagon/HexagonOptions.h"
 #include "llvm/Target/TargetMachine.h"
 
 #define DEBUG_TYPE "hexagon-sdata"
@@ -43,16 +42,14 @@ using namespace llvm;
 #ifdef NDEBUG
 #define TRACE(X)                                                               \
   do {                                                                         \
-    if (clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_TraceGVPlacement>( \
-            clv2::defaultOptionsContext(), false)) {                           \
+    if (HexagonOptions::Current.HEX_TraceGVPlacement) {                        \
       TRACE_TO(errs(), X);                                                     \
     }                                                                          \
   } while (false)
 #else
 #define TRACE(X)                                                               \
   do {                                                                         \
-    if (clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_TraceGVPlacement>( \
-            clv2::defaultOptionsContext(), false)) {                           \
+    if (HexagonOptions::Current.HEX_TraceGVPlacement) {                        \
       TRACE_TO(errs(), X);                                                     \
     } else {                                                                   \
       LLVM_DEBUG(TRACE_TO(dbgs(), X));                                         \
@@ -119,8 +116,7 @@ MCSection *HexagonTargetObjectFile::SelectSectionForGlobal(
 
   // If the lookup table is used by more than one function, do not place
   // it in text section.
-  if (clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_EmitLUTInText>(
-          TM.getOptionsContext(), false) &&
+  if (HexagonOptions::Current.HEX_EmitLUTInText &&
       GO->getName().starts_with("switch.table")) {
     if (const Function *Fn = getLutUsedFunction(GO))
       return selectSectionForLookupTable(GO, TM, Fn);
@@ -184,9 +180,8 @@ bool HexagonTargetObjectFile::isGlobalInSmallSection(
                          "may have explicit section assignments...\n");
   // Only global variables, not functions.
   LLVM_DEBUG(dbgs() << "Checking if value is in small-data, -G"
-                    << clv2::getOptValOrDefault<&clv2::HEX_SmallDataThreshold>(
-                           TM.getOptionsContext())
-                    << ": \"" << GO->getName() << "\": ");
+                    << HexagonOptions::Current.HEX_SmallDataThreshold << ": \""
+                    << GO->getName() << "\": ");
   const GlobalVariable *GVar = dyn_cast<GlobalVariable>(GO);
   if (!GVar) {
     LLVM_DEBUG(dbgs() << "no, not a global variable\n");
@@ -215,9 +210,7 @@ bool HexagonTargetObjectFile::isGlobalInSmallSection(
   }
 
   bool IsLocal = GVar->hasLocalLinkage();
-  if (!clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_StaticInSData>(
-          TM.getOptionsContext(), false) &&
-      IsLocal) {
+  if (!HexagonOptions::Current.HEX_StaticInSData && IsLocal) {
     LLVM_DEBUG(dbgs() << "no, is static\n");
     return false;
   }
@@ -244,8 +237,7 @@ bool HexagonTargetObjectFile::isGlobalInSmallSection(
     LLVM_DEBUG(dbgs() << "no, has size 0\n");
     return false;
   }
-  if (Size > clv2::getOptValOrDefault<&clv2::HEX_SmallDataThreshold>(
-                 TM.getOptionsContext())) {
+  if (Size > HexagonOptions::Current.HEX_SmallDataThreshold) {
     LLVM_DEBUG(dbgs() << "no, size exceeds sdata threshold: " << Size << '\n');
     return false;
   }
@@ -256,25 +248,21 @@ bool HexagonTargetObjectFile::isGlobalInSmallSection(
 
 bool HexagonTargetObjectFile::isSmallDataEnabled(
     const TargetMachine &TM) const {
-  return clv2::getOptValOrDefault<&clv2::HEX_SmallDataThreshold>(
-             TM.getOptionsContext()) > 0 &&
+  return HexagonOptions::Current.HEX_SmallDataThreshold > 0 &&
          !TM.isPositionIndependent();
 }
 
 unsigned HexagonTargetObjectFile::getSmallDataSize() const {
   if (!TM)
     return 8; // compile-time default
-  return clv2::getOptValOr<&clv2::HexagonOptsReg,
-                           &clv2::HEX_SmallDataThreshold>(
-      TM->getOptionsContext(), 8u);
+  return HexagonOptions::Current.HEX_SmallDataThreshold;
 }
 
 bool HexagonTargetObjectFile::shouldPutJumpTableInFunctionSection(
     bool UsesLabelDifference, const Function &F) const {
   if (!TM)
     return false; // compile-time default
-  return clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_EmitJTInText>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext().getOptions<HexagonOptions>().HEX_EmitJTInText;
 }
 
 /// Descends any type down to "elementary" components,
@@ -353,8 +341,7 @@ MCSection *HexagonTargetObjectFile::selectSmallSectionForGlobal(
     // claration. Also, compiler adds explicit pad fields to some struct
     // declarations - they are currently counted towards smallest addres-
     // sable entity.
-    if (clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_NoSmallDataSorting>(
-            TM.getOptionsContext(), false)) {
+    if (HexagonOptions::Current.HEX_NoSmallDataSorting) {
       TRACE(" default sbss\n");
       return SmallBSSSection;
     }
@@ -378,8 +365,7 @@ MCSection *HexagonTargetObjectFile::selectSmallSectionForGlobal(
     // section. However, the BitcodeSectionWriter pass will query for the
     // sections of commons (and the linker expects us to know their section) so
     // we'll return one here.
-    if (clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_NoSmallDataSorting>(
-            TM.getOptionsContext(), false))
+    if (HexagonOptions::Current.HEX_NoSmallDataSorting)
       return BSSSection;
 
     Twine Name = Twine(".scommon") + getSectionSuffixForSize(Size);
@@ -400,8 +386,7 @@ MCSection *HexagonTargetObjectFile::selectSmallSectionForGlobal(
   }
 
   if (Kind.isData()) {
-    if (clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_NoSmallDataSorting>(
-            TM.getOptionsContext(), false)) {
+    if (HexagonOptions::Current.HEX_NoSmallDataSorting) {
       TRACE(" default sdata\n");
       return SmallDataSection;
     }

@@ -15,7 +15,7 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/Statistic.h"
-#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
+#include "llvm/Analysis/AnalysisOptions.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/Constants.h"
@@ -25,7 +25,6 @@
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/Compiler.h"
-#include "llvm/Support/OptionsContext.h"
 #include <deque>
 
 using namespace llvm;
@@ -43,30 +42,27 @@ using namespace llvm;
 #include "llvm/IR/FunctionProperties.def"
 
 static bool getEnableDetailedFunctionProperties(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AN_EnableDetailedFunctionProperties>(
-      F.getContext().getOptionsContext());
-}
-
-static bool
-getEnableDetailedFunctionProperties(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::AN_EnableDetailedFunctionProperties>(
-      Ctx);
+  return F.getContext()
+      .getOptions<AnalysisOptions>()
+      .AN_EnableDetailedFunctionProperties;
 }
 
 static unsigned getBigBasicBlockInstructionThreshold(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AN_BigBasicBlockInstructionThreshold>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<AnalysisOptions>()
+      .AN_BigBasicBlockInstructionThreshold;
 }
 
 static unsigned getMediumBasicBlockInstructionThreshold(const Function &F) {
-  return clv2::getOptValOrDefault<
-      &clv2::AN_MediumBasicBlockInstructionThreshold>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<AnalysisOptions>()
+      .AN_MediumBasicBlockInstructionThreshold;
 }
 
 static unsigned getCallWithManyArgumentsThreshold(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AN_CallWithManyArgumentsThreshold>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<AnalysisOptions>()
+      .AN_CallWithManyArgumentsThreshold;
 }
 
 namespace {
@@ -361,9 +357,7 @@ void FunctionPropertiesInfo::print(raw_ostream &OS, const Function *F) const {
 #define FUNCTION_PROPERTY(Name, Description) OS << #Name ": " << Name << "\n";
 
 #define DETAILED_FUNCTION_PROPERTY(Name, Description)                          \
-  if (F ? getEnableDetailedFunctionProperties(                                 \
-              F->getContext().getOptionsContext())                             \
-        : false) {                                                             \
+  if (F ? getEnableDetailedFunctionProperties(*F) : false) {                   \
     OS << #Name ": " << Name << "\n";                                          \
   }
 
@@ -384,9 +378,8 @@ FunctionPropertiesAnalysis::run(Function &F, FunctionAnalysisManager &FAM) {
 
 PreservedAnalyses
 FunctionPropertiesPrinterPass::run(Function &F, FunctionAnalysisManager &AM) {
-  OS << "Printing analysis results of CFA for function "
-     << "'" << F.getName() << "':"
-     << "\n";
+  OS << "Printing analysis results of CFA for function " << "'" << F.getName()
+     << "':" << "\n";
   AM.getResult<FunctionPropertiesAnalysis>(F).print(OS, &F);
   return PreservedAnalyses::all();
 }

@@ -19,6 +19,7 @@
 #include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/OptionsContext.h"
+#include "llvm/Support/PluginLoaderOptions.h"
 #include "llvm/Support/Process.h"
 #include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/WithColor.h"
@@ -105,7 +106,10 @@ int main(int argc, char **argv) {
   P.add<&UndNameToolReg>();
   RegisterAllLLVMOptions(P);
   P.hideUnrelatedOptions({&UndNameCategory, &getColorCategory()});
-  auto OptsCtx = P.parse(argc, argv, "llvm-undname\n");
+  std::vector<const char *> ArgsAfterPlugins =
+      loadPluginsAndStripArgs(argc, argv);
+  auto OptsCtx = P.parse(static_cast<int>(ArgsAfterPlugins.size()),
+                          ArgsAfterPlugins.data(), "llvm-undname\n");
   auto *Opts = OptsCtx->getViewPtr<&UndNameToolReg>();
 
   UndNameOpts O{

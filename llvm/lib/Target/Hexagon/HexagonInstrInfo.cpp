@@ -50,9 +50,8 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
+#include "llvm/Target/Hexagon/HexagonOptions.h"
 #include "llvm/Target/TargetMachine.h"
 #include <cassert>
 #include <cstdint>
@@ -83,43 +82,37 @@ static bool BranchRelaxAsmLarge = true;
 static bool UseDFAHazardRec = true;
 
 static bool getScheduleInlineAsm(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_ScheduleInlineAsm>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_ScheduleInlineAsm;
 }
 
 static bool getEnableBranchPrediction(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_EnableBranchPrediction>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_EnableBranchPrediction;
 }
 
 static bool getDisableNVSchedule(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_DisableNVSchedule>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_DisableNVSchedule;
 }
 
 static bool getEnableTimingClassLatency(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_EnableTimingClassLatency>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<HexagonOptions>()
+      .HEX_EnableTimingClassLatency;
 }
 
 static bool getEnableALUForwarding(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_EnableALUForwarding>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_EnableALUForwarding;
 }
 
 static bool getEnableACCForwarding(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_EnableACCForwarding>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_EnableACCForwarding;
 }
 
 static bool getBranchRelaxAsmLarge(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_BranchRelaxAsmLarge>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_BranchRelaxAsmLarge;
 }
 
 static bool getUseDFAHazardRec(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_UseDFAHazardRec>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_UseDFAHazardRec;
 }
 
 /// Constants for Hexagon instructions.

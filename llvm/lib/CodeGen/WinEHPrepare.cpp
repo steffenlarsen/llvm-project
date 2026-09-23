@@ -19,7 +19,7 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsCore2.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/CodeGen/WinEHFuncInfo.h"
@@ -45,16 +45,16 @@ using namespace llvm;
 
 #define DEBUG_TYPE "win-eh-prepare"
 
-static bool getDisableDemotion(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_DisableDemotion>(Ctx);
+static bool getDisableDemotion(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore2Options>().CGPASS_DisableDemotion;
 }
 
-static bool getDisableCleanups(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_DisableCleanups>(Ctx);
+static bool getDisableCleanups(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore2Options>().CGPASS_DisableCleanups;
 }
 
-static bool getDemoteCatchswitchOnly(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_DemoteCatchswitchOnly>(Ctx);
+static bool getDemoteCatchswitchOnly(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore2Options>().CGPASS_DemoteCatchswitchOnly;
 }
 
 namespace {
@@ -1226,7 +1226,7 @@ void WinEHPrepareImpl::verifyPreparedFunclets(Function &F) {
       report_fatal_error("Uncolored BB!");
     if (NumColors > 1)
       report_fatal_error("Multicolor BB!");
-    assert((getDisableDemotion(F.getContext().getOptionsContext()) ||
+    assert((getDisableDemotion(F.getContext()) ||
             !(BB.isEHPad() && isa<PHINode>(BB.begin()))) &&
            "EH Pad still has a PHI!");
   }
@@ -1244,12 +1244,12 @@ bool WinEHPrepareImpl::prepareExplicitEH(Function &F) {
 
   Changed |= cloneCommonBlocks(F);
 
-  if (!getDisableDemotion(F.getContext().getOptionsContext()))
-    Changed |= demotePHIsOnFunclets(
-        F, DemoteCatchSwitchPHIOnly ||
-               getDemoteCatchswitchOnly(F.getContext().getOptionsContext()));
+  if (!getDisableDemotion(F.getContext()))
+    Changed |=
+        demotePHIsOnFunclets(F, DemoteCatchSwitchPHIOnly ||
+                                    getDemoteCatchswitchOnly(F.getContext()));
 
-  if (!getDisableCleanups(F.getContext().getOptionsContext())) {
+  if (!getDisableCleanups(F.getContext())) {
     assert(!verifyFunction(F, &dbgs()));
     Changed |= removeImplausibleInstructions(F);
 

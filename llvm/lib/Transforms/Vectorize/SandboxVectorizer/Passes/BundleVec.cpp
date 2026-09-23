@@ -18,31 +18,26 @@
 #include "llvm/Transforms/Vectorize/SandboxVectorizer/Debug.h"
 #include "llvm/Transforms/Vectorize/SandboxVectorizer/VecUtils.h"
 
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Transforms/Vectorize/VectorizeOptions.h"
 
 namespace llvm {
 
 #ifndef NDEBUG
 static bool getAlwaysVerify(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::VEC_AlwaysVerify>(
-      F.getContext().getOptionsContext());
+  return VectorizeOptions::Current.VEC_AlwaysVerify;
 }
 #endif // NDEBUG
 
 static constexpr unsigned long StopAtDisabled =
     std::numeric_limits<unsigned long>::max();
 static unsigned long getStopAt(const Function &F) {
-  return clv2::getOptValIfSpecified<&clv2::VectorizeOptsReg, &clv2::VEC_StopAt>(
-      F.getContext().getOptionsContext(), StopAtDisabled);
+  return VectorizeOptions::Current.VEC_StopAt;
 }
 
 static constexpr unsigned long StopBundleDisabled =
     std::numeric_limits<unsigned long>::max();
 static unsigned long getStopBundle(const Function &F) {
-  return clv2::getOptValIfSpecified<&clv2::VectorizeOptsReg,
-                                    &clv2::VEC_StopBundle>(
-      F.getContext().getOptionsContext(), StopBundleDisabled);
+  return VectorizeOptions::Current.VEC_StopBundle;
 }
 
 namespace sandboxir {

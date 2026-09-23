@@ -34,6 +34,7 @@ add_llvm_component_library(LLVMGlobalISel
 
   DEPENDS
   intrinsics_gen
+  CodeGenGISelOptParserTableGen
 
   LINK_COMPONENTS
   Analysis

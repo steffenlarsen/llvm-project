@@ -26,9 +26,10 @@
 #include "llvm/CodeGen/MachineScheduler.h"
 #include "llvm/CodeGen/TargetFrameLowering.h"
 #include "llvm/IR/DiagnosticInfo.h"
+#include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/MDBuilder.h"
 #include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/AMDGPU/AMDGPUOptionsOptInfos.h"
+#include "llvm/Target/AMDGPU/AMDGPUOptions.h"
 #include <algorithm>
 
 using namespace llvm;
@@ -41,33 +42,16 @@ using namespace llvm;
 #include "AMDGPUGenSubtargetInfo.inc"
 #undef AMDGPUSubtarget
 
-static bool getEnableVGPRIndexMode(const amdgpu_opts::ParsedOpts *O,
-                                   const llvm::clv2::OptionsContext &Ctx) {
-  if (!O)
-    O = clv2::getView<&clv2::AMDGPUOptsReg>(Ctx);
-  if (O)
-    return O->get<&llvm::clv2::AMDGPU_EnableVGPRIndexMode>();
-  return false;
-}
-
-static bool getUseAA(const amdgpu_opts::ParsedOpts *O,
-                     const llvm::clv2::OptionsContext &Ctx) {
-  if (!O)
-    O = clv2::getView<&clv2::AMDGPUOptsReg>(Ctx);
-  if (O)
-    return O->get<&llvm::clv2::AMDGPU_UseAA>();
-  return true;
-}
-
 static unsigned getNSAThreshold(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AMDGPU_NSAThreshold>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<AMDGPUOptions>()
+      .AMDGPU_NSAThreshold.value_or(2);
 }
 
 static bool getNSAThresholdWasSpecified(const Function &F) {
-  return clv2::wasOptSpecified<&clv2::AMDGPUOptsReg,
-                               &llvm::clv2::AMDGPU_NSAThreshold>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<AMDGPUOptions>()
+      .AMDGPU_NSAThreshold.has_value();
 }
 
 GCNSubtarget::~GCNSubtarget() = default;
@@ -492,12 +476,10 @@ bool GCNSubtarget::hasMadF16() const {
 
 bool GCNSubtarget::useVGPRIndexMode() const {
   return hasVGPRIndexMode() &&
-         (!hasMovrel() || getEnableVGPRIndexMode(nullptr, getOptionsContext()));
+         (!hasMovrel() || AMDGPUOptions::Current.AMDGPU_EnableVGPRIndexMode);
 }
 
-bool GCNSubtarget::useAA() const {
-  return getUseAA(nullptr, getOptionsContext());
-}
+bool GCNSubtarget::useAA() const { return AMDGPUOptions::Current.AMDGPU_UseAA; }
 
 unsigned GCNSubtarget::getOccupancyWithNumSGPRs(unsigned SGPRs) const {
   return AMDGPU::IsaInfo::getOccupancyWithNumSGPRs(*this, SGPRs);

@@ -28,9 +28,9 @@
 #include "llvm/InitializePasses.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Passes/PassBuilder.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Compiler.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/BPF/BPFOptionsOptInfos.h"
+#include "llvm/Target/BPF/BPFOptions.h"
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/Transforms/Scalar.h"
 #include <optional>
@@ -76,8 +76,7 @@ BPFTargetMachine::BPFTargetMachine(const Target &T, const Triple &TT,
                                getEffectiveCodeModel(CM, CodeModel::Small), OL),
       TLOF(std::make_unique<BPFTargetLoweringObjectFileELF>()),
       Subtarget(TT, std::string(CPU), std::string(FS), *this) {
-  if (!clv2::getOptValOr<&clv2::BPFOptsReg, &clv2::BPF_DisableTrapUnreachable>(
-          this->getOptionsContext(), false)) {
+  if (!BPFOptions::Current.BPF_DisableTrapUnreachable) {
     this->Options.TrapUnreachable = true;
     this->Options.NoTrapAfterNoreturn = true;
   }
@@ -110,7 +109,7 @@ public:
   bool addRegBankSelect() override;
   bool addGlobalInstructionSelect() override;
 };
-}
+} // namespace
 
 TargetPassConfig *BPFTargetMachine::createPassConfig(PassManagerBase &PM) {
   return new BPFPassConfig(*this, PM);

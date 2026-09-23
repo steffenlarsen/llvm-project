@@ -7,8 +7,9 @@ set(LLVM_LINK_COMPONENTS
   )
 
 add_llvm_tool(llvm-ctxprof-util
-llvm-ctxprof-util.cpp
+  llvm-ctxprof-util.cpp
 
   DEPENDS
   intrinsics_gen
+  ProfileDataOptParserTableGen
   )

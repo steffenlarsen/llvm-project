@@ -29,6 +29,7 @@
 #include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Path.h"
+#include "llvm/Support/PluginLoaderOptions.h"
 #include "llvm/Support/RegisterLLVMOptions.h"
 
 using namespace clang::tooling;
@@ -154,7 +155,10 @@ llvm::Error CommonOptionsParser::init(
   ProgName =
       argc > 0 && argv[0] ? llvm::sys::path::filename(argv[0]).str() : "";
   size_t ErrorLenBefore = ErrorMessage.size();
-  auto ParseResult = P.parse(argc, argv, Overview, &OS);
+  std::vector<const char *> ArgsAfterPlugins =
+      loadPluginsAndStripArgs(argc, argv);
+  auto ParseResult = P.parse(static_cast<int>(ArgsAfterPlugins.size()),
+                             ArgsAfterPlugins.data(), Overview, &OS);
 
   if (!ParseResult) {
     // Help/version was printed, or a fatal parse error occurred.

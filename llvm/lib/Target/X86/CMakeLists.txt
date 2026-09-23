@@ -100,8 +100,6 @@ set(sources
   )
 
 add_llvm_target(X86CodeGen ${sources}
-  X86OptionsGetters.cpp
-  X86OptionsRegistration.cpp
   LINK_COMPONENTS
   Analysis
   AsmPrinter
@@ -125,6 +123,9 @@ add_llvm_target(X86CodeGen ${sources}
 
   ADD_TO_COMPONENT
   X86
+
+  DEPENDS
+  X86OptParserTableGen
   )
 
 add_subdirectory(AsmParser)

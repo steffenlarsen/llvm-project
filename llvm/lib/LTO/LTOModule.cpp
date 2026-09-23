@@ -670,7 +670,7 @@ lto::InputFile *LTOModule::createInputFile(const void *buffer,
   MemoryBufferRef BufferRef(Data, path);
 
   Expected<std::unique_ptr<lto::InputFile>> ObjOrErr =
-      lto::InputFile::create(BufferRef, llvm::clv2::defaultOptionsContext());
+      lto::InputFile::create(BufferRef);
 
   if (ObjOrErr)
     return ObjOrErr->release();

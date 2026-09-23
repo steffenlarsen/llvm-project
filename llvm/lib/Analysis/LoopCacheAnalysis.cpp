@@ -30,7 +30,7 @@
 #include "llvm/ADT/Sequence.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Analysis/AliasAnalysis.h"
-#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
+#include "llvm/Analysis/AnalysisOptions.h"
 #include "llvm/Analysis/Delinearization.h"
 #include "llvm/Analysis/DependenceAnalysis.h"
 #include "llvm/Analysis/LoopInfo.h"
@@ -38,7 +38,6 @@
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/OptionsContext.h"
 
 using namespace llvm;
 
@@ -47,8 +46,7 @@ using namespace llvm;
 unsigned DefaultTripCount = 100;
 
 static unsigned getDefaultTripCount(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AN_DefaultTripCount>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<AnalysisOptions>().AN_DefaultTripCount;
 }
 
 // In this analysis two array references are considered to exhibit temporal
@@ -56,8 +54,7 @@ static unsigned getDefaultTripCount(const Function &F) {
 // with distance smaller than a configurable threshold.
 
 static unsigned getTemporalReuseThreshold(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AN_TemporalReuseThreshold>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<AnalysisOptions>().AN_TemporalReuseThreshold;
 }
 
 /// Retrieve the innermost loop in the given loop nest \p Loops. It returns a
@@ -121,7 +118,7 @@ static const SCEV *computeTripCount(const Loop &L, const SCEV &ElemSize,
 
   if (!TripCount) {
     LLVM_DEBUG(dbgs() << "Trip count of loop " << L.getName()
-               << " could not be computed, using DefaultTripCount\n");
+                      << " could not be computed, using DefaultTripCount\n");
     TripCount = SE.getConstant(
         ElemSize.getType(), getDefaultTripCount(*L.getHeader()->getParent()));
   }
@@ -158,8 +155,8 @@ IndexedReference::IndexedReference(Instruction &StoreOrLoadInst,
 
   IsValid = delinearize(LI);
   if (IsValid)
-    LLVM_DEBUG(dbgs().indent(2) << "Succesfully delinearized: " << *this
-                                << "\n");
+    LLVM_DEBUG(dbgs().indent(2)
+               << "Succesfully delinearized: " << *this << "\n");
 }
 
 std::optional<bool>
@@ -333,7 +330,8 @@ CacheCostTy IndexedReference::computeRefCost(const Loop &L,
       assert(AR && AR->getLoop() && "Expecting valid loop");
       const SCEV *TripCount =
           computeTripCount(*AR->getLoop(), *Sizes.back(), SE);
-      Type *WiderType = SE.getWiderType(RefCost->getType(), TripCount->getType());
+      Type *WiderType =
+          SE.getWiderType(RefCost->getType(), TripCount->getType());
       // For the multiplication result to fit, request a type twice as wide.
       WiderType = WiderType->getExtendedType();
       RefCost = SE.getMulExpr(SE.getNoopOrZeroExtend(RefCost, WiderType),
@@ -418,7 +416,8 @@ bool IndexedReference::delinearize(const LoopInfo &LI) {
       // In this case, reconstruct the access function using the absolute value
       // of the step recurrence.
       const SCEVAddRecExpr *AccessFnAR = dyn_cast<SCEVAddRecExpr>(AccessFn);
-      const SCEV *StepRec = AccessFnAR ? AccessFnAR->getStepRecurrence(SE) : nullptr;
+      const SCEV *StepRec =
+          AccessFnAR ? AccessFnAR->getStepRecurrence(SE) : nullptr;
 
       if (StepRec && SE.isKnownNegative(StepRec))
         AccessFn = SE.getAddRecExpr(
@@ -625,7 +624,7 @@ bool CacheCost::populateReferenceGroups(ReferenceGroupsTy &RefGroups) const {
   unsigned CLS = TTI.getCacheLineSize(InnerMostLoop->getHeader()
                                           ->getParent()
                                           ->getContext()
-                                          .getOptionsContext());
+                                          .getOptions<AnalysisOptions>());
 
   for (BasicBlock *BB : InnerMostLoop->getBlocks()) {
     for (Instruction &I : *BB) {
@@ -645,18 +644,17 @@ bool CacheCost::populateReferenceGroups(ReferenceGroupsTy &RefGroups) const {
           dbgs().indent(2) << Representative << "\n";
         });
 
-
-       // FIXME: Both positive and negative access functions will be placed
-       // into the same reference group, resulting in a bi-directional array
-       // access such as:
-       //   for (i = N; i > 0; i--)
-       //     A[i] = A[N - i];
-       // having the same cost calculation as a single dimention access pattern
-       //   for (i = 0; i < N; i++)
-       //     A[i] = A[i];
-       // when in actuality, depending on the array size, the first example
-       // should have a cost closer to 2x the second due to the two cache
-       // access per iteration from opposite ends of the array
+        // FIXME: Both positive and negative access functions will be placed
+        // into the same reference group, resulting in a bi-directional array
+        // access such as:
+        //   for (i = N; i > 0; i--)
+        //     A[i] = A[N - i];
+        // having the same cost calculation as a single dimention access pattern
+        //   for (i = 0; i < N; i++)
+        //     A[i] = A[i];
+        // when in actuality, depending on the array size, the first example
+        // should have a cost closer to 2x the second due to the two cache
+        // access per iteration from opposite ends of the array
         std::optional<bool> HasTemporalReuse =
             R->hasTemporalReuse(Representative, *TRT, *InnerMostLoop, DI, AA);
         std::optional<bool> HasSpacialReuse =
@@ -716,8 +714,8 @@ CacheCost::computeLoopCacheCost(const Loop &L,
     LoopCost += RefGroupCost * TripCountsProduct;
   }
 
-  LLVM_DEBUG(dbgs().indent(2) << "Loop '" << L.getName()
-                              << "' has cost=" << LoopCost << "\n");
+  LLVM_DEBUG(dbgs().indent(2)
+             << "Loop '" << L.getName() << "' has cost=" << LoopCost << "\n");
 
   return LoopCost;
 }
@@ -727,9 +725,9 @@ CacheCostTy CacheCost::computeRefGroupCacheCost(const ReferenceGroupTy &RG,
   assert(!RG.empty() && "Reference group should have at least one member.");
 
   const IndexedReference *Representative = RG.front().get();
-  return Representative->computeRefCost(
-      L, TTI.getCacheLineSize(
-             L.getHeader()->getParent()->getContext().getOptionsContext()));
+  const auto &Opts =
+      L.getHeader()->getParent()->getContext().getOptions<AnalysisOptions>();
+  return Representative->computeRefCost(L, TTI.getCacheLineSize(Opts));
 }
 
 //===----------------------------------------------------------------------===//

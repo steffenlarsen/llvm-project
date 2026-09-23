@@ -23,9 +23,6 @@
 #include <functional>
 
 namespace llvm {
-namespace clv2 {
-class OptionsContext;
-}
 class GlobalValueSummary;
 class LLVMContext;
 class Module;
@@ -90,8 +87,8 @@ class MemProfContextDisambiguation
   std::unique_ptr<ICallPromotionAnalysis> ICallAnalysis;
 
   /// Deferred option validation and import summary loading.  Called from run()
-  /// once an OptionsContext is available (from the Module or LLVMContext).
-  void initFromOptions(const clv2::OptionsContext &Ctx);
+  /// once an LLVMContext is available (from the Module or index-only path).
+  void initFromOptions(const LLVMContext &Ctx);
 
 public:
   LLVM_ABI

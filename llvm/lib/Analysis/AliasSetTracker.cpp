@@ -14,7 +14,7 @@
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Analysis/AliasAnalysis.h"
-#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
+#include "llvm/Analysis/AnalysisOptions.h"
 #include "llvm/Analysis/GuardUtils.h"
 #include "llvm/Analysis/MemoryLocation.h"
 #include "llvm/Config/llvm-config.h"
@@ -31,13 +31,17 @@
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 
 using namespace llvm;
 
-static unsigned getSaturationThreshold(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::AN_SaturationThreshold>(Ctx);
+// AliasSetTracker (AliasSetTracker.h) still threads a legacy
+// clv2::OptionsContext through its constructor rather than an AnalysisOptions
+// reference, so there is no per-context override reachable here; fall back
+// to the process-wide default, matching what Ctx.getOptions<AnalysisOptions>()
+// would itself return absent an explicit setOptions<AnalysisOptions>() call.
+static unsigned getSaturationThreshold() {
+  return AnalysisOptions::Current.AN_SaturationThreshold;
 }
 
 /// mergeSetIn - Merge the specified alias set into this alias set.
@@ -48,7 +52,7 @@ void AliasSet::mergeSetIn(AliasSet &AS, AliasSetTracker &AST,
 
   // Update the alias and access types of this set...
   Access |= AS.Access;
-  Alias  |= AS.Alias;
+  Alias |= AS.Alias;
 
   if (Alias == SetMustAlias) {
     // Check that these two merged sets really are must aliases. If we cannot
@@ -70,7 +74,7 @@ void AliasSet::mergeSetIn(AliasSet &AS, AliasSetTracker &AST,
   }
 
   bool ASHadUnknownInsts = !AS.UnknownInsts.empty();
-  if (UnknownInsts.empty()) {            // Merge call sites...
+  if (UnknownInsts.empty()) { // Merge call sites...
     if (ASHadUnknownInsts) {
       std::swap(UnknownInsts, AS.UnknownInsts);
       addRef();
@@ -134,8 +138,9 @@ void AliasSet::addUnknownInst(Instruction *I, BatchAAResults &AA) {
   // Guards are marked as modifying memory for control flow modelling purposes,
   // but don't actually modify any specific memory location.
   using namespace PatternMatch;
-  bool MayWriteMemory = I->mayWriteToMemory() && !isGuard(I) &&
-    !(I->use_empty() && match(I, m_Intrinsic<Intrinsic::invariant_start>()));
+  bool MayWriteMemory =
+      I->mayWriteToMemory() && !isGuard(I) &&
+      !(I->use_empty() && match(I, m_Intrinsic<Intrinsic::invariant_start>()));
   if (!MayWriteMemory) {
     Alias = SetMayAlias;
     Access |= ModRefInfo::Ref;
@@ -428,15 +433,14 @@ void AliasSetTracker::add(BasicBlock &BB) {
 }
 
 AliasSet &AliasSetTracker::mergeAllAliasSets() {
-  assert(!AliasAnyAS &&
-         (TotalAliasSetSize > getSaturationThreshold(*OptsCtx)) &&
+  assert(!AliasAnyAS && (TotalAliasSetSize > getSaturationThreshold()) &&
          "Full merge should happen once, when the saturation threshold is "
          "reached");
 
   // Collect all alias sets, so that we can drop references with impunity
   // without worrying about iterator invalidation.
   std::vector<AliasSet *> ASVector;
-  ASVector.reserve(getSaturationThreshold(*OptsCtx));
+  ASVector.reserve(getSaturationThreshold());
   for (AliasSet &AS : *this)
     ASVector.push_back(&AS);
 
@@ -470,7 +474,7 @@ AliasSet &AliasSetTracker::addMemoryLocation(MemoryLocation Loc,
   AliasSet &AS = getAliasSetFor(Loc);
   AS.Access |= MR;
 
-  if (!AliasAnyAS && (TotalAliasSetSize > getSaturationThreshold(*OptsCtx))) {
+  if (!AliasAnyAS && (TotalAliasSetSize > getSaturationThreshold())) {
     // The AST is now saturated. From here on, we conservatively consider all
     // elements to alias each-other.
     return mergeAllAliasSets();
@@ -484,7 +488,7 @@ AliasSet &AliasSetTracker::addMemoryLocation(MemoryLocation Loc,
 //===----------------------------------------------------------------------===//
 
 void AliasSet::print(raw_ostream &OS) const {
-  OS << "  AliasSet[" << (const void*)this << ", " << RefCount << "] ";
+  OS << "  AliasSet[" << (const void *)this << ", " << RefCount << "] ";
   OS << (Alias == SetMustAlias ? "must" : "may") << " alias, ";
   switch (Access) {
   case ModRefInfo::NoModRef:
@@ -501,7 +505,7 @@ void AliasSet::print(raw_ostream &OS) const {
     break;
   }
   if (Forward)
-    OS << " forwarding to " << (void*)Forward;
+    OS << " forwarding to " << (void *)Forward;
 
   if (!MemoryLocs.empty()) {
     ListSeparator LS;

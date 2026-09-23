@@ -35,12 +35,11 @@
 #include "llvm/Support/KnownBits.h"
 #include "llvm/Support/KnownFPClass.h"
 #include "llvm/Support/MathExtras.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/TargetParser/Triple.h"
 #include "llvm/Transforms/Utils/BuildLibCalls.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/SizeOpts.h"
-#include "llvm/Transforms/Utils/UtilsOptionsOptInfos.h"
+#include "llvm/Transforms/Utils/UtilsOptions.h"
 
 #include <cmath>
 
@@ -50,14 +49,14 @@ using namespace PatternMatch;
 #define DEBUG_TYPE "simplify-lib-calls"
 
 static bool getEnableUnsafeFPShrink(const Function &F) {
-  return clv2::getOptValIfSpecified<&clv2::TransformUtilsOptsReg,
-                                    &clv2::TU_EnableUnsafeFPShrink>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext()
+      .getOptions<UtilsOptions>()
+      .TU_EnableUnsafeFPShrink.value_or(true);
 }
 static bool isEnableUnsafeFPShrinkSpecified(const Function &F) {
-  return clv2::wasOptSpecified<&clv2::TransformUtilsOptsReg,
-                               &clv2::TU_EnableUnsafeFPShrink>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<UtilsOptions>()
+      .TU_EnableUnsafeFPShrink.has_value();
 }
 
 // Enable conversion of operator new calls with a MemProf hot or cold hint
@@ -65,28 +64,26 @@ static bool isEnableUnsafeFPShrinkSpecified(const Function &F) {
 // not all allocators currently support this extension.
 
 static bool getOptimizeHotColdNew(const Function &F) {
-  return clv2::getOptValIfSpecified<&clv2::TransformUtilsOptsReg,
-                                    &clv2::TU_OptimizeHotColdNew>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext().getOptions<UtilsOptions>().TU_OptimizeHotColdNew;
 }
 
-using OptimizeExistingHotColdNewKind = clv2::OptimizeExistingHotColdNewKind;
+using OptimizeExistingHotColdNewKind = llvm::OptimizeExistingHotColdNewKind;
 
 static OptimizeExistingHotColdNewKind
 getOptimizeExistingHotColdNew(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::TU_OptimizeExistingHotColdNew>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<UtilsOptions>()
+      .TU_OptimizeExistingHotColdNew;
 }
 
 static bool getMinExistingHotColdNewHint(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::TU_MinExistingHotColdNewHint>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<UtilsOptions>().TU_MinExistingHotColdNewHint;
 }
 
 static bool getOptimizeNoBuiltinHotColdNew(const Function &F) {
-  return clv2::getOptValIfSpecified<&clv2::TransformUtilsOptsReg,
-                                    &clv2::TU_OptimizeNoBuiltinHotColdNew>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext()
+      .getOptions<UtilsOptions>()
+      .TU_OptimizeNoBuiltinHotColdNew;
 }
 
 // Hot/cold operator new takes an 8 bit hotness hint, where 0 is the coldest
@@ -94,23 +91,19 @@ static bool getOptimizeNoBuiltinHotColdNew(const Function &F) {
 // hints, so that the compiler hinted allocations are slightly less strong than
 // manually inserted hints at the two extremes.
 static unsigned getColdNewHintValue(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::TU_ColdNewHintValue>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<UtilsOptions>().TU_ColdNewHintValue;
 }
 
 static unsigned getNotColdNewHintValue(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::TU_NotColdNewHintValue>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<UtilsOptions>().TU_NotColdNewHintValue;
 }
 
 static unsigned getHotNewHintValue(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::TU_HotNewHintValue>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<UtilsOptions>().TU_HotNewHintValue;
 }
 
 static unsigned getAmbiguousNewHintValue(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::TU_AmbiguousNewHintValue>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<UtilsOptions>().TU_AmbiguousNewHintValue;
 }
 
 //===----------------------------------------------------------------------===//
@@ -118,8 +111,8 @@ static unsigned getAmbiguousNewHintValue(const Function &F) {
 //===----------------------------------------------------------------------===//
 
 static bool ignoreCallingConv(LibFunc Func) {
-  return Func == LibFunc_abs || Func == LibFunc_labs ||
-         Func == LibFunc_llabs || Func == LibFunc_strlen;
+  return Func == LibFunc_abs || Func == LibFunc_labs || Func == LibFunc_llabs ||
+         Func == LibFunc_strlen;
 }
 
 /// Return true if it is only used in equality comparisons with With.
@@ -141,9 +134,8 @@ static bool callHasFloatingPointArgument(const CallInst *CI) {
 }
 
 static bool callHasFP128Argument(const CallInst *CI) {
-  return any_of(CI->operands(), [](const Use &OI) {
-    return OI->getType()->isFP128Ty();
-  });
+  return any_of(CI->operands(),
+                [](const Use &OI) { return OI->getType()->isFP128Ty(); });
 }
 
 // Convert the entire string Str representing an integer in Base, up to
@@ -163,7 +155,7 @@ static Value *convertStrToInt(CallInst *CI, StringRef &Str, Value *EndPtr,
   // Current offset into the original string to reflect in EndPtr.
   size_t Offset = 0;
   // Strip leading whitespace.
-  for ( ; Offset != Str.size(); ++Offset)
+  for (; Offset != Str.size(); ++Offset)
     if (!isSpace((unsigned char)Str[Offset])) {
       Str = Str.substr(Offset);
       break;
@@ -203,13 +195,11 @@ static Value *convertStrToInt(CallInst *CI, StringRef &Str, Value *EndPtr,
         Str = Str.drop_front(2);
         Offset += 2;
         Base = 16;
-      }
-      else if (Base == 0)
+      } else if (Base == 0)
         Base = 8;
     } else if (Base == 0)
       Base = 10;
-  }
-  else if (Base == 0)
+  } else if (Base == 0)
     Base = 10;
 
   // Convert the rest of the subject sequence, not including the sign,
@@ -311,7 +301,7 @@ static void annotateDereferenceableBytes(CallInst *CI,
 }
 
 static void annotateNonNullNoUndefBasedOnAccess(CallInst *CI,
-                                         ArrayRef<unsigned> ArgNos) {
+                                                ArrayRef<unsigned> ArgNos) {
   Function *F = CI->getCaller();
   if (!F)
     return;
@@ -332,8 +322,10 @@ static void annotateNonNullNoUndefBasedOnAccess(CallInst *CI,
   }
 }
 
-static void annotateNonNullAndDereferenceable(CallInst *CI, ArrayRef<unsigned> ArgNos,
-                               Value *Size, const DataLayout &DL) {
+static void annotateNonNullAndDereferenceable(CallInst *CI,
+                                              ArrayRef<unsigned> ArgNos,
+                                              Value *Size,
+                                              const DataLayout &DL) {
   if (ConstantInt *LenC = dyn_cast<ConstantInt>(Size)) {
     annotateNonNullNoUndefBasedOnAccess(CI, ArgNos);
     annotateDereferenceableBytes(CI, ArgNos, LenC->getZExtValue());
@@ -470,9 +462,8 @@ Value *LibCallSimplifier::optimizeStrNCat(CallInst *CI, IRBuilderBase &B) {
 // Helper to transform memchr(S, C, N) == S to N && *S == C and, when
 // NBytes is null, strchr(S, C) to *S == C.  A precondition of the function
 // is that either S is dereferenceable or the value of N is nonzero.
-static Value* memChrToCharCompare(CallInst *CI, Value *NBytes,
-                                  IRBuilderBase &B, const DataLayout &DL)
-{
+static Value *memChrToCharCompare(CallInst *CI, Value *NBytes, IRBuilderBase &B,
+                                  const DataLayout &DL) {
   Value *Src = CI->getArgOperand(0);
   Value *CharVal = CI->getArgOperand(1);
 
@@ -524,8 +515,7 @@ Value *LibCallSimplifier::optimizeStrChr(CallInst *CI, IRBuilderBase &B) {
     Type *SizeTTy = IntegerType::get(CI->getContext(), SizeTBits);
     return copyFlags(*CI,
                      emitMemChr(SrcStr, CharVal, // include nul.
-                                ConstantInt::get(SizeTTy, Len), B,
-                                DL, TLI));
+                                ConstantInt::get(SizeTTy, Len), B, DL, TLI));
   }
 
   if (CharC->isZero()) {
@@ -577,7 +567,7 @@ Value *LibCallSimplifier::optimizeStrRChr(CallInst *CI, IRBuilderBase &B) {
 
   // Try to expand strrchr to the memrchr nonstandard extension if it's
   // available, or simply fail otherwise.
-  uint64_t NBytes = Str.size() + 1;   // Include the terminating nul.
+  uint64_t NBytes = Str.size() + 1; // Include the terminating nul.
   Value *Size = ConstantInt::get(SizeTTy, NBytes);
   return copyFlags(*CI, emitMemRChr(SrcStr, CharVal, Size, B, DL, TLI));
 }
@@ -640,8 +630,8 @@ Value *LibCallSimplifier::optimizeStrCmp(CallInst *CI, IRBuilderBase &B) {
 // Optimize a memcmp or, when StrNCmp is true, strncmp call CI with constant
 // arrays LHS and RHS and nonconstant Size.
 static Value *optimizeMemCmpVarSize(CallInst *CI, Value *LHS, Value *RHS,
-                                    Value *Size, bool StrNCmp,
-                                    IRBuilderBase &B, const DataLayout &DL);
+                                    Value *Size, bool StrNCmp, IRBuilderBase &B,
+                                    const DataLayout &DL);
 
 Value *LibCallSimplifier::optimizeStrNCmp(CallInst *CI, IRBuilderBase &B) {
   Value *Str1P = CI->getArgOperand(0);
@@ -906,9 +896,10 @@ Value *LibCallSimplifier::optimizeStringNCpy(CallInst *CI, bool RetEnd,
   if (SrcLen == 0) {
     // Transform st{p,r}ncpy(D, "", N) to memset(D, '\0', N) for any N.
     Align MemSetAlign =
-      CI->getAttributes().getParamAttrs(0).getAlignment().valueOrOne();
+        CI->getAttributes().getParamAttrs(0).getAlignment().valueOrOne();
     CallInst *NewCI = B.CreateMemSet(Dst, B.getInt8('\0'), Size, MemSetAlign);
-    AttrBuilder ArgAttrs(CI->getContext(), CI->getAttributes().getParamAttrs(0));
+    AttrBuilder ArgAttrs(CI->getContext(),
+                         CI->getAttributes().getParamAttrs(0));
     NewCI->setAttributes(NewCI->getAttributes().addParamAttributes(
         CI->getContext(), 0, ArgAttrs));
     copyFlags(*CI, NewCI);
@@ -960,8 +951,7 @@ Value *LibCallSimplifier::optimizeStringLength(CallInst *CI, IRBuilderBase &B,
     // and likewise strnlen with constant N > 0:
     //   strnlen(x, N) != 0 --> *x != 0
     //   strnlen(x, N) == 0 --> *x == 0
-    return B.CreateZExt(B.CreateLoad(CharTy, Src, "char0"),
-                        CI->getType());
+    return B.CreateZExt(B.CreateLoad(CharTy, Src, "char0"), CI->getType());
   }
 
   if (Bound) {
@@ -1388,8 +1378,8 @@ Value *LibCallSimplifier::optimizeMemChr(CallInst *CI, IRBuilderBase &B) {
     Str = substr(Str, LenC->getZExtValue());
 
   size_t Pos = Str.find_first_not_of(Str[0]);
-  if (Pos == StringRef::npos
-      || Str.find_first_not_of(Str[Pos], Pos) == StringRef::npos) {
+  if (Pos == StringRef::npos ||
+      Str.find_first_not_of(Str[Pos], Pos) == StringRef::npos) {
     // If the source array consists of at most two consecutive sequences
     // of the same characters, then for any C and N (whether in bounds or
     // not), fold memchr(S, C, N) to
@@ -1533,8 +1523,8 @@ Value *LibCallSimplifier::optimizeMemChr(CallInst *CI, IRBuilderBase &B) {
 // Optimize a memcmp or, when StrNCmp is true, strncmp call CI with constant
 // arrays LHS and RHS and nonconstant Size.
 static Value *optimizeMemCmpVarSize(CallInst *CI, Value *LHS, Value *RHS,
-                                    Value *Size, bool StrNCmp,
-                                    IRBuilderBase &B, const DataLayout &DL) {
+                                    Value *Size, bool StrNCmp, IRBuilderBase &B,
+                                    const DataLayout &DL) {
   if (LHS == RHS) // memcmp(s,s,x) -> 0
     return Constant::getNullValue(CI->getType());
 
@@ -1550,7 +1540,7 @@ static Value *optimizeMemCmpVarSize(CallInst *CI, Value *LHS, Value *RHS,
 
   uint64_t Pos = 0;
   Value *Zero = ConstantInt::get(CI->getType(), 0);
-  for (uint64_t MinSize = std::min(LStr.size(), RStr.size()); ; ++Pos) {
+  for (uint64_t MinSize = std::min(LStr.size(), RStr.size());; ++Pos) {
     if (Pos == MinSize ||
         (StrNCmp && (LStr[Pos] == '\0' && RStr[Pos] == '\0'))) {
       // One array is a leading part of the other of equal or greater
@@ -1706,8 +1696,8 @@ Value *LibCallSimplifier::optimizeMemCCpy(CallInst *CI, IRBuilderBase &B) {
     return nullptr;
   }
 
-  Value *NewN =
-      ConstantInt::get(N->getType(), std::min(uint64_t(Pos + 1), N->getZExtValue()));
+  Value *NewN = ConstantInt::get(
+      N->getType(), std::min(uint64_t(Pos + 1), N->getZExtValue()));
   // memccpy -> llvm.memcpy
   copyFlags(*CI, B.CreateMemCpy(Dst, Align(1), Src, Align(1), NewN));
   return Pos + 1 <= N->getZExtValue()
@@ -2039,8 +2029,8 @@ static Value *valueHasFloatPrecision(Value *Val) {
 }
 
 /// Shrink double -> float functions.
-static Value *optimizeDoubleFP(CallInst *CI, IRBuilderBase &B,
-                               bool isBinary, const TargetLibraryInfo *TLI,
+static Value *optimizeDoubleFP(CallInst *CI, IRBuilderBase &B, bool isBinary,
+                               const TargetLibraryInfo *TLI,
                                bool isPrecise = false) {
   Function *CalleeFn = CI->getCalledFunction();
   if (!CI->getType()->isDoubleTy() || !CalleeFn)
@@ -2804,7 +2794,7 @@ Value *LibCallSimplifier::optimizeLog(CallInst *Log, IRBuilderBase &B) {
   // log(exp{,2,10}(y)) -> y*log({e,2,10})
   // TODO: There is no exp10() intrinsic yet.
   if (ArgLb == ExpLb || ArgLb == Exp2Lb || ArgLb == Exp10Lb ||
-           ArgID == Intrinsic::exp || ArgID == Intrinsic::exp2) {
+      ArgID == Intrinsic::exp || ArgID == Intrinsic::exp2) {
     Constant *Eul;
     if (ArgLb == ExpLb || ArgID == Intrinsic::exp)
       // FIXME: Add more precise value of e for long double.
@@ -3160,7 +3150,8 @@ Value *LibCallSimplifier::optimizeSymmetric(CallInst *CI, LibFunc Func,
   }
 }
 
-Value *LibCallSimplifier::optimizeSinCosPi(CallInst *CI, bool IsSin, IRBuilderBase &B) {
+Value *LibCallSimplifier::optimizeSinCosPi(CallInst *CI, bool IsSin,
+                                           IRBuilderBase &B) {
   // Make sure the prototype is as expected, otherwise the rest of the
   // function is probably invalid and likely to abort.
   if (!isTrigLibCall(CI))
@@ -3546,8 +3537,8 @@ Value *LibCallSimplifier::optimizePrintF(CallInst *CI, IRBuilderBase &B) {
     return New;
   }
 
-  // printf(format, ...) -> __small_printf(format, ...) if no 128-bit floating point
-  // arguments.
+  // printf(format, ...) -> __small_printf(format, ...) if no 128-bit floating
+  // point arguments.
   if (isLibFuncEmittable(M, TLI, LibFunc_small_printf) &&
       !callHasFP128Argument(CI)) {
     auto SmallPrintFFn = getOrInsertLibFunc(M, *TLI, LibFunc_small_printf, FT,
@@ -3663,8 +3654,8 @@ Value *LibCallSimplifier::optimizeSPrintF(CallInst *CI, IRBuilderBase &B) {
     return New;
   }
 
-  // sprintf(str, format, ...) -> __small_sprintf(str, format, ...) if no 128-bit
-  // floating point arguments.
+  // sprintf(str, format, ...) -> __small_sprintf(str, format, ...) if no
+  // 128-bit floating point arguments.
   if (isLibFuncEmittable(M, TLI, LibFunc_small_sprintf) &&
       !callHasFP128Argument(CI)) {
     auto SmallSPrintFFn = getOrInsertLibFunc(M, *TLI, LibFunc_small_sprintf, FT,
@@ -3886,9 +3877,8 @@ Value *LibCallSimplifier::optimizeFPrintF(CallInst *CI, IRBuilderBase &B) {
   // 128-bit floating point arguments.
   if (isLibFuncEmittable(M, TLI, LibFunc_small_fprintf) &&
       !callHasFP128Argument(CI)) {
-    auto SmallFPrintFFn =
-        getOrInsertLibFunc(M, *TLI, LibFunc_small_fprintf, FT,
-                           Callee->getAttributes());
+    auto SmallFPrintFFn = getOrInsertLibFunc(M, *TLI, LibFunc_small_fprintf, FT,
+                                             Callee->getAttributes());
     CallInst *New = cast<CallInst>(CI->clone());
     New->setCalledFunction(SmallFPrintFFn);
     B.Insert(New);
@@ -3946,11 +3936,9 @@ Value *LibCallSimplifier::optimizeFPuts(CallInst *CI, IRBuilderBase &B) {
   // Known to have no uses (see above).
   unsigned SizeTBits = TLI->getSizeTSize(*CI->getModule());
   Type *SizeTTy = IntegerType::get(CI->getContext(), SizeTBits);
-  return copyFlags(
-      *CI,
-      emitFWrite(CI->getArgOperand(0),
-                 ConstantInt::get(SizeTTy, Len - 1),
-                 CI->getArgOperand(1), B, DL, TLI));
+  return copyFlags(*CI, emitFWrite(CI->getArgOperand(0),
+                                   ConstantInt::get(SizeTTy, Len - 1),
+                                   CI->getArgOperand(1), B, DL, TLI));
 }
 
 Value *LibCallSimplifier::optimizePuts(CallInst *CI, IRBuilderBase &B) {
@@ -4136,10 +4124,10 @@ Value *LibCallSimplifier::optimizeFloatingPointLibCall(CallInst *CI,
   switch (Func) {
   case LibFunc_sinpif:
   case LibFunc_sinpi:
-    return optimizeSinCosPi(CI, /*IsSin*/true, Builder);
+    return optimizeSinCosPi(CI, /*IsSin*/ true, Builder);
   case LibFunc_cospif:
   case LibFunc_cospi:
-    return optimizeSinCosPi(CI, /*IsSin*/false, Builder);
+    return optimizeSinCosPi(CI, /*IsSin*/ false, Builder);
   case LibFunc_sinf:
   case LibFunc_sinl:
     if (CI->doesNotAccessMemory())
@@ -4247,7 +4235,8 @@ Value *LibCallSimplifier::optimizeFloatingPointLibCall(CallInst *CI,
   case LibFunc_exp10:
   case LibFunc_expm1:
   case LibFunc_tanh:
-    if (UnsafeFPShrink && hasFloatVersion(M, CI->getCalledFunction()->getName()))
+    if (UnsafeFPShrink &&
+        hasFloatVersion(M, CI->getCalledFunction()->getName()))
       return optimizeUnaryDoubleFP(CI, Builder, TLI, true);
     return nullptr;
   case LibFunc_copysign:
@@ -4444,9 +4433,7 @@ void LibCallSimplifier::replaceAllUsesWith(Instruction *I, Value *With) {
   Replacer(I, With);
 }
 
-void LibCallSimplifier::eraseFromParent(Instruction *I) {
-  Eraser(I);
-}
+void LibCallSimplifier::eraseFromParent(Instruction *I) { Eraser(I); }
 
 // TODO:
 //   Additional cases that we need to add to this file:
@@ -4621,8 +4608,8 @@ Value *FortifiedLibCallSimplifier::optimizeStrpCpyChk(CallInst *CI,
 Value *FortifiedLibCallSimplifier::optimizeStrLenChk(CallInst *CI,
                                                      IRBuilderBase &B) {
   if (isFortifiedCallFoldable(CI, 1, std::nullopt, 0))
-    return copyFlags(*CI, emitStrLen(CI->getArgOperand(0), B,
-                                     CI->getDataLayout(), TLI));
+    return copyFlags(
+        *CI, emitStrLen(CI->getArgOperand(0), B, CI->getDataLayout(), TLI));
   return nullptr;
 }
 

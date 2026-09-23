@@ -21,7 +21,7 @@
 #include "SPIRVTargetMachine.h"
 #include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/SPIRV/SPIRVOptionsOptInfos.h"
+#include "llvm/Target/SPIRV/SPIRVOptions.h"
 
 #include "llvm/TargetParser/Host.h"
 
@@ -34,8 +34,7 @@ using namespace llvm;
 #include "SPIRVGenSubtargetInfo.inc"
 
 static bool getTranslatorCompat(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SPIRV_TranslatorCompat>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<SPIRVOptions>().SPIRV_TranslatorCompat;
 }
 
 // Compare version numbers, but allow 0 to mean unspecified.

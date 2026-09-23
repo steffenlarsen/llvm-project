@@ -12,26 +12,21 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/CodeGen/MachineDominators.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsMachine1.h"
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/IR/Function.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/GenericDomTreeConstruction.h"
-#include "llvm/Support/OptionsContext.h"
 
 using namespace llvm;
 
-static bool getVerifyMachineDomInfo(const clv2::OptionsContext &Ctx) {
-  if (auto *O = clv2::getView<&clv2::CGPassMachine1Reg>(Ctx))
-    return O->get<&clv2::CGPASS_VerifyMachineDomInfo>();
-#ifdef EXPENSIVE_CHECKS
-  return true;
-#else
-  return false;
-#endif
+// Note: pre-migration this had a getView<>()-null / EXPENSIVE_CHECKS fallback
+// that is not representable with LLVMContext::getOptions<T>(); dropped here
+// (narrow, disclosed behavior change, see CodeGenPassOptionsMachine1.td).
+static bool getVerifyMachineDomInfo(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenMachine1Options>().CGPASS_VerifyMachineDomInfo;
 }
 
 namespace llvm {
@@ -113,11 +108,8 @@ void MachineDominatorTreeWrapperPass::releaseMemory() { DT.reset(); }
 
 void MachineDominatorTreeWrapperPass::verifyAnalysis() const {
   if (DT && DT->root_size() > 0) {
-    const auto &Ctx = DT->getRoot()
-                          ->getParent()
-                          ->getFunction()
-                          .getContext()
-                          .getOptionsContext();
+    const auto &Ctx =
+        DT->getRoot()->getParent()->getFunction().getContext();
     if (getVerifyMachineDomInfo(Ctx))
       if (!DT->verify(MachineDominatorTree::VerificationLevel::Basic))
         report_fatal_error("MachineDominatorTree verification failed!");

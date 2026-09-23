@@ -61,10 +61,9 @@
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/ObjCARC.h"
-#include "llvm/Transforms/ObjCARC/ObjCARCOptionsOptInfos.h"
+#include "llvm/Transforms/ObjCARC/ObjCARCOptions.h"
 #include <cassert>
 #include <iterator>
 #include <utility>
@@ -75,8 +74,7 @@ using namespace llvm::objcarc;
 #define DEBUG_TYPE "objc-arc-opts"
 
 static unsigned getMaxPtrStates(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::ARC_MaxPtrStates>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<ObjCARCOptions>().ARC_MaxPtrStates;
 }
 
 /// \defgroup ARCUtilities Utility declarations/definitions specific to ARC.

@@ -40,7 +40,7 @@
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Instrumentation/CFGMST.h"
 #include "llvm/Transforms/Instrumentation/GCOVProfiler.h"
-#include "llvm/Transforms/Instrumentation/InstrumentationOptionsOptInfos.h"
+#include "llvm/Transforms/Instrumentation/InstrumentationOptions.h"
 #include "llvm/Transforms/Utils/Instrumentation.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 #include <algorithm>
@@ -70,33 +70,26 @@ static unsigned wordsOfString(StringRef s) {
   return (s.size() / 4) + 2;
 }
 
-GCOVOptions GCOVOptions::getDefault(const clv2::OptionsContext &Ctx) {
+// clv2::OptionsContext carries no LLVMContext, so it cannot reach a per-job
+// override of the new schema (see the analogous
+// llvm::getEnableLoopInterleaving/getEnableLoopVectorization precedent in
+// LoopVectorize.cpp); read the process-wide default directly instead. The
+// parameter is kept, unnamed, purely for API compatibility.
+GCOVOptions GCOVOptions::getDefault(const clv2::OptionsContext &) {
   GCOVOptions Options;
   Options.EmitNotes = true;
   Options.EmitData = true;
   Options.NoRedZone = false;
 
-  auto *O = clv2::getView<&clv2::InstrumentationOptsReg>(Ctx);
-
-  if (O) {
-    Options.Atomic = O->specified<&clv2::INST_GcovAtomicCounter>()
-                         ? O->get<&clv2::INST_GcovAtomicCounter>()
-                         : false;
-    std::string GCOVVer = O->specified<&clv2::INST_DefaultGCOVVersion>()
-                              ? O->get<&clv2::INST_DefaultGCOVVersion>()
-                              : std::string("0000");
-    if (GCOVVer.size() != 4) {
-      reportFatalUsageError(Twine("Invalid -default-gcov-version: ") + GCOVVer);
-    }
-    memcpy(Options.Version, GCOVVer.c_str(), 4);
-  } else {
-    Options.Atomic = false;
-    std::string GCOVVer = "0000";
-    if (GCOVVer.size() != 4) {
-      reportFatalUsageError(Twine("Invalid -default-gcov-version: ") + GCOVVer);
-    }
-    memcpy(Options.Version, GCOVVer.c_str(), 4);
+  Options.Atomic =
+      InstrumentationOptions::Current.INST_GcovAtomicCounter.value_or(false);
+  std::string GCOVVer =
+      InstrumentationOptions::Current.INST_DefaultGCOVVersion.value_or(
+          "0000");
+  if (GCOVVer.size() != 4) {
+    reportFatalUsageError(Twine("Invalid -default-gcov-version: ") + GCOVVer);
   }
+  memcpy(Options.Version, GCOVVer.c_str(), 4);
 
   return Options;
 }
@@ -573,17 +566,14 @@ bool GCOVProfiler::runOnModule(
 PreservedAnalyses GCOVProfilerPass::run(Module &M,
                                         ModuleAnalysisManager &AM) {
   GCOVOptions Opts = GCOVOpts;
-  if (auto *O = clv2::getView<&clv2::InstrumentationOptsReg>(
-          M.getContext().getOptionsContext())) {
-    if (O->specified<&clv2::INST_GcovAtomicCounter>())
-      Opts.Atomic = O->get<&clv2::INST_GcovAtomicCounter>();
-    if (O->specified<&clv2::INST_DefaultGCOVVersion>()) {
-      std::string GCOVVer = O->get<&clv2::INST_DefaultGCOVVersion>();
-      if (GCOVVer.size() != 4)
-        reportFatalUsageError(Twine("Invalid -default-gcov-version: ") +
-                              GCOVVer);
-      memcpy(Opts.Version, GCOVVer.c_str(), 4);
-    }
+  const auto &InstOpts = M.getContext().getOptions<InstrumentationOptions>();
+  if (auto Atomic = InstOpts.INST_GcovAtomicCounter)
+    Opts.Atomic = *Atomic;
+  if (auto GCOVVer = InstOpts.INST_DefaultGCOVVersion) {
+    if (GCOVVer->size() != 4)
+      reportFatalUsageError(Twine("Invalid -default-gcov-version: ") +
+                            *GCOVVer);
+    memcpy(Opts.Version, GCOVVer->c_str(), 4);
   }
 
   GCOVProfiler Profiler(Opts, *VFS);

@@ -28,7 +28,7 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Transforms/Instrumentation/InstrumentationOptionsOptInfos.h"
+#include "llvm/Transforms/Instrumentation/InstrumentationOptions.h"
 #include <utility>
 
 using namespace llvm;
@@ -36,8 +36,7 @@ using namespace llvm;
 #define DEBUG_TYPE "bounds-checking"
 
 static bool getSingleTrapBB(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::INST_BoundsCheckingSingleTrap>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<InstrumentationOptions>().INST_BoundsCheckingSingleTrap;
 }
 
 STATISTIC(ChecksAdded, "Bounds checks added");

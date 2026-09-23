@@ -1,5 +1,3 @@
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
 //===- RewriteStatepointsForGC.cpp - Make GC relocations explicit ---------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -61,6 +59,7 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Transforms/Scalar/ScalarOptions.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/PromoteMemToReg.h"
@@ -80,48 +79,44 @@ using namespace llvm;
 
 // Print the liveset found at the insert location
 static bool getPrintLiveSet(const Function &F) {
-  return clv2::getOptValOr<&clv2::ScalarOptsReg, &clv2::SC_SppPrintLiveset>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext().getOptions<ScalarOptions>().SC_SppPrintLiveset;
 }
 static bool getPrintLiveSetSize(const Function &F) {
-  return clv2::getOptValOr<&clv2::ScalarOptsReg, &clv2::SC_SppPrintLivesetSize>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext().getOptions<ScalarOptions>().SC_SppPrintLivesetSize;
 }
 
 // Print out the base pointers for debugging
 static bool getPrintBasePointers(const Function &F) {
-  return clv2::getOptValOr<&clv2::ScalarOptsReg,
-                           &clv2::SC_SppPrintBasePointers>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext().getOptions<ScalarOptions>().SC_SppPrintBasePointers;
 }
 
 // Cost threshold measuring when it is profitable to rematerialize value instead
 // of relocating it
 static unsigned getRematerializationThreshold(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_SppRematerializationThreshold>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_SppRematerializationThreshold;
 }
 
 static bool getClobberNonLive(const Function &F) {
-  if (auto *O = clv2::getView<&clv2::ScalarOptsReg>(
-          F.getContext().getOptionsContext()))
-    return O->get<&clv2::SC_Rs4gcClobberNonLive>();
 #ifdef EXPENSIVE_CHECKS
-  return true;
+  constexpr bool Default = true;
 #else
-  return false;
+  constexpr bool Default = false;
 #endif
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_Rs4gcClobberNonLive.value_or(Default);
 }
 
 static bool getAllowStatepointWithNoDeoptInfo(const Function &F) {
-  return clv2::getOptValOrDefault<
-      &clv2::SC_Rs4gcAllowStatepointWithNoDeoptInfo>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_Rs4gcAllowStatepointWithNoDeoptInfo;
 }
 
 static bool getRematDerivedAtUses(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_Rs4gcRematDerivedAtUses>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<ScalarOptions>().SC_Rs4gcRematDerivedAtUses;
 }
 
 /// The IR fed into RewriteStatepointsForGC may have had attributes and

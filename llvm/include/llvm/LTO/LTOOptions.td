@@ -1,4 +1,4 @@
-//===- LTOOptions.td - CLV2 option defs for LTO ----------*- tablegen -*-===//
+//===- LTOOptions.td - LTO options -*- tablegen -*-===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -6,188 +6,125 @@
 //
 //===----------------------------------------------------------------------===//
 
-include "llvm/Support/CLV2Options.td"
+include "llvm/Option/OptParser.td"
 
-def LTOOptsReg : Registry<"llvm::lto_opts"> {
-  // Getter bodies are compiled once, in LTOOptionsGetters.cpp.
-  let OutOfLineGetters = 1;
-}
+def LTOOptions : OptionsStruct<"llvm"> {}
 
 // --- LTOCodeGenerator.cpp ---
 
-def LTO_DiscardValueNames : Option<
-    "lto-discard-value-names",
+// Consumers (LTOCodeGenerator.cpp's getLTODiscardValueNames(),
+// ThinLTOCodeGenerator.cpp's getLTODiscardValueNames()) fall back to
+// NDEBUG ? true : false when this was never specified on the command line --
+// a build-config-dependent default that can't be expressed as a single
+// literal ValueField default -- hence std::optional<bool> via
+// OptionalValueField rather than a plain BoolField.
+defm LTO_DiscardValueNames : OptionalValueField<
+    "lto-discard-value-names", "bool", "true",
     "Strip names from Value during LTO (other than GlobalValue).",
-    "bool"> {
-  let Registry = LTOOptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def LTO_PassRemarksWithHotness : Option<
-    "lto-pass-remarks-with-hotness",
+defm LTO_PassRemarksWithHotness : BoolField<
+    "lto-pass-remarks-with-hotness", "false",
     "With PGO, include profile count in optimization remarks",
-    "bool"> {
-  let Registry = LTOOptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def LTO_PassRemarksHotnessThreshold : Option<
-    "lto-pass-remarks-hotness-threshold",
-    "Minimum profile count required for an "
-    "optimization remark to be output."
-    " Use 'auto' to apply the threshold from profile summary.",
-    "unsigned"> {
-  let Registry = LTOOptsReg;
-  let ValueDesc = "uint or 'auto'";
-  let Hidden = 1;
-}
+// Also needs optional semantics (consumers distinguish "never specified"
+// from "0"), but the original clv2 Option had no bare-flag spelling, so
+// this deliberately uses ValueField -- with an std::optional<unsigned>
+// FieldType, which parseFieldValue's generic std::optional<T> overload
+// (LibraryOptions.h) already supports regardless of which multiclass
+// produced the Field<> -- rather than OptionalValueField, which would add
+// an unwanted new bare "-lto-pass-remarks-hotness-threshold" spelling.
+// NOTE: despite the stale-looking ValueDesc text below, this option's own
+// C++ type is plain unsigned; it does not itself parse the literal string
+// "auto". That string-based translation happens in unrelated, separate,
+// tool-local options (e.g. opt/llc/llvm-lto2's own RemarksHotnessThreshold).
+defm LTO_PassRemarksHotnessThreshold : ValueField<
+    "lto-pass-remarks-hotness-threshold", "std::optional<unsigned>",
+    "std::nullopt",
+    "Minimum profile count required for an optimization remark to be "
+    "output. Use 'auto' to apply the threshold from profile summary.",
+    /*hidden=*/1, /*metaVar=*/"uint or 'auto'">;
 
-def LTO_PassRemarksOutput : Option<
-    "lto-pass-remarks-output",
+defm LTO_PassRemarksOutput : ValueField<
+    "lto-pass-remarks-output", "std::string", "\"\"",
     "Output filename for pass remarks",
-    "std::string"> {
-  let Registry = LTOOptsReg;
-  let ValueDesc = "filename";
-  let Hidden = 1;
-}
+    /*hidden=*/1, /*metaVar=*/"filename">;
 
-def LTO_PassRemarksFilter : Option<
-    "lto-pass-remarks-filter",
-    "Only record optimization remarks from passes whose "
-    "names match the given regular expression",
-    "std::string"> {
-  let Registry = LTOOptsReg;
-  let ValueDesc = "regex";
-  let Hidden = 1;
-}
+defm LTO_PassRemarksFilter : ValueField<
+    "lto-pass-remarks-filter", "std::string", "\"\"",
+    "Only record optimization remarks from passes whose names match the "
+    "given regular expression",
+    /*hidden=*/1, /*metaVar=*/"regex">;
 
-def LTO_PassRemarksFormat : Option<
-    "lto-pass-remarks-format",
+defm LTO_PassRemarksFormat : ValueField<
+    "lto-pass-remarks-format", "std::string", "\"yaml\"",
     "The format used for serializing remarks (default: YAML)",
-    "std::string"> {
-  let Registry = LTOOptsReg;
-  let Default = "\"yaml\"";
-  let ValueDesc = "format";
-  let Hidden = 1;
-}
+    /*hidden=*/1, /*metaVar=*/"format">;
 
-def LTO_StatsFile : Option<
-    "lto-stats-file",
+defm LTO_StatsFile : ValueField<
+    "lto-stats-file", "std::string", "\"\"",
     "Save statistics to the specified file",
-    "std::string"> {
-  let Registry = LTOOptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def LTO_AIXSystemAssembler : Option<
-    "lto-aix-system-assembler",
+defm LTO_AIXSystemAssembler : ValueField<
+    "lto-aix-system-assembler", "std::string", "\"\"",
     "Path to a system assembler, picked up on AIX only",
-    "std::string"> {
-  let Registry = LTOOptsReg;
-  let ValueDesc = "path";
-  let Hidden = 1;
-}
+    /*hidden=*/1, /*metaVar=*/"path">;
 
-def LTO_CSProfileGenerate : Option<
-    "cs-profile-generate",
+defm LTO_CSProfileGenerate : BoolField<
+    "cs-profile-generate", "false",
     "Perform context sensitive PGO instrumentation",
-    "bool"> {
-  let Registry = LTOOptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def LTO_CSProfilePath : Option<
-    "cs-profile-path",
+defm LTO_CSProfilePath : ValueField<
+    "cs-profile-path", "std::string", "\"\"",
     "Context sensitive profile file path",
-    "std::string"> {
-  let Registry = LTOOptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // --- LTO.cpp ---
 
-def LTO_DumpThinCGSCCs : Option<
-    "dump-thin-cg-sccs",
+defm LTO_DumpThinCGSCCs : BoolField<
+    "dump-thin-cg-sccs", "false",
     "Dump the SCCs in the ThinLTO index's callgraph",
-    "bool"> {
-  let Registry = LTOOptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def LTO_EnableInternalization : Option<
-    "enable-lto-internalization",
+defm LTO_EnableInternalization : BoolField<
+    "enable-lto-internalization", "true",
     "Enable global value internalization in LTO",
-    "bool"> {
-  let Registry = LTOOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def LTO_KeepSymbolCopies : Option<
-    "lto-keep-symbol-copies",
+defm LTO_KeepSymbolCopies : BoolField<
+    "lto-keep-symbol-copies", "false",
     "Keep copies of symbols in LTO indexing",
-    "bool"> {
-  let Registry = LTOOptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // --- ThinLTOCodeGenerator.cpp ---
 
-def LTO_ThreadCount : Option<
-    "threads", "",
-    "int"> {
-  let Registry = LTOOptsReg;
-  let Hidden = 1;
-}
+defm LTO_ThreadCount : ValueField<
+    "threads", "int", "0", "",
+    /*hidden=*/1>;
 
 // --- LTOBackend.cpp ---
 
-def LTOBitcodeEmbeddingDoNotEmbed : EnumValue<"none",
-    "Do not embed"> {
-  let CppName = "DoNotEmbed";
-  let Value = 0;
-}
+def LTOBitcodeEmbeddingEnum : OptionEnum<"LTOBitcodeEmbedding", [
+    EnumMember<"DoNotEmbed", "none">,
+    EnumMember<"EmbedOptimized", "optimized">,
+    EnumMember<"EmbedPostMergePreOptimized", "post-merge-pre-opt">]>;
 
-def LTOBitcodeEmbeddingEmbedOptimized : EnumValue<"optimized",
-    "Embed after all optimization passes"> {
-  let CppName = "EmbedOptimized";
-  let Value = 1;
-}
+defm LTO_EmbedBitcode : EnumField<
+    "lto-embed-bitcode", LTOBitcodeEmbeddingEnum,
+    "LTOBitcodeEmbedding::DoNotEmbed",
+    "Embed LLVM bitcode in object files produced by LTO">;
 
-def LTOBitcodeEmbeddingEmbedPostMergePreOptimized : EnumValue<
-    "post-merge-pre-opt",
-    "Embed post merge, but before optimizations"> {
-  let CppName = "EmbedPostMergePreOptimized";
-  let Value = 2;
-}
-
-def LTOBitcodeEmbeddingEnum : EnumType<"LTOBitcodeEmbedding",
-    [LTOBitcodeEmbeddingDoNotEmbed, LTOBitcodeEmbeddingEmbedOptimized,
-     LTOBitcodeEmbeddingEmbedPostMergePreOptimized]>;
-
-def LTO_EmbedBitcode : Option<
-    "lto-embed-bitcode",
-    "Embed LLVM bitcode in object files produced by LTO",
-    "LTOBitcodeEmbedding"> {
-  let Registry = LTOOptsReg;
-  let Default = "none";
-}
-
-def LTO_ThinLTOAssumeMerged : Option<
-    "thinlto-assume-merged",
+defm LTO_ThinLTOAssumeMerged : BoolField<
+    "thinlto-assume-merged", "false",
     "Assume the input has already undergone ThinLTO function "
-    "importing and the other pre-optimization pipeline changes.",
-    "bool"> {
-  let Registry = LTOOptsReg;
-}
+    "importing and the other pre-optimization pipeline changes.">;
 
-def LTO_FilterSaveModules : ListOption<
-    "filter-save-modules",
+defm LTO_FilterSaveModules : ListField<
+    "filter-save-modules", "std::string",
     "Only save bitcode for module whose name without "
     "path matches this for -save-temps options",
-    "std::string"> {
-  let Registry = LTOOptsReg;
-  let ValueDesc = "module names";
-  let Hidden = 1;
-  let CommaSeparated = 1;
-}
+    /*commaJoined=*/1, /*appendEquals=*/1, /*hidden=*/1,
+    /*metaVar=*/"module names">;

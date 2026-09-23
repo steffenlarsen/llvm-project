@@ -40,7 +40,7 @@
 #include "llvm/Support/StringSaver.h"
 #include "llvm/Support/VirtualFileSystem.h"
 #include "llvm/TargetParser/Triple.h"
-#include "llvm/Transforms/Instrumentation/InstrumentationOptionsOptInfos.h"
+#include "llvm/Transforms/Instrumentation/InstrumentationOptions.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 
 #include <array>
@@ -88,28 +88,23 @@ using MetadataInfoSet = SetVector<const MetadataInfo *>;
 //===--- Command-line options ---------------------------------------------===//
 
 bool getClWeakCallbacks(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::INST_SanitizerMetadataWeakCallbacks>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<InstrumentationOptions>().INST_SanitizerMetadataWeakCallbacks;
 }
 
 bool getClNoSanitize(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::INST_SanitizerMetadataNosanitize>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<InstrumentationOptions>().INST_SanitizerMetadataNosanitize;
 }
 
 bool getClEmitCovered(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::INST_SanitizerMetadataCovered>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<InstrumentationOptions>().INST_SanitizerMetadataCovered;
 }
 
 bool getClEmitAtomics(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::INST_SanitizerMetadataAtomics>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<InstrumentationOptions>().INST_SanitizerMetadataAtomics;
 }
 
 bool getClEmitUAR(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::INST_SanitizerMetadataUAR>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<InstrumentationOptions>().INST_SanitizerMetadataUAR;
 }
 
 //===--- Statistics -------------------------------------------------------===//

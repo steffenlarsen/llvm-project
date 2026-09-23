@@ -98,8 +98,7 @@
 #include "llvm/Pass.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/PowerPC/PowerPCOptionsOptInfos.h"
+#include "llvm/Target/PowerPC/PowerPCOptions.h"
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Utils.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
@@ -114,75 +113,41 @@
 
 using namespace llvm;
 
-static unsigned MaxVarsPrep = 24;
-
-static bool PreferUpdateForm = true;
-
-// Sum of following 3 per loop thresholds for all loops can not be larger
-// than MaxVarsPrep.
-// now the thresholds for each kind prep are exterimental values on Power9.
-static unsigned MaxVarsUpdateForm = 3;
-
-static unsigned MaxVarsDSForm = 3;
-
-static unsigned MaxVarsDQForm = 8;
-
-// Commoning chain will reduce the register pressure, so we don't consider about
-// the PHI nodes number.
-// But commoning chain will increase the addi/add number in the loop and also
-// increase loop ILP. Maximum chain number should be same with hardware
-// IssueWidth, because we won't benefit from ILP if the parallel chains number
-// is bigger than IssueWidth. We assume there are 2 chains in one bucket, so
-// there would be 4 buckets at most on P9(IssueWidth is 8).
-static unsigned MaxVarsChainCommon = 4;
-
-// If would not be profitable if the common base has only one load/store, ISEL
-// should already be able to choose best load/store form based on offset for
-// single load/store. Set minimal profitable value default to 2 and make it as
-// an option.
-static unsigned DispFormPrepMinThreshold = 2;
-
-static unsigned ChainCommonPrepMinThreshold = 4;
-
 static unsigned getMaxVarsPrep(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::PPC_MaxVarsPrep>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<PowerPCOptions>().PPC_MaxVarsPrep;
 }
 static bool getPreferUpdateForm(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::PPC_PreferUpdateForm>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<PowerPCOptions>().PPC_PreferUpdateForm;
 }
 static bool getEnableUpdateFormForNonConstInc(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::PPC_EnableUpdateFormForNonConstInc>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<PowerPCOptions>()
+      .PPC_EnableUpdateFormForNonConstInc;
 }
 static bool getEnableChainCommoning(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::PPC_EnableChainCommoning>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<PowerPCOptions>().PPC_EnableChainCommoning;
 }
 static unsigned getMaxVarsUpdateForm(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::PPC_MaxVarsUpdateForm>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<PowerPCOptions>().PPC_MaxVarsUpdateForm;
 }
 static unsigned getMaxVarsDSForm(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::PPC_MaxVarsDSForm>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<PowerPCOptions>().PPC_MaxVarsDSForm;
 }
 static unsigned getMaxVarsDQForm(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::PPC_MaxVarsDQForm>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<PowerPCOptions>().PPC_MaxVarsDQForm;
 }
 static unsigned getMaxVarsChainCommon(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::PPC_MaxVarsChainCommon>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<PowerPCOptions>().PPC_MaxVarsChainCommon;
 }
 static unsigned getDispFormPrepMinThreshold(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::PPC_DispFormPrepMinThreshold>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<PowerPCOptions>()
+      .PPC_DispFormPrepMinThreshold;
 }
 static unsigned getChainCommonPrepMinThreshold(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::PPC_ChainCommonPrepMinThreshold>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<PowerPCOptions>()
+      .PPC_ChainCommonPrepMinThreshold;
 }
 
 STATISTIC(PHINodeAlreadyExistsUpdate, "PHI node already in pre-increment form");
@@ -194,149 +159,147 @@ STATISTIC(UpdFormChainRewritten, "Num of update form chain rewritten");
 STATISTIC(ChainCommoningRewritten, "Num of commoning chains");
 
 namespace {
-  struct BucketElement {
-    BucketElement(const SCEV *O, Instruction *I) : Offset(O), Instr(I) {}
-    BucketElement(Instruction *I) : Offset(nullptr), Instr(I) {}
+struct BucketElement {
+  BucketElement(const SCEV *O, Instruction *I) : Offset(O), Instr(I) {}
+  BucketElement(Instruction *I) : Offset(nullptr), Instr(I) {}
 
-    const SCEV *Offset;
-    Instruction *Instr;
-  };
+  const SCEV *Offset;
+  Instruction *Instr;
+};
 
-  struct Bucket {
-    Bucket(const SCEV *B, Instruction *I)
-        : BaseSCEV(B), Elements(1, BucketElement(I)) {
-      ChainSize = 0;
-    }
+struct Bucket {
+  Bucket(const SCEV *B, Instruction *I)
+      : BaseSCEV(B), Elements(1, BucketElement(I)) {
+    ChainSize = 0;
+  }
 
-    // The base of the whole bucket.
-    const SCEV *BaseSCEV;
+  // The base of the whole bucket.
+  const SCEV *BaseSCEV;
 
-    // All elements in the bucket. In the bucket, the element with the BaseSCEV
-    // has no offset and all other elements are stored as offsets to the
-    // BaseSCEV.
-    SmallVector<BucketElement, 16> Elements;
+  // All elements in the bucket. In the bucket, the element with the BaseSCEV
+  // has no offset and all other elements are stored as offsets to the
+  // BaseSCEV.
+  SmallVector<BucketElement, 16> Elements;
 
-    // The potential chains size. This is used for chain commoning only.
-    unsigned ChainSize;
+  // The potential chains size. This is used for chain commoning only.
+  unsigned ChainSize;
 
-    // The base for each potential chain. This is used for chain commoning only.
-    SmallVector<BucketElement, 16> ChainBases;
-  };
+  // The base for each potential chain. This is used for chain commoning only.
+  SmallVector<BucketElement, 16> ChainBases;
+};
 
-  // "UpdateForm" is not a real PPC instruction form, it stands for dform
-  // load/store with update like ldu/stdu, or Prefetch intrinsic.
-  // For DS form instructions, their displacements must be multiple of 4.
-  // For DQ form instructions, their displacements must be multiple of 16.
-  enum PrepForm { UpdateForm = 1, DSForm = 4, DQForm = 16, ChainCommoning };
+// "UpdateForm" is not a real PPC instruction form, it stands for dform
+// load/store with update like ldu/stdu, or Prefetch intrinsic.
+// For DS form instructions, their displacements must be multiple of 4.
+// For DQ form instructions, their displacements must be multiple of 16.
+enum PrepForm { UpdateForm = 1, DSForm = 4, DQForm = 16, ChainCommoning };
 
-  class PPCLoopInstrFormPrep : public FunctionPass {
-  public:
-    static char ID; // Pass ID, replacement for typeid
+class PPCLoopInstrFormPrep : public FunctionPass {
+public:
+  static char ID; // Pass ID, replacement for typeid
 
-    PPCLoopInstrFormPrep(PPCTargetMachine &TM) : FunctionPass(ID), TM(&TM) {}
+  PPCLoopInstrFormPrep(PPCTargetMachine &TM) : FunctionPass(ID), TM(&TM) {}
 
-    void getAnalysisUsage(AnalysisUsage &AU) const override {
-      AU.addPreserved<DominatorTreeWrapperPass>();
-      AU.addRequired<LoopInfoWrapperPass>();
-      AU.addPreserved<LoopInfoWrapperPass>();
-      AU.addRequired<ScalarEvolutionWrapperPass>();
-    }
+  void getAnalysisUsage(AnalysisUsage &AU) const override {
+    AU.addPreserved<DominatorTreeWrapperPass>();
+    AU.addRequired<LoopInfoWrapperPass>();
+    AU.addPreserved<LoopInfoWrapperPass>();
+    AU.addRequired<ScalarEvolutionWrapperPass>();
+  }
 
-    bool runOnFunction(Function &F) override;
+  bool runOnFunction(Function &F) override;
 
-  private:
-    PPCTargetMachine *TM = nullptr;
-    const PPCSubtarget *ST;
-    DominatorTree *DT;
-    LoopInfo *LI;
-    ScalarEvolution *SE;
-    bool PreserveLCSSA;
-    bool HasCandidateForPrepare;
+private:
+  PPCTargetMachine *TM = nullptr;
+  const PPCSubtarget *ST;
+  DominatorTree *DT;
+  LoopInfo *LI;
+  ScalarEvolution *SE;
+  bool PreserveLCSSA;
+  bool HasCandidateForPrepare;
 
-    /// Successful preparation number for Update/DS/DQ form in all inner most
-    /// loops. One successful preparation will put one common base out of loop,
-    /// this may leads to register presure like LICM does.
-    /// Make sure total preparation number can be controlled by option.
-    unsigned SuccPrepCount;
+  /// Successful preparation number for Update/DS/DQ form in all inner most
+  /// loops. One successful preparation will put one common base out of loop,
+  /// this may leads to register presure like LICM does.
+  /// Make sure total preparation number can be controlled by option.
+  unsigned SuccPrepCount;
 
-    bool runOnLoop(Loop *L);
+  bool runOnLoop(Loop *L);
 
-    /// Check if required PHI node is already exist in Loop \p L.
-    bool alreadyPrepared(Loop *L, Instruction *MemI,
-                         const SCEV *BasePtrStartSCEV,
-                         const SCEV *BasePtrIncSCEV, PrepForm Form);
+  /// Check if required PHI node is already exist in Loop \p L.
+  bool alreadyPrepared(Loop *L, Instruction *MemI, const SCEV *BasePtrStartSCEV,
+                       const SCEV *BasePtrIncSCEV, PrepForm Form);
 
-    /// Get the value which defines the increment SCEV \p BasePtrIncSCEV.
-    Value *getNodeForInc(Loop *L, Instruction *MemI,
-                         const SCEV *BasePtrIncSCEV);
+  /// Get the value which defines the increment SCEV \p BasePtrIncSCEV.
+  Value *getNodeForInc(Loop *L, Instruction *MemI, const SCEV *BasePtrIncSCEV);
 
-    /// Common chains to reuse offsets for a loop to reduce register pressure.
-    bool chainCommoning(Loop *L, SmallVector<Bucket, 16> &Buckets);
+  /// Common chains to reuse offsets for a loop to reduce register pressure.
+  bool chainCommoning(Loop *L, SmallVector<Bucket, 16> &Buckets);
 
-    /// Find out the potential commoning chains and their bases.
-    bool prepareBasesForCommoningChains(Bucket &BucketChain);
+  /// Find out the potential commoning chains and their bases.
+  bool prepareBasesForCommoningChains(Bucket &BucketChain);
 
-    /// Rewrite load/store according to the common chains.
-    bool rewriteLoadStoresForCommoningChains(
-        Loop *L, Bucket &Bucket, SmallPtrSet<BasicBlock *, 16> &BBChanged);
+  /// Rewrite load/store according to the common chains.
+  bool
+  rewriteLoadStoresForCommoningChains(Loop *L, Bucket &Bucket,
+                                      SmallPtrSet<BasicBlock *, 16> &BBChanged);
 
-    /// Collect condition matched(\p isValidCandidate() returns true)
-    /// candidates in Loop \p L.
-    SmallVector<Bucket, 16> collectCandidates(
-        Loop *L,
-        std::function<bool(const Instruction *, Value *, const Type *)>
-            isValidCandidate,
-        std::function<bool(const SCEV *)> isValidDiff,
-        unsigned MaxCandidateNum);
+  /// Collect condition matched(\p isValidCandidate() returns true)
+  /// candidates in Loop \p L.
+  SmallVector<Bucket, 16> collectCandidates(
+      Loop *L,
+      std::function<bool(const Instruction *, Value *, const Type *)>
+          isValidCandidate,
+      std::function<bool(const SCEV *)> isValidDiff, unsigned MaxCandidateNum);
 
-    /// Add a candidate to candidates \p Buckets if diff between candidate and
-    /// one base in \p Buckets matches \p isValidDiff.
-    void addOneCandidate(Instruction *MemI, const SCEV *LSCEV,
-                         SmallVector<Bucket, 16> &Buckets,
-                         std::function<bool(const SCEV *)> isValidDiff,
-                         unsigned MaxCandidateNum);
+  /// Add a candidate to candidates \p Buckets if diff between candidate and
+  /// one base in \p Buckets matches \p isValidDiff.
+  void addOneCandidate(Instruction *MemI, const SCEV *LSCEV,
+                       SmallVector<Bucket, 16> &Buckets,
+                       std::function<bool(const SCEV *)> isValidDiff,
+                       unsigned MaxCandidateNum);
 
-    /// Prepare all candidates in \p Buckets for update form.
-    bool updateFormPrep(Loop *L, SmallVector<Bucket, 16> &Buckets);
+  /// Prepare all candidates in \p Buckets for update form.
+  bool updateFormPrep(Loop *L, SmallVector<Bucket, 16> &Buckets);
 
-    /// Prepare all candidates in \p Buckets for displacement form, now for
-    /// ds/dq.
-    bool dispFormPrep(Loop *L, SmallVector<Bucket, 16> &Buckets, PrepForm Form);
+  /// Prepare all candidates in \p Buckets for displacement form, now for
+  /// ds/dq.
+  bool dispFormPrep(Loop *L, SmallVector<Bucket, 16> &Buckets, PrepForm Form);
 
-    /// Prepare for one chain \p BucketChain, find the best base element and
-    /// update all other elements in \p BucketChain accordingly.
-    /// \p Form is used to find the best base element.
-    /// If success, best base element must be stored as the first element of
-    /// \p BucketChain.
-    /// Return false if no base element found, otherwise return true.
-    bool prepareBaseForDispFormChain(Bucket &BucketChain, PrepForm Form);
+  /// Prepare for one chain \p BucketChain, find the best base element and
+  /// update all other elements in \p BucketChain accordingly.
+  /// \p Form is used to find the best base element.
+  /// If success, best base element must be stored as the first element of
+  /// \p BucketChain.
+  /// Return false if no base element found, otherwise return true.
+  bool prepareBaseForDispFormChain(Bucket &BucketChain, PrepForm Form);
 
-    /// Prepare for one chain \p BucketChain, find the best base element and
-    /// update all other elements in \p BucketChain accordingly.
-    /// If success, best base element must be stored as the first element of
-    /// \p BucketChain.
-    /// Return false if no base element found, otherwise return true.
-    bool prepareBaseForUpdateFormChain(Bucket &BucketChain);
+  /// Prepare for one chain \p BucketChain, find the best base element and
+  /// update all other elements in \p BucketChain accordingly.
+  /// If success, best base element must be stored as the first element of
+  /// \p BucketChain.
+  /// Return false if no base element found, otherwise return true.
+  bool prepareBaseForUpdateFormChain(Bucket &BucketChain);
 
-    /// Rewrite load/store instructions in \p BucketChain according to
-    /// preparation.
-    bool rewriteLoadStores(Loop *L, Bucket &BucketChain,
-                           SmallPtrSet<BasicBlock *, 16> &BBChanged,
-                           PrepForm Form);
+  /// Rewrite load/store instructions in \p BucketChain according to
+  /// preparation.
+  bool rewriteLoadStores(Loop *L, Bucket &BucketChain,
+                         SmallPtrSet<BasicBlock *, 16> &BBChanged,
+                         PrepForm Form);
 
-    /// Rewrite for the base load/store of a chain.
-    std::pair<Instruction *, Instruction *>
-    rewriteForBase(Loop *L, const SCEVAddRecExpr *BasePtrSCEV,
-                   Instruction *BaseMemI, bool CanPreInc, PrepForm Form,
-                   SCEVExpander &SCEVE, SmallPtrSet<Value *, 16> &DeletedPtrs);
+  /// Rewrite for the base load/store of a chain.
+  std::pair<Instruction *, Instruction *>
+  rewriteForBase(Loop *L, const SCEVAddRecExpr *BasePtrSCEV,
+                 Instruction *BaseMemI, bool CanPreInc, PrepForm Form,
+                 SCEVExpander &SCEVE, SmallPtrSet<Value *, 16> &DeletedPtrs);
 
-    /// Rewrite for the other load/stores of a chain according to the new \p
-    /// Base.
-    Instruction *
-    rewriteForBucketElement(std::pair<Instruction *, Instruction *> Base,
-                            const BucketElement &Element, Value *OffToBase,
-                            SmallPtrSet<Value *, 16> &DeletedPtrs);
-  };
+  /// Rewrite for the other load/stores of a chain according to the new \p
+  /// Base.
+  Instruction *
+  rewriteForBucketElement(std::pair<Instruction *, Instruction *> Base,
+                          const BucketElement &Element, Value *OffToBase,
+                          SmallPtrSet<Value *, 16> &DeletedPtrs);
+};
 
 } // end anonymous namespace
 
@@ -347,8 +310,8 @@ INITIALIZE_PASS_DEPENDENCY(LoopInfoWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(ScalarEvolutionWrapperPass)
 INITIALIZE_PASS_END(PPCLoopInstrFormPrep, DEBUG_TYPE, name, false, false)
 
-static constexpr StringRef PHINodeNameSuffix    = ".phi";
-static constexpr StringRef CastNodeNameSuffix   = ".cast";
+static constexpr StringRef PHINodeNameSuffix = ".phi";
+static constexpr StringRef CastNodeNameSuffix = ".cast";
 static constexpr StringRef GEPNodeIncNameSuffix = ".inc";
 static constexpr StringRef GEPNodeOffNameSuffix = ".off";
 
@@ -1098,7 +1061,7 @@ bool PPCLoopInstrFormPrep::rewriteLoadStores(
 }
 
 bool PPCLoopInstrFormPrep::updateFormPrep(Loop *L,
-                                       SmallVector<Bucket, 16> &Buckets) {
+                                          SmallVector<Bucket, 16> &Buckets) {
   bool MadeChange = false;
   if (Buckets.empty())
     return MadeChange;
@@ -1236,7 +1199,7 @@ bool PPCLoopInstrFormPrep::alreadyPrepared(Loop *L, Instruction *MemI,
 
   // Run through the PHIs and see if we have some that looks like a preparation
   iterator_range<BasicBlock::phi_iterator> PHIIter = BB->phis();
-  for (auto & CurrentPHI : PHIIter) {
+  for (auto &CurrentPHI : PHIIter) {
     PHINode *CurrentPHINode = dyn_cast<PHINode>(&CurrentPHI);
     if (!CurrentPHINode)
       continue;
@@ -1251,7 +1214,7 @@ bool PPCLoopInstrFormPrep::alreadyPrepared(Loop *L, Instruction *MemI,
       continue;
 
     const SCEVConstant *PHIBasePtrIncSCEV =
-      dyn_cast<SCEVConstant>(PHIBasePtrSCEV->getStepRecurrence(*SE));
+        dyn_cast<SCEVConstant>(PHIBasePtrSCEV->getStepRecurrence(*SE));
     if (!PHIBasePtrIncSCEV)
       continue;
 
@@ -1263,7 +1226,7 @@ bool PPCLoopInstrFormPrep::alreadyPrepared(Loop *L, Instruction *MemI,
         if (PHIBasePtrIncSCEV == BasePtrIncSCEV) {
           // The existing PHI (CurrentPHINode) has the same start and increment
           // as the PHI that we wanted to create.
-          if ((Form == UpdateForm || Form == ChainCommoning ) &&
+          if ((Form == UpdateForm || Form == ChainCommoning) &&
               PHIBasePtrSCEV->getStart() == BasePtrStartSCEV) {
             ++PHINodeAlreadyExistsUpdate;
             return true;

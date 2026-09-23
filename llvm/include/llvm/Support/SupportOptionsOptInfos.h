@@ -143,4 +143,16 @@ inline constexpr OptionsRegistry<
 
 } // namespace llvm::clv2
 
+namespace llvm::support {
+
+/// The parsed-options view type for the Support library registry.
+using ParsedOpts = decltype(clv2::SupportOptsReg)::ParsedOptionsT;
+
+/// Legacy bridge for tools still parsing through clv2: applies the parsed
+/// Support options exactly as llvm::SupportOptions::parse() does.
+/// Call once after clv2 parse, before any Support getter is invoked.
+LLVM_ABI void applySupportOptions(const ParsedOpts &Opts);
+
+} // namespace llvm::support
+
 #endif // LLVM_SUPPORT_SUPPORTOPTIONSOPTINFOS_H

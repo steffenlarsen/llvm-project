@@ -21,9 +21,7 @@
 #include "llvm/IR/Module.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCExpr.h"
-#include "llvm/Support/CommandLineV2.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/AMDGPU/AMDGPUOptionsOptInfos.h"
+#include "llvm/Target/AMDGPU/AMDGPUOptions.h"
 #include "llvm/Target/TargetLoweringObjectFile.h"
 
 using namespace llvm;
@@ -65,13 +63,11 @@ static std::string getEnqueuedBlockSymbolName(const AMDGPUTargetMachine &TM,
 }
 
 static bool getDumpHSAMetadata(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AMDGPU_DumpHSAMetadata>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<AMDGPUOptions>().AMDGPU_DumpHSAMetadata;
 }
 
 static bool getVerifyHSAMetadata(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AMDGPU_VerifyHSAMetadata>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<AMDGPUOptions>().AMDGPU_VerifyHSAMetadata;
 }
 
 namespace llvm {
@@ -577,12 +573,10 @@ void MetadataStreamerMsgPackV4::end() {
   raw_string_ostream StrOS(HSAMetadataString);
   HSAMetadataDoc->toYAML(StrOS);
 
-  if (auto *O = clv2::getView<&clv2::AMDGPUOptsReg>(getOptionsContext())) {
-    if (O->get<&llvm::clv2::AMDGPU_DumpHSAMetadata>())
-      dump(StrOS.str());
-    if (O->get<&llvm::clv2::AMDGPU_VerifyHSAMetadata>())
-      verify(StrOS.str());
-  }
+  if (AMDGPUOptions::Current.AMDGPU_DumpHSAMetadata)
+    dump(StrOS.str());
+  if (AMDGPUOptions::Current.AMDGPU_VerifyHSAMetadata)
+    verify(StrOS.str());
 }
 
 void MetadataStreamerMsgPackV4::emitKernel(const MachineFunction &MF,

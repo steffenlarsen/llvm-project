@@ -27,8 +27,7 @@
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/RegisterScavenging.h"
 #include "llvm/InitializePasses.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/AMDGPU/AMDGPUOptionsOptInfos.h"
+#include "llvm/Target/AMDGPU/AMDGPUOptions.h"
 
 using namespace llvm;
 
@@ -51,8 +50,9 @@ static LaneVGPRInsertPt insertPt(MachineBasicBlock *MBB,
 }
 
 static unsigned getMaxNumVGPRsForWwmAllocation(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AMDGPU_MaxNumVGPRsForWwmAllocation>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<AMDGPUOptions>()
+      .AMDGPU_MaxNumVGPRsForWwmAllocation;
 }
 
 class SILowerSGPRSpills {
@@ -477,8 +477,8 @@ bool SILowerSGPRSpills::run(MachineFunction &MF) {
 
   // TODO: CSR VGPRs will never be spilled to AGPRs. These can probably be
   // handled as SpilledToReg in regular PrologEpilogInserter.
-  const bool HasSGPRSpillToVGPR = TRI->spillSGPRToVGPR() &&
-                                  (HasCSRs || FuncInfo->hasSpilledSGPRs());
+  const bool HasSGPRSpillToVGPR =
+      TRI->spillSGPRToVGPR() && (HasCSRs || FuncInfo->hasSpilledSGPRs());
   if (HasSGPRSpillToVGPR) {
     // Process all SGPR spills before frame offsets are finalized. Ideally SGPRs
     // are spilled to VGPRs, in which case we can eliminate the stack usage.

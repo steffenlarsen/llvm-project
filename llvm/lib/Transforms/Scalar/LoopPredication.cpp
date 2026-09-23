@@ -1,5 +1,3 @@
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
 //===-- LoopPredication.cpp - Guard based loop predication pass -----------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -196,7 +194,9 @@
 #include "llvm/IR/ProfDataUtils.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Transforms/Scalar.h"
+#include "llvm/Transforms/Scalar/ScalarOptions.h"
 #include "llvm/Transforms/Utils/GuardUtils.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
@@ -211,19 +211,21 @@ STATISTIC(TotalWidened, "Number of checks widened");
 using namespace llvm;
 
 static bool getEnableIVTruncation(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_LoopPredicationEnableIvTruncation>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_LoopPredicationEnableIvTruncation;
 }
 
 static bool getEnableCountDownLoop(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_LoopPredicationEnableCountDownLoop>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_LoopPredicationEnableCountDownLoop;
 }
 
 static bool getSkipProfitabilityChecks(const Function &F) {
-  return clv2::getOptValOr<&clv2::ScalarOptsReg,
-                           &clv2::SC_LoopPredicationSkipProfitabilityChecks>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_LoopPredicationSkipProfitabilityChecks;
 }
 
 // This is the scale factor for the latch probability. We use this during
@@ -231,21 +233,21 @@ static bool getSkipProfitabilityChecks(const Function &F) {
 // probability of exiting the loop instead of loop exiting via latch.
 // This value should be greater than 1 for a sane profitability check.
 static float getLatchExitProbabilityScale(const Function &F) {
-  return clv2::getOptValOrDefault<
-      &clv2::SC_LoopPredicationLatchProbabilityScale>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_LoopPredicationLatchProbabilityScale;
 }
 
 static bool getPredicateWidenableBranchGuards(const Function &F) {
-  return clv2::getOptValOrDefault<
-      &clv2::SC_LoopPredicationPredicateWidenableBranchesToDeopt>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_LoopPredicationPredicateWidenableBranchesToDeopt;
 }
 
 static bool getInsertAssumesOfPredicatedGuardsConditions(const Function &F) {
-  return clv2::getOptValOrDefault<
-      &clv2::SC_LoopPredicationInsertAssumesOfPredicatedGuardsConditions>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_LoopPredicationInsertAssumesOfPredicatedGuardsConditions;
 }
 
 namespace {

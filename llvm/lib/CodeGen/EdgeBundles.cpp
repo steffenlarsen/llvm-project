@@ -12,21 +12,19 @@
 
 #include "llvm/CodeGen/EdgeBundles.h"
 #include "llvm/ADT/Twine.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsCore1.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/IR/Function.h"
 #include "llvm/InitializePasses.h"
-#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/GraphWriter.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 
 using namespace llvm;
 
-static bool getViewEdgeBundles(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_ViewEdgeBundles>(Ctx);
+static bool getViewEdgeBundles(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore1Options>().CGPASS_ViewEdgeBundles;
 }
 
 char EdgeBundlesWrapperLegacy::ID = 0;
@@ -68,7 +66,7 @@ void EdgeBundles::init() {
       EC.join(OutE, 2 * Succ->getNumber());
   }
   EC.compress();
-  if (getViewEdgeBundles(MF->getFunction().getContext().getOptionsContext()))
+  if (getViewEdgeBundles(MF->getFunction().getContext()))
     view();
 
   // Compute the reverse mapping.

@@ -49,13 +49,11 @@
 #include "llvm/IR/Value.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/CodeGen.h"
-#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
+#include "llvm/Target/Hexagon/HexagonOptions.h"
 #include "llvm/Target/TargetMachine.h"
 #include <algorithm>
 #include <cassert>
@@ -445,9 +443,10 @@ HexagonTargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
 
   if (Subtarget.useHVXOps())
     CCInfo.AnalyzeCallOperands(Outs, CC_Hexagon_HVX);
-  else if (clv2::getOptValOr<&clv2::HexagonOptsReg,
-                             &clv2::HEX_DisableArgsMinAlignment>(
-               MF.getFunction().getContext().getOptionsContext(), false))
+  else if (MF.getFunction()
+               .getContext()
+               .getOptions<HexagonOptions>()
+               .HEX_DisableArgsMinAlignment)
     CCInfo.AnalyzeCallOperands(Outs, CC_Hexagon_Legacy);
   else
     CCInfo.AnalyzeCallOperands(Outs, CC_Hexagon);
@@ -837,9 +836,10 @@ SDValue HexagonTargetLowering::LowerFormalArguments(
 
   if (Subtarget.useHVXOps())
     CCInfo.AnalyzeFormalArguments(Ins, CC_Hexagon_HVX);
-  else if (clv2::getOptValOr<&clv2::HexagonOptsReg,
-                             &clv2::HEX_DisableArgsMinAlignment>(
-               MF.getFunction().getContext().getOptionsContext(), false))
+  else if (MF.getFunction()
+               .getContext()
+               .getOptions<HexagonOptions>()
+               .HEX_DisableArgsMinAlignment)
     CCInfo.AnalyzeFormalArguments(Ins, CC_Hexagon_Legacy);
   else
     CCInfo.AnalyzeFormalArguments(Ins, CC_Hexagon);
@@ -1497,8 +1497,7 @@ HexagonTargetLowering::HexagonTargetLowering(const TargetMachine &TM,
   setMaxAtomicSizeInBitsSupported(64);
   setMinCmpXchgSizeInBits(32);
 
-  if (clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_EnableHexSDNodeSched>(
-          Subtarget.getOptionsContext(), false))
+  if (HexagonOptions::Current.HEX_EnableHexSDNodeSched)
     setSchedulingPreference(Sched::VLIW);
   else
     setSchedulingPreference(Sched::Source);
@@ -1589,11 +1588,8 @@ HexagonTargetLowering::HexagonTargetLowering(const TargetMachine &TM,
   setOperationAction(ISD::STACKRESTORE, MVT::Other, Expand);
   setOperationAction(ISD::DYNAMIC_STACKALLOC, MVT::i32, Custom);
 
-  if (clv2::getOptValOrDefault<&clv2::HEX_EmitJumpTables>(
-          Subtarget.getOptionsContext()))
-    setMinimumJumpTableEntries(
-        clv2::getOptValOrDefault<&clv2::HEX_MinimumJumpTables>(
-            Subtarget.getOptionsContext()));
+  if (HexagonOptions::Current.HEX_EmitJumpTables)
+    setMinimumJumpTableEntries(HexagonOptions::Current.HEX_MinimumJumpTables);
   else
     setMinimumJumpTableEntries(std::numeric_limits<unsigned>::max());
   setOperationAction(ISD::BR_JT, MVT::Other, Expand);
@@ -3197,12 +3193,11 @@ HexagonTargetLowering::LowerUnalignedLoad(SDValue Op, SelectionDAG &DAG)
   if (!LN->isUnindexed())
     DoDefault = true;
 
-  if (!clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_AlignLoads>(
-          DAG.getMachineFunction()
-              .getFunction()
-              .getContext()
-              .getOptionsContext(),
-          false)) {
+  if (!DAG.getMachineFunction()
+           .getFunction()
+           .getContext()
+           .getOptions<HexagonOptions>()
+           .HEX_AlignLoads) {
     if (allowsMemoryAccessForAlignment(Ctx, DL, LN->getMemoryVT(),
                                        *LN->getMemOperand()))
       return Op;
@@ -3710,8 +3705,7 @@ bool HexagonTargetLowering::isFPImmLegal(const APFloat &Imm, EVT VT,
 /// to just the constant itself.
 bool HexagonTargetLowering::shouldConvertConstantLoadToIntImm(const APInt &Imm,
                                                               Type *Ty) const {
-  if (!clv2::getOptValOrDefault<&clv2::HEX_ConstantLoadsToImm>(
-          Subtarget.getOptionsContext()))
+  if (!HexagonOptions::Current.HEX_ConstantLoadsToImm)
     return false;
 
   assert(Ty->isIntegerTy());

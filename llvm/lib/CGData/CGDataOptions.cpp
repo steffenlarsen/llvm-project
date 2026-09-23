@@ -1,4 +1,4 @@
-//===- CGDataOptions.cpp - CGData option bridge ---------------------------===//
+//===- CGDataOptions.cpp - CGData options ---------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -6,10 +6,52 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "llvm/CGData/CGDataOptionsOptInfos.h"
-#include "llvm/IR/Function.h"
-#include "llvm/IR/LLVMContext.h"
-#include "llvm/IR/Module.h"
-#include "llvm/Support/OptionsContext.h"
+#include "llvm/CGData/CGDataOptions.h"
+#include "llvm/Option/Arg.h"
+#include "llvm/Option/ArgList.h"
+#include "llvm/Option/LibraryOptions.h"
+#include "llvm/Option/OptTable.h"
+#include "llvm/Option/Option.h"
+
 using namespace llvm;
-using namespace llvm::clv2;
+using namespace llvm::opt;
+
+namespace {
+enum ID {
+  OPT_INVALID = 0,
+#define OPTION(...) LLVM_MAKE_OPT_ID(__VA_ARGS__),
+#include "llvm/CGData/CGDataOptions.inc"
+#undef OPTION
+};
+
+#define OPTTABLE_STR_TABLE_CODE
+#include "llvm/CGData/CGDataOptions.inc"
+#undef OPTTABLE_STR_TABLE_CODE
+
+#define OPTTABLE_PREFIXES_TABLE_CODE
+#include "llvm/CGData/CGDataOptions.inc"
+#undef OPTTABLE_PREFIXES_TABLE_CODE
+
+static constexpr OptTable::Info InfoTable[] = {
+#define OPTION(...) LLVM_CONSTRUCT_OPT_INFO(__VA_ARGS__),
+#include "llvm/CGData/CGDataOptions.inc"
+#undef OPTION
+};
+
+class CGDataOptTable : public GenericOptTable {
+public:
+  CGDataOptTable()
+      : GenericOptTable(OptionStrTable, OptionPrefixesTable, InfoTable) {}
+};
+} // namespace
+
+llvm::opt::OptTable &llvm::CGDataOptions::table() {
+  static CGDataOptTable Table;
+  return Table;
+}
+
+#define OPTIONS_STRUCT_DEFS
+#include "llvm/CGData/CGDataOptions.inc"
+#undef OPTIONS_STRUCT_DEFS
+
+static llvm::opt::RegisterLibraryOptions<llvm::CGDataOptions> Registration;

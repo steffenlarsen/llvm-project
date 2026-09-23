@@ -175,6 +175,7 @@ add_clang_library(clangCodeGen
   ClangDriverOptions
   # These generated headers are included transitively.
   target_parser_gen
+  ProfileDataOptParserTableGen
 
   LINK_LIBS
   clangAST

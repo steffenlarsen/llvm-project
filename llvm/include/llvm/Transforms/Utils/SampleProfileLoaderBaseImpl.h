@@ -34,6 +34,7 @@
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/PseudoProbe.h"
 #include "llvm/ProfileData/SampleProf.h"
@@ -227,7 +228,7 @@ public:
 protected:
   /// True when the profile format implied flow-based inference.
   bool UseProfiImplied = false;
-  bool useProfi(const clv2::OptionsContext &Ctx) const {
+  bool useProfi(const LLVMContext &Ctx) const {
     return UseProfiImplied || getSampleProfileUseProfi(Ctx);
   }
 
@@ -512,11 +513,13 @@ SampleProfileLoaderBaseImpl<BT>::getProbeWeight(const InstructionT &Inst) {
         return Remark;
       });
     }
-    LLVM_DEBUG({dbgs() << "    " << Probe->Id;
+    LLVM_DEBUG({
+      dbgs() << "    " << Probe->Id;
       if (Probe->Discriminator)
         dbgs() << "." << Probe->Discriminator;
       dbgs() << ":" << Inst << " - weight: " << R.get()
-             << " - factor: " << format("%0.2f", Probe->Factor) << ")\n";});
+             << " - factor: " << format("%0.2f", Probe->Factor) << ")\n";
+    });
     return Samples;
   }
   return R;
@@ -942,7 +945,7 @@ template <typename BT>
 void SampleProfileLoaderBaseImpl<BT>::propagateWeights(FunctionT &F) {
   // Flow-based profile inference is only usable with BasicBlock instantiation
   // of SampleProfileLoaderBaseImpl.
-  if (useProfi(getFunction(F).getContext().getOptionsContext())) {
+  if (useProfi(getFunction(F).getContext())) {
     // Prepare block sample counts for inference.
     BlockWeightMap SampleBlockWeights;
     for (const auto &BI : F) {
@@ -971,9 +974,8 @@ void SampleProfileLoaderBaseImpl<BT>::propagateWeights(FunctionT &F) {
     }
 
     // Propagate until we converge or we go past the iteration limit.
-    while (Changed &&
-           I++ < getSampleProfileMaxPropagateIterations(
-                     getFunction(F).getContext().getOptionsContext())) {
+    while (Changed && I++ < getSampleProfileMaxPropagateIterations(
+                                getFunction(F).getContext())) {
       Changed = propagateThroughEdges(F, false);
     }
 
@@ -982,18 +984,16 @@ void SampleProfileLoaderBaseImpl<BT>::propagateWeights(FunctionT &F) {
     // weights to propagate edge weights.
     VisitedEdges.clear();
     Changed = true;
-    while (Changed &&
-           I++ < getSampleProfileMaxPropagateIterations(
-                     getFunction(F).getContext().getOptionsContext())) {
+    while (Changed && I++ < getSampleProfileMaxPropagateIterations(
+                                getFunction(F).getContext())) {
       Changed = propagateThroughEdges(F, false);
     }
 
     // The 3rd propagation pass allows adjust annotated BB weights that are
     // obviously wrong.
     Changed = true;
-    while (Changed &&
-           I++ < getSampleProfileMaxPropagateIterations(
-                     getFunction(F).getContext().getOptionsContext())) {
+    while (Changed && I++ < getSampleProfileMaxPropagateIterations(
+                                getFunction(F).getContext())) {
       Changed = propagateThroughEdges(F, true);
     }
   }
@@ -1085,7 +1085,7 @@ void SampleProfileLoaderBaseImpl<BT>::initWeightPropagation(
   // match the profiled binary before annotation.
   getFunction(F).setEntryCount(Samples->getHeadSamples() + 1, &InlinedGUIDs);
 
-  if (!useProfi(getFunction(F).getContext().getOptionsContext())) {
+  if (!useProfi(getFunction(F).getContext())) {
     // Compute dominance and loop info needed for propagation.
     computeDominanceAndLoopInfo(F);
 
@@ -1110,7 +1110,7 @@ void SampleProfileLoaderBaseImpl<BT>::finalizeWeightPropagation(
   // which uses the entry count for mass propagation.
   // If profi produces a zero-value for the entry count, we fallback to
   // Samples->getHeadSamples() + 1 to avoid functions with zero count.
-  if (useProfi(getFunction(F).getContext().getOptionsContext())) {
+  if (useProfi(getFunction(F).getContext())) {
     const BasicBlockT *EntryBB = getEntryBB(&F);
     if (BlockWeights[EntryBB] > 0) {
       getFunction(F).setEntryCount(BlockWeights[EntryBB], &InlinedGUIDs);
@@ -1122,12 +1122,11 @@ template <typename BT>
 void SampleProfileLoaderBaseImpl<BT>::emitCoverageRemarks(FunctionT &F) {
   // If coverage checking was requested, compute it now.
   const Function &Func = getFunction(F);
-  if (getSampleProfileRecordCoverage(Func.getContext().getOptionsContext())) {
+  if (getSampleProfileRecordCoverage(Func.getContext())) {
     unsigned Used = CoverageTracker.countUsedRecords(Samples, PSI);
     unsigned Total = CoverageTracker.countBodyRecords(Samples, PSI);
     unsigned Coverage = CoverageTracker.computeCoverage(Used, Total);
-    if (Coverage <
-        getSampleProfileRecordCoverage(Func.getContext().getOptionsContext())) {
+    if (Coverage < getSampleProfileRecordCoverage(Func.getContext())) {
       Func.getContext().diagnose(DiagnosticInfoSampleProfile(
           Func.getSubprogram()->getFilename(), getFunctionLoc(F),
           Twine(Used) + " of " + Twine(Total) + " available profile records (" +
@@ -1136,12 +1135,11 @@ void SampleProfileLoaderBaseImpl<BT>::emitCoverageRemarks(FunctionT &F) {
     }
   }
 
-  if (getSampleProfileSampleCoverage(Func.getContext().getOptionsContext())) {
+  if (getSampleProfileSampleCoverage(Func.getContext())) {
     uint64_t Used = CoverageTracker.getTotalUsedSamples();
     uint64_t Total = CoverageTracker.countBodySamples(Samples, PSI);
     unsigned Coverage = CoverageTracker.computeCoverage(Used, Total);
-    if (Coverage <
-        getSampleProfileSampleCoverage(Func.getContext().getOptionsContext())) {
+    if (Coverage < getSampleProfileSampleCoverage(Func.getContext())) {
       Func.getContext().diagnose(DiagnosticInfoSampleProfile(
           Func.getSubprogram()->getFilename(), getFunctionLoc(F),
           Twine(Used) + " of " + Twine(Total) + " available profile samples (" +
@@ -1168,7 +1166,7 @@ unsigned SampleProfileLoaderBaseImpl<BT>::getFunctionLoc(FunctionT &F) {
   if (DISubprogram *S = Func.getSubprogram())
     return S->getLine();
 
-  if (getNoWarnSampleUnused(Func.getContext().getOptionsContext()))
+  if (getNoWarnSampleUnused(Func.getContext()))
     return 0;
 
   // If the start of \p F is missing, emit a diagnostic to inform the user

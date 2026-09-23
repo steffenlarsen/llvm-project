@@ -180,6 +180,7 @@ add_llvm_component_library(LLVMSupport
   Chrono.cpp
   COM.cpp
   CodeGenCoverage.cpp
+  ColorOptions.cpp
   CommandLineTokenizer.cpp
   CommandLine.cpp
   CommandLineV2.cpp
@@ -248,6 +249,7 @@ add_llvm_component_library(LLVMSupport
   PGOOptions.cpp
   Parallel.cpp
   PluginLoader.cpp
+  PluginLoaderOptions.cpp
   PrettyStackTrace.cpp
   RandomNumberGenerator.cpp
   IntegerInclusiveInterval.cpp

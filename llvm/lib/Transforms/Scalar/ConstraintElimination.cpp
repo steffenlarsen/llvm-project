@@ -40,8 +40,7 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/DebugCounter.h"
 #include "llvm/Support/MathExtras.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
+#include "llvm/Transforms/Scalar/ScalarOptions.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/ValueMapper.h"
 
@@ -59,14 +58,15 @@ DEBUG_COUNTER(EliminatedCounter, "conds-eliminated",
               "Controls which conditions are eliminated");
 
 static unsigned getMaxRows(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_ConstraintEliminationMaxRows>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_ConstraintEliminationMaxRows;
 }
 
 static bool getDumpReproducers(const Function &F) {
-  return clv2::getOptValOr<&clv2::ScalarOptsReg,
-                           &clv2::SC_ConstraintEliminationDumpReproducers>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_ConstraintEliminationDumpReproducers;
 }
 
 static constexpr int64_t MaxConstraintValue =

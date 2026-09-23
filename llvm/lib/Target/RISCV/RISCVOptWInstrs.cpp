@@ -39,8 +39,7 @@
 #include "llvm/ADT/Statistic.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/TargetInstrInfo.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/RISCV/RISCVOptionsOptInfos.h"
+#include "llvm/Target/RISCV/RISCVOptions.h"
 
 using namespace llvm;
 
@@ -53,16 +52,12 @@ STATISTIC(NumTransformedToWInstrs,
 STATISTIC(NumTransformedToNonWInstrs,
           "Number of instructions transformed to non-W-ops");
 
-static bool DisableSExtWRemoval = false;
-
 static bool getDisableSExtWRemoval(const Function &F) {
-  return clv2::getOptValOr<&clv2::RISCVOptsReg, &clv2::RV_DisableSExtWRemoval>(
-      F.getContext().getOptionsContext(), DisableSExtWRemoval);
+  return F.getContext().getOptions<RISCVOptions>().RV_DisableSExtWRemoval;
 }
 
 static bool getDisableStripWSuffix(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::RV_DisableStripWSuffix>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<RISCVOptions>().RV_DisableStripWSuffix;
 }
 
 namespace {

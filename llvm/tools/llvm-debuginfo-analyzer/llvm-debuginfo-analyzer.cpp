@@ -17,6 +17,7 @@
 #include "llvm/Support/COM.h"
 #include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/InitLLVM.h"
+#include "llvm/Support/PluginLoaderOptions.h"
 #include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/ToolOutputFile.h"
@@ -109,7 +110,10 @@ int main(int argc, char **argv) {
                           &PrintCategory, &ReportCategory, &SelectCategory,
                           &WarningCategory, &InternalCategory});
   P.setExtraHelp("\nPass @FILE as argument to read options from FILE.\n");
-  auto OptsCtx = P.parse(argc, argv,
+  std::vector<const char *> ArgsAfterPlugins =
+      loadPluginsAndStripArgs(argc, argv);
+  auto OptsCtx = P.parse(static_cast<int>(ArgsAfterPlugins.size()),
+                         ArgsAfterPlugins.data(),
                          "Printing a logical representation of low-level "
                          "debug information.\n");
   auto *Opts = OptsCtx->getViewPtr<&DebugInfoToolReg>();

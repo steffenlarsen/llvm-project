@@ -65,7 +65,7 @@
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsCore1.h"
 #include "llvm/CodeGen/TargetLowering.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/IR/Function.h"
@@ -74,8 +74,6 @@
 #include "llvm/IR/PatternMatch.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Support/Allocator.h"
-#include "llvm/Support/CommandLineV2.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include <algorithm>
@@ -87,9 +85,8 @@ using namespace PatternMatch;
 
 STATISTIC(NumComplexTransformations, "Amount of complex patterns transformed");
 
-static bool getEnableComplexDeinterleaving(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_EnableComplexDeinterleaving>(
-      Ctx);
+static bool getEnableComplexDeinterleaving(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore1Options>().CGPASS_EnableComplexDeinterleaving;
 }
 
 /// Checks the given mask, and determines whether said mask is interleaving.
@@ -547,7 +544,7 @@ bool ComplexDeinterleavingLegacyPass::runOnFunction(Function &F) {
 }
 
 bool ComplexDeinterleaving::runOnFunction(Function &F) {
-  if (!getEnableComplexDeinterleaving(F.getContext().getOptionsContext())) {
+  if (!getEnableComplexDeinterleaving(F.getContext())) {
     LLVM_DEBUG(
         dbgs() << "Complex deinterleaving has been explicitly disabled.\n");
     return false;

@@ -22,17 +22,16 @@
 
 namespace llvm {
 
-namespace clv2 {
-class OptionsContext;
-}
-
 class AssumeInst;
 class Function;
 class Instruction;
 class AssumptionCache;
 class DominatorTree;
+class LLVMContext;
 
-LLVM_ABI bool getEnableKnowledgeRetention(const clv2::OptionsContext &Ctx);
+/// \p Ctx is the LLVMContext to read the option from, or nullptr if none is
+/// available (in which case the process-wide default is used).
+LLVM_ABI bool getEnableKnowledgeRetention(const LLVMContext *Ctx);
 
 /// Build a call to llvm.assume to preserve informations that can be derived
 /// from the given instruction.

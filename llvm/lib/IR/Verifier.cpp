@@ -89,7 +89,7 @@
 #include "llvm/IR/GlobalAlias.h"
 #include "llvm/IR/GlobalValue.h"
 #include "llvm/IR/GlobalVariable.h"
-#include "llvm/IR/IROptionsOptInfos.h"
+#include "llvm/IR/IROptions.h"
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/InstVisitor.h"
 #include "llvm/IR/InstrTypes.h"
@@ -125,7 +125,6 @@
 #include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/ModRef.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/TimeProfiler.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/TargetParser/RISCVTargetParser.h"
@@ -142,8 +141,6 @@
 #include <utility>
 
 using namespace llvm;
-
-static bool VerifyNoAliasScopeDomEnabled = false;
 
 namespace {
 
@@ -559,7 +556,8 @@ void Verifier::visit(Instruction &I) {
   InstVisitor<Verifier>::visit(I);
 }
 
-// Helper to iterate over indirect users. By returning false, the callback can ask to stop traversing further.
+// Helper to iterate over indirect users. By returning false, the callback can
+// ask to stop traversing further.
 static void forEachUser(const Value *User,
                         SmallPtrSet<const Value *, 32> &Visited,
                         llvm::function_ref<bool(const Value *)> Callback) {
@@ -568,7 +566,7 @@ static void forEachUser(const Value *User,
 
   SmallVector<const Value *> WorkList(User->materialized_users());
   while (!WorkList.empty()) {
-   const Value *Cur = WorkList.pop_back_val();
+    const Value *Cur = WorkList.pop_back_val();
     if (!Visited.insert(Cur).second)
       continue;
     if (Callback(Cur))
@@ -779,8 +777,8 @@ void Verifier::visitGlobalVariable(const GlobalVariable &GV) {
     }
   }
 
-  if (GV.hasName() && (GV.getName() == "llvm.used" ||
-                       GV.getName() == "llvm.compiler.used")) {
+  if (GV.hasName() &&
+      (GV.getName() == "llvm.used" || GV.getName() == "llvm.compiler.used")) {
     Check(!GV.hasInitializer() || GV.hasAppendingLinkage(),
           "invalid linkage for intrinsic global variable", &GV);
     Check(GV.materialized_use_empty(),
@@ -848,13 +846,14 @@ void Verifier::visitGlobalVariable(const GlobalVariable &GV) {
 }
 
 void Verifier::visitAliaseeSubExpr(const GlobalAlias &GA, const Constant &C) {
-  SmallPtrSet<const GlobalAlias*, 4> Visited;
+  SmallPtrSet<const GlobalAlias *, 4> Visited;
   Visited.insert(&GA);
   visitAliaseeSubExpr(Visited, GA, C);
 }
 
-void Verifier::visitAliaseeSubExpr(SmallPtrSetImpl<const GlobalAlias*> &Visited,
-                                   const GlobalAlias &GA, const Constant &C) {
+void Verifier::visitAliaseeSubExpr(
+    SmallPtrSetImpl<const GlobalAlias *> &Visited, const GlobalAlias &GA,
+    const Constant &C) {
   if (GA.hasAvailableExternallyLinkage()) {
     Check(isa<GlobalValue>(C) &&
               cast<GlobalValue>(C).hasAvailableExternallyLinkage(),
@@ -1951,11 +1950,12 @@ void Verifier::visitModuleErrnoTBAA() {
 
 void Verifier::visitModuleFlags() {
   const NamedMDNode *Flags = M.getModuleFlagsMetadata();
-  if (!Flags) return;
+  if (!Flags)
+    return;
 
   // Scan each flag, and track the flags and requirements.
-  DenseMap<const MDString*, const MDNode*> SeenIDs;
-  SmallVector<const MDNode*, 16> Requirements;
+  DenseMap<const MDString *, const MDNode *> SeenIDs;
+  SmallVector<const MDNode *, 16> Requirements;
 
   // Either both aarch64-elf-pauthabi-* flags should be set or none at all.
   std::optional<uint64_t> PAuthABIPlatform;
@@ -2026,10 +2026,9 @@ void Verifier::visitModuleFlags() {
   }
 }
 
-void
-Verifier::visitModuleFlag(const MDNode *Op,
-                          DenseMap<const MDString *, const MDNode *> &SeenIDs,
-                          SmallVectorImpl<const MDNode *> &Requirements) {
+void Verifier::visitModuleFlag(
+    const MDNode *Op, DenseMap<const MDString *, const MDNode *> &SeenIDs,
+    SmallVectorImpl<const MDNode *> &Requirements) {
   // Each module flag should have three arguments, the merge behavior (a
   // constant int), the flag ID (an MDString), and the value.
   Check(Op->getNumOperands() == 3,
@@ -2109,8 +2108,8 @@ Verifier::visitModuleFlag(const MDNode *Op,
 
   StringRef Name = ID->getString();
   if (Name == "wchar_size") {
-    ConstantInt *Value
-      = mdconst::dyn_extract_or_null<ConstantInt>(Op->getOperand(2));
+    ConstantInt *Value =
+        mdconst::dyn_extract_or_null<ConstantInt>(Op->getOperand(2));
     Check(Value, "wchar_size metadata requires constant integer argument");
     return;
   }
@@ -2330,7 +2329,8 @@ void Verifier::verifyParameterAttrs(AttributeSet Attrs, Type *Ty,
     if (!Attr.isStringAttribute() &&
         IncompatibleAttrs.contains(Attr.getKindAsEnum())) {
       CheckFailed("Attribute '" + Attr.getAsString() +
-                  "' applied to incompatible type!", V);
+                      "' applied to incompatible type!",
+                  V);
       return;
     }
   }
@@ -2562,15 +2562,15 @@ void Verifier::verifyFunctionAttrs(FunctionType *FT, AttributeList Attrs,
   }
 
   Check(!Attrs.hasAttrSomewhere(Attribute::Writable) ||
-        isModSet(Attrs.getMemoryEffects().getModRef(IRMemLocation::ArgMem)),
+            isModSet(Attrs.getMemoryEffects().getModRef(IRMemLocation::ArgMem)),
         "Attribute writable and memory without argmem: write are incompatible!",
         V);
 
   if (Attrs.hasFnAttr("aarch64_pstate_sm_enabled")) {
     Check(!Attrs.hasFnAttr("aarch64_pstate_sm_compatible"),
-           "Attributes 'aarch64_pstate_sm_enabled and "
-           "aarch64_pstate_sm_compatible' are incompatible!",
-           V);
+          "Attributes 'aarch64_pstate_sm_enabled and "
+          "aarch64_pstate_sm_compatible' are incompatible!",
+          V);
   }
 
   Check((Attrs.hasFnAttr("aarch64_new_za") + Attrs.hasFnAttr("aarch64_in_za") +
@@ -3028,7 +3028,8 @@ void Verifier::verifyStatepoint(const CallBase &Call) {
   Check(TargetFuncType,
         "gc.statepoint callee elementtype must be function type", Call);
 
-  const int NumCallArgs = cast<ConstantInt>(Call.getArgOperand(3))->getZExtValue();
+  const int NumCallArgs =
+      cast<ConstantInt>(Call.getArgOperand(3))->getZExtValue();
   Check(NumCallArgs >= 0,
         "gc.statepoint number of arguments to underlying call "
         "must be positive",
@@ -3047,8 +3048,8 @@ void Verifier::verifyStatepoint(const CallBase &Call) {
     Check(NumCallArgs == NumParams,
           "gc.statepoint mismatch in number of call args", Call);
 
-  const uint64_t Flags
-    = cast<ConstantInt>(Call.getArgOperand(4))->getZExtValue();
+  const uint64_t Flags =
+      cast<ConstantInt>(Call.getArgOperand(4))->getZExtValue();
   Check((Flags & ~(uint64_t)StatepointFlags::MaskAll) == 0,
         "unknown flag used in gc.statepoint flags argument", Call);
 
@@ -3555,7 +3556,7 @@ void Verifier::visitBasicBlock(BasicBlock &BB) {
   // it.
   if (isa<PHINode>(BB.front())) {
     SmallVector<BasicBlock *, 8> Preds(predecessors(&BB));
-    SmallVector<std::pair<BasicBlock*, Value*>, 8> Values;
+    SmallVector<std::pair<BasicBlock *, Value *>, 8> Values;
     llvm::sort(Preds);
     for (const PHINode &PN : BB.phis()) {
       Check(PN.getNumIncomingValues() == Preds.size(),
@@ -3592,8 +3593,7 @@ void Verifier::visitBasicBlock(BasicBlock &BB) {
   }
 
   // Check that all instructions have their parent pointers set up correctly.
-  for (auto &I : BB)
-  {
+  for (auto &I : BB) {
     Check(I.getParent() == &BB, "Instruction has bogus parent pointer!");
   }
 
@@ -3639,7 +3639,7 @@ void Verifier::visitSwitchInst(SwitchInst &SI) {
   // Check to make sure that all of the constants in the switch instruction
   // have the same type as the switched-on value.
   Type *SwitchTy = SI.getCondition()->getType();
-  SmallPtrSet<ConstantInt*, 32> Constants;
+  SmallPtrSet<ConstantInt *, 32> Constants;
   for (auto &Case : SI.cases()) {
     Check(isa<ConstantInt>(Case.getCaseValue()),
           "Case value is not a constant integer.", &SI);
@@ -4087,7 +4087,8 @@ void Verifier::visitCallBase(CallBase &Call) {
   for (unsigned i = 0, e = FTy->getNumParams(); i != e; ++i) {
     if (Call.paramHasAttr(i, Attribute::SwiftError)) {
       Value *SwiftErrorArg = Call.getArgOperand(i);
-      if (auto AI = dyn_cast<AllocaInst>(SwiftErrorArg->stripInBoundsOffsets())) {
+      if (auto AI =
+              dyn_cast<AllocaInst>(SwiftErrorArg->stripInBoundsOffsets())) {
         Check(AI->isSwiftError(),
               "swifterror argument for call has mismatched alloca", AI, Call);
         continue;
@@ -4329,7 +4330,8 @@ void Verifier::verifyTailCCMustTailAttrs(const AttrBuilder &Attrs,
         Twine("byref attribute not allowed in ") + Context);
 }
 
-static AttrBuilder getParameterABIAttributes(LLVMContext& C, unsigned I, AttributeList Attrs) {
+static AttrBuilder getParameterABIAttributes(LLVMContext &C, unsigned I,
+                                             AttributeList Attrs) {
   static const Attribute::AttrKind ABIAttrs[] = {
       Attribute::StructRet,  Attribute::ByVal,          Attribute::InAlloca,
       Attribute::InReg,      Attribute::StackAlignment, Attribute::SwiftSelf,
@@ -4386,12 +4388,14 @@ void Verifier::verifyMustTailCall(CallInst &CI) {
     // - Only sret, byval, swiftself, and swiftasync ABI-impacting attributes
     //   are allowed in swifttailcc call
     for (unsigned I = 0, E = CallerTy->getNumParams(); I != E; ++I) {
-      AttrBuilder ABIAttrs = getParameterABIAttributes(F->getContext(), I, CallerAttrs);
+      AttrBuilder ABIAttrs =
+          getParameterABIAttributes(F->getContext(), I, CallerAttrs);
       SmallString<32> Context{CCName, StringRef(" musttail caller")};
       verifyTailCCMustTailAttrs(ABIAttrs, Context);
     }
     for (unsigned I = 0, E = CalleeTy->getNumParams(); I != E; ++I) {
-      AttrBuilder ABIAttrs = getParameterABIAttributes(F->getContext(), I, CalleeAttrs);
+      AttrBuilder ABIAttrs =
+          getParameterABIAttributes(F->getContext(), I, CalleeAttrs);
       SmallString<32> Context{CCName, StringRef(" musttail callee")};
       verifyTailCCMustTailAttrs(ABIAttrs, Context);
     }
@@ -4415,8 +4419,10 @@ void Verifier::verifyMustTailCall(CallInst &CI) {
   // - All ABI-impacting function attributes, such as sret, byval, inreg,
   //   returned, preallocated, and inalloca, must match.
   for (unsigned I = 0, E = CallerTy->getNumParams(); I != E; ++I) {
-    AttrBuilder CallerABIAttrs = getParameterABIAttributes(F->getContext(), I, CallerAttrs);
-    AttrBuilder CalleeABIAttrs = getParameterABIAttributes(F->getContext(), I, CalleeAttrs);
+    AttrBuilder CallerABIAttrs =
+        getParameterABIAttributes(F->getContext(), I, CallerAttrs);
+    AttrBuilder CalleeABIAttrs =
+        getParameterABIAttributes(F->getContext(), I, CalleeAttrs);
     Check(CallerABIAttrs == CalleeABIAttrs,
           "cannot guarantee tail call due to mismatched ABI impacting "
           "function attributes",
@@ -5426,7 +5432,7 @@ void Verifier::verifyDominatesUse(Instruction &I, unsigned i) {
   Check(DT.dominates(Op, U), "Instruction does not dominate all uses!", Op, &I);
 }
 
-void Verifier::visitDereferenceableMetadata(Instruction& I, MDNode* MD) {
+void Verifier::visitDereferenceableMetadata(Instruction &I, MDNode *MD) {
   Check(I.getType()->isPointerTy(),
         "dereferenceable, dereferenceable_or_null "
         "apply only to pointer types",
@@ -5878,7 +5884,7 @@ void Verifier::visitInstruction(Instruction &I) {
   BasicBlock *BB = I.getParent();
   Check(BB, "Instruction not embedded in basic block!", &I);
 
-  if (!isa<PHINode>(I)) {   // Check that non-phi nodes are not self referential
+  if (!isa<PHINode>(I)) { // Check that non-phi nodes are not self referential
     for (User *U : I.users()) {
       Check(U != (User *)&I || !DT.isReachableFromEntry(BB),
             "Only PHI nodes may reference their own value!", &I);
@@ -7814,11 +7820,8 @@ void Verifier::verifyNoAliasScopeDecl() {
 
   // Only check the domination rule when requested. Once all passes have been
   // adapted this option can go away.
-  bool VerifyNoAliasScopeDom = VerifyNoAliasScopeDomEnabled;
-  if (auto *O =
-          clv2::getView<&clv2::IROptsReg>(M.getContext().getOptionsContext()))
-    if (O->specified<&clv2::IR_VerifyNoAliasScopeDomination>())
-      VerifyNoAliasScopeDom = O->get<&clv2::IR_VerifyNoAliasScopeDomination>();
+  bool VerifyNoAliasScopeDom =
+      M.getContext().getOptions<IROptions>().IR_VerifyNoAliasScopeDomination;
   if (!VerifyNoAliasScopeDom)
     return;
 
@@ -7942,7 +7945,7 @@ struct VerifierLegacyPass : public FunctionPass {
 } // end anonymous namespace
 
 /// Helper to issue failure from the TBAA verification
-template <typename... Tys> void TBAAVerifier::CheckFailed(Tys &&... Args) {
+template <typename... Tys> void TBAAVerifier::CheckFailed(Tys &&...Args) {
   if (Diagnostic)
     return Diagnostic->CheckFailed(Args...);
 }
@@ -7992,7 +7995,8 @@ TBAAVerifier::verifyTBAABaseNodeImpl(const Instruction *I,
   if (IsNewFormat) {
     if (BaseNode->getNumOperands() % 3 != 0) {
       CheckFailed("Access tag nodes must have the number of operands that is a "
-                  "multiple of 3!", BaseNode);
+                  "multiple of 3!",
+                  BaseNode);
       return InvalidNode;
     }
   } else {
@@ -8005,8 +8009,8 @@ TBAAVerifier::verifyTBAABaseNodeImpl(const Instruction *I,
 
   // Check the type size field.
   if (IsNewFormat) {
-    auto *TypeSizeNode = mdconst::dyn_extract_or_null<ConstantInt>(
-        BaseNode->getOperand(1));
+    auto *TypeSizeNode =
+        mdconst::dyn_extract_or_null<ConstantInt>(BaseNode->getOperand(1));
     if (!TypeSizeNode) {
       CheckFailed("Type size nodes must be constants!", I, BaseNode);
       return InvalidNode;
@@ -8030,7 +8034,7 @@ TBAAVerifier::verifyTBAABaseNodeImpl(const Instruction *I,
   unsigned FirstFieldOpNo = IsNewFormat ? 3 : 1;
   unsigned NumOpsPerField = IsNewFormat ? 3 : 2;
   for (unsigned Idx = FirstFieldOpNo; Idx < BaseNode->getNumOperands();
-           Idx += NumOpsPerField) {
+       Idx += NumOpsPerField) {
     const MDOperand &FieldTy = BaseNode->getOperand(Idx);
     const MDOperand &FieldOffset = BaseNode->getOperand(Idx + 1);
     if (!isa<MDNode>(FieldTy)) {
@@ -8144,7 +8148,7 @@ MDNode *TBAAVerifier::getFieldNodeFromTBAABaseNode(const Instruction *I,
   unsigned FirstFieldOpNo = IsNewFormat ? 3 : 1;
   unsigned NumOpsPerField = IsNewFormat ? 3 : 2;
   for (unsigned Idx = FirstFieldOpNo; Idx < BaseNode->getNumOperands();
-           Idx += NumOpsPerField) {
+       Idx += NumOpsPerField) {
     auto *OffsetEntryCI =
         mdconst::extract<ConstantInt>(BaseNode->getOperand(Idx + 1));
     if (OffsetEntryCI->getValue().ugt(Offset)) {
@@ -8163,8 +8167,8 @@ MDNode *TBAAVerifier::getFieldNodeFromTBAABaseNode(const Instruction *I,
   }
 
   unsigned LastIdx = BaseNode->getNumOperands() - NumOpsPerField;
-  auto *LastOffsetEntryCI = mdconst::extract<ConstantInt>(
-      BaseNode->getOperand(LastIdx + 1));
+  auto *LastOffsetEntryCI =
+      mdconst::extract<ConstantInt>(BaseNode->getOperand(LastIdx + 1));
   Offset -= LastOffsetEntryCI->getValue();
   return cast<MDNode>(BaseNode->getOperand(LastIdx));
 }
@@ -8210,8 +8214,8 @@ bool TBAAVerifier::visitTBAAMetadata(const Instruction *I, const MDNode *MD) {
 
   // Check the access size field.
   if (IsNewFormat) {
-    auto *AccessSizeNode = mdconst::dyn_extract_or_null<ConstantInt>(
-        MD->getOperand(3));
+    auto *AccessSizeNode =
+        mdconst::dyn_extract_or_null<ConstantInt>(MD->getOperand(3));
     CheckTBAA(AccessSizeNode, "Access size field must be a constant", I, MD);
   }
 
@@ -8304,7 +8308,7 @@ VerifierAnalysis::Result VerifierAnalysis::run(Module &M,
 
 VerifierAnalysis::Result VerifierAnalysis::run(Function &F,
                                                FunctionAnalysisManager &) {
-  return { llvm::verifyFunction(F, &dbgs()), false };
+  return {llvm::verifyFunction(F, &dbgs()), false};
 }
 
 PreservedAnalyses VerifierPass::run(Module &M, ModuleAnalysisManager &AM) {

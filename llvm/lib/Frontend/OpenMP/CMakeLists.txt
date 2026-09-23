@@ -1,6 +1,4 @@
 add_llvm_component_library(LLVMFrontendOpenMP
-  OpenMPOptionsGetters.cpp
-  OpenMPOptionsRegistration.cpp
   OMP.cpp
   OMPContext.cpp
   OMPDescriptors.cpp
@@ -15,6 +13,7 @@ add_llvm_component_library(LLVMFrontendOpenMP
   DEPENDS
   intrinsics_gen
   omp_gen
+  OpenMPOptParserTableGen
 
   LINK_COMPONENTS
   Core
@@ -24,6 +23,7 @@ add_llvm_component_library(LLVMFrontendOpenMP
   Analysis
   Demangle
   MC
+  Option
   Scalar
   BitReader
   FrontendOffloading

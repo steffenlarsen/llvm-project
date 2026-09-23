@@ -15,7 +15,7 @@
 #include "llvm/Analysis/ModuleSummaryAnalysis.h"
 #include "llvm/CGData/CodeGenData.h"
 #include "llvm/CGData/CodeGenDataWriter.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsCore1.h"
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
@@ -30,8 +30,8 @@
 using namespace llvm;
 using namespace llvm::support;
 
-static bool getDisableCgdataForMerging(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_DisableCgdataForMerging>(Ctx);
+static bool getDisableCgdataForMerging(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore1Options>().CGPASS_DisableCgdataForMerging;
 }
 
 STATISTIC(NumMergedFunctions,
@@ -520,7 +520,7 @@ void GlobalMergeFunc::initializeMergerMode(const Module &M) {
   LocalFunctionMap = std::make_unique<StableFunctionMap>();
 
   // Disable codegen data for merging. The local merge is still enabled.
-  if (getDisableCgdataForMerging(M.getContext().getOptionsContext()))
+  if (getDisableCgdataForMerging(M.getContext()))
     return;
 
   // (Full)LTO module does not have functions added to the index.

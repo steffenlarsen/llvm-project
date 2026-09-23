@@ -25,7 +25,7 @@
 
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/ADT/Statistic.h"
-#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
+#include "llvm/Analysis/AnalysisOptions.h"
 #include "llvm/Analysis/BasicAliasAnalysis.h"
 #include "llvm/Analysis/CaptureTracking.h"
 #include "llvm/Analysis/GlobalsModRef.h"
@@ -46,8 +46,6 @@
 #include "llvm/Pass.h"
 #include "llvm/Support/AtomicOrdering.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLineCompat.h"
-#include "llvm/Support/OptionsContext.h"
 #include <cassert>
 #include <functional>
 #include <iterator>
@@ -56,8 +54,8 @@
 
 using namespace llvm;
 
-STATISTIC(NumNoAlias,   "Number of NoAlias results");
-STATISTIC(NumMayAlias,  "Number of MayAlias results");
+STATISTIC(NumNoAlias, "Number of NoAlias results");
+STATISTIC(NumMayAlias, "Number of MayAlias results");
 STATISTIC(NumMustAlias, "Number of MustAlias results");
 
 /// Allow disabling BasicAA from the AA results. This is particularly useful
@@ -65,15 +63,13 @@ STATISTIC(NumMustAlias, "Number of MustAlias results");
 static bool DisableBasicAA = false;
 
 static bool getDisableBasicAA(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AN_DisableBasicAA>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<AnalysisOptions>().AN_DisableBasicAA;
 }
 
 #ifndef NDEBUG
 /// Print a trace of alias analysis queries and their results.
 static bool getEnableAATrace(const LLVMContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::AN_EnableAATrace>(
-      Ctx.getOptionsContext());
+  return Ctx.getOptions<AnalysisOptions>().AN_EnableAATrace;
 }
 #else
 static bool getEnableAATrace(const LLVMContext &) { return false; }
@@ -131,8 +127,8 @@ AliasResult AAResults::alias(const MemoryLocation &LocA,
   if (Trace) {
     for (unsigned I = 0; I < AAQI.Depth; ++I)
       dbgs() << "  ";
-    dbgs() << "Start " << *LocA.Ptr << " @ " << LocA.Size << ", "
-           << *LocB.Ptr << " @ " << LocB.Size << "\n";
+    dbgs() << "Start " << *LocA.Ptr << " @ " << LocA.Size << ", " << *LocB.Ptr
+           << " @ " << LocB.Size << "\n";
   }
 
   AAQI.Depth++;
@@ -146,8 +142,8 @@ AliasResult AAResults::alias(const MemoryLocation &LocA,
   if (Trace) {
     for (unsigned I = 0; I < AAQI.Depth; ++I)
       dbgs() << "  ";
-    dbgs() << "End " << *LocA.Ptr << " @ " << LocA.Size << ", "
-           << *LocB.Ptr << " @ " << LocB.Size << " = " << Result << "\n";
+    dbgs() << "End " << *LocA.Ptr << " @ " << LocA.Size << ", " << *LocB.Ptr
+           << " @ " << LocB.Size << " = " << Result << "\n";
   }
 
   if (AAQI.Depth == 0) {
@@ -698,8 +694,7 @@ ModRefInfo AAResults::getModRefInfo(const Instruction *I,
 /// with a smarter AA in place, this test is just wasting compile time.
 ModRefInfo AAResults::callCapturesBefore(const Instruction *I,
                                          const MemoryLocation &MemLoc,
-                                         DominatorTree *DT,
-                                         AAQueryInfo &AAQI) {
+                                         DominatorTree *DT, AAQueryInfo &AAQI) {
   if (!DT)
     return ModRefInfo::ModRef;
 
@@ -775,7 +770,7 @@ bool AAResults::canInstructionRangeModRef(const Instruction &I1,
          "Instructions not in same basic block!");
   BasicBlock::const_iterator I = I1.getIterator();
   BasicBlock::const_iterator E = I2.getIterator();
-  ++E;  // Convert from inclusive to exclusive range.
+  ++E; // Convert from inclusive to exclusive range.
 
   for (; I != E; ++I) // Check every instruction in range
     if (isModOrRefSet(getModRefInfo(&*I, Loc) & Mode))

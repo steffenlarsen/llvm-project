@@ -12,7 +12,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Analysis/Delinearization.h"
-#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
+#include "llvm/Analysis/AnalysisOptions.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/Analysis/ScalarEvolutionDivision.h"
@@ -23,9 +23,7 @@
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/PassManager.h"
-#include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 
 using namespace llvm;
@@ -34,8 +32,9 @@ using namespace llvm;
 #define DEBUG_TYPE DL_NAME
 
 static bool getUseFixedSizeArrayHeuristic(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AN_UseFixedSizeArrayHeuristic>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<AnalysisOptions>()
+      .AN_UseFixedSizeArrayHeuristic;
 }
 
 // Return true when S contains at least an undef value.

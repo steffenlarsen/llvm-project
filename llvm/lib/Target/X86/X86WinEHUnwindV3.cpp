@@ -35,8 +35,7 @@
 #include "llvm/IR/Module.h"
 #include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/X86/X86OptionsOptInfos.h"
+#include "llvm/Target/X86/X86Options.h"
 
 using namespace llvm;
 
@@ -61,8 +60,7 @@ static constexpr unsigned EpilogDistanceThreshold = 32767;
 /// approximate byte count is used as a proxy — instructions are charged
 /// ApproxBytesPerInstr each and alignment padding is added.
 static unsigned getApproxBytesPerInstr(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::X86_ApproxBytesPerInstr>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<X86Options>().X86_ApproxBytesPerInstr;
 }
 
 /// After reporting a recoverable error for `MF`, erase all SEH pseudo-

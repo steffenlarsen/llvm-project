@@ -10,7 +10,6 @@
 #include "Mips.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/MC/MCTargetOptions.h"
-#include "llvm/Target/Mips/MipsOptionsOptInfos.h"
 
 using namespace llvm;
 
@@ -20,7 +19,7 @@ static const MCPhysReg O32IntRegs[4] = {Mips::A0, Mips::A1, Mips::A2, Mips::A3};
 static const MCPhysReg Mips64IntRegs[8] = {
     Mips::A0_64, Mips::A1_64, Mips::A2_64, Mips::A3_64,
     Mips::T0_64, Mips::T1_64, Mips::T2_64, Mips::T3_64};
-}
+} // namespace
 
 ArrayRef<MCPhysReg> MipsABIInfo::GetByValArgRegs() const {
   if (IsO32())
@@ -111,12 +110,9 @@ unsigned MipsABIInfo::GetGPRMoveOp() const {
 }
 
 unsigned MipsABIInfo::GetEhDataReg(unsigned I) const {
-  static const unsigned EhDataReg[] = {
-    Mips::A0, Mips::A1, Mips::A2, Mips::A3
-  };
-  static const unsigned EhDataReg64[] = {
-    Mips::A0_64, Mips::A1_64, Mips::A2_64, Mips::A3_64
-  };
+  static const unsigned EhDataReg[] = {Mips::A0, Mips::A1, Mips::A2, Mips::A3};
+  static const unsigned EhDataReg64[] = {Mips::A0_64, Mips::A1_64, Mips::A2_64,
+                                         Mips::A3_64};
 
   return IsN64() ? EhDataReg64[I] : EhDataReg[I];
 }

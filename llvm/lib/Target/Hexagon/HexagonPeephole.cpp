@@ -46,9 +46,7 @@
 #include "llvm/CodeGen/TargetRegisterInfo.h"
 #include "llvm/IR/Function.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/CommandLineV2.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
+#include "llvm/Target/Hexagon/HexagonOptions.h"
 #include "llvm/Target/TargetMachine.h"
 
 using namespace llvm;
@@ -60,23 +58,19 @@ static bool DisableOptSZExt = true;
 static bool DisableOptExtTo64 = true;
 
 static bool getDisableHexagonPeephole(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_DisableHexagonPeephole>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_DisableHexagonPeephole;
 }
 
 static bool getDisablePNotP(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_DisablePNotP>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_DisablePNotP;
 }
 
 static bool getDisableOptSZExt(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_DisableOptSZExt>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_DisableOptSZExt;
 }
 
 static bool getDisableOptExtTo64(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_DisableOptExtTo64>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_DisableOptExtTo64;
 }
 
 namespace {

@@ -21,7 +21,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/CodeGen/CalcSpillWeights.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsRegAlloc.h"
 #include "llvm/CodeGen/LiveInterval.h"
 #include "llvm/CodeGen/LiveIntervals.h"
 #include "llvm/CodeGen/LiveRangeEdit.h"
@@ -45,22 +45,21 @@
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/IR/DebugLoc.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/LLVMContext.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/MC/LaneBitmask.h"
 #include "llvm/MC/MCInstrDesc.h"
 #include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/CommandLineCompat.h"
-#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <cassert>
 #include <iterator>
 #include <limits>
+#include <optional>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -83,40 +82,42 @@ STATISTIC(NumShrinkToUses, "Number of shrinkToUses called");
 
 /// Temporary flag to test global copy optimization.
 
-static bool getJoinLiveintervals(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_JoinLiveintervals>(Ctx);
+static bool getJoinLiveintervals(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenRegAllocOptions>().CGPASS_JoinLiveintervals;
 }
 
-static bool getTerminalRule(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_TerminalRule>(Ctx);
+static bool getTerminalRule(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenRegAllocOptions>().CGPASS_TerminalRule;
 }
 
-static bool getJoinSplitedges(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_JoinSplitedges>(Ctx);
+static bool getJoinSplitedges(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenRegAllocOptions>().CGPASS_JoinSplitedges;
 }
 
-static bool getVerifyCoalescing(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_VerifyCoalescing>(Ctx);
+static bool getVerifyCoalescing(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenRegAllocOptions>().CGPASS_VerifyCoalescing;
 }
 
-static unsigned getLateRematUpdateThreshold(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_LateRematUpdateThreshold>(Ctx);
+static unsigned getLateRematUpdateThreshold(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenRegAllocOptions>()
+      .CGPASS_LateRematUpdateThreshold;
 }
 
-static unsigned getLargeIntervalSizeThreshold(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_LargeIntervalSizeThreshold>(
-      Ctx);
+static unsigned getLargeIntervalSizeThreshold(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenRegAllocOptions>()
+      .CGPASS_LargeIntervalSizeThreshold;
 }
 
-static unsigned getLargeIntervalFreqThreshold(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_LargeIntervalFreqThreshold>(
-      Ctx);
+static unsigned getLargeIntervalFreqThreshold(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenRegAllocOptions>()
+      .CGPASS_LargeIntervalFreqThreshold;
 }
 
-static cl::boolOrDefault getJoinGlobalcopies(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::CGPassRegAllocReg,
-                           &clv2::CGPASS_JoinGlobalcopies>(
-      Ctx, cl::boolOrDefault::BOU_UNSET);
+// join-globalcopies used to be a tri-state cl::opt<cl::boolOrDefault>:
+// unspecified falls back to the subtarget's own default below, which a plain
+// bool (unset indistinguishable from false) cannot represent.
+static std::optional<bool> getJoinGlobalcopies(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenRegAllocOptions>().CGPASS_JoinGlobalcopies;
 }
 
 namespace {
@@ -1726,8 +1727,8 @@ bool RegisterCoalescer::reMaterializeDef(const CoalescerPair &CP,
     if (UseMO.getParent()->isCopyLike())
       NumCopyUses++;
   }
-  if (NumCopyUses < getLateRematUpdateThreshold(
-                        MF->getFunction().getContext().getOptionsContext())) {
+  if (NumCopyUses <
+      getLateRematUpdateThreshold(MF->getFunction().getContext())) {
     // The source interval can become smaller because we removed a use.
     shrinkToUses(&SrcInt, &DeadDefs);
     if (!DeadDefs.empty())
@@ -3700,12 +3701,11 @@ void RegisterCoalescer::mergeSubRangeInto(LiveInterval &LI,
 
 bool RegisterCoalescer::isHighCostLiveInterval(LiveInterval &LI) {
   if (LI.valnos.size() <
-      getLargeIntervalSizeThreshold(
-          MF->getFunction().getContext().getOptionsContext()))
+      getLargeIntervalSizeThreshold(MF->getFunction().getContext()))
     return false;
   auto &Counter = LargeLIVisitCounter[LI.reg()];
-  if (Counter < getLargeIntervalFreqThreshold(
-                    MF->getFunction().getContext().getOptionsContext())) {
+  if (Counter <
+      getLargeIntervalFreqThreshold(MF->getFunction().getContext())) {
     Counter++;
     return false;
   }
@@ -4153,7 +4153,7 @@ static bool isTerminalReg(Register DstReg, const MachineInstr &Copy,
 
 bool RegisterCoalescer::applyTerminalRule(const MachineInstr &Copy) const {
   assert(Copy.isCopyLike());
-  if (!getTerminalRule(MF->getFunction().getContext().getOptionsContext()))
+  if (!getTerminalRule(MF->getFunction().getContext()))
     return false;
   Register SrcReg, DstReg;
   unsigned SrcSubReg = 0, DstSubReg = 0;
@@ -4348,14 +4348,12 @@ bool RegisterCoalescer::run(MachineFunction &fn) {
   const TargetSubtargetInfo &STI = fn.getSubtarget();
   TRI = STI.getRegisterInfo();
   TII = STI.getInstrInfo();
-  if (getJoinGlobalcopies(MF->getFunction().getContext().getOptionsContext()) ==
-      cl::boolOrDefault::BOU_UNSET)
+  std::optional<bool> JoinGlobalcopiesOpt =
+      getJoinGlobalcopies(MF->getFunction().getContext());
+  if (!JoinGlobalcopiesOpt)
     JoinGlobalCopies = STI.enableJoinGlobalCopies();
   else
-    JoinGlobalCopies =
-        (getJoinGlobalcopies(
-             MF->getFunction().getContext().getOptionsContext()) ==
-         cl::boolOrDefault::BOU_TRUE);
+    JoinGlobalCopies = *JoinGlobalcopiesOpt;
 
   // If there are PHIs tracked by debug-info, they will need updating during
   // coalescing. Build an index of those PHIs to ease updating.
@@ -4374,16 +4372,16 @@ bool RegisterCoalescer::run(MachineFunction &fn) {
   // either be enabled unconditionally or replaced by a more general live range
   // splitting optimization.
   JoinSplitEdges =
-      getJoinSplitedges(MF->getFunction().getContext().getOptionsContext());
+      getJoinSplitedges(MF->getFunction().getContext());
 
-  if (getVerifyCoalescing(MF->getFunction().getContext().getOptionsContext()))
+  if (getVerifyCoalescing(MF->getFunction().getContext()))
     MF->verify(LIS, SI, "Before register coalescing", &errs());
 
   DbgVRegToValues.clear();
   buildVRegToDbgValueMap(fn);
 
   // Join (coalesce) intervals if requested.
-  if (getJoinLiveintervals(MF->getFunction().getContext().getOptionsContext()))
+  if (getJoinLiveintervals(MF->getFunction().getContext()))
     joinAllIntervals();
 
   // After deleting a lot of copies, register classes may be less constrained.
@@ -4435,7 +4433,7 @@ bool RegisterCoalescer::run(MachineFunction &fn) {
 
   LLVM_DEBUG(LIS->dump());
 
-  if (getVerifyCoalescing(MF->getFunction().getContext().getOptionsContext()))
+  if (getVerifyCoalescing(MF->getFunction().getContext()))
     MF->verify(LIS, SI, "After register coalescing", &errs());
   return true;
 }

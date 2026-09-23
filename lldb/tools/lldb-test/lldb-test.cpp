@@ -43,6 +43,7 @@
 #include "llvm/Support/ManagedStatic.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/Path.h"
+#include "llvm/Support/PluginLoaderOptions.h"
 #include "llvm/Support/PrettyStackTrace.h"
 #include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/Signals.h"
@@ -1315,7 +1316,10 @@ int main(int argc, const char *argv[]) {
   clv2::OptionParser P;
   P.add<&opts::LLDBTestReg>();
   RegisterAllLLVMOptions(P);
-  auto OptsCtx = P.parse(argc, argv, "LLDB Testing Utility\n");
+  std::vector<const char *> ArgsAfterPlugins =
+      loadPluginsAndStripArgs(argc, argv);
+  auto OptsCtx = P.parse(static_cast<int>(ArgsAfterPlugins.size()),
+                         ArgsAfterPlugins.data(), "LLDB Testing Utility\n");
   auto *Opts = OptsCtx->getViewPtr<&opts::LLDBTestReg>();
 
   if (Opts->isActive<&opts::DwoDiagnosticSuffixCmd>()) {

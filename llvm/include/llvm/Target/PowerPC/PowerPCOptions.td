@@ -1,4 +1,4 @@
-//===- PowerPCOptions.td - CLV2 option defs for PPC ------*- tablegen -*-===//
+//===- PowerPCOptions.td - OptTable option defs for PowerPC ---*- tablegen -*-===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -6,833 +6,372 @@
 //
 //===----------------------------------------------------------------------===//
 
-include "llvm/Support/CLV2Options.td"
+include "llvm/Option/OptParser.td"
 
-def PowerPCOptsReg : Registry<"llvm::ppc_opts"> {
-  // Getter bodies are compiled once, in PowerPCOptionsGetters.cpp.
-  let OutOfLineGetters = 1;
-}
+def PowerPCOptions : OptionsStruct<"llvm"> {}
 
 // --- PPCAsmPrinter.cpp ---
 
-def PPC_EnableSSPCanaryBitInTB : Option<
-    "aix-ssp-tb-bit",
-    "Enable Passing SSP Canary info in Trackback on AIX",
-    "bool"> {
-  let Default = "false";
-  let Registry = PowerPCOptsReg;
-  let Hidden = 1;
-}
+defm PPC_EnableSSPCanaryBitInTB : BoolField<"aix-ssp-tb-bit", "false",
+    "Enable Passing SSP Canary info in Trackback on AIX", /*hidden=*/1>;
 
-def PPC_IFuncLocalIfProven : Option<
-    "ifunc-local-if-proven",
+defm PPC_IFuncLocalIfProven : BoolField<"ifunc-local-if-proven", "false",
     "During ifunc lowering, the compiler assumes the resolver returns "
     "dso-local functions and bails out if non-local functions are "
     "detected; this flag flips the assumption: resolver returns "
     "preemptible functions unless the compiler can prove all paths "
-    "return local functions.",
-    "bool"> {
-  let Default = "false";
-  let Registry = PowerPCOptsReg;
-  let Hidden = 1;
-}
+    "return local functions.", /*hidden=*/1>;
 
-def PPC_IFuncWarnInsteadOfError : Option<
-    "test-ifunc-warn-noerror", "",
-    "bool"> {
-  let Default = "false";
-  let Registry = PowerPCOptsReg;
-  let ReallyHidden = 1;
-}
+defm PPC_IFuncWarnInsteadOfError : BoolField<"test-ifunc-warn-noerror",
+    "false", "", /*hidden=*/1>;
 
 // --- PPCFrameLowering.cpp ---
 
-def PPC_EnablePEVectorSpills : Option<
-    "ppc-enable-pe-vector-spills",
-    "Enable spills in prologue to vector registers.",
-    "bool"> {
-  let Default = "false";
-  let Registry = PowerPCOptsReg;
-  let Hidden = 1;
-}
+defm PPC_EnablePEVectorSpills : BoolField<"ppc-enable-pe-vector-spills",
+    "false", "Enable spills in prologue to vector registers.", /*hidden=*/1>;
 
 // --- PPCInstrInfo.cpp ---
 
-def PPC_DisableCTRLoopAnal : Option<
-    "disable-ppc-ctrloop-analysis",
-    "Disable analysis for CTR loops",
-    "bool"> {
-  let Default = "false";
-  let Registry = PowerPCOptsReg;
-  let Hidden = 1;
-}
+defm PPC_DisableCTRLoopAnal : BoolField<"disable-ppc-ctrloop-analysis",
+    "false", "Disable analysis for CTR loops", /*hidden=*/1>;
 
-def PPC_DisableCmpOpt : Option<
-    "disable-ppc-cmp-opt",
-    "Disable compare instruction optimization",
-    "bool"> {
-  let Default = "false";
-  let Registry = PowerPCOptsReg;
-  let Hidden = 1;
-}
+defm PPC_DisableCmpOpt : BoolField<"disable-ppc-cmp-opt", "false",
+    "Disable compare instruction optimization", /*hidden=*/1>;
 
-def PPC_VSXSelfCopyCrash : Option<
-    "crash-on-ppc-vsx-self-copy",
+defm PPC_VSXSelfCopyCrash : BoolField<"crash-on-ppc-vsx-self-copy", "false",
     "Causes the backend to crash instead of generating a nop VSX copy",
-    "bool"> {
-  let Default = "false";
-  let Registry = PowerPCOptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def PPC_UseOldLatencyCalc : Option<
-    "ppc-old-latency-calc",
-    "Use the old (incorrect) instruction latency calculation",
-    "bool"> {
-  let Default = "false";
-  let Registry = PowerPCOptsReg;
-  let Hidden = 1;
-}
+defm PPC_UseOldLatencyCalc : BoolField<"ppc-old-latency-calc", "false",
+    "Use the old (incorrect) instruction latency calculation", /*hidden=*/1>;
 
-def PPC_FMARPFactor : Option<
-    "ppc-fma-rp-factor",
-    "register pressure factor for the transformations.",
-    "float"> {
-  let Registry = PowerPCOptsReg;
-  let Default = "1.5f";
-  let Hidden = 1;
-}
+defm PPC_FMARPFactor : ValueField<"ppc-fma-rp-factor", "float", "1.5f",
+    "register pressure factor for the transformations.", /*hidden=*/1>;
 
-def PPC_EnableFMARegPressureReduction : Option<
-    "ppc-fma-rp-reduction",
-    "enable register pressure reduce in machine combiner pass.",
-    "bool"> {
-  let Registry = PowerPCOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm PPC_EnableFMARegPressureReduction : BoolField<"ppc-fma-rp-reduction",
+    "true", "enable register pressure reduce in machine combiner pass.",
+    /*hidden=*/1>;
 
 // --- PPCISelDAGToDAG.cpp ---
 
-def PPC_ANDIGlueBug : Option<
-    "expose-ppc-andi-glue-bug",
-    "expose the ANDI glue bug on PPC",
-    "bool"> {
-  let Default = "false";
-  let Registry = PowerPCOptsReg;
-  let Hidden = 1;
-}
+defm PPC_ANDIGlueBug : BoolField<"expose-ppc-andi-glue-bug", "false",
+    "expose the ANDI glue bug on PPC", /*hidden=*/1>;
 
-def PPC_UseBitPermRewriter : Option<
-    "ppc-use-bit-perm-rewriter",
-    "use aggressive ppc isel for bit permutations",
-    "bool"> {
-  let Registry = PowerPCOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm PPC_UseBitPermRewriter : BoolField<"ppc-use-bit-perm-rewriter", "true",
+    "use aggressive ppc isel for bit permutations", /*hidden=*/1>;
 
-def PPC_BPermRewriterNoMasking : Option<
-    "ppc-bit-perm-rewriter-stress-rotates",
+defm PPC_BPermRewriterNoMasking : BoolField<
+    "ppc-bit-perm-rewriter-stress-rotates", "false",
     "stress rotate selection in aggressive ppc isel for bit permutations",
-    "bool"> {
-  let Default = "false";
-  let Registry = PowerPCOptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def PPC_EnableBranchHint : Option<
-    "ppc-use-branch-hint",
-    "Enable static hinting of branches on ppc",
-    "bool"> {
-  let Registry = PowerPCOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm PPC_EnableBranchHint : BoolField<"ppc-use-branch-hint", "true",
+    "Enable static hinting of branches on ppc", /*hidden=*/1>;
 
-def PPC_EnableTLSOpt : Option<
-    "ppc-tls-opt",
-    "Enable tls optimization peephole",
-    "bool"> {
-  let Registry = PowerPCOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm PPC_EnableTLSOpt : BoolField<"ppc-tls-opt", "true",
+    "Enable tls optimization peephole", /*hidden=*/1>;
 
-// --- PPCICmpInGPRType enum ---
+def PPCICmpInGPRTypeEnum : OptionEnum<"PPCICmpInGPRType", [
+    EnumMember<"All", "all">,
+    EnumMember<"None", "none">,
+    EnumMember<"I32", "i32">,
+    EnumMember<"I64", "i64">,
+    EnumMember<"NonExtIn", "nonextin">,
+    EnumMember<"Zext", "zext">,
+    EnumMember<"Sext", "sext">,
+    EnumMember<"ZextI32", "zexti32">,
+    EnumMember<"SextI32", "sexti32">,
+    EnumMember<"ZextI64", "zexti64">,
+    EnumMember<"SextI64", "sexti64">]>;
 
-def PPCICmpAll : EnumValue<"all",
-    "All possible int comparisons in GPRs."> {
-  let CppName = "All";
-  let Value = 0;
-}
-
-def PPCICmpNone : EnumValue<"none",
-    "Do not modify integer comparisons."> {
-  let CppName = "None";
-  let Value = 1;
-}
-
-def PPCICmpI32 : EnumValue<"i32",
-    "Only i32 comparisons in GPRs."> {
-  let CppName = "I32";
-  let Value = 2;
-}
-
-def PPCICmpI64 : EnumValue<"i64",
-    "Only i64 comparisons in GPRs."> {
-  let CppName = "I64";
-  let Value = 3;
-}
-
-def PPCICmpNonExtIn : EnumValue<"nonextin",
-    "Only comparisons where inputs don't need [sz]ext."> {
-  let CppName = "NonExtIn";
-  let Value = 4;
-}
-
-def PPCICmpZext : EnumValue<"zext",
-    "Only comparisons with zext result."> {
-  let CppName = "Zext";
-  let Value = 5;
-}
-
-def PPCICmpSext : EnumValue<"sext",
-    "Only comparisons with sext result."> {
-  let CppName = "Sext";
-  let Value = 6;
-}
-
-def PPCICmpZextI32 : EnumValue<"zexti32",
-    "Only i32 comparisons with zext result."> {
-  let CppName = "ZextI32";
-  let Value = 7;
-}
-
-def PPCICmpSextI32 : EnumValue<"sexti32",
-    "Only i32 comparisons with sext result."> {
-  let CppName = "SextI32";
-  let Value = 8;
-}
-
-def PPCICmpZextI64 : EnumValue<"zexti64",
-    "Only i64 comparisons with zext result."> {
-  let CppName = "ZextI64";
-  let Value = 9;
-}
-
-def PPCICmpSextI64 : EnumValue<"sexti64",
-    "Only i64 comparisons with sext result."> {
-  let CppName = "SextI64";
-  let Value = 10;
-}
-
-def PPCICmpInGPRType : EnumType<"PPCICmpInGPRType",
-    [PPCICmpAll, PPCICmpNone, PPCICmpI32, PPCICmpI64,
-     PPCICmpNonExtIn, PPCICmpZext, PPCICmpSext, PPCICmpZextI32,
-     PPCICmpSextI32, PPCICmpZextI64, PPCICmpSextI64]>;
-
-def PPC_CmpInGPR : Option<
-    "ppc-gpr-icmps",
-    "Specify the types of comparisons to emit GPR-only code for.",
-    "PPCICmpInGPRType"> {
-  let Registry = PowerPCOptsReg;
-  let Default = "all";
-  let Hidden = 1;
-}
+// std::optional<PPCICmpInGPRType>: getCmpInGPRWasSpecified() needs a
+// genuine tri-state (clv2's specified<>() check) distinct from the actual
+// value, so this is hand-authored (not EnumField<>) like X86_AsmSyntax --
+// no multiclass composes std::optional<> field storage with FieldEnum<>
+// tracking.
+def PPC_CmpInGPR : Joined<["-", "--"], "ppc-gpr-icmps=">,
+    HelpText<"Specify the types of comparisons to emit GPR-only code for.">,
+    Flags<[HelpHidden]>,
+    Field<"std::optional<PPCICmpInGPRType>", "PPC_CmpInGPR", "std::nullopt">,
+    FieldEnum<PPCICmpInGPRTypeEnum>;
+def PPC_CmpInGPR_sep : Separate<["-", "--"], "ppc-gpr-icmps">,
+    Flags<[HelpHidden]>, Alias<!cast<Option>(PPC_CmpInGPR)>;
 
 // --- PPCISelLowering.cpp ---
 
-def PPC_DisableP10StoreForward : Option<
-    "disable-p10-store-forward",
-    "disable P10 store forward-friendly conversion",
-    "bool"> {
-  let Registry = PowerPCOptsReg;
-  let Hidden = 1;
-}
+defm PPC_DisableP10StoreForward : BoolField<"disable-p10-store-forward",
+    "false", "disable P10 store forward-friendly conversion", /*hidden=*/1>;
 
-def PPC_DisablePreinc : Option<
-    "disable-ppc-preinc",
-    "disable preincrement load/store generation on PPC",
-    "bool"> {
-  let Registry = PowerPCOptsReg;
-  let Hidden = 1;
-}
+defm PPC_DisablePreinc : BoolField<"disable-ppc-preinc", "false",
+    "disable preincrement load/store generation on PPC", /*hidden=*/1>;
 
-def PPC_DisableILPPref : Option<
-    "disable-ppc-ilp-pref",
+defm PPC_DisableILPPref : BoolField<"disable-ppc-ilp-pref", "false",
     "disable setting the node scheduling preference to ILP on PPC",
-    "bool"> {
-  let Registry = PowerPCOptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def PPC_DisableUnaligned : Option<
-    "disable-ppc-unaligned",
-    "disable unaligned load/store generation on PPC",
-    "bool"> {
-  let Registry = PowerPCOptsReg;
-  let Hidden = 1;
-}
+defm PPC_DisableUnaligned : BoolField<"disable-ppc-unaligned", "false",
+    "disable unaligned load/store generation on PPC", /*hidden=*/1>;
 
-def PPC_DisableSCO : Option<
-    "disable-ppc-sco",
-    "disable sibling call optimization on ppc",
-    "bool"> {
-  let Registry = PowerPCOptsReg;
-  let Hidden = 1;
-}
+defm PPC_DisableSCO : BoolField<"disable-ppc-sco", "false",
+    "disable sibling call optimization on ppc", /*hidden=*/1>;
 
-def PPC_DisableInnermostLoopAlign32 : Option<
-    "disable-ppc-innermost-loop-align32",
-    "don't always align innermost loop to 32 bytes on ppc",
-    "bool"> {
-  let Registry = PowerPCOptsReg;
-  let Hidden = 1;
-}
+defm PPC_DisableInnermostLoopAlign32 : BoolField<
+    "disable-ppc-innermost-loop-align32", "false",
+    "don't always align innermost loop to 32 bytes on ppc", /*hidden=*/1>;
 
-def PPC_UseAbsoluteJumpTables : Option<
-    "ppc-use-absolute-jumptables",
-    "use absolute jump tables on ppc",
-    "bool"> {
-  let Registry = PowerPCOptsReg;
-  let Hidden = 1;
-}
+defm PPC_UseAbsoluteJumpTables : BoolField<"ppc-use-absolute-jumptables",
+    "false", "use absolute jump tables on ppc", /*hidden=*/1>;
 
-def PPC_DisablePerfectShuffle : Option<
-    "ppc-disable-perfect-shuffle",
-    "disable vector permute decomposition",
-    "bool"> {
-  let Registry = PowerPCOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm PPC_DisablePerfectShuffle : BoolField<"ppc-disable-perfect-shuffle",
+    "true", "disable vector permute decomposition", /*hidden=*/1>;
 
-def PPC_DisableAutoPairedVecSt : Option<
-    "disable-auto-paired-vec-st",
+// OptionalValueField gives a std::optional<bool> field: the fallback when
+// unspecified is computed at the call site from Subtarget.isISAFuture()
+// (clv2's getOptValIfSpecified<>(Ctx, !IsFutureCPU) runtime-computed
+// default), so "unspecified" must survive as tri-state.
+defm PPC_DisableAutoPairedVecSt : OptionalValueField<
+    "disable-auto-paired-vec-st", "bool", "true",
     "disable automatically generated 32byte paired vector stores",
-    "bool"> {
-  let Registry = PowerPCOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def PPC_MinimumJumpTableEntries : Option<
-    "ppc-min-jump-table-entries",
+defm PPC_MinimumJumpTableEntries : ValueField<"ppc-min-jump-table-entries",
+    "unsigned", "64",
     "Set minimum number of entries to use a jump table on PPC",
-    "unsigned"> {
-  let Registry = PowerPCOptsReg;
-  let Default = "64";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def PPC_MinimumBitTestCmps : Option<
-    "ppc-min-bit-test-cmps",
+defm PPC_MinimumBitTestCmps : ValueField<"ppc-min-bit-test-cmps",
+    "unsigned", "3",
     "Set minimum of largest number of comparisons to use bit test for "
-    "switch on PPC.",
-    "unsigned"> {
-  let Registry = PowerPCOptsReg;
-  let Default = "3";
-  let Hidden = 1;
-}
+    "switch on PPC.", /*hidden=*/1>;
 
-def PPC_GatherAllAliasesMaxDepth : Option<
-    "ppc-gather-alias-max-depth",
+defm PPC_GatherAllAliasesMaxDepth : ValueField<
+    "ppc-gather-alias-max-depth", "unsigned", "18",
     "max depth when checking alias info in GatherAllAliases()",
-    "unsigned"> {
-  let Registry = PowerPCOptsReg;
-  let Default = "18";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def PPC_AIXTLSModelOptUseIEForLDLimit : Option<
-    "ppc-aix-shared-lib-tls-model-opt-limit",
+defm PPC_AIXTLSModelOptUseIEForLDLimit : ValueField<
+    "ppc-aix-shared-lib-tls-model-opt-limit", "unsigned", "1",
     "Set inclusive limit count of TLS local-dynamic access(es) in a "
-    "function to use initial-exec",
-    "unsigned"> {
-  let Registry = PowerPCOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+    "function to use initial-exec", /*hidden=*/1>;
 
 // --- PPCTargetMachine.cpp ---
 
-def PPC_EnableBranchCoalescing : Option<
-    "enable-ppc-branch-coalesce",
-    "enable coalescing of duplicate branches for PPC",
-    "bool"> {
-  let Registry = PowerPCOptsReg;
-  let Hidden = 1;
-}
+defm PPC_EnableBranchCoalescing : BoolField<"enable-ppc-branch-coalesce",
+    "false", "enable coalescing of duplicate branches for PPC",
+    /*hidden=*/1>;
 
-def PPC_DisableCTRLoops : Option<
-    "disable-ppc-ctrloops",
-    "Disable CTR loops for PPC",
-    "bool"> {
-  let Registry = PowerPCOptsReg;
-  let Hidden = 1;
-}
+defm PPC_DisableCTRLoops : BoolField<"disable-ppc-ctrloops", "false",
+    "Disable CTR loops for PPC", /*hidden=*/1>;
 
-def PPC_DisableInstrFormPrep : Option<
-    "disable-ppc-instr-form-prep",
-    "Disable PPC loop instr form prep",
-    "bool"> {
-  let Registry = PowerPCOptsReg;
-  let Hidden = 1;
-}
+defm PPC_DisableInstrFormPrep : BoolField<"disable-ppc-instr-form-prep",
+    "false", "Disable PPC loop instr form prep", /*hidden=*/1>;
 
-def PPC_VSXFMAMutateEarly : Option<
-    "schedule-ppc-vsx-fma-mutation-early",
-    "Schedule VSX FMA instruction mutation early",
-    "bool"> {
-  let Registry = PowerPCOptsReg;
-  let Hidden = 1;
-}
+defm PPC_VSXFMAMutateEarly : BoolField<
+    "schedule-ppc-vsx-fma-mutation-early", "false",
+    "Schedule VSX FMA instruction mutation early", /*hidden=*/1>;
 
-def PPC_DisableVSXSwapRemoval : Option<
-    "disable-ppc-vsx-swap-removal",
-    "Disable VSX Swap Removal for PPC",
-    "bool"> {
-  let Registry = PowerPCOptsReg;
-  let Hidden = 1;
-}
+defm PPC_DisableVSXSwapRemoval : BoolField<"disable-ppc-vsx-swap-removal",
+    "false", "Disable VSX Swap Removal for PPC", /*hidden=*/1>;
 
-def PPC_DisableMIPeephole : Option<
-    "disable-ppc-peephole",
-    "Disable machine peepholes for PPC",
-    "bool"> {
-  let Registry = PowerPCOptsReg;
-  let Hidden = 1;
-}
+defm PPC_DisableMIPeephole : BoolField<"disable-ppc-peephole", "false",
+    "Disable machine peepholes for PPC", /*hidden=*/1>;
 
-def PPC_EnableGEPOpt : Option<
-    "ppc-gep-opt",
-    "Enable optimizations on complex GEPs",
-    "bool"> {
-  let Registry = PowerPCOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm PPC_EnableGEPOpt : BoolField<"ppc-gep-opt", "true",
+    "Enable optimizations on complex GEPs", /*hidden=*/1>;
 
-def PPC_EnablePrefetch : Option<
-    "enable-ppc-prefetching",
-    "enable software prefetching on PPC",
-    "bool"> {
-  let Registry = PowerPCOptsReg;
-  let Hidden = 1;
-}
+// OptionalValueField gives a std::optional<bool> field so
+// getEnablePrefetchWasSpecified() can tell "never specified" (clv2's
+// wasOptSpecified<> check -- the pass is only added when this flag was
+// explicitly passed, regardless of true/false) apart from the default.
+defm PPC_EnablePrefetch : OptionalValueField<"enable-ppc-prefetching",
+    "bool", "true", "enable software prefetching on PPC", /*hidden=*/1>;
 
-def PPC_EnableExtraTOCRegDeps : Option<
-    "enable-ppc-extra-toc-reg-deps",
-    "Add extra TOC register dependencies",
-    "bool"> {
-  let Registry = PowerPCOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm PPC_EnableExtraTOCRegDeps : BoolField<
+    "enable-ppc-extra-toc-reg-deps", "true",
+    "Add extra TOC register dependencies", /*hidden=*/1>;
 
-def PPC_EnableMachineCombinerPass : Option<
-    "ppc-machine-combiner",
-    "Enable the machine combiner pass",
-    "bool"> {
-  let Registry = PowerPCOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm PPC_EnableMachineCombinerPass : BoolField<"ppc-machine-combiner",
+    "true", "Enable the machine combiner pass", /*hidden=*/1>;
 
-def PPC_ReduceCRLogical : Option<
-    "ppc-reduce-cr-logicals",
-    "Expand eligible cr-logical binary ops to branches",
-    "bool"> {
-  let Registry = PowerPCOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm PPC_ReduceCRLogical : BoolField<"ppc-reduce-cr-logicals", "true",
+    "Expand eligible cr-logical binary ops to branches", /*hidden=*/1>;
 
-def PPC_EnableGenScalarMASSEntries : Option<
-    "enable-ppc-gen-scalar-mass",
+defm PPC_EnableGenScalarMASSEntries : BoolField<
+    "enable-ppc-gen-scalar-mass", "false",
     "Enable lowering math functions to their corresponding MASS "
-    "(scalar) entries",
-    "bool"> {
-  let Registry = PowerPCOptsReg;
-  let Hidden = 1;
-}
+    "(scalar) entries", /*hidden=*/1>;
 
-def PPC_EnableGlobalMerge : Option<
-    "ppc-global-merge",
-    "Enable the global merge pass",
-    "bool"> {
-  let Registry = PowerPCOptsReg;
-  let Hidden = 1;
-}
+// OptionalValueField gives a std::optional<bool> field so callers can tell
+// "-ppc-global-merge was never given" (clv2's wasOptSpecified<> check,
+// used to fall back to the optimization-level-based AIX default) apart
+// from an explicit false.
+defm PPC_EnableGlobalMerge : OptionalValueField<"ppc-global-merge", "bool",
+    "true", "Enable the global merge pass", /*hidden=*/1>;
 
-def PPC_GlobalMergeMaxOffset : Option<
-    "ppc-global-merge-max-offset",
-    "Maximum global merge offset",
-    "unsigned"> {
-  let Registry = PowerPCOptsReg;
-  let Default = "32767";
-  let Hidden = 1;
-}
+defm PPC_GlobalMergeMaxOffset : ValueField<"ppc-global-merge-max-offset",
+    "unsigned", "32767", "Maximum global merge offset", /*hidden=*/1>;
 
 // --- MCTargetDesc/PPCInstPrinter.cpp ---
 
-def PPC_FullRegNames : Option<
-    "ppc-asm-full-reg-names",
-    "Use full register names when printing assembly",
-    "bool"> {
-  let Registry = PowerPCOptsReg;
-  let Hidden = 1;
-}
+defm PPC_FullRegNames : BoolField<"ppc-asm-full-reg-names", "false",
+    "Use full register names when printing assembly", /*hidden=*/1>;
 
-def PPC_ShowVSRNumsAsVR : Option<
-    "ppc-vsr-nums-as-vr",
-    "Prints full register names with vs{31-63} as v{0-31}",
-    "bool"> {
-  let Registry = PowerPCOptsReg;
-  let Hidden = 1;
-}
+defm PPC_ShowVSRNumsAsVR : BoolField<"ppc-vsr-nums-as-vr", "false",
+    "Prints full register names with vs{31-63} as v{0-31}", /*hidden=*/1>;
 
-def PPC_FullRegNamesWithPercent : Option<
-    "ppc-reg-with-percent-prefix",
-    "Prints full register names with percent",
-    "bool"> {
-  let Registry = PowerPCOptsReg;
-  let Hidden = 1;
-}
+defm PPC_FullRegNamesWithPercent : BoolField<
+    "ppc-reg-with-percent-prefix", "false",
+    "Prints full register names with percent", /*hidden=*/1>;
 
 // --- PPCMachineScheduler.cpp ---
 
-def PPC_DisableAddiLoadHeuristic : Option<
-    "disable-ppc-sched-addi-load",
+defm PPC_DisableAddiLoadHeuristic : BoolField<
+    "disable-ppc-sched-addi-load", "false",
     "Disable scheduling addi instruction before load for ppc",
-    "bool"> {
-  let Default = "false";
-  let Registry = PowerPCOptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def PPC_EnableAddiHeuristic : Option<
-    "ppc-postra-bias-addi",
+defm PPC_EnableAddiHeuristic : BoolField<"ppc-postra-bias-addi", "true",
     "Enable scheduling addi instruction as early as possible post ra",
-    "bool"> {
-  let Registry = PowerPCOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // --- PPCPreEmitPeephole.cpp ---
 
-def PPC_EnablePCRelLinkerOpt : Option<
-    "ppc-pcrel-linker-opt",
-    "enable PC Relative linker optimization",
-    "bool"> {
-  let Registry = PowerPCOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm PPC_EnablePCRelLinkerOpt : BoolField<"ppc-pcrel-linker-opt", "true",
+    "enable PC Relative linker optimization", /*hidden=*/1>;
 
-def PPC_RunPreEmitPeephole : Option<
-    "ppc-late-peephole",
-    "Run pre-emit peephole optimizations.",
-    "bool"> {
-  let Registry = PowerPCOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm PPC_RunPreEmitPeephole : BoolField<"ppc-late-peephole", "true",
+    "Run pre-emit peephole optimizations.", /*hidden=*/1>;
 
-def PPC_DSCRValue : Option<
-    "ppc-set-dscr",
-    "Set the Data Stream Control Register.",
-    "uint64_t"> {
-  let Default = "0";
-  let Registry = PowerPCOptsReg;
-  let Hidden = 1;
-}
+// OptionalField gives a std::optional<uint64_t> field: getDSCRValueWasSpecified()
+// needs a genuine tri-state (clv2's specified<>() check) distinct from the
+// value itself, since the DSCR-setting code only runs when this was
+// actually passed on the command line.
+defm PPC_DSCRValue : OptionalField<"ppc-set-dscr", "uint64_t",
+    "Set the Data Stream Control Register.", /*hidden=*/1>;
 
 // --- PPCSubtarget.cpp ---
 
-def PPC_EnableMachinePipeliner : Option<
-    "ppc-enable-pipeliner",
-    "Enable Machine Pipeliner for PPC",
-    "bool"> {
-  let Registry = PowerPCOptsReg;
-  let Hidden = 1;
-}
+defm PPC_EnableMachinePipeliner : BoolField<"ppc-enable-pipeliner", "false",
+    "Enable Machine Pipeliner for PPC", /*hidden=*/1>;
 
 // --- PPCLoopInstrFormPrep.cpp ---
 
-def PPC_MaxVarsPrep : Option<
-    "ppc-formprep-max-vars",
+defm PPC_MaxVarsPrep : ValueField<"ppc-formprep-max-vars", "unsigned", "24",
     "Potential common base number threshold per function for PPC loop prep",
-    "unsigned"> {
-  let Registry = PowerPCOptsReg;
-  let Default = "24";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def PPC_PreferUpdateForm : Option<
-    "ppc-formprep-prefer-update",
-    "prefer update form when ds form is also a update form",
-    "bool"> {
-  let Registry = PowerPCOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm PPC_PreferUpdateForm : BoolField<"ppc-formprep-prefer-update", "true",
+    "prefer update form when ds form is also a update form", /*hidden=*/1>;
 
-def PPC_EnableUpdateFormForNonConstInc : Option<
-    "ppc-formprep-update-nonconst-inc",
+defm PPC_EnableUpdateFormForNonConstInc : BoolField<
+    "ppc-formprep-update-nonconst-inc", "false",
     "prepare update form when the load/store increment is a loop "
-    "invariant non-const value.",
-    "bool"> {
-  let Default = "false";
-  let Registry = PowerPCOptsReg;
-  let Hidden = 1;
-}
+    "invariant non-const value.", /*hidden=*/1>;
 
-def PPC_EnableChainCommoning : Option<
-    "ppc-formprep-chain-commoning",
-    "Enable chain commoning in PPC loop prepare pass.",
-    "bool"> {
-  let Default = "false";
-  let Registry = PowerPCOptsReg;
-  let Hidden = 1;
-}
+defm PPC_EnableChainCommoning : BoolField<
+    "ppc-formprep-chain-commoning", "false",
+    "Enable chain commoning in PPC loop prepare pass.", /*hidden=*/1>;
 
-def PPC_MaxVarsUpdateForm : Option<
-    "ppc-preinc-prep-max-vars",
+defm PPC_MaxVarsUpdateForm : ValueField<"ppc-preinc-prep-max-vars",
+    "unsigned", "3",
     "Potential PHI threshold per loop for PPC loop prep of update form",
-    "unsigned"> {
-  let Registry = PowerPCOptsReg;
-  let Default = "3";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def PPC_MaxVarsDSForm : Option<
-    "ppc-dsprep-max-vars",
+defm PPC_MaxVarsDSForm : ValueField<"ppc-dsprep-max-vars", "unsigned", "3",
     "Potential PHI threshold per loop for PPC loop prep of DS form",
-    "unsigned"> {
-  let Registry = PowerPCOptsReg;
-  let Default = "3";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def PPC_MaxVarsDQForm : Option<
-    "ppc-dqprep-max-vars",
+defm PPC_MaxVarsDQForm : ValueField<"ppc-dqprep-max-vars", "unsigned", "8",
     "Potential PHI threshold per loop for PPC loop prep of DQ form",
-    "unsigned"> {
-  let Registry = PowerPCOptsReg;
-  let Default = "8";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def PPC_MaxVarsChainCommon : Option<
-    "ppc-chaincommon-max-vars",
-    "Bucket number per loop for PPC loop chain common",
-    "unsigned"> {
-  let Registry = PowerPCOptsReg;
-  let Default = "4";
-  let Hidden = 1;
-}
+defm PPC_MaxVarsChainCommon : ValueField<"ppc-chaincommon-max-vars",
+    "unsigned", "4",
+    "Bucket number per loop for PPC loop chain common", /*hidden=*/1>;
 
-def PPC_DispFormPrepMinThreshold : Option<
-    "ppc-dispprep-min-threshold",
+defm PPC_DispFormPrepMinThreshold : ValueField<
+    "ppc-dispprep-min-threshold", "unsigned", "2",
     "Minimal common base load/store instructions triggering DS/DQ form "
-    "preparation",
-    "unsigned"> {
-  let Registry = PowerPCOptsReg;
-  let Default = "2";
-  let Hidden = 1;
-}
+    "preparation", /*hidden=*/1>;
 
-def PPC_ChainCommonPrepMinThreshold : Option<
-    "ppc-chaincommon-min-threshold",
+defm PPC_ChainCommonPrepMinThreshold : ValueField<
+    "ppc-chaincommon-min-threshold", "unsigned", "4",
     "Minimal common base load/store instructions triggering chain "
-    "commoning preparation. Must be not smaller than 4",
-    "unsigned"> {
-  let Registry = PowerPCOptsReg;
-  let Default = "4";
-  let Hidden = 1;
-}
+    "commoning preparation. Must be not smaller than 4", /*hidden=*/1>;
 
 // --- PPCMachineFunctionInfo.cpp ---
 
-def PPC_DisableNonVolatileCR : Option<
-    "ppc-disable-non-volatile-cr",
-    "Disable the use of non-volatile CR register fields",
-    "bool"> {
-  let Default = "false";
-  let Registry = PowerPCOptsReg;
-  let Hidden = 1;
-}
+defm PPC_DisableNonVolatileCR : BoolField<"ppc-disable-non-volatile-cr",
+    "false", "Disable the use of non-volatile CR register fields",
+    /*hidden=*/1>;
 
 // --- PPCTargetTransformInfo.cpp ---
 
-def PPC_EVL : Option<
-    "ppc-evl",
-    "Allow EVL type vp.load/vp.store",
-    "bool"> {
-  let Default = "false";
-  let Registry = PowerPCOptsReg;
-  let Hidden = 1;
-}
+defm PPC_EVL : BoolField<"ppc-evl", "false",
+    "Allow EVL type vp.load/vp.store", /*hidden=*/1>;
 
-def PPC_Pwr9EVL : Option<
-    "ppc-pwr9-evl",
-    "Allow vp.load and vp.store for pwr9",
-    "bool"> {
-  let Default = "false";
-  let Registry = PowerPCOptsReg;
-  let Hidden = 1;
-}
+defm PPC_Pwr9EVL : BoolField<"ppc-pwr9-evl", "false",
+    "Allow vp.load and vp.store for pwr9", /*hidden=*/1>;
 
-def PPC_VecMaskCost : Option<
-    "ppc-vec-mask-cost",
-    "add masking cost for i1 vectors",
-    "bool"> {
-  let Registry = PowerPCOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm PPC_VecMaskCost : BoolField<"ppc-vec-mask-cost", "true",
+    "add masking cost for i1 vectors", /*hidden=*/1>;
 
-def PPC_DisableConstHoist : Option<
-    "disable-ppc-constant-hoisting",
-    "disable constant hoisting on PPC",
-    "bool"> {
-  let Default = "false";
-  let Registry = PowerPCOptsReg;
-  let Hidden = 1;
-}
+defm PPC_DisableConstHoist : BoolField<"disable-ppc-constant-hoisting",
+    "false", "disable constant hoisting on PPC", /*hidden=*/1>;
 
-def PPC_EnableColdCC : Option<
-    "ppc-enable-coldcc",
+defm PPC_EnableColdCC : BoolField<"ppc-enable-coldcc", "false",
     "Enable using coldcc calling conv for cold internal functions",
-    "bool"> {
-  let Default = "false";
-  let Registry = PowerPCOptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def PPC_LsrNoInsnsCost : Option<
-    "ppc-lsr-no-insns-cost",
-    "Do not add instruction count to lsr cost model",
-    "bool"> {
-  let Default = "false";
-  let Registry = PowerPCOptsReg;
-  let Hidden = 1;
-}
+defm PPC_LsrNoInsnsCost : BoolField<"ppc-lsr-no-insns-cost", "false",
+    "Do not add instruction count to lsr cost model", /*hidden=*/1>;
 
-def PPC_SmallCTRLoopThreshold : Option<
-    "min-ctr-loop-threshold",
+defm PPC_SmallCTRLoopThreshold : ValueField<"min-ctr-loop-threshold",
+    "unsigned", "4",
     "Loops with a constant trip count smaller than "
-    "this value will not use the count register.",
-    "unsigned"> {
-  let Registry = PowerPCOptsReg;
-  let Default = "4";
-  let Hidden = 1;
-}
+    "this value will not use the count register.", /*hidden=*/1>;
 
 // --- PPCVSXFMAMutate.cpp ---
 
-def PPC_DisableVSXFMAMutate : Option<
-    "disable-ppc-vsx-fma-mutation",
-    "Disable VSX FMA instruction mutation",
-    "bool"> {
-  let Registry = PowerPCOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm PPC_DisableVSXFMAMutate : BoolField<"disable-ppc-vsx-fma-mutation",
+    "true", "Disable VSX FMA instruction mutation", /*hidden=*/1>;
 
 // --- PPCMIPeephole.cpp ---
 
-def PPC_FixedPointRegToImm : Option<
-    "ppc-reg-to-imm-fixed-point",
-    "Iterate to a fixed point when attempting to "
-    "convert reg-reg instructions to reg-imm",
-    "bool"> {
-  let Registry = PowerPCOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm PPC_FixedPointRegToImm : BoolField<"ppc-reg-to-imm-fixed-point",
+    "true", "Iterate to a fixed point when attempting to "
+    "convert reg-reg instructions to reg-imm", /*hidden=*/1>;
 
-def PPC_ConvertRegReg : Option<
-    "ppc-convert-rr-to-ri",
-    "Convert eligible reg+reg instructions to reg+imm",
-    "bool"> {
-  let Registry = PowerPCOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm PPC_ConvertRegReg : BoolField<"ppc-convert-rr-to-ri", "true",
+    "Convert eligible reg+reg instructions to reg+imm", /*hidden=*/1>;
 
-def PPC_EnableSExtElimination : Option<
-    "ppc-eliminate-signext",
-    "enable elimination of sign-extensions",
-    "bool"> {
-  let Registry = PowerPCOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm PPC_EnableSExtElimination : BoolField<"ppc-eliminate-signext", "true",
+    "enable elimination of sign-extensions", /*hidden=*/1>;
 
-def PPC_EnableZExtElimination : Option<
-    "ppc-eliminate-zeroext",
-    "enable elimination of zero-extensions",
-    "bool"> {
-  let Registry = PowerPCOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm PPC_EnableZExtElimination : BoolField<"ppc-eliminate-zeroext", "true",
+    "enable elimination of zero-extensions", /*hidden=*/1>;
 
-def PPC_EnableTrapOptimization : Option<
-    "ppc-opt-conditional-trap",
-    "enable optimization of conditional traps",
-    "bool"> {
-  let Default = "false";
-  let Registry = PowerPCOptsReg;
-  let Hidden = 1;
-}
+defm PPC_EnableTrapOptimization : BoolField<"ppc-opt-conditional-trap",
+    "false", "enable optimization of conditional traps", /*hidden=*/1>;
 
 // --- PPCRegisterInfo.cpp ---
 
-def PPC_EnableBasePointer : Option<
-    "ppc-use-base-pointer",
-    "Enable use of a base pointer for complex stack frames",
-    "bool"> {
-  let Registry = PowerPCOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm PPC_EnableBasePointer : BoolField<"ppc-use-base-pointer", "true",
+    "Enable use of a base pointer for complex stack frames", /*hidden=*/1>;
 
-def PPC_AlwaysBasePointer : Option<
-    "ppc-always-use-base-pointer",
-    "Force the use of a base pointer in every function",
-    "bool"> {
-  let Registry = PowerPCOptsReg;
-  let Hidden = 1;
-}
+defm PPC_AlwaysBasePointer : BoolField<"ppc-always-use-base-pointer",
+    "false", "Force the use of a base pointer in every function",
+    /*hidden=*/1>;
 
-def PPC_EnableGPRToVecSpills : Option<
-    "ppc-enable-gpr-to-vsr-spills",
-    "Enable spills from gpr to vsr rather than stack",
-    "bool"> {
-  let Registry = PowerPCOptsReg;
-  let Hidden = 1;
-}
+defm PPC_EnableGPRToVecSpills : BoolField<"ppc-enable-gpr-to-vsr-spills",
+    "false", "Enable spills from gpr to vsr rather than stack",
+    /*hidden=*/1>;
 
-def PPC_StackPtrConst : Option<
-    "ppc-stack-ptr-caller-preserved",
+defm PPC_StackPtrConst : BoolField<"ppc-stack-ptr-caller-preserved", "true",
     "Consider R1 caller preserved so stack saves of "
-    "caller preserved registers can be LICM candidates",
-    "bool"> {
-  let Registry = PowerPCOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+    "caller preserved registers can be LICM candidates", /*hidden=*/1>;
 
-def PPC_MaxCRBitSpillDist : Option<
-    "ppc-max-crbit-spill-dist",
+defm PPC_MaxCRBitSpillDist : ValueField<"ppc-max-crbit-spill-dist",
+    "unsigned", "100",
     "Maximum search distance for definition of CR bit spill on ppc",
-    "unsigned"> {
-  let Registry = PowerPCOptsReg;
-  let Default = "100";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;

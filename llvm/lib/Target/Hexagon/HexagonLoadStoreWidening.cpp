@@ -59,9 +59,8 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
+#include "llvm/Target/Hexagon/HexagonOptions.h"
 #include <algorithm>
 #include <cassert>
 #include <cstdint>
@@ -74,8 +73,9 @@ using namespace llvm;
 static unsigned MaxMBBSizeForLoadStoreWidening = 1000;
 
 static unsigned getMaxMBBSizeForLoadStoreWidening(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_MaxMBBSizeForLoadStoreWidening>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<HexagonOptions>()
+      .HEX_MaxMBBSizeForLoadStoreWidening;
 }
 
 namespace {

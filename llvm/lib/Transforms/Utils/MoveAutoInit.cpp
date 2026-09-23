@@ -24,7 +24,7 @@
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/Support/OptionsContext.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
-#include "llvm/Transforms/Utils/UtilsOptionsOptInfos.h"
+#include "llvm/Transforms/Utils/UtilsOptions.h"
 
 using namespace llvm;
 
@@ -33,8 +33,7 @@ using namespace llvm;
 STATISTIC(NumMoved, "Number of instructions moved");
 
 static unsigned getMoveAutoInitThreshold(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::TU_MoveAutoInitThreshold>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<UtilsOptions>().TU_MoveAutoInitThreshold;
 }
 
 static bool hasAutoInitMetadata(const Instruction &I) {

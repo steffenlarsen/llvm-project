@@ -34,9 +34,8 @@
 #include "llvm/IR/Type.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/NVPTX/NVPTXOptionsOptInfos.h"
+#include "llvm/Target/NVPTX/NVPTXOptions.h"
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Local.h"
@@ -85,17 +84,13 @@ ModulePass *llvm::createNVVMReflectPass(unsigned SmVersion) {
 }
 
 static bool getNVVMReflectEnabled(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::NVPTX_NVVMReflectEnabled>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<NVPTXOptions>().NVPTX_NVVMReflectEnabled;
 }
 
 static SmallVector<std::string, 4> getReflectList(const Module &M) {
-  if (auto *O = clv2::getView<&clv2::NVPTXOptsReg>(
-          M.getContext().getOptionsContext())) {
-    const auto &V = O->get<&clv2::NVPTX_NVVMReflectList>();
-    return SmallVector<std::string, 4>(V.begin(), V.end());
-  }
-  return {};
+  const auto &V =
+      M.getContext().getOptions<NVPTXOptions>().NVPTX_NVVMReflectList;
+  return SmallVector<std::string, 4>(V.begin(), V.end());
 }
 
 char NVVMReflectLegacyPass::ID = 0;

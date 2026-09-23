@@ -23,9 +23,8 @@
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/IR/Function.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Target/TargetMachine.h"
-#include "llvm/Target/X86/X86OptionsOptInfos.h"
+#include "llvm/Target/X86/X86Options.h"
 using namespace llvm;
 
 #define DEBUG_TYPE "x86-seses"
@@ -33,23 +32,19 @@ using namespace llvm;
 STATISTIC(NumLFENCEsInserted, "Number of lfence instructions inserted");
 
 static bool getEnableSESES(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::X86_SESESEnableWithoutLVICFI>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<X86Options>().X86_SESESEnableWithoutLVICFI;
 }
 
 static bool getOneLFENCEPerBasicBlock(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::X86_SESESOneLFENCEPerBB>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<X86Options>().X86_SESESOneLFENCEPerBB;
 }
 
 static bool getOnlyLFENCENonConst(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::X86_SESESOnlyLFENCENonConst>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<X86Options>().X86_SESESOnlyLFENCENonConst;
 }
 
 static bool getOmitBranchLFENCEs(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::X86_SESESOmitBranchLFENCEs>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<X86Options>().X86_SESESOmitBranchLFENCEs;
 }
 
 namespace {

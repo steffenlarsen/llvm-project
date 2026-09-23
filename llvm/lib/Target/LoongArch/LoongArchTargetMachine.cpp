@@ -24,8 +24,7 @@
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/CodeGen.h"
 #include "llvm/Support/Compiler.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/LoongArch/LoongArchOptionsOptInfos.h"
+#include "llvm/Target/LoongArch/LoongArchOptions.h"
 #include "llvm/Transforms/Scalar.h"
 #include <optional>
 
@@ -122,8 +121,7 @@ class LoongArchPassConfig : public TargetPassConfig {
 public:
   LoongArchPassConfig(LoongArchTargetMachine &TM, PassManagerBase &PM)
       : TargetPassConfig(TM, PM) {
-    setEnableSinkAndFold(clv2::getOptValOrDefault<&clv2::LA_EnableSinkFold>(
-        TM.getOptionsContext()));
+    setEnableSinkAndFold(LoongArchOptions::Current.LA_EnableSinkFold);
   }
 
   LoongArchTargetMachine &getLoongArchTargetMachine() const {
@@ -154,9 +152,7 @@ void LoongArchPassConfig::addIRPasses() {
   // Run this before LSR to remove the multiplies involved in computing the
   // pointer values N iterations ahead.
   if (TM->getOptLevel() != CodeGenOptLevel::None &&
-      clv2::getOptValOr<&clv2::LoongArchOptsReg,
-                        &clv2::LA_EnableLoopDataPrefetch>(
-          TM->getOptionsContext(), false))
+      LoongArchOptions::Current.LA_EnableLoopDataPrefetch)
     addPass(createLoopDataPrefetchPass());
   addPass(createAtomicExpandLegacyPass());
 
@@ -203,23 +199,20 @@ void LoongArchPassConfig::addMachineSSAOptimization() {
 void LoongArchPassConfig::addPreRegAlloc() {
   addPass(createLoongArchPreRAExpandPseudoPass());
   if (TM->getOptLevel() != CodeGenOptLevel::None &&
-      clv2::getOptValOr<&clv2::LoongArchOptsReg, &clv2::LA_EnableMergeOffset>(
-          TM->getOptionsContext(), true))
+      LoongArchOptions::Current.LA_EnableMergeOffset)
     addPass(createLoongArchMergeBaseOffsetOptPass());
 }
 
 bool LoongArchPassConfig::addRegAssignAndRewriteFast() {
   if (TM->getOptLevel() != CodeGenOptLevel::None &&
-      clv2::getOptValOr<&clv2::LoongArchOptsReg, &clv2::LA_EnableDeadDefs>(
-          TM->getOptionsContext(), true))
+      LoongArchOptions::Current.LA_EnableDeadDefs)
     addPass(createLoongArchDeadRegisterDefinitionsPass());
   return TargetPassConfig::addRegAssignAndRewriteFast();
 }
 
 bool LoongArchPassConfig::addRegAssignAndRewriteOptimized() {
   if (TM->getOptLevel() != CodeGenOptLevel::None &&
-      clv2::getOptValOr<&clv2::LoongArchOptsReg, &clv2::LA_EnableDeadDefs>(
-          TM->getOptionsContext(), true))
+      LoongArchOptions::Current.LA_EnableDeadDefs)
     addPass(createLoongArchDeadRegisterDefinitionsPass());
   return TargetPassConfig::addRegAssignAndRewriteOptimized();
 }

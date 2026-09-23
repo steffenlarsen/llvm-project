@@ -20,8 +20,7 @@
 #include "llvm/CodeGen/MachinePassManager.h"
 #include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/IR/Analysis.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/Lanai/LanaiOptionsOptInfos.h"
+#include "llvm/Target/Lanai/LanaiOptions.h"
 
 using namespace llvm;
 
@@ -29,11 +28,8 @@ using namespace llvm;
 
 STATISTIC(FilledSlots, "Number of delay slots filled");
 
-static bool NopDelaySlotFiller = false;
-
 static bool getNopDelaySlotFiller(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::LANAI_NopDelaySlotFiller>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<LanaiOptions>().LANAI_NopDelaySlotFiller;
 }
 
 namespace {

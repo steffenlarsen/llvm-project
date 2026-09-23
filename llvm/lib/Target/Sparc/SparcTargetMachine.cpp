@@ -21,8 +21,7 @@
 #include "llvm/IR/Function.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/Compiler.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/Sparc/SparcOptionsOptInfos.h"
+#include "llvm/Target/Sparc/SparcOptions.h"
 #include <optional>
 using namespace llvm;
 
@@ -41,8 +40,7 @@ extern "C" LLVM_ABI LLVM_EXTERNAL_VISIBILITY void LLVMInitializeSparcTarget() {
 static bool BranchRelaxation = true;
 
 static bool getBranchRelaxation(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SPARC_BranchRelaxation>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<SparcOptions>().SPARC_BranchRelaxation;
 }
 
 static Reloc::Model getEffectiveRelocModel(std::optional<Reloc::Model> RM) {

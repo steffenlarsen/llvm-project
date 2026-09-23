@@ -30,7 +30,7 @@
 #include "llvm/IR/ProfDataUtils.h"
 #include "llvm/IR/Type.h"
 #include "llvm/ProfileData/InstrProfReader.h"
-#include "llvm/ProfileData/ProfileDataOptionsOptInfos.h"
+#include "llvm/ProfileData/ProfileDataOptions.h"
 #include "llvm/ProfileData/SampleProf.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Compiler.h"
@@ -41,7 +41,6 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/LEB128.h"
 #include "llvm/Support/MathExtras.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/SwapByteOrder.h"
 #include "llvm/Support/VirtualFileSystem.h"
@@ -67,13 +66,15 @@ static bool StaticFuncFullModulePrefix = true;
 static unsigned StaticFuncStripDirNamePrefix = 0;
 
 static bool getStaticFuncFullModulePrefix(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::PD_StaticFuncFullModulePrefix>(
-      M.getContext().getOptionsContext());
+  return M.getContext()
+      .getOptions<ProfileDataOptions>()
+      .PD_StaticFuncFullModulePrefix;
 }
 
 static unsigned getStaticFuncStripDirNamePrefix(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::PD_StaticFuncStripDirNamePrefix>(
-      M.getContext().getOptionsContext());
+  return M.getContext()
+      .getOptions<ProfileDataOptions>()
+      .PD_StaticFuncStripDirNamePrefix;
 }
 
 static std::string getInstrProfErrString(instrprof_error Err,
@@ -702,9 +703,10 @@ Error collectGlobalObjectNameStrings(ArrayRef<std::string> NameStrs,
   std::string UncompressedNameStrings =
       join(NameStrs.begin(), NameStrs.end(), getInstrProfNameSeparator());
 
-  assert(StringRef(UncompressedNameStrings)
-                 .count(getInstrProfNameSeparator()) == (NameStrs.size() - 1) &&
-         "PGO name is invalid (contains separator token)");
+  assert(
+      StringRef(UncompressedNameStrings).count(getInstrProfNameSeparator()) ==
+          (NameStrs.size() - 1) &&
+      "PGO name is invalid (contains separator token)");
 
   unsigned EncLen = encodeULEB128(UncompressedNameStrings.length(), P);
   P += EncLen;
@@ -1198,13 +1200,13 @@ uint32_t getNumValueKindsInstrProf(const void *Record) {
 }
 
 uint32_t getNumValueSitesInstrProf(const void *Record, uint32_t VKind) {
-  return reinterpret_cast<const InstrProfRecord *>(Record)
-      ->getNumValueSites(VKind);
+  return reinterpret_cast<const InstrProfRecord *>(Record)->getNumValueSites(
+      VKind);
 }
 
 uint32_t getNumValueDataInstrProf(const void *Record, uint32_t VKind) {
-  return reinterpret_cast<const InstrProfRecord *>(Record)
-      ->getNumValueData(VKind);
+  return reinterpret_cast<const InstrProfRecord *>(Record)->getNumValueData(
+      VKind);
 }
 
 uint32_t getNumValueDataForSiteInstrProf(const void *R, uint32_t VK,
@@ -1405,9 +1407,8 @@ void annotateValueSite(Module &M, Instruction &Inst,
 }
 
 void annotateValueSite(Module &M, Instruction &Inst,
-                       ArrayRef<InstrProfValueData> VDs,
-                       uint64_t Sum, InstrProfValueKind ValueKind,
-                       uint32_t MaxMDCount) {
+                       ArrayRef<InstrProfValueData> VDs, uint64_t Sum,
+                       InstrProfValueKind ValueKind, uint32_t MaxMDCount) {
   if (VDs.empty())
     return;
   LLVMContext &Ctx = M.getContext();

@@ -1,5 +1,3 @@
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
 //===- Reassociate.cpp - Reassociate binary expressions -------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -57,6 +55,7 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Scalar.h"
+#include "llvm/Transforms/Scalar/ScalarOptions.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include <algorithm>
 #include <cassert>
@@ -73,8 +72,7 @@ STATISTIC(NumAnnihil, "Number of expr tree annihilated");
 STATISTIC(NumFactor , "Number of multiplies factored");
 
 static bool getUseCSELocalOpt(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_ReassociateUseCseLocal>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<ScalarOptions>().SC_ReassociateUseCseLocal;
 }
 
 #ifndef NDEBUG

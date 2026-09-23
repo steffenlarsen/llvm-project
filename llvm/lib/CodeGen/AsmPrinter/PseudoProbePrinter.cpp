@@ -23,9 +23,8 @@
 #include "llvm/IR/Module.h"
 #include "llvm/Support/WithColor.h"
 #endif
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
-#include "llvm/Support/CommandLineV2.h"
-#include "llvm/Support/OptionsContext.h"
+#include "llvm/CodeGen/CodeGenPassOptionsAsmPrint.h"
+#include "llvm/IR/LLVMContext.h"
 
 using namespace llvm;
 
@@ -34,9 +33,9 @@ using namespace llvm;
 // pseudo probe descriptors may not be imported, resulting in false positive
 // warning.
 static bool
-getPseudoProbeVerifyGuidExistenceInDesc(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<
-      &clv2::CGPASS_PseudoProbeVerifyGuidExistenceInDesc>(Ctx);
+getPseudoProbeVerifyGuidExistenceInDesc(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenAsmPrintOptions>()
+      .CGPASS_PseudoProbeVerifyGuidExistenceInDesc;
 }
 
 #endif
@@ -62,7 +61,7 @@ void PseudoProbeHandler::emitPseudoProbe(uint64_t Guid, uint64_t Index,
       CallerGuid = Function::getGUIDAssumingExternalLinkage(Name);
 #ifndef NDEBUG
     if (getPseudoProbeVerifyGuidExistenceInDesc(
-            Asm->MF->getFunction().getContext().getOptionsContext()))
+            Asm->MF->getFunction().getContext()))
       verifyGuidExistenceInDesc(CallerGuid, Name);
 #endif
     // Keep an unrepresentable callsite as an explicit unknown edge. Probe zero
@@ -89,7 +88,7 @@ void PseudoProbeHandler::emitPseudoProbe(uint64_t Guid, uint64_t Index,
                                     InlineStack, Asm->CurrentFnSym);
 #ifndef NDEBUG
   if (getPseudoProbeVerifyGuidExistenceInDesc(
-          Asm->MF->getFunction().getContext().getOptionsContext()))
+          Asm->MF->getFunction().getContext()))
     verifyGuidExistenceInDesc(
         Guid, DebugLoc ? DebugLoc->getSubprogramLinkageName() : "");
 #endif

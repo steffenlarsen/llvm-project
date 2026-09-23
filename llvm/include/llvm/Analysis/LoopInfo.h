@@ -24,9 +24,7 @@
 
 namespace llvm {
 
-namespace clv2 {
-class OptionsContext;
-} // namespace clv2
+struct AnalysisOptions;
 
 class DominatorTree;
 class InductionDescriptor;
@@ -573,7 +571,7 @@ public:
 /// The flag enables checks which are expensive and are disabled by default
 /// unless the `EXPENSIVE_CHECKS` macro is defined.  The `-verify-loop-info`
 /// flag allows the checks to be enabled selectively without re-compilation.
-LLVM_ABI bool getVerifyLoopInfo(const clv2::OptionsContext &Ctx);
+LLVM_ABI bool getVerifyLoopInfo(const AnalysisOptions &Opts);
 
 // Allow clients to walk the list of nested loops...
 template <> struct GraphTraits<const Loop *> {

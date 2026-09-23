@@ -18,7 +18,7 @@
 #include "llvm/Analysis/ReleaseModeModelRunner.h"
 #include "llvm/Analysis/TensorSpec.h"
 #include "llvm/CodeGen/CalcSpillWeights.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsCore2.h"
 #include "llvm/CodeGen/LiveRegMatrix.h"
 #include "llvm/CodeGen/MachineBlockFrequencyInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
@@ -33,8 +33,6 @@
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
 #include "llvm/PassRegistry.h"
-#include "llvm/Support/CommandLineV2.h"
-#include "llvm/Support/OptionsContext.h"
 
 #if defined(LLVM_HAVE_TFLITE)
 #include "llvm/Analysis/ModelUnderTrainingRunner.h"
@@ -45,8 +43,6 @@
 
 using namespace llvm;
 
-static std::string InteractiveChannelBaseName;
-
 using CompiledModelType = NoopSavedModelImpl;
 
 // Options that only make sense in development mode
@@ -54,30 +50,20 @@ using CompiledModelType = NoopSavedModelImpl;
 #include "RegAllocScore.h"
 #include "llvm/Analysis/Utils/TFUtils.h"
 
-static std::string TrainingLog;
-
-static std::string ModelUnderTraining;
-
-static std::string
-getRegallocPriorityTrainingLog(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::CGPassCore2Reg,
-                           &clv2::CGPASS_RegallocPriorityTrainingLog>(
-      Ctx, TrainingLog);
+static std::string getRegallocPriorityTrainingLog(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore2Options>()
+      .CGPASS_RegallocPriorityTrainingLog;
 }
 
-static std::string getRegallocPriorityModel(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::CGPassCore2Reg,
-                           &clv2::CGPASS_RegallocPriorityModel>(
-      Ctx, ModelUnderTraining);
+static std::string getRegallocPriorityModel(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore2Options>().CGPASS_RegallocPriorityModel;
 }
 #endif // #ifdef LLVM_HAVE_TFLITE
 
 static std::string
-getRegallocPriorityInteractiveChannelBase(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<
-      &clv2::CGPassCore2Reg,
-      &clv2::CGPASS_RegallocPriorityInteractiveChannelBase>(
-      Ctx, InteractiveChannelBaseName);
+getRegallocPriorityInteractiveChannelBase(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore2Options>()
+      .CGPASS_RegallocPriorityInteractiveChannelBase;
 }
 
 namespace llvm {
@@ -144,7 +130,7 @@ public:
              SlotIndexes &SI) override {
     if (!Runner) {
       if (getRegallocPriorityInteractiveChannelBase(
-              MF.getFunction().getContext().getOptionsContext())
+              MF.getFunction().getContext())
               .empty())
         Runner = std::make_unique<ReleaseModeModelRunner<CompiledModelType>>(
             MF.getFunction().getContext(), InputFeatures, DecisionName);
@@ -152,10 +138,10 @@ public:
         Runner = std::make_unique<InteractiveModelRunner>(
             MF.getFunction().getContext(), InputFeatures, DecisionSpec,
             getRegallocPriorityInteractiveChannelBase(
-                MF.getFunction().getContext().getOptionsContext()) +
+                MF.getFunction().getContext()) +
                 ".out",
             getRegallocPriorityInteractiveChannelBase(
-                MF.getFunction().getContext().getOptionsContext()) +
+                MF.getFunction().getContext()) +
                 ".in");
     }
     return std::make_unique<MLPriorityAdvisor>(MF, RA, &SI, Runner.get());
@@ -225,28 +211,29 @@ public:
   // Save all the logs (when requested).
   DevelopmentModePriorityAdvisorProvider(LLVMContext &Ctx)
       : RegAllocPriorityAdvisorProvider(AdvisorMode::Development) {
-    if (getRegallocPriorityModel().empty() &&
-        getRegallocPriorityTrainingLog().empty()) {
+    if (getRegallocPriorityModel(Ctx).empty() &&
+        getRegallocPriorityTrainingLog(Ctx).empty()) {
       Ctx.emitError("Regalloc development mode should be requested with at "
                     "least logging enabled and/or a training model");
       return;
     }
-    if (getRegallocPriorityModel().empty())
+    if (getRegallocPriorityModel(Ctx).empty())
       Runner = std::make_unique<NoInferenceModelRunner>(Ctx, InputFeatures);
     else
       Runner = ModelUnderTrainingRunner::createAndEnsureValid(
-          Ctx, getRegallocPriorityModel(), DecisionName, TrainingInputFeatures);
+          Ctx, getRegallocPriorityModel(Ctx), DecisionName,
+          TrainingInputFeatures);
     if (!Runner) {
       Ctx.emitError("Regalloc: could not set up the model runner");
       return;
     }
-    if (getRegallocPriorityTrainingLog().empty())
+    if (getRegallocPriorityTrainingLog(Ctx).empty())
       return;
     std::error_code EC;
-    auto OS =
-        std::make_unique<raw_fd_ostream>(getRegallocPriorityTrainingLog(), EC);
+    auto OS = std::make_unique<raw_fd_ostream>(
+        getRegallocPriorityTrainingLog(Ctx), EC);
     if (EC) {
-      Ctx.emitError(EC.message() + ":" + getRegallocPriorityTrainingLog());
+      Ctx.emitError(EC.message() + ":" + getRegallocPriorityTrainingLog(Ctx));
       return;
     }
     std::vector<TensorSpec> LFS = InputFeatures;
@@ -376,7 +363,10 @@ DevelopmentModePriorityAdvisor::getPriority(const LiveInterval &LI) const {
     Prio = getDefaultAdvisor().getPriority(LI);
   }
 
-  if (getRegallocPriorityTrainingLog().empty())
+  // No Function/Module is reachable from this advisor (RegAllocPriorityAdvisor
+  // does not retain the MachineFunction it was built from), so fall back to
+  // the process-wide default per the migration's no-context routing rule.
+  if (CodeGenCore2Options::Current.CGPASS_RegallocPriorityTrainingLog.empty())
     return Prio;
 
   // TODO(mtrofin): when we support optional rewards, this can go away. In the

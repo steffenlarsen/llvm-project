@@ -16,7 +16,7 @@
 #include "llvm/ADT/PostOrderIterator.h"
 #include "llvm/Analysis/OptimizationRemarkEmitter.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsGISel.h"
 #include "llvm/CodeGen/GlobalISel/CSEInfo.h"
 #include "llvm/CodeGen/GlobalISel/CSEMIRBuilder.h"
 #include "llvm/CodeGen/GlobalISel/GISelChangeObserver.h"
@@ -33,40 +33,24 @@
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/IR/Analysis.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/LLVMContext.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Error.h"
-#include "llvm/Support/OptionsContext.h"
 
 #define DEBUG_TYPE "legalizer"
 
 using namespace llvm;
 
-static bool getEnableCseInLegalizer(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_EnableCseInLegalizer>(Ctx);
+static bool getAllowGinsertAsArtifact(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenGISelOptions>().CGPASS_AllowGinsertAsArtifact;
 }
 
-static bool
-getEnableCseInLegalizerWasSpecified(const clv2::OptionsContext &Ctx) {
-  return clv2::wasOptSpecified<&clv2::CGPassGISelReg,
-                               &clv2::CGPASS_EnableCseInLegalizer>(Ctx);
-}
-
-static bool getAllowGinsertAsArtifact(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_AllowGinsertAsArtifact>(Ctx);
-}
-
-enum class DebugLocVerifyLevel {
-  None,
-  Legalizations,
-  LegalizationsAndArtifactCombiners,
-};
 #ifndef NDEBUG
-static DebugLocVerifyLevel getVerifyDebugLocs(const clv2::OptionsContext &Ctx) {
-  return static_cast<DebugLocVerifyLevel>(
-      clv2::getOptValOrDefault<&clv2::CGPASS_VerifyLegalizerDebugLocs>(Ctx));
+static DebugLocVerifyLevel getVerifyDebugLocs(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenGISelOptions>().CGPASS_VerifyLegalizerDebugLocs;
 }
 #else
-static DebugLocVerifyLevel getVerifyDebugLocs(const clv2::OptionsContext &) {
+static DebugLocVerifyLevel getVerifyDebugLocs(const LLVMContext &) {
   return DebugLocVerifyLevel::None;
 }
 #endif
@@ -111,8 +95,7 @@ static bool isArtifact(const MachineInstr &MI) {
   case TargetOpcode::G_EXTRACT:
     return true;
   case TargetOpcode::G_INSERT:
-    return getAllowGinsertAsArtifact(
-        MI.getMF()->getFunction().getContext().getOptionsContext());
+    return getAllowGinsertAsArtifact(MI.getMF()->getFunction().getContext());
   }
 }
 using InstListTy = GISelWorkList<256>;
@@ -290,8 +273,7 @@ LegalizerMFResult llvm::legalizeMachineFunction(
         WorkListObserver.printNewInstrs();
         eraseInstrs(DeadInstructions, MRI, &LocObserver);
         LocObserver.checkpoint(
-            getVerifyDebugLocs(
-                MF.getFunction().getContext().getOptionsContext()) ==
+            getVerifyDebugLocs(MF.getFunction().getContext()) ==
             DebugLocVerifyLevel::LegalizationsAndArtifactCombiners);
         Changed = true;
         continue;
@@ -310,10 +292,10 @@ LegalizerMFResult llvm::legalizeMachineFunction(
 }
 
 static bool isCSEEnabled(const MachineFunction &MF) {
-  const clv2::OptionsContext &Ctx =
-      MF.getFunction().getContext().getOptionsContext();
-  return getEnableCseInLegalizerWasSpecified(Ctx) ? getEnableCseInLegalizer(Ctx)
-                                                  : true;
+  return MF.getFunction()
+      .getContext()
+      .getOptions<CodeGenGISelOptions>()
+      .CGPASS_EnableCseInLegalizer.value_or(true);
 }
 
 static bool
@@ -345,7 +327,7 @@ runLegalizerOnMachineFunction(MachineFunction &MF,
   }
   assert(!CSEInfo || !errorToBool(CSEInfo->verify()));
   LostDebugLocObserver LocObserver(DEBUG_TYPE);
-  if (getVerifyDebugLocs(MF.getFunction().getContext().getOptionsContext()) >
+  if (getVerifyDebugLocs(MF.getFunction().getContext()) >
       DebugLocVerifyLevel::None)
     AuxObservers.push_back(&LocObserver);
 

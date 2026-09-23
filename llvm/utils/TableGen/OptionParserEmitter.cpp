@@ -32,6 +32,40 @@ static std::string getOptionName(const Record &R) {
   return R.getValueAsString("EnumName").str();
 }
 
+// The bare, user-facing spelling for a Field<>/Assign<> record's option, used
+// in generated parse-failure diagnostics (e.g. "for the --dump-input option:
+// ..."). ValueField/EnumField/ListField/EnumListField's primary def's Name
+// includes a trailing "=" when the option's Joined spelling embeds one
+// (appendEquals=1, see OptParser.td); strip it so the message reads the same
+// regardless of which spelling matched.
+static std::string getOptionDisplayName(const Record &R) {
+  StringRef Name = R.getValueAsString("Name");
+  return Name.ends_with("=") ? Name.drop_back().str() : Name.str();
+}
+
+// clv2's own "for the -X option: ..." diagnostics use a single dash for a
+// one-character name (e.g. "-D") and a double dash otherwise (e.g.
+// "--dump-input"); matched here so generated diagnostics read identically.
+static const char *getOptionDashPrefix(StringRef DisplayName) {
+  return DisplayName.size() == 1 ? "-" : "--";
+}
+
+// Maps a Field<>'s C++ element type to the wording clv2's own per-type
+// parsers used (CommandLineV2.cpp's parseIntArg/parseUIntArg/etc.), so
+// generated parse-failure diagnostics keep matching that established,
+// widely-lit-tested repo convention.
+static const char *getTypeArgWord(StringRef ElementType) {
+  if (ElementType == "int" || ElementType == "int64_t")
+    return "integer";
+  if (ElementType == "unsigned" || ElementType == "uint64_t")
+    return "uint";
+  if (ElementType == "double" || ElementType == "float")
+    return "floating point";
+  if (ElementType == "bool")
+    return "boolean";
+  return nullptr;
+}
+
 // Only pass EmitComment for short strings that cannot contain "*/".
 static void writeStrTableOffset(raw_ostream &OS,
                                 const StringToOffsetTable &Table,
@@ -688,6 +722,408 @@ static void emitOptionParser(const RecordKeeper &Records, raw_ostream &OS) {
   }
   OS << "};\n";
   OS << "#endif // OPTTABLE_SUBCOMMANDS_CODE\n\n";
+
+  // ==========================================================================
+  // Library options structs. See the OptionsStruct/Field/Assign/FieldEnum
+  // classes and BoolField/ValueField/EnumField multiclasses in OptParser.td,
+  // and llvm/include/llvm/Option/LibraryOptions.h for the runtime side
+  // (parseFieldValue, registerLibraryOptions).
+  //
+  // `table()` is intentionally NOT generated here: every existing OptTable
+  // consumer in this codebase builds its GenericOptTable by hand from the
+  // OPTION-gated rows already emitted above, and the per-library .cpp does
+  // the same for consistency rather than duplicating that idiom here.
+  // ==========================================================================
+  std::vector<const Record *> OptionStructs =
+      Records.getAllDerivedDefinitions("OptionsStruct");
+  std::vector<const Record *> OptionEnums =
+      Records.getAllDerivedDefinitions("OptionEnum");
+
+  auto HasField = [](const Record &R) {
+    return R.getValue("FieldType") != nullptr;
+  };
+  auto HasAssign = [](const Record &R) {
+    return R.getValue("AssignMember") != nullptr;
+  };
+  auto HasBoolAssign = [](const Record &R) {
+    return R.getValue("AssignKeyPath") != nullptr;
+  };
+  auto HasListElement = [](const Record &R) {
+    return R.getValue("ElementType") != nullptr;
+  };
+
+  std::vector<const Record *> StructOpts;
+  for (const Record &R : llvm::make_pointee_range(Opts))
+    if (HasField(R) || HasAssign(R) || HasBoolAssign(R))
+      StructOpts.push_back(&R);
+
+  if (!OptionStructs.empty()) {
+    if (OptionStructs.size() > 1)
+      PrintFatalError("only one OptionsStruct def is supported per .td file");
+    const Record &SR = *OptionStructs.front();
+    StringRef StructName = SR.getName();
+    StringRef Namespace = SR.getValueAsString("Namespace");
+    bool HasPositional = SR.getValue("PositionalType") != nullptr;
+
+    OS << "/////////\n";
+    OS << "// Options struct declaration\n\n";
+    OS << "#ifdef OPTIONS_STRUCT_DECL\n";
+    // Non-external enums are generated types owned by this struct, so they
+    // must be declared inside its namespace (a qualified `enum class
+    // Namespace::Name { ... };` definition is not legal C++). External enums
+    // already use fully-qualified names (e.g. "llvm::cl::boolOrDefault"),
+    // which resolve the same whether nested in `namespace Namespace` or not,
+    // so opening the namespace here doesn't affect them.
+    OS << "namespace " << Namespace << " {\n";
+    for (const Record *ER : OptionEnums) {
+      // EnumType is the C++ type reference (may be namespace-qualified, e.g.
+      // "cl::boolOrDefault"); EnumIdent is a valid bare identifier used to
+      // name the generated `enum class` / `parse<Ident>` helper, since "::"
+      // cannot appear in a function name.
+      StringRef EnumType = ER->getValueAsString("Name");
+      StringRef EnumIdent = ER->getValueAsString("Ident");
+      bool IsExternal = ER->getValueAsBit("External");
+      std::vector<const Record *> Members = ER->getValueAsListOfDefs("Members");
+      // External enums (e.g. InliningAdvisorMode, cl::boolOrDefault) already
+      // exist in C++ elsewhere; only the spelling<->value parse helper below
+      // is generated for them, not a colliding duplicate `enum class`.
+      if (!IsExternal) {
+        OS << "enum class " << EnumType << " {\n";
+        for (const Record *M : Members)
+          OS << "  " << M->getValueAsString("Name") << ",\n";
+        OS << "};\n";
+      }
+      // External enums may be referenced (with the same Ident) from more than
+      // one OptionsStruct's .td file; if two such generated headers both end
+      // up included in the same translation unit, the parse<Ident> helper
+      // below would otherwise be defined twice. Guard it so only the first
+      // inclusion wins; non-external enums are private to this struct and
+      // can't collide this way.
+      if (IsExternal) {
+        OS << "#ifndef LLVM_OPTPARSER_PARSE_" << EnumIdent << "_DEFINED\n";
+        OS << "#define LLVM_OPTPARSER_PARSE_" << EnumIdent << "_DEFINED\n";
+      }
+      OS << "inline bool parse" << EnumIdent << "(llvm::StringRef V, "
+         << EnumType << " &Out) {\n";
+      OS << "  static constexpr std::pair<llvm::StringLiteral, " << EnumType
+         << "> Table[] = {\n";
+      for (const Record *M : Members)
+        OS << "    {\"" << M->getValueAsString("Spelling") << "\", " << EnumType
+           << "::" << M->getValueAsString("Name") << "},\n";
+      OS << "  };\n";
+      OS << "  for (const auto &[Spelling, Val] : Table)\n";
+      OS << "    if (V == Spelling) { Out = Val; return true; }\n";
+      OS << "  return false;\n";
+      OS << "}\n";
+      if (IsExternal)
+        OS << "#endif\n";
+    }
+    OS << "struct " << StructName << " {\n";
+    if (HasPositional) {
+      OS << "  " << SR.getValueAsString("PositionalType") << " "
+         << SR.getValueAsString("PositionalName") << ";\n";
+    }
+    for (const Record *R : StructOpts) {
+      if (!HasField(*R))
+        continue;
+      StringRef FieldType = R->getValueAsString("FieldType");
+      StringRef KeyPath = R->getValueAsString("KeyPath");
+      StringRef Default = R->getValueAsString("DefaultValue");
+      OS << "  " << FieldType << " " << KeyPath;
+      if (!Default.empty())
+        OS << " = " << Default;
+      OS << ";\n";
+    }
+    OS << "\n";
+    OS << "  static " << StructName << " Current;\n";
+    OS << "  static unsigned Slot;\n";
+    OS << "  static llvm::opt::OptTable &table();\n";
+    OS << "  // Returns true if A was recognized and applied. On failure, "
+          "Err\n";
+    OS << "  // is left empty if A simply isn't one of this struct's options\n";
+    OS << "  // (the caller should forward it to Rest), or set to a "
+          "formatted\n";
+    OS << "  // diagnostic if A was recognized but its value was invalid "
+          "(the\n";
+    OS << "  // caller should treat this as a hard parse error).\n";
+    OS << "  bool apply(const llvm::opt::Arg &A, std::string &Err);\n";
+    OS << "  llvm::Error parse(llvm::ArrayRef<const char *> Args,\n";
+    OS << "                    llvm::SmallVectorImpl<const char *> &Rest,\n";
+    OS << "                    llvm::raw_ostream &Errs);\n";
+    OS << "};\n";
+    OS << "} // namespace " << Namespace << "\n";
+    OS << "#endif // OPTIONS_STRUCT_DECL\n\n";
+
+    OS << "/////////\n";
+    OS << "// Options struct definitions\n\n";
+    OS << "#ifdef OPTIONS_STRUCT_DEFS\n";
+    OS << StructName << " " << Namespace << "::" << StructName
+       << "::Current{};\n";
+    OS << "unsigned " << Namespace << "::" << StructName << "::Slot = 0;\n";
+    OS << "bool " << Namespace << "::" << StructName
+       << "::apply(const llvm::opt::Arg &A, std::string &Err) {\n";
+    OS << "  switch (A.getOption().getID()) {\n";
+    for (const Record *R : StructOpts) {
+      OS << "  case OPT_" << getOptionName(*R) << ":\n";
+      const DefInit *EnumDI =
+          R->getValue("FieldEnum")
+              ? dyn_cast<DefInit>(R->getValueInit("FieldEnum"))
+              : nullptr;
+      std::string DisplayName = getOptionDisplayName(*R);
+      if (HasAssign(*R)) {
+        OS << "    " << R->getValueAsString("AssignMember") << " = "
+           << R->getValueAsString("AssignValue") << ";\n";
+        OS << "    return true;\n";
+      } else if (HasBoolAssign(*R)) {
+        StringRef KeyPath = R->getValueAsString("AssignKeyPath");
+        OS << "    if (!llvm::opt::parseFieldValue(A.getValue(), " << KeyPath
+           << ")) {\n";
+        OS << "      Err = (llvm::Twine(\"for the "
+           << getOptionDashPrefix(DisplayName) << DisplayName
+           << " option: '\") + A.getValue() + \"' value invalid for boolean "
+              "argument!\").str();\n";
+        OS << "      return false;\n";
+        OS << "    }\n";
+        OS << "    return true;\n";
+      } else if (EnumDI && HasListElement(*R)) {
+        StringRef EnumType = EnumDI->getDef()->getValueAsString("Name");
+        StringRef EnumIdent = EnumDI->getDef()->getValueAsString("Ident");
+        StringRef KeyPath = R->getValueAsString("KeyPath");
+        bool CommaSplit = R->getValueAsBit("CommaSplit");
+        bool AlwaysPrefix = R->getValueAsBit("AlwaysPrefix");
+        // Each matched Arg (whichever spelling -- Joined, JoinedOrSeparate,
+        // or the Separate alias -- actually matched) carries exactly one
+        // raw value; when CommaSplit is set that raw value is split here,
+        // in emitted code, rather than relying on OptTable's CommaJoined
+        // Kind, so both spellings behave identically. See ListElement in
+        // OptParser.td.
+        if (AlwaysPrefix) {
+          // AlwaysPrefixFormat (e.g. "-Dfoo=bar"): the value must be
+          // attached to the same token; a bare token with nothing attached
+          // is a hard error, never a prompt to consume the next token.
+          OS << "    if (llvm::StringRef(A.getValue()).empty()) {\n";
+          OS << "      Err = \"for the " << getOptionDashPrefix(DisplayName)
+             << DisplayName << " option: requires a value!\";\n";
+          OS << "      return false;\n";
+          OS << "    }\n";
+        }
+        OS << "    {\n";
+        if (CommaSplit) {
+          OS << "      llvm::SmallVector<llvm::StringRef, 4> Parts;\n";
+          OS << "      llvm::StringRef(A.getValue())"
+                ".split(Parts, ',', -1, /*KeepEmpty=*/true);\n";
+          OS << "      for (llvm::StringRef Part : Parts) {\n";
+          OS << "        " << EnumType << " Elt;\n";
+          OS << "        if (!parse" << EnumIdent << "(Part, Elt)) {\n";
+          OS << "          Err = (llvm::Twine(\"for the "
+             << getOptionDashPrefix(DisplayName) << DisplayName
+             << " option: Cannot find option named '\") + Part + \"'!\")"
+                ".str();\n";
+          OS << "          return false;\n";
+          OS << "        }\n";
+          OS << "        " << KeyPath << ".push_back(Elt);\n";
+          OS << "      }\n";
+        } else {
+          OS << "      " << EnumType << " Elt;\n";
+          OS << "      if (!parse" << EnumIdent << "(A.getValue(), Elt)) {\n";
+          OS << "        Err = (llvm::Twine(\"for the "
+             << getOptionDashPrefix(DisplayName) << DisplayName
+             << " option: Cannot find option named '\") + A.getValue() + "
+                "\"'!\").str();\n";
+          OS << "        return false;\n";
+          OS << "      }\n";
+          OS << "      " << KeyPath << ".push_back(Elt);\n";
+        }
+        OS << "    }\n";
+        OS << "    return true;\n";
+      } else if (EnumDI) {
+        StringRef EnumIdent = EnumDI->getDef()->getValueAsString("Ident");
+        StringRef KeyPath = R->getValueAsString("KeyPath");
+        StringRef FieldType = R->getValueAsString("FieldType");
+        // A std::optional<EnumType> KeyPath (hand-authored to track "was
+        // this option specified" for an enum field, mirroring OptionalField
+        // for non-enum types) can't bind directly to parse<Ident>'s
+        // `EnumType &Out` parameter, so parse into a temporary and assign.
+        if (FieldType.starts_with("std::optional<")) {
+          StringRef EnumType = EnumDI->getDef()->getValueAsString("Name");
+          OS << "    {\n";
+          OS << "      " << EnumType << " Tmp;\n";
+          OS << "      if (!parse" << EnumIdent << "(A.getValue(), Tmp)) {\n";
+          OS << "        Err = (llvm::Twine(\"for the "
+             << getOptionDashPrefix(DisplayName) << DisplayName
+             << " option: Cannot find option named '\") + A.getValue() + "
+                "\"'!\").str();\n";
+          OS << "        return false;\n";
+          OS << "      }\n";
+          OS << "      " << KeyPath << " = Tmp;\n";
+          OS << "    }\n";
+          OS << "    return true;\n";
+        } else {
+          OS << "    if (!parse" << EnumIdent << "(A.getValue(), " << KeyPath
+             << ")) {\n";
+          OS << "      Err = (llvm::Twine(\"for the "
+             << getOptionDashPrefix(DisplayName) << DisplayName
+             << " option: Cannot find option named '\") + A.getValue() + "
+                "\"'!\").str();\n";
+          OS << "      return false;\n";
+          OS << "    }\n";
+          OS << "    return true;\n";
+        }
+      } else if (HasListElement(*R)) {
+        StringRef ElementType = R->getValueAsString("ElementType");
+        StringRef KeyPath = R->getValueAsString("KeyPath");
+        bool CommaSplit = R->getValueAsBit("CommaSplit");
+        bool AlwaysPrefix = R->getValueAsBit("AlwaysPrefix");
+        const char *TypeWord = getTypeArgWord(ElementType);
+        if (AlwaysPrefix) {
+          // AlwaysPrefixFormat (e.g. "-Dfoo=bar"): the value must be
+          // attached to the same token; a bare token with nothing attached
+          // is a hard error, never a prompt to consume the next token.
+          OS << "    if (llvm::StringRef(A.getValue()).empty()) {\n";
+          OS << "      Err = \"for the " << getOptionDashPrefix(DisplayName)
+             << DisplayName << " option: requires a value!\";\n";
+          OS << "      return false;\n";
+          OS << "    }\n";
+        }
+        OS << "    {\n";
+        if (CommaSplit) {
+          OS << "      llvm::SmallVector<llvm::StringRef, 4> Parts;\n";
+          OS << "      llvm::StringRef(A.getValue())"
+                ".split(Parts, ',', -1, /*KeepEmpty=*/true);\n";
+          OS << "      for (llvm::StringRef Part : Parts) {\n";
+          OS << "        " << ElementType << " Elt;\n";
+          OS << "        if (!llvm::opt::parseFieldValue(Part, Elt)) {\n";
+          if (TypeWord) {
+            OS << "          Err = (llvm::Twine(\"for the "
+               << getOptionDashPrefix(DisplayName) << DisplayName
+               << " option: '\") + Part + \"' value invalid for " << TypeWord
+               << " argument!\").str();\n";
+          } else {
+            OS << "          Err = (llvm::Twine(\"for the "
+               << getOptionDashPrefix(DisplayName) << DisplayName
+               << " option: '\") + Part + \"' invalid value!\").str();\n";
+          }
+          OS << "          return false;\n";
+          OS << "        }\n";
+          OS << "        " << KeyPath << ".push_back(std::move(Elt));\n";
+          OS << "      }\n";
+        } else {
+          OS << "      " << ElementType << " Elt;\n";
+          OS << "      if (!llvm::opt::parseFieldValue(A.getValue(), Elt)) "
+                "{\n";
+          if (TypeWord) {
+            OS << "        Err = (llvm::Twine(\"for the "
+               << getOptionDashPrefix(DisplayName) << DisplayName
+               << " option: '\") + A.getValue() + \"' value invalid for "
+               << TypeWord << " argument!\").str();\n";
+          } else {
+            OS << "        Err = (llvm::Twine(\"for the "
+               << getOptionDashPrefix(DisplayName) << DisplayName
+               << " option: '\") + A.getValue() + \"' invalid value!\")"
+                  ".str();\n";
+          }
+          OS << "        return false;\n";
+          OS << "      }\n";
+          OS << "      " << KeyPath << ".push_back(std::move(Elt));\n";
+        }
+        OS << "    }\n";
+        OS << "    return true;\n";
+      } else {
+        StringRef FieldType = R->getValueAsString("FieldType");
+        const char *TypeWord = getTypeArgWord(FieldType);
+        OS << "    if (!llvm::opt::parseFieldValue(A.getValue(), "
+           << R->getValueAsString("KeyPath") << ")) {\n";
+        if (TypeWord) {
+          OS << "      Err = (llvm::Twine(\"for the "
+             << getOptionDashPrefix(DisplayName) << DisplayName
+             << " option: '\") + A.getValue() + \"' value invalid for "
+             << TypeWord << " argument!\").str();\n";
+        } else {
+          OS << "      Err = (llvm::Twine(\"for the "
+             << getOptionDashPrefix(DisplayName) << DisplayName
+             << " option: '\") + A.getValue() + \"' invalid value!\").str();\n";
+        }
+        OS << "      return false;\n";
+        OS << "    }\n";
+        if (const RecordVal *MaxValueField = R->getValue("MaxValue")) {
+          (void)MaxValueField;
+          int MaxValue = R->getValueAsInt("MaxValue");
+          if (MaxValue >= 0) {
+            OS << "    if (" << R->getValueAsString("KeyPath") << " > "
+               << MaxValue << ") {\n";
+            OS << "      Err = (llvm::Twine(\"for the "
+               << getOptionDashPrefix(DisplayName) << DisplayName
+               << " option: '\") + A.getValue() + \"' value must be in "
+                  "the range [0, "
+               << MaxValue << "]!\").str();\n";
+            OS << "      return false;\n";
+            OS << "    }\n";
+          }
+        }
+        OS << "    return true;\n";
+      }
+    }
+    OS << "  default:\n";
+    OS << "    return false;\n";
+    OS << "  }\n";
+    OS << "}\n";
+    OS << "llvm::Error " << Namespace << "::" << StructName
+       << "::parse(llvm::ArrayRef<const char *> Args,\n";
+    OS << "    llvm::SmallVectorImpl<const char *> &Rest, "
+          "llvm::raw_ostream &Errs) {\n";
+    OS << "  unsigned MissingArgIndex, MissingArgCount;\n";
+    OS << "  llvm::opt::InputArgList AL = table().ParseArgs(\n";
+    OS << "      Args, MissingArgIndex, MissingArgCount);\n";
+    OS << "  if (MissingArgCount) {\n";
+    OS << "    Errs << \"missing argument for option '\"\n";
+    OS << "         << AL.getArgString(MissingArgIndex) << \"'\\n\";\n";
+    OS << "    return llvm::createStringError(\n";
+    OS << "        llvm::inconvertibleErrorCode(),\n";
+    OS << "        \"missing argument for option\");\n";
+    OS << "  }\n";
+    OS << "  // Most Field<>/Assign<> options here are single-token Joined "
+          "or\n";
+    OS << "  // Flag options (see OptParser.td); some also accept a "
+          "two-token\n";
+    OS << "  // Separate/JoinedOrSeparate spelling, in which case A->getIndex()"
+          "\n";
+    OS << "  // is the first (option-name) token only. Either way, anything "
+          "apply()\n";
+    OS << "  // does not recognize (including INPUT/UNKNOWN) is forwarded to "
+          "Rest\n";
+    OS << "  // verbatim, starting from that index. A recognized option "
+          "whose value\n";
+    OS << "  // fails to parse is a hard error, not a forward: apply() "
+          "reports that\n";
+    OS << "  // by setting Err (see its declaration above).\n";
+    if (HasPositional)
+      OS << "  bool SawPositional = false;\n";
+    OS << "  for (const llvm::opt::Arg *A : AL) {\n";
+    if (HasPositional) {
+      OS << "    if (A->getOption().getID() == OPT_INPUT) {\n";
+      OS << "      if (!SawPositional) {\n";
+      OS << "        " << SR.getValueAsString("PositionalName")
+         << " = A->getValue();\n";
+      OS << "        SawPositional = true;\n";
+      OS << "      } else {\n";
+      OS << "        Rest.push_back(Args[A->getIndex()]);\n";
+      OS << "      }\n";
+      OS << "      continue;\n";
+      OS << "    }\n";
+    }
+    OS << "    std::string Err;\n";
+    OS << "    if (!apply(*A, Err)) {\n";
+    OS << "      if (Err.empty())\n";
+    OS << "        Rest.push_back(Args[A->getIndex()]);\n";
+    OS << "      else\n";
+    OS << "        return llvm::createStringError(\n";
+    OS << "            llvm::inconvertibleErrorCode(), Err);\n";
+    OS << "    }\n";
+    OS << "  }\n";
+    OS << "  return llvm::Error::success();\n";
+    OS << "}\n";
+    OS << "#endif // OPTIONS_STRUCT_DEFS\n\n";
+  }
 
   OS << "\n";
 }

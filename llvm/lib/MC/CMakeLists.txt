@@ -1,6 +1,5 @@
 add_llvm_component_library(LLVMMC
-  MCOptionsGetters.cpp
-  MCOptionsRegistration.cpp
+  MCOptions.cpp
   ConstantPools.cpp
   DXContainerInfo.cpp
   DXContainerPSVInfo.cpp
@@ -81,12 +80,14 @@ add_llvm_component_library(LLVMMC
   LINK_COMPONENTS
   BinaryFormat
   DebugInfoDWARFLowLevel
+  Option
   Support
   TargetParser
 
   DEPENDS
   intrinsics_gen
   llvm_vcsrevision_h
+  MCOptParserTableGen
   )
 
 add_subdirectory(MCParser)

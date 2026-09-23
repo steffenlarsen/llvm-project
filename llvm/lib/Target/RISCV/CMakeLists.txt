@@ -31,8 +31,6 @@ tablegen(LLVM RISCVGenPostLegalizeGICombiner.inc -gen-global-isel-combiner
 add_public_tablegen_target(RISCVCommonTableGen)
 
 add_llvm_target(RISCVCodeGen
-  RISCVOptionsGetters.cpp
-  RISCVOptionsRegistration.cpp
   RISCVAsmPrinter.cpp
   RISCVCallingConv.cpp
   RISCVCodeGenPassBuilder.cpp
@@ -112,6 +110,9 @@ add_llvm_target(RISCVCodeGen
 
   ADD_TO_COMPONENT
   RISCV
+
+  DEPENDS
+  RISCVOptParserTableGen
   )
 
 add_subdirectory(AsmParser)

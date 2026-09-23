@@ -23,7 +23,7 @@
 #include "llvm/CodeGen/FixupStatepointCallerSaved.h"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/Statistic.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsCore1.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/StackMaps.h"
@@ -31,9 +31,7 @@
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Statepoint.h"
 #include "llvm/InitializePasses.h"
-#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/OptionsContext.h"
 
 using namespace llvm;
 
@@ -45,21 +43,22 @@ STATISTIC(NumSpillSlotsExtended, "Number of spill slots extended");
 // This is purely debugging option.
 // It may be handy for investigating statepoint spilling issues.
 
-static bool getFixupScsExtendSlotSize(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_FixupScsExtendSlotSize>(Ctx);
+static bool getFixupScsExtendSlotSize(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore1Options>().CGPASS_FixupScsExtendSlotSize;
 }
 
-static bool getFixupAllowGcptrInCsr(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_FixupAllowGcptrInCsr>(Ctx);
+static bool getFixupAllowGcptrInCsr(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore1Options>().CGPASS_FixupAllowGcptrInCsr;
 }
 
-static bool getFixupScsEnableCopyPropagation(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_FixupScsEnableCopyPropagation>(
-      Ctx);
+static bool getFixupScsEnableCopyPropagation(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore1Options>()
+      .CGPASS_FixupScsEnableCopyPropagation;
 }
 
-static unsigned getFixupMaxCsrStatepoints(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_FixupMaxCsrStatepoints>(Ctx);
+static std::optional<unsigned>
+getFixupMaxCsrStatepoints(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore1Options>().CGPASS_FixupMaxCsrStatepoints;
 }
 
 namespace {
@@ -126,7 +125,7 @@ static Register performCopyPropagation(Register Reg,
   }
 
   if (!getFixupScsEnableCopyPropagation(
-          RI->getMF()->getFunction().getContext().getOptionsContext()))
+          RI->getMF()->getFunction().getContext()))
     return Reg;
 
   MachineBasicBlock *MBB = RI->getParent();
@@ -210,7 +209,7 @@ private:
   };
   MachineFrameInfo &MFI;
   const TargetRegisterInfo &TRI;
-  const clv2::OptionsContext *Ctx;
+  const LLVMContext *Ctx;
   // Map size to list of frame indexes of this size. If the mode is
   // FixupSCSExtendSlotSize then the key 0 is used to keep all frame indexes.
   // If the size of required spill slot is greater than in a cache then the
@@ -235,7 +234,7 @@ private:
 
 public:
   FrameIndexesCache(MachineFrameInfo &MFI, const TargetRegisterInfo &TRI,
-                    const clv2::OptionsContext &Ctx)
+                    const LLVMContext &Ctx)
       : MFI(MFI), TRI(TRI), Ctx(&Ctx) {}
   // Reset the current state of used frame indexes. After invocation of
   // this function all frame indexes are available for allocation with
@@ -572,8 +571,7 @@ private:
 public:
   StatepointProcessor(MachineFunction &MF)
       : MF(MF), TRI(*MF.getSubtarget().getRegisterInfo()),
-        CacheFI(MF.getFrameInfo(), TRI,
-                MF.getFunction().getContext().getOptionsContext()) {}
+        CacheFI(MF.getFrameInfo(), TRI, MF.getFunction().getContext()) {}
 
   bool process(MachineInstr &MI, bool AllowGCPtrInCSR) {
     StatepointOpers SO(&MI);
@@ -617,15 +615,11 @@ bool FixupStatepointCallerSavedImpl::run(MachineFunction &MF) {
   bool Changed = false;
   StatepointProcessor SPP(MF);
   unsigned NumStatepoints = 0;
-  bool AllowGCPtrInCSR =
-      getFixupAllowGcptrInCsr(F.getContext().getOptionsContext());
+  bool AllowGCPtrInCSR = getFixupAllowGcptrInCsr(F.getContext());
   for (MachineInstr *I : Statepoints) {
     ++NumStatepoints;
-    if (clv2::wasOptSpecified<&clv2::CGPassCore1Reg,
-                              &clv2::CGPASS_FixupMaxCsrStatepoints>(
-            F.getContext().getOptionsContext()) &&
-        NumStatepoints >=
-            getFixupMaxCsrStatepoints(F.getContext().getOptionsContext()))
+    if (auto MaxCsrStatepoints = getFixupMaxCsrStatepoints(F.getContext());
+        MaxCsrStatepoints && NumStatepoints >= *MaxCsrStatepoints)
       AllowGCPtrInCSR = false;
     Changed |= SPP.process(*I, AllowGCPtrInCSR);
   }

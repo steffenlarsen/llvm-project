@@ -24,7 +24,7 @@
 #include "llvm/ADT/SparseSet.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/OptimizationRemarkEmitter.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsCore1.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineBranchProbabilityInfo.h"
 #include "llvm/CodeGen/MachineDominators.h"
@@ -44,36 +44,34 @@
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/IR/Function.h"
 #include "llvm/InitializePasses.h"
-#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 
 using namespace llvm;
 
 #define DEBUG_TYPE "early-ifcvt"
 
-static unsigned getEarlyIfcvtLimit(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_EarlyIfcvtLimit>(Ctx);
+static unsigned getEarlyIfcvtLimit(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore1Options>().CGPASS_EarlyIfcvtLimit;
 }
 
-static bool getStressEarlyIfcvt(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_StressEarlyIfcvt>(Ctx);
+static bool getStressEarlyIfcvt(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore1Options>().CGPASS_StressEarlyIfcvt;
 }
 
-static bool getEnableEarlyIfcvtDataDependent(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_EnableEarlyIfcvtDataDependent>(
-      Ctx);
+static bool getEnableEarlyIfcvtDataDependent(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore1Options>()
+      .CGPASS_EnableEarlyIfcvtDataDependent;
 }
 
-static unsigned getEarlyIfcvtMaxSteps(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_EarlyIfcvtMaxSteps>(Ctx);
+static unsigned getEarlyIfcvtMaxSteps(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore1Options>().CGPASS_EarlyIfcvtMaxSteps;
 }
 
 // Limit the work done when looking for calls between a load and the condition
 // it feeds.
-static unsigned getMaxRegionInstrs(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_EarlyIfcvtMaxRegionInstrs>(Ctx);
+static unsigned getMaxRegionInstrs(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore1Options>().CGPASS_EarlyIfcvtMaxRegionInstrs;
 }
 
 STATISTIC(NumDiamondsSeen,  "Number of diamonds");
@@ -246,11 +244,11 @@ bool SSAIfConv::canSpeculateInstrs(MachineBasicBlock *MBB) {
 
     const Function *F = &MBB->getParent()->getFunction();
     if (++InstrCount >
-            getEarlyIfcvtLimit(F->getContext().getOptionsContext()) &&
-        !getStressEarlyIfcvt(F->getContext().getOptionsContext())) {
+            getEarlyIfcvtLimit(F->getContext()) &&
+        !getStressEarlyIfcvt(F->getContext())) {
       LLVM_DEBUG(
           dbgs() << printMBBReference(*MBB) << " has more than "
-                 << getEarlyIfcvtLimit(F->getContext().getOptionsContext())
+                 << getEarlyIfcvtLimit(F->getContext())
                  << " instructions.\n");
       return false;
     }
@@ -346,11 +344,11 @@ bool SSAIfConv::canPredicateInstrs(MachineBasicBlock *MBB) {
 
     const Function *F = &MBB->getParent()->getFunction();
     if (++InstrCount >
-            getEarlyIfcvtLimit(F->getContext().getOptionsContext()) &&
-        !getStressEarlyIfcvt(F->getContext().getOptionsContext())) {
+            getEarlyIfcvtLimit(F->getContext()) &&
+        !getStressEarlyIfcvt(F->getContext())) {
       LLVM_DEBUG(
           dbgs() << printMBBReference(*MBB) << " has more than "
-                 << getEarlyIfcvtLimit(F->getContext().getOptionsContext())
+                 << getEarlyIfcvtLimit(F->getContext())
                  << " instructions.\n");
       return false;
     }
@@ -965,7 +963,7 @@ bool EarlyIfConverter::hasCallOrLoopInRange(const MachineInstr *From,
   const MachineBasicBlock *ToBB = To->getParent();
 
   const unsigned MaxRegionInstrs = getMaxRegionInstrs(
-      FromBB->getParent()->getFunction().getContext().getOptionsContext());
+      FromBB->getParent()->getFunction().getContext());
   unsigned NumScanned = 0;
   auto HitSearchLimit = [&](unsigned N) {
     NumScanned += N;
@@ -1086,7 +1084,7 @@ bool EarlyIfConverter::doOperandsComeFromMemory(
   const Function *F = &IfConv.Head->getParent()->getFunction();
   while (!Worklist.empty() &&
          VisitedInstrs.size() <
-             getEarlyIfcvtMaxSteps(F->getContext().getOptionsContext())) {
+             getEarlyIfcvtMaxSteps(F->getContext())) {
     const MachineInstr *MI = Worklist.pop_back_val();
     if (!VisitedInstrs.insert(MI).second)
       continue;
@@ -1192,7 +1190,7 @@ template <typename Remark> Remark &operator<<(Remark &R, Cycles C) {
 bool EarlyIfConverter::shouldConvertIf() {
   const Function *F = &IfConv.Head->getParent()->getFunction();
   // Stress testing mode disables all cost considerations.
-  if (getStressEarlyIfcvt(F->getContext().getOptionsContext()))
+  if (getStressEarlyIfcvt(F->getContext()))
     return true;
 
   // Do not try to if-convert if the condition has a high chance of being
@@ -1240,7 +1238,7 @@ bool EarlyIfConverter::shouldConvertIf() {
   // When hard-to-predict analysis is enabled, use full MispredictPenalty for
   // hard-to-predict branches, half for others. Otherwise use half for all.
   bool DataDependent = false;
-  if (getEnableEarlyIfcvtDataDependent(F->getContext().getOptionsContext()))
+  if (getEnableEarlyIfcvtDataDependent(F->getContext()))
     DataDependent = isConditionDataDependent();
 
   unsigned CritLimit = DataDependent ? STI->getMispredictionPenalty()
@@ -1459,7 +1457,7 @@ EarlyIfConverterPass::run(MachineFunction &MF,
   MachineTraceMetrics &MTM = MFAM.getResult<MachineTraceMetricsAnalysis>(MF);
   MachineBranchProbabilityInfo *MBPI = nullptr;
   if (getEnableEarlyIfcvtDataDependent(
-          MF.getFunction().getContext().getOptionsContext()))
+          MF.getFunction().getContext()))
     MBPI = &MFAM.getResult<MachineBranchProbabilityAnalysis>(MF);
 
   EarlyIfConverter Impl(MDT, LI, MTM, MBPI);
@@ -1485,7 +1483,7 @@ bool EarlyIfConverterLegacy::runOnMachineFunction(MachineFunction &MF) {
       getAnalysis<MachineTraceMetricsWrapperPass>().getMTM();
   MachineBranchProbabilityInfo *MBPI = nullptr;
   if (getEnableEarlyIfcvtDataDependent(
-          MF.getFunction().getContext().getOptionsContext()))
+          MF.getFunction().getContext()))
     MBPI = &getAnalysis<MachineBranchProbabilityInfoWrapperPass>().getMBPI();
 
   return EarlyIfConverter(MDT, LI, MTM, MBPI).run(MF);

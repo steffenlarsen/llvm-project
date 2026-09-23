@@ -1,4 +1,4 @@
-//===- HexagonOptions.td - CLV2 option defs for Hexagon ---*- tablegen -*-===//
+//===- HexagonOptions.td - Option defs for Hexagon -------*- tablegen -*-===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -6,2210 +6,1360 @@
 //
 //===----------------------------------------------------------------------===//
 
-include "llvm/Support/CLV2Options.td"
+include "llvm/Option/OptParser.td"
 
-def HexagonOptsReg : Registry<"llvm::hex_opts"> { let OutOfLineGetters = 1; }
+def HexagonOptions : OptionsStruct<"llvm"> {}
 
-// --- HexagonBitSimplify.cpp ---
-
-def HEX_PreserveTiedOps : Option<
-    "hexbit-keep-tied",
-    "Preserve subregisters in tied operands",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
-
-def HEX_GenExtractBit : Option<
-    "hexbit-extract",
-    "Generate extract instructions",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
-
-def HEX_GenBitSplit : Option<
-    "hexbit-bitsplit",
-    "Generate bitsplit instructions",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
-
-def HEX_MaxExtract : Option<
-    "hexbit-max-extract", "",
-    "unsigned"> {
-  let Registry = HexagonOptsReg;
-  let Default = "4294967295";
-  let Hidden = 1;
-}
-
-def HEX_MaxBitSplit : Option<
-    "hexbit-max-bitsplit", "",
-    "unsigned"> {
-  let Registry = HexagonOptsReg;
-  let Default = "4294967295";
-  let Hidden = 1;
-}
-
-def HEX_RegisterSetLimit : Option<
-    "hexbit-registerset-limit", "",
-    "unsigned"> {
-  let Registry = HexagonOptsReg;
-  let Default = "1000";
-  let Hidden = 1;
-}
-
-// --- HexagonBranchRelaxation.cpp ---
-
-def HEX_BranchRelaxSafetyBuffer : Option<
-    "branch-relax-safety-buffer",
-    "safety buffer size",
-    "unsigned"> {
-  let Registry = HexagonOptsReg;
-  let Default = "200";
-  let Hidden = 1;
-}
-
-// --- HexagonCommonGEP.cpp ---
-
-def HEX_OptSpeculate : Option<
-    "commgep-speculate", "",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
-
-def HEX_OptEnableInv : Option<
-    "commgep-inv", "",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
-
-def HEX_OptEnableConst : Option<
-    "commgep-const", "",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
-
-// --- HexagonConstExtenders.cpp ---
-
-def HEX_CExtThreshold : Option<
-    "hexagon-cext-threshold",
-    "Minimum number of extenders to trigger replacement",
-    "unsigned"> {
-  let Registry = HexagonOptsReg;
-  let Default = "3";
-  let Hidden = 1;
-}
-
-def HEX_CExtLimit : Option<
-    "hexagon-cext-limit",
-    "Maximum number of replacements",
-    "unsigned"> {
-  let Default = "0";
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
-
-// --- HexagonCopyHoisting.cpp ---
-
-def HEX_CPHoistFn : Option<
-    "cphoistfn", "",
-    "std::string"> {
-  let Default = "\"\"";
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
-
-// --- HexagonCopyToCombine.cpp ---
-
-def HEX_DisableMergeIntoCombines : Option<
-    "disable-merge-into-combines",
-    "Disable merging into combines",
-    "bool"> {
-  let Default = "false";
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
-
-def HEX_DisableConst64 : Option<
-    "disable-const64",
-    "Disable generation of const64",
-    "bool"> {
-  let Default = "false";
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
-
-def HEX_MaxNumInstBetweenNewValueStoreAndTFR : Option<
-    "max-num-inst-between-tfr-and-nv-store",
-    "Maximum distance between a tfr feeding a store we "
-    "consider the store still to be newifiable",
-    "unsigned"> {
-  let Registry = HexagonOptsReg;
-  let Default = "4";
-  let Hidden = 1;
-}
-
-// --- HexagonEarlyIfConv.cpp ---
-
-def HEX_EnableHexagonBP : Option<
-    "enable-hexagon-br-prob", "",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
-
-def HEX_EIFSizeLimit : Option<
-    "eif-limit", "",
-    "unsigned"> {
-  let Registry = HexagonOptsReg;
-  let Default = "6";
-  let Hidden = 1;
-}
-
-def HEX_SkipExitBranches : Option<
-    "eif-no-loop-exit", "",
-    "bool"> {
-  let Default = "false";
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
-
-// --- HexagonExpandCondsets.cpp ---
-
-def HEX_ExpandCondsetsTfrLimit : Option<
-    "expand-condsets-tfr-limit", "",
-    "unsigned"> {
-  let Registry = HexagonOptsReg;
-  let Default = "4294967295";
-  let Hidden = 1;
-}
-
-def HEX_ExpandCondsetsCoaLimit : Option<
-    "expand-condsets-coa-limit", "",
-    "unsigned"> {
-  let Registry = HexagonOptsReg;
-  let Default = "4294967295";
-  let Hidden = 1;
-}
-
-// --- HexagonFixupHwLoops.cpp ---
-
-def HEX_MaxLoopRange : Option<
-    "hexagon-loop-range", "",
-    "unsigned"> {
-  let Registry = HexagonOptsReg;
-  let Default = "200";
-  let Hidden = 1;
-}
-
-// --- HexagonFrameLowering.cpp ---
-
-def HEX_DisableDeallocRet : Option<
-    "disable-hexagon-dealloc-ret",
-    "Disable Dealloc Return for Hexagon target",
-    "bool"> {
-  let Default = "false";
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
-
-def HEX_NumberScavengerSlots : Option<
-    "number-scavenger-slots",
-    "Set the number of scavenger slots",
-    "unsigned"> {
-  let Registry = HexagonOptsReg;
-  let Default = "2";
-  let Hidden = 1;
-}
-
-def HEX_SpillFuncThreshold : Option<
-    "spill-func-threshold",
-    "Specify O2(not Os) spill func threshold",
-    "int"> {
-  let Registry = HexagonOptsReg;
-  let Default = "6";
-  let Hidden = 1;
-}
-
-def HEX_SpillFuncThresholdOs : Option<
-    "spill-func-threshold-Os",
-    "Specify Os spill func threshold",
-    "int"> {
-  let Registry = HexagonOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
-
-def HEX_EnableStackOVFSanitizer : Option<
-    "enable-stackovf-sanitizer",
-    "Enable runtime checks for stack overflow.",
-    "bool"> {
-  let Default = "false";
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
-
-def HEX_EnableShrinkWrapping : Option<
-    "hexagon-shrink-frame",
-    "Enable stack frame shrink wrapping",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
-
-def HEX_ShrinkLimit : Option<
-    "shrink-frame-limit",
-    "Max count of stack frame shrink-wraps",
-    "unsigned"> {
-  let Registry = HexagonOptsReg;
-  let Default = "4294967295";
-  let Hidden = 1;
-}
-
-def HEX_EnableSaveRestoreLong : Option<
-    "enable-save-restore-long",
-    "Enable long calls for save-restore stubs.",
-    "bool"> {
-  let Default = "false";
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
-
-def HEX_EliminateFramePointer : Option<
-    "hexagon-fp-elim",
-    "Refrain from using FP whenever possible",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
-
-def HEX_OptimizeSpillSlots : Option<
-    "hexagon-opt-spill",
-    "Optimize spill slots",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
-
-// --- HexagonGenExtract.cpp ---
-
-def HEX_ExtractCutoff : Option<
-    "extract-cutoff", "",
-    "unsigned"> {
-  let Registry = HexagonOptsReg;
-  let Default = "4294967295";
-  let Hidden = 1;
-}
-
-def HEX_NoSR0 : Option<
-    "extract-nosr0", "",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
-
-// --- HexagonGenInsert.cpp ---
-
-def HEX_VRegDistCutoff : Option<
-    "insert-dist-cutoff", "",
-    "unsigned"> {
-  let Registry = HexagonOptsReg;
-  let Default = "30";
-  let Hidden = 1;
-}
-
-def HEX_MaxIFMSize : Option<
-    "insert-max-ifmap", "",
-    "unsigned"> {
-  let Registry = HexagonOptsReg;
-  let Default = "1024";
-  let Hidden = 1;
-}
-
-def HEX_OptTiming : Option<
-    "insert-timing", "",
-    "bool"> {
-  let Default = "false";
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
-
-def HEX_OptSelectAll0 : Option<
-    "insert-all0", "",
-    "bool"> {
-  let Default = "false";
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
-
-def HEX_OptSelectHas0 : Option<
-    "insert-has0", "",
-    "bool"> {
-  let Default = "false";
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
-
-def HEX_OptInsertConst : Option<
-    "insert-const", "",
-    "bool"> {
-  let Default = "false";
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
-
-// --- HexagonGenMux.cpp ---
-
-def HEX_MinPredDist : Option<
-    "hexagon-gen-mux-threshold",
-    "Minimum distance between predicate definition and furthest use",
-    "unsigned"> {
-  let Default = "0";
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
-
-// --- HexagonGlobalScheduler.cpp ---
-
-def HEX_DisablePullUp : Option<
-    "disable-pull-up",
-    "Disable the pull up of instructions optimization",
-    "bool"> {
-  let Default = "false";
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
-
-def HEX_EnableSpeculativePullUp : Option<
-    "enable-speculative-pull-up",
-    "Enable speculative pull up scheduling",
-    "bool"> {
-  let Default = "false";
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
-
-def HEX_EnableLocalPullUp : Option<
-    "enable-local-pull-up",
-    "Enable local scheduling of pull up candidates",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
-
-def HEX_AllowSpeculateLoads : Option<
-    "speculate-loads-on-pull-up",
-    "Allow speculative scheduling of loads",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
-
-def HEX_AllowCmpBranchLoads : Option<
-    "cmp-branch-loads-pull-up",
-    "Allow speculative scheduling of loads past cmp/branch",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
-
-def HEX_AllowUnlikelyPath : Option<
-    "unlikely-path-pull-up",
-    "Allow pull up of unlikely path instructions",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
-
-def HEX_AllowDependentPullUp : Option<
-    "enable-dependent-pull-up",
-    "Allow dependent pull up",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
-
-def HEX_PreventCompoundSeparation : Option<
-    "prevent-compound-separation",
-    "Prevent separation of compound instructions",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
-
-def HEX_PreventDuplexSeparation : Option<
-    "prevent-duplex-separation",
-    "Prevent separation of duplex instructions",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
-
-def HEX_MainCandidateQueueSize : Option<
-    "pull-up-main-queue-size", "",
-    "unsigned"> {
-  let Registry = HexagonOptsReg;
-  let Default = "8";
-  let Hidden = 1;
-}
-
-def HEX_SecondaryCandidateQueueSize : Option<
-    "pull-up-sec-queue-size", "",
-    "unsigned"> {
-  let Registry = HexagonOptsReg;
-  let Default = "2";
-  let Hidden = 1;
-}
-
-def HEX_PostPullUpOpt : Option<
-    "post-pull-up-opt",
-    "Enable post pull up optimization pass",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
-
-def HEX_SpeculateNonPredInsn : Option<
-    "speculate-non-pred-insn",
-    "Allow speculate non-predicated instructions",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
-
-def HEX_OneFloatPerPacket : Option<
-    "single-float-packet",
-    "Only allow one float instruction per packet",
-    "bool"> {
-  let Default = "false";
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
-
-def HEX_OneComplexPerPacket : Option<
-    "single-complex-packet",
-    "Only allow one complex instruction per packet",
-    "bool"> {
-  let Default = "false";
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
-
-// --- HexagonHardwareLoops.cpp ---
-
-def HEX_HWLoopLimit : Option<
-    "hexagon-max-hwloop", "",
-    "int"> {
-  let Registry = HexagonOptsReg;
-  let Default = "-1";
-  let Hidden = 1;
-}
-
-def HEX_PHFn : Option<
-    "hexagon-hwloop-phfn", "",
-    "std::string"> {
-  let Default = "\"\"";
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
-
-def HEX_HWCreatePreheader : Option<
-    "hexagon-hwloop-preheader",
-    "Automatically create preheader for hardware loops",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
-
-def HEX_SpecPreheader : Option<
-    "hwloop-spec-preheader",
-    "Allow speculative preheader",
-    "bool"> {
-  let Default = "false";
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
-
-// --- HexagonInstrInfo.cpp ---
-
-def HEX_ScheduleInlineAsm : Option<
-    "hexagon-sched-inline-asm",
-    "Schedule inline assembly",
-    "bool"> {
-  let Default = "false";
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
-
-def HEX_EnableBranchPrediction : Option<
-    "hexagon-enable-branch-prediction",
-    "Enable branch prediction",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
-
-def HEX_DisableNVSchedule : Option<
-    "disable-hexagon-nv-schedule",
-    "Disable schedule adjustment for new value stores",
-    "bool"> {
-  let Default = "false";
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
-
-def HEX_EnableTimingClassLatency : Option<
-    "enable-timing-class-latency",
-    "Enable timing class latency",
-    "bool"> {
-  let Default = "false";
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
-
-def HEX_EnableALUForwarding : Option<
-    "enable-alu-forwarding",
-    "Enable ALU forwarding",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
-
-def HEX_EnableACCForwarding : Option<
-    "enable-acc-forwarding",
-    "Enable ACC forwarding",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
-
-def HEX_BranchRelaxAsmLarge : Option<
-    "branch-relax-asm-large",
-    "Branch relaxation for asm large",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
-
-// --- HexagonISelDAGToDAG.cpp ---
-
-def HEX_EnableAddressRebalancing : Option<
-    "isel-rebalance-addr", "",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
-
-def HEX_RebalanceOnlyForOptimizations : Option<
-    "rebalance-only-opt", "",
-    "bool"> {
-  let Default = "false";
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
-
-def HEX_RebalanceOnlyImbalanced : Option<
-    "rebalance-only-imbal", "",
-    "bool"> {
-  let Default = "false";
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
-
-def HEX_CheckSingleUse : Option<
-    "hexagon-isel-su",
-    "Check single use",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
-
-// --- HexagonISelLowering.cpp ---
-
-def HEX_EmitJumpTables : Option<
-    "hexagon-emit-jump-tables",
-    "Control whether jump tables are emitted or not",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
-
-def HEX_MinimumJumpTables : Option<
-    "minimum-jump-tables",
-    "Set minimum jump tables",
-    "int"> {
-  let Registry = HexagonOptsReg;
-  let Default = "5";
-  let Hidden = 1;
-}
-
-def HEX_EnableHexSDNodeSched : Option<
-    "enable-hexagon-sdnode-sched", "",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
-
-def HEX_AlignLoads : Option<
-    "hexagon-align-loads",
-    "Rewrite unaligned loads as a pair of aligned loads",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
-
-// --- HexagonISelLoweringHVX.cpp ---
-
-def HEX_HvxWidenThreshold : Option<
-    "hexagon-hvx-widen",
-    "Lower threshold (in bytes) for widening to HVX vectors",
-    "unsigned"> {
-  let Registry = HexagonOptsReg;
-  let Default = "16";
-  let Hidden = 1;
-}
-
-// --- HexagonLoadStoreWidening.cpp ---
-
-def HEX_MaxMBBSizeForLoadStoreWidening : Option<
-    "max-bb-size-for-load-store-widening", "",
-    "unsigned"> {
-  let Registry = HexagonOptsReg;
-  let Default = "1000";
-  let Hidden = 1;
-}
-
-// --- HexagonLoopAlign.cpp ---
-
-def HEX_DisableLoopAlign : Option<
-    "disable-hexagon-loop-align",
-    "Disable Hexagon loop alignment",
-    "bool"> {
-  let Default = "false";
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
-
-def HEX_HVXLoopAlignLimitUB : Option<
-    "hexagon-hvx-loop-align-limit-ub",
-    "Upper bound for HVX loop alignment",
-    "unsigned"> {
-  let Registry = HexagonOptsReg;
-  let Default = "16";
-  let Hidden = 1;
-}
-
-def HEX_TinyLoopAlignLimitUB : Option<
-    "hexagon-tiny-loop-align-limit-ub",
-    "Upper bound for tiny loop alignment",
-    "unsigned"> {
-  let Registry = HexagonOptsReg;
-  let Default = "16";
-  let Hidden = 1;
-}
-
-def HEX_LoopAlignLimitUB : Option<
-    "hexagon-loop-align-limit-ub",
-    "Upper bound for loop alignment",
-    "unsigned"> {
-  let Registry = HexagonOptsReg;
-  let Default = "8";
-  let Hidden = 1;
-}
-
-def HEX_LoopAlignLimitLB : Option<
-    "hexagon-loop-align-limit-lb",
-    "Lower bound for loop alignment",
-    "unsigned"> {
-  let Registry = HexagonOptsReg;
-  let Default = "4";
-  let Hidden = 1;
-}
-
-def HEX_LoopBndlAlignLimit : Option<
-    "hexagon-loop-bundle-align-limit",
-    "Bundle alignment limit for loop alignment",
-    "unsigned"> {
-  let Registry = HexagonOptsReg;
-  let Default = "4";
-  let Hidden = 1;
-}
-
-def HEX_TinyLoopBndlAlignLimit : Option<
-    "hexagon-tiny-loop-bundle-align-limit",
-    "Bundle alignment limit for tiny loop alignment",
-    "unsigned"> {
-  let Registry = HexagonOptsReg;
-  let Default = "8";
-  let Hidden = 1;
-}
-
-// --- HexagonLoopIdiomRecognition.cpp ---
-
-def HEX_DisableMemcpyIdiom : Option<
-    "disable-memcpy-idiom",
-    "Disable memcpy idiom recognition",
-    "bool"> {
-  let Default = "false";
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
-
-def HEX_DisableMemmoveIdiom : Option<
-    "disable-memmove-idiom",
-    "Disable memmove idiom recognition",
-    "bool"> {
-  let Default = "false";
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
-
-def HEX_RuntimeMemSizeThreshold : Option<
-    "runtime-mem-idiom-threshold",
-    "Runtime memory idiom threshold",
-    "unsigned"> {
-  let Default = "0";
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
-
-def HEX_CompileTimeMemSizeThreshold : Option<
-    "compile-time-mem-idiom-threshold",
-    "Compile time memory idiom threshold",
-    "unsigned"> {
-  let Registry = HexagonOptsReg;
-  let Default = "64";
-  let Hidden = 1;
-}
-
-def HEX_OnlyNonNestedMemmove : Option<
-    "only-nonnested-memmove-idiom",
-    "Only non-nested memmove idiom",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
-
-def HEX_VolatileMemcpy : Option<
-    "disable-hexagon-volatile-memcpy",
-    "Hexagon volatile memcpy",
-    "bool"> {
-  let Default = "false";
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
-
-def HEX_HLIRSimplifyLimit : Option<
-    "hlir-simplify-limit", "",
-    "unsigned"> {
-  let Registry = HexagonOptsReg;
-  let Default = "10000";
-  let Hidden = 1;
-}
-
-// --- HexagonNewValueJump.cpp ---
-
-def HEX_DbgNVJCount : Option<
-    "nvj-count", "",
-    "int"> {
-  let Registry = HexagonOptsReg;
-  let Default = "-1";
-  let Hidden = 1;
-}
-
-def HEX_DisableNewValueJumps : Option<
-    "disable-nvjump",
-    "Disable new value jumps",
-    "bool"> {
-  let Default = "false";
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
-
-// --- HexagonOptAddrMode.cpp ---
-
-def HEX_CodeGrowthLimit : Option<
-    "hexagon-amode-growth-limit",
-    "Address mode growth limit",
-    "int"> {
-  let Default = "0";
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
-
-// --- HexagonPeephole.cpp ---
-
-def HEX_DisableOptSZExt : Option<
-    "disable-hexagon-optszext",
-    "Disable Hexagon opt sign/zero extend",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
-
-def HEX_DisablePNotP : Option<
-    "disable-hexagon-pnotp",
-    "Disable Hexagon PNOT P",
-    "bool"> {
-  let Default = "false";
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
-
-def HEX_DisableOptExtTo64 : Option<
-    "disable-hexagon-opt-ext-to-64",
-    "Disable Hexagon opt ext to 64",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
-
-// --- HexagonQFPOptimizer.cpp ---
-
-def HEX_DisableQFPOptimizer : Option<
-    "disable-qfp-opt",
-    "Disable optimization of Qfloat operations.",
-    "bool"> {
-  let Default = "false";
-  let Registry = HexagonOptsReg;
-}
-
-def HEX_DisableQFOptForMul : Option<
-    "disable-qfp-opt-mul",
-    "Disable optimization of Qfloat operations for multiply.",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Default = "1";
-}
-
-// --- HexagonRDFOpt.cpp ---
-
-def HEX_RDFLimit : Option<
-    "hexagon-rdf-limit", "",
-    "unsigned"> {
-  let Registry = HexagonOptsReg;
-  let Default = "4294967295";
-}
-
-def HEX_RDFDump : Option<
-    "hexagon-rdf-dump", "",
-    "bool"> {
-  let Default = "false";
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
-
-def HEX_RDFTrackReserved : Option<
-    "hexagon-rdf-track-reserved", "",
-    "bool"> {
-  let Default = "false";
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
-
-def HEX_EnableAggressiveRDFCopy : Option<
-    "hexagon-aggressive-rdf-copy",
-    "Enable aggressive RDF copy propagation with super-register support",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
-
-// --- HexagonRegisterInfo.cpp ---
-
-def HEX_FrameIndexSearchRange : Option<
-    "hexagon-frame-index-search-range", "",
-    "unsigned"> {
-  let Registry = HexagonOptsReg;
-  let Default = "32";
-  let Hidden = 1;
-}
-
-def HEX_FrameIndexReuseLimit : Option<
-    "hexagon-frame-index-reuse-limit", "",
-    "unsigned"> {
-  let Registry = HexagonOptsReg;
-  let Default = "4294967295";
-  let Hidden = 1;
-}
-
-// --- HexagonSplitDouble.cpp ---
-
-def HEX_MaxHSDR : Option<
-    "max-hsdr", "",
-    "int"> {
-  let Registry = HexagonOptsReg;
-  let Default = "-1";
-  let Hidden = 1;
-}
-
-def HEX_MemRefsFixed : Option<
-    "hsdr-no-mem", "",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
-
-// --- HexagonSubtarget.cpp ---
-
-def HEX_EnableBSBSched : Option<
-    "enable-bsb-sched",
-    "Enable BSB scheduling",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
-
-def HEX_EnableTCLatencySched : Option<
-    "enable-tc-latency-sched",
-    "Enable TC latency scheduling",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
-
-def HEX_EnableDotCurSched : Option<
-    "enable-cur-sched",
-    "Enable dot cur scheduling",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
-
-def HEX_OverrideLongCalls : Option<
-    "hexagon-long-calls",
-    "If set, always generate long calls",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
-
-def HEX_EnablePredicatedCalls : Option<
-    "hexagon-pred-calls",
-    "Consider calls to be predicable",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
-
-def HEX_SchedPredsCloser : Option<
-    "sched-preds-closer",
-    "Schedule predicate definitions closer to uses",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
-
-def HEX_SchedRetvalOptimization : Option<
-    "sched-retval-optimization",
-    "Enable retval optimization",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
-
-def HEX_EnableCheckBankConflict : Option<
-    "hexagon-check-bank-conflict",
-    "Enable bank conflict checking",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
-
-// --- HexagonTargetMachine.cpp ---
-
-def HEX_EnableCExtOpt : Option<
-    "hexagon-cext",
-    "Enable Hexagon constant-extender optimization",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
-
-def HEX_EnableRDFOpt : Option<
-    "rdf-opt",
-    "Enable RDF-based optimizations",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
-
-def HEX_EnablePostRAHandleQFP : Option<
-    "hexagon-handle-qfloat",
-    "Fix up QFloat spills and reloads after register allocation",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
-
-def HEX_RDFFuncBlockLimit : Option<
-    "rdf-bb-limit",
-    "Basic block limit for a function for RDF optimizations",
-    "unsigned"> {
-  let Registry = HexagonOptsReg;
-  let Default = "1000";
-  let Hidden = 1;
-}
-
-def HEX_DisableHardwareLoops : Option<
-    "disable-hexagon-hwloops",
-    "Disable Hardware Loops for Hexagon target",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
-
-def HEX_EnableMCR : Option<
-    "hexagon-mcr",
-    "Enable the machine combiner pass",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
-
-def HEX_DisableAModeOpt : Option<
-    "disable-hexagon-amodeopt",
-    "Disable Hexagon Addressing Mode Optimization",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
-
-def HEX_DisableCFGOpt : Option<
-    "disable-hexagon-cfgopt",
-    "Disable Hexagon CFG Optimization",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
-
-def HEX_DisableHCP : Option<
-    "disable-hcp",
-    "Disable Hexagon constant propagation",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
-
-def HEX_DisableMask : Option<
-    "disable-mask",
-    "Disable Hexagon specific Mask generation pass",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
-
-def HEX_DisableLiveVars : Option<
-    "disable-hlv",
-    "Disable Hexagon specific post-RA live-variable analysis",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
-
-def HEX_DisableStoreWidening : Option<
-    "disable-store-widen",
-    "Disable store widening",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
-
-def HEX_DisableLoadWidening : Option<
-    "disable-load-widen",
-    "Disable load widening",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
-
-def HEX_EnableExpandCondsets : Option<
-    "hexagon-expand-condsets",
-    "Early expansion of MUX",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
-
-def HEX_EnableTfrCleanup : Option<
-    "hexagon-tfr-cleanup",
-    "Cleanup of TFRs/COPYs",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
-
-def HEX_EnableEarlyIf : Option<
-    "hexagon-eif",
-    "Enable early if-conversion",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
-
-def HEX_EnableCopyHoist : Option<
-    "hexagon-copy-hoist",
-    "Enable Hexagon copy hoisting",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
-
-def HEX_EnableGenInsert : Option<
-    "hexagon-insert",
-    "Generate \"insert\" instructions",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
-
-def HEX_EnableCommGEP : Option<
-    "hexagon-commgep",
-    "Enable commoning of GEP instructions",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
-
-def HEX_EnableGenExtract : Option<
-    "hexagon-extract",
-    "Generate \"extract\" instructions",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
-
-def HEX_EnableGenMux : Option<
-    "hexagon-mux",
-    "Enable converting conditional transfers into MUX instructions",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
-
-def HEX_EnableGenPred : Option<
-    "hexagon-gen-pred",
-    "Enable conversion of arithmetic operations to predicate instructions",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
-
-def HEX_EnableLoopPrefetch : Option<
-    "hexagon-loop-prefetch",
-    "Enable loop data prefetch on Hexagon",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
-
-def HEX_DisableHSDR : Option<
-    "disable-hsdr",
-    "Disable splitting double registers",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
-
-def HEX_EnableGenMemAbs : Option<
-    "hexagon-mem-abs",
-    "Generate absolute set instructions",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
-
-def HEX_EnableBitSimplify : Option<
-    "hexagon-bit",
-    "Bit simplification",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
-
-def HEX_EnableLoopResched : Option<
-    "hexagon-loop-resched",
-    "Loop rescheduling",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
-
-def HEX_NoOpt : Option<
-    "hexagon-noopt",
-    "Disable backend optimizations",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
-
-def HEX_EnableVectorPrint : Option<
-    "enable-hexagon-vector-print",
-    "Enable Hexagon Vector print instr pass",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
-
-def HEX_EnableVExtractOpt : Option<
-    "hexagon-opt-vextract",
-    "Enable vextract optimization",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
-
-def HEX_EnableVectorCombine : Option<
-    "hexagon-vector-combine",
-    "Enable HVX vector combining",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
-
-def HEX_EnableInitialCFGCleanup : Option<
-    "hexagon-initial-cfg-cleanup",
-    "Simplify the CFG after atomic expansion pass",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
-
-def HEX_EnableInstSimplify : Option<
-    "hexagon-instsimplify",
-    "Enable instsimplify",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
-
-// --- HexagonTargetObjectFile.cpp ---
-
-def HEX_SmallDataThreshold : Option<
-    "hexagon-small-data-threshold",
-    "Maximum size of an object in the sdata section",
-    "unsigned"> {
-  let Registry = HexagonOptsReg;
-  let Default = "8";
-  let Hidden = 1;
-}
-
-def HEX_NoSmallDataSorting : Option<
-    "mno-sort-sda", "",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
-
-def HEX_StaticInSData : Option<
-    "hexagon-statics-in-small-data", "",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
-
-def HEX_TraceGVPlacement : Option<
-    "trace-gv-placement",
-    "Trace GV placement",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
-
-def HEX_EmitJTInText : Option<
-    "hexagon-emit-jt-text", "",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
-
-def HEX_EmitLUTInText : Option<
-    "hexagon-emit-lut-text", "",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
-
-// --- HexagonTargetTransformInfo.cpp ---
-
-def HEX_AutoHVX : Option<
-    "hexagon-autohvx",
-    "Enable auto-vectorization for HVX",
-    "bool"> {
-  let Default = "false";
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
-
-def HEX_AllowScatterGatherHVX : Option<
-    "hexagon-allow-scatter-gather-hvx",
-    "Allow gather/scatter intrinsics for Hexagon",
-    "bool"> {
-  let Default = "false";
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
-
-def HEX_EnableV68FloatAutoHVX : Option<
-    "force-hvx-float",
-    "Enable auto-vectorization of floating point types on v68.",
-    "bool"> {
-  let Default = "false";
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
-
-def HEX_EmitLookupTables : Option<
-    "hexagon-emit-lookup-tables",
-    "Enable emission of lookup tables",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
-
-def HEX_MaskedVMem : Option<
-    "hexagon-masked-vmem",
-    "Enable masked vector memory operations",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
-
-// --- HexagonVExtract.cpp ---
-
-def HEX_VExtractThreshold : Option<
-    "hexagon-vextract-threshold", "",
-    "unsigned"> {
-  let Registry = HexagonOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
-
-// --- HexagonVLIWPacketizer.cpp ---
-
-def HEX_DisablePacketizer : Option<
-    "disable-packetizer",
-    "Disable Hexagon packetizer pass",
-    "bool"> {
-  let Default = "0";
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
-
-def HEX_Slot1Store : Option<
-    "slot1-store-slot0-load",
-    "Allow slot1 store slot0 load",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
-
-def HEX_PacketizeVolatiles : Option<
-    "hexagon-packetize-volatiles",
-    "Allow packetizing volatile memory accesses",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
-
-def HEX_DisableVecDblNVStores : Option<
-    "disable-vecdbl-nv-stores", "",
-    "bool"> {
-  let Default = "false";
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
-
-// --- HexagonVectorCombine.cpp ---
-
-def HEX_HVCDumpModule : Option<
-    "hvc-dump-module", "",
-    "bool"> {
-  let Default = "false";
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
-
-def HEX_HVCVAEnabled : Option<
-    "hvc-va", "",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
-
-def HEX_HVCVIEnabled : Option<
-    "hvc-vi", "",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
-
-def HEX_HVCVADoFullStores : Option<
-    "hvc-va-full-stores", "",
-    "bool"> {
-  let Default = "false";
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
-
-def HEX_HVCVAGroupCountLimit : Option<
-    "hvc-va-group-count-limit", "",
-    "unsigned"> {
-  let Registry = HexagonOptsReg;
-  let Default = "4294967295";
-  let Hidden = 1;
-}
-
-def HEX_HVCVAGroupSizeLimit : Option<
-    "hvc-va-group-size-limit", "",
-    "unsigned"> {
-  let Registry = HexagonOptsReg;
-  let Default = "4294967295";
-  let Hidden = 1;
-}
-
-// --- HexagonVectorLoopCarriedReuse.cpp ---
-
-def HEX_VLCRIterationLim : Option<
-    "hexagon-vlcr-iteration-lim", "",
-    "int"> {
-  let Registry = HexagonOptsReg;
-  let Default = "2";
-  let Hidden = 1;
-}
-
-// --- HexagonVectorPrint.cpp ---
-
-def HEX_TraceHexVectorStoresOnly : Option<
-    "trace-hex-vector-stores-only",
-    "Trace hex vector stores only",
-    "bool"> {
-  let Default = "false";
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
-
-// --- RDFCopy.cpp ---
-
-def HEX_RDFCpLimit : Option<
-    "rdf-cp-limit", "",
-    "unsigned"> {
-  let Default = "0";
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
+// =========================================================================
+// Enum types
+// =========================================================================
 
 // --- MCTargetDesc/HexagonMCTargetDesc.cpp ---
 
-def HEX_DisableCompound : Option<
-    "mno-compound",
+// Self-contained (not External): the real Hexagon::ArchEnum lives in the
+// private lib/Target/Hexagon/HexagonDepArch.h header, unreachable from the
+// driver tools that include HexagonOptions.h. HexagonMCTargetDesc.cpp's
+// toArchEnum() maps each enumerator by name to Hexagon::ArchEnum. Only the
+// spellings upstream's -mhvx cl::opt accepted are listed; Generic's empty
+// spelling is what "-mhvx=" (explicitly empty value) parses to.
+def HexHVXArchV60 : EnumMember<"V60", "v60">;
+def HexHVXArchV62 : EnumMember<"V62", "v62">;
+def HexHVXArchV65 : EnumMember<"V65", "v65">;
+def HexHVXArchV66 : EnumMember<"V66", "v66">;
+def HexHVXArchV67 : EnumMember<"V67", "v67">;
+def HexHVXArchV68 : EnumMember<"V68", "v68">;
+def HexHVXArchV69 : EnumMember<"V69", "v69">;
+def HexHVXArchV71 : EnumMember<"V71", "v71">;
+def HexHVXArchV73 : EnumMember<"V73", "v73">;
+def HexHVXArchV75 : EnumMember<"V75", "v75">;
+def HexHVXArchV79 : EnumMember<"V79", "v79">;
+def HexHVXArchV81 : EnumMember<"V81", "v81">;
+def HexHVXArchGeneric : EnumMember<"Generic", "">;
+
+def HexHVXArchEnum : OptionEnum<"HexHVXArch", [
+    HexHVXArchV60, HexHVXArchV62, HexHVXArchV65, HexHVXArchV66,
+    HexHVXArchV67, HexHVXArchV68, HexHVXArchV69, HexHVXArchV71,
+    HexHVXArchV73, HexHVXArchV75, HexHVXArchV79, HexHVXArchV81,
+    HexHVXArchGeneric]>;
+
+// --- HexagonTargetMachine.cpp ---
+
+// Generated as llvm::QFloatMode, replacing the identical
+// `enum class QFloatMode` HexagonTargetMachine.h used to declare.
+def QFloatModeStrictIEEE : EnumMember<"StrictIEEE", "strict-ieee">;
+def QFloatModeIEEE : EnumMember<"IEEE", "ieee">;
+def QFloatModeLossy : EnumMember<"Lossy", "lossy">;
+def QFloatModeLegacy : EnumMember<"Legacy", "legacy">;
+
+def QFloatModeEnum : OptionEnum<"QFloatMode", [
+    QFloatModeStrictIEEE, QFloatModeIEEE, QFloatModeLossy,
+    QFloatModeLegacy]>;
+
+// =========================================================================
+// Options
+// =========================================================================
+
+// --- HexagonBitSimplify.cpp ---
+
+defm HEX_PreserveTiedOps : BoolField<
+    "hexbit-keep-tied", "true",
+    "Preserve subregisters in tied operands",
+    /*hidden=*/1>;
+
+defm HEX_GenExtractBit : BoolField<
+    "hexbit-extract", "true",
+    "Generate extract instructions",
+    /*hidden=*/1>;
+
+defm HEX_GenBitSplit : BoolField<
+    "hexbit-bitsplit", "true",
+    "Generate bitsplit instructions",
+    /*hidden=*/1>;
+
+defm HEX_MaxExtract : OptionalField<
+    "hexbit-max-extract", "unsigned",
+    "",
+    /*hidden=*/1>;
+
+defm HEX_MaxBitSplit : OptionalField<
+    "hexbit-max-bitsplit", "unsigned",
+    "",
+    /*hidden=*/1>;
+
+defm HEX_RegisterSetLimit : ValueField<
+    "hexbit-registerset-limit", "unsigned", "1000",
+    "",
+    /*hidden=*/1>;
+
+// --- HexagonBranchRelaxation.cpp ---
+
+defm HEX_BranchRelaxSafetyBuffer : ValueField<
+    "branch-relax-safety-buffer", "unsigned", "200",
+    "safety buffer size",
+    /*hidden=*/1>;
+
+// --- HexagonCommonGEP.cpp ---
+
+defm HEX_OptSpeculate : BoolField<
+    "commgep-speculate", "true",
+    "",
+    /*hidden=*/1>;
+
+defm HEX_OptEnableInv : BoolField<
+    "commgep-inv", "true",
+    "",
+    /*hidden=*/1>;
+
+defm HEX_OptEnableConst : BoolField<
+    "commgep-const", "true",
+    "",
+    /*hidden=*/1>;
+
+// --- HexagonConstExtenders.cpp ---
+
+defm HEX_CExtThreshold : ValueField<
+    "hexagon-cext-threshold", "unsigned", "3",
+    "Minimum number of extenders to trigger replacement",
+    /*hidden=*/1>;
+
+defm HEX_CExtLimit : OptionalField<
+    "hexagon-cext-limit", "unsigned",
+    "Maximum number of replacements",
+    /*hidden=*/1>;
+
+// --- HexagonCopyHoisting.cpp ---
+
+defm HEX_CPHoistFn : ValueField<
+    "cphoistfn", "std::string", "\"\"",
+    "",
+    /*hidden=*/1>;
+
+// --- HexagonCopyToCombine.cpp ---
+
+defm HEX_DisableMergeIntoCombines : BoolField<
+    "disable-merge-into-combines", "false",
+    "Disable merging into combines",
+    /*hidden=*/1>;
+
+defm HEX_DisableConst64 : BoolField<
+    "disable-const64", "false",
+    "Disable generation of const64",
+    /*hidden=*/1>;
+
+defm HEX_MaxNumInstBetweenNewValueStoreAndTFR : ValueField<
+    "max-num-inst-between-tfr-and-nv-store", "unsigned", "4",
+    "Maximum distance between a tfr feeding a store we "
+    "consider the store still to be newifiable",
+    /*hidden=*/1>;
+
+// --- HexagonEarlyIfConv.cpp ---
+
+defm HEX_EnableHexagonBP : BoolField<
+    "enable-hexagon-br-prob", "true",
+    "",
+    /*hidden=*/1>;
+
+defm HEX_EIFSizeLimit : ValueField<
+    "eif-limit", "unsigned", "6",
+    "",
+    /*hidden=*/1>;
+
+defm HEX_SkipExitBranches : BoolField<
+    "eif-no-loop-exit", "false",
+    "",
+    /*hidden=*/1>;
+
+// --- HexagonExpandCondsets.cpp ---
+
+defm HEX_ExpandCondsetsTfrLimit : OptionalField<
+    "expand-condsets-tfr-limit", "unsigned",
+    "",
+    /*hidden=*/1>;
+
+defm HEX_ExpandCondsetsCoaLimit : OptionalField<
+    "expand-condsets-coa-limit", "unsigned",
+    "",
+    /*hidden=*/1>;
+
+// --- HexagonFixupHwLoops.cpp ---
+
+defm HEX_MaxLoopRange : ValueField<
+    "hexagon-loop-range", "unsigned", "200",
+    "",
+    /*hidden=*/1>;
+
+// --- HexagonFrameLowering.cpp ---
+
+defm HEX_DisableDeallocRet : BoolField<
+    "disable-hexagon-dealloc-ret", "false",
+    "Disable Dealloc Return for Hexagon target",
+    /*hidden=*/1>;
+
+defm HEX_NumberScavengerSlots : ValueField<
+    "number-scavenger-slots", "unsigned", "2",
+    "Set the number of scavenger slots",
+    /*hidden=*/1>;
+
+defm HEX_SpillFuncThreshold : ValueField<
+    "spill-func-threshold", "int", "6",
+    "Specify O2(not Os) spill func threshold",
+    /*hidden=*/1>;
+
+defm HEX_SpillFuncThresholdOs : ValueField<
+    "spill-func-threshold-Os", "int", "1",
+    "Specify Os spill func threshold",
+    /*hidden=*/1>;
+
+defm HEX_EnableStackOVFSanitizer : BoolField<
+    "enable-stackovf-sanitizer", "false",
+    "Enable runtime checks for stack overflow.",
+    /*hidden=*/1>;
+
+defm HEX_EnableShrinkWrapping : BoolField<
+    "hexagon-shrink-frame", "true",
+    "Enable stack frame shrink wrapping",
+    /*hidden=*/1>;
+
+defm HEX_ShrinkLimit : OptionalField<
+    "shrink-frame-limit", "unsigned",
+    "Max count of stack frame shrink-wraps",
+    /*hidden=*/1>;
+
+defm HEX_EnableSaveRestoreLong : BoolField<
+    "enable-save-restore-long", "false",
+    "Enable long calls for save-restore stubs.",
+    /*hidden=*/1>;
+
+defm HEX_EliminateFramePointer : BoolField<
+    "hexagon-fp-elim", "true",
+    "Refrain from using FP whenever possible",
+    /*hidden=*/1>;
+
+defm HEX_OptimizeSpillSlots : BoolField<
+    "hexagon-opt-spill", "true",
+    "Optimize spill slots",
+    /*hidden=*/1>;
+
+// --- HexagonGenExtract.cpp ---
+
+defm HEX_ExtractCutoff : OptionalField<
+    "extract-cutoff", "unsigned",
+    "",
+    /*hidden=*/1>;
+
+defm HEX_NoSR0 : BoolField<
+    "extract-nosr0", "true",
+    "",
+    /*hidden=*/1>;
+
+// --- HexagonGenInsert.cpp ---
+
+defm HEX_VRegDistCutoff : ValueField<
+    "insert-dist-cutoff", "unsigned", "30",
+    "",
+    /*hidden=*/1>;
+
+defm HEX_MaxIFMSize : ValueField<
+    "insert-max-ifmap", "unsigned", "1024",
+    "",
+    /*hidden=*/1>;
+
+defm HEX_OptTiming : BoolField<
+    "insert-timing", "false",
+    "",
+    /*hidden=*/1>;
+
+defm HEX_OptSelectAll0 : BoolField<
+    "insert-all0", "false",
+    "",
+    /*hidden=*/1>;
+
+defm HEX_OptSelectHas0 : BoolField<
+    "insert-has0", "false",
+    "",
+    /*hidden=*/1>;
+
+defm HEX_OptInsertConst : BoolField<
+    "insert-const", "false",
+    "",
+    /*hidden=*/1>;
+
+// --- HexagonGenMux.cpp ---
+
+defm HEX_MinPredDist : ValueField<
+    "hexagon-gen-mux-threshold", "unsigned", "0",
+    "Minimum distance between predicate definition and furthest use",
+    /*hidden=*/1>;
+
+// --- HexagonGlobalScheduler.cpp ---
+
+defm HEX_DisablePullUp : OptionalValueField<
+    "disable-pull-up", "bool", "true",
+    "Disable the pull up of instructions optimization",
+    /*hidden=*/1>;
+
+defm HEX_EnableSpeculativePullUp : BoolField<
+    "enable-speculative-pull-up", "false",
+    "Enable speculative pull up scheduling",
+    /*hidden=*/1>;
+
+defm HEX_EnableLocalPullUp : BoolField<
+    "enable-local-pull-up", "true",
+    "Enable local scheduling of pull up candidates",
+    /*hidden=*/1>;
+
+defm HEX_AllowSpeculateLoads : BoolField<
+    "speculate-loads-on-pull-up", "true",
+    "Allow speculative scheduling of loads",
+    /*hidden=*/1>;
+
+defm HEX_AllowCmpBranchLoads : BoolField<
+    "cmp-branch-loads-pull-up", "true",
+    "Allow speculative scheduling of loads past cmp/branch",
+    /*hidden=*/1>;
+
+defm HEX_AllowUnlikelyPath : BoolField<
+    "unlikely-path-pull-up", "true",
+    "Allow pull up of unlikely path instructions",
+    /*hidden=*/1>;
+
+defm HEX_AllowDependentPullUp : BoolField<
+    "enable-dependent-pull-up", "true",
+    "Allow dependent pull up",
+    /*hidden=*/1>;
+
+defm HEX_PreventCompoundSeparation : OptionalValueField<
+    "prevent-compound-separation", "bool", "true",
+    "Prevent separation of compound instructions",
+    /*hidden=*/1>;
+
+defm HEX_PreventDuplexSeparation : BoolField<
+    "prevent-duplex-separation", "true",
+    "Prevent separation of duplex instructions",
+    /*hidden=*/1>;
+
+defm HEX_MainCandidateQueueSize : ValueField<
+    "pull-up-main-queue-size", "unsigned", "8",
+    "",
+    /*hidden=*/1>;
+
+defm HEX_SecondaryCandidateQueueSize : ValueField<
+    "pull-up-sec-queue-size", "unsigned", "2",
+    "",
+    /*hidden=*/1>;
+
+defm HEX_PostPullUpOpt : BoolField<
+    "post-pull-up-opt", "true",
+    "Enable post pull up optimization pass",
+    /*hidden=*/1>;
+
+defm HEX_SpeculateNonPredInsn : BoolField<
+    "speculate-non-pred-insn", "true",
+    "Allow speculate non-predicated instructions",
+    /*hidden=*/1>;
+
+defm HEX_OneFloatPerPacket : BoolField<
+    "single-float-packet", "false",
+    "Only allow one float instruction per packet",
+    /*hidden=*/1>;
+
+defm HEX_OneComplexPerPacket : BoolField<
+    "single-complex-packet", "false",
+    "Only allow one complex instruction per packet",
+    /*hidden=*/1>;
+
+// --- HexagonHardwareLoops.cpp ---
+
+defm HEX_HWLoopLimit : ValueField<
+    "hexagon-max-hwloop", "int", "-1",
+    "",
+    /*hidden=*/1>;
+
+defm HEX_PHFn : ValueField<
+    "hexagon-hwloop-phfn", "std::string", "\"\"",
+    "",
+    /*hidden=*/1>;
+
+defm HEX_HWCreatePreheader : BoolField<
+    "hexagon-hwloop-preheader", "true",
+    "Automatically create preheader for hardware loops",
+    /*hidden=*/1>;
+
+defm HEX_SpecPreheader : BoolField<
+    "hwloop-spec-preheader", "false",
+    "Allow speculative preheader",
+    /*hidden=*/1>;
+
+// --- HexagonInstrInfo.cpp ---
+
+defm HEX_ScheduleInlineAsm : BoolField<
+    "hexagon-sched-inline-asm", "false",
+    "Schedule inline assembly",
+    /*hidden=*/1>;
+
+defm HEX_EnableBranchPrediction : BoolField<
+    "hexagon-enable-branch-prediction", "true",
+    "Enable branch prediction",
+    /*hidden=*/1>;
+
+defm HEX_DisableNVSchedule : BoolField<
+    "disable-hexagon-nv-schedule", "false",
+    "Disable schedule adjustment for new value stores",
+    /*hidden=*/1>;
+
+defm HEX_EnableTimingClassLatency : BoolField<
+    "enable-timing-class-latency", "false",
+    "Enable timing class latency",
+    /*hidden=*/1>;
+
+defm HEX_EnableALUForwarding : BoolField<
+    "enable-alu-forwarding", "true",
+    "Enable ALU forwarding",
+    /*hidden=*/1>;
+
+defm HEX_EnableACCForwarding : BoolField<
+    "enable-acc-forwarding", "true",
+    "Enable ACC forwarding",
+    /*hidden=*/1>;
+
+defm HEX_BranchRelaxAsmLarge : BoolField<
+    "branch-relax-asm-large", "true",
+    "Branch relaxation for asm large",
+    /*hidden=*/1>;
+
+// --- HexagonISelDAGToDAG.cpp ---
+
+defm HEX_EnableAddressRebalancing : BoolField<
+    "isel-rebalance-addr", "true",
+    "",
+    /*hidden=*/1>;
+
+defm HEX_RebalanceOnlyForOptimizations : BoolField<
+    "rebalance-only-opt", "false",
+    "",
+    /*hidden=*/1>;
+
+defm HEX_RebalanceOnlyImbalanced : BoolField<
+    "rebalance-only-imbal", "false",
+    "",
+    /*hidden=*/1>;
+
+defm HEX_CheckSingleUse : BoolField<
+    "hexagon-isel-su", "true",
+    "Check single use",
+    /*hidden=*/1>;
+
+// --- HexagonISelLowering.cpp ---
+
+defm HEX_EmitJumpTables : BoolField<
+    "hexagon-emit-jump-tables", "true",
+    "Control whether jump tables are emitted or not",
+    /*hidden=*/1>;
+
+defm HEX_MinimumJumpTables : ValueField<
+    "minimum-jump-tables", "int", "5",
+    "Set minimum jump tables",
+    /*hidden=*/1>;
+
+defm HEX_EnableHexSDNodeSched : BoolField<
+    "enable-hexagon-sdnode-sched", "false",
+    "",
+    /*hidden=*/1>;
+
+defm HEX_AlignLoads : BoolField<
+    "hexagon-align-loads", "false",
+    "Rewrite unaligned loads as a pair of aligned loads",
+    /*hidden=*/1>;
+
+// --- HexagonISelLoweringHVX.cpp ---
+
+defm HEX_HvxWidenThreshold : OptionalField<
+    "hexagon-hvx-widen", "unsigned",
+    "Lower threshold (in bytes) for widening to HVX vectors",
+    /*hidden=*/1>;
+
+// --- HexagonLoadStoreWidening.cpp ---
+
+defm HEX_MaxMBBSizeForLoadStoreWidening : ValueField<
+    "max-bb-size-for-load-store-widening", "unsigned", "1000",
+    "",
+    /*hidden=*/1>;
+
+// --- HexagonLoopAlign.cpp ---
+
+defm HEX_DisableLoopAlign : BoolField<
+    "disable-hexagon-loop-align", "false",
+    "Disable Hexagon loop alignment",
+    /*hidden=*/1>;
+
+defm HEX_HVXLoopAlignLimitUB : ValueField<
+    "hexagon-hvx-loop-align-limit-ub", "unsigned", "16",
+    "Upper bound for HVX loop alignment",
+    /*hidden=*/1>;
+
+defm HEX_TinyLoopAlignLimitUB : ValueField<
+    "hexagon-tiny-loop-align-limit-ub", "unsigned", "16",
+    "Upper bound for tiny loop alignment",
+    /*hidden=*/1>;
+
+defm HEX_LoopAlignLimitUB : ValueField<
+    "hexagon-loop-align-limit-ub", "unsigned", "8",
+    "Upper bound for loop alignment",
+    /*hidden=*/1>;
+
+defm HEX_LoopAlignLimitLB : ValueField<
+    "hexagon-loop-align-limit-lb", "unsigned", "4",
+    "Lower bound for loop alignment",
+    /*hidden=*/1>;
+
+defm HEX_LoopBndlAlignLimit : ValueField<
+    "hexagon-loop-bundle-align-limit", "unsigned", "4",
+    "Bundle alignment limit for loop alignment",
+    /*hidden=*/1>;
+
+defm HEX_TinyLoopBndlAlignLimit : ValueField<
+    "hexagon-tiny-loop-bundle-align-limit", "unsigned", "8",
+    "Bundle alignment limit for tiny loop alignment",
+    /*hidden=*/1>;
+
+// --- HexagonLoopIdiomRecognition.cpp ---
+
+defm HEX_DisableMemcpyIdiom : BoolField<
+    "disable-memcpy-idiom", "false",
+    "Disable memcpy idiom recognition",
+    /*hidden=*/1>;
+
+defm HEX_DisableMemmoveIdiom : BoolField<
+    "disable-memmove-idiom", "false",
+    "Disable memmove idiom recognition",
+    /*hidden=*/1>;
+
+defm HEX_RuntimeMemSizeThreshold : ValueField<
+    "runtime-mem-idiom-threshold", "unsigned", "0",
+    "Runtime memory idiom threshold",
+    /*hidden=*/1>;
+
+defm HEX_CompileTimeMemSizeThreshold : ValueField<
+    "compile-time-mem-idiom-threshold", "unsigned", "64",
+    "Compile time memory idiom threshold",
+    /*hidden=*/1>;
+
+defm HEX_OnlyNonNestedMemmove : BoolField<
+    "only-nonnested-memmove-idiom", "true",
+    "Only non-nested memmove idiom",
+    /*hidden=*/1>;
+
+defm HEX_VolatileMemcpy : BoolField<
+    "disable-hexagon-volatile-memcpy", "false",
+    "Hexagon volatile memcpy",
+    /*hidden=*/1>;
+
+defm HEX_HLIRSimplifyLimit : ValueField<
+    "hlir-simplify-limit", "unsigned", "10000",
+    "",
+    /*hidden=*/1>;
+
+// --- HexagonNewValueJump.cpp ---
+
+defm HEX_DbgNVJCount : ValueField<
+    "nvj-count", "int", "-1",
+    "",
+    /*hidden=*/1>;
+
+defm HEX_DisableNewValueJumps : BoolField<
+    "disable-nvjump", "false",
+    "Disable new value jumps",
+    /*hidden=*/1>;
+
+// --- HexagonOptAddrMode.cpp ---
+
+defm HEX_CodeGrowthLimit : ValueField<
+    "hexagon-amode-growth-limit", "int", "0",
+    "Address mode growth limit",
+    /*hidden=*/1>;
+
+// --- HexagonPeephole.cpp ---
+
+defm HEX_DisableOptSZExt : BoolField<
+    "disable-hexagon-optszext", "true",
+    "Disable Hexagon opt sign/zero extend",
+    /*hidden=*/1>;
+
+defm HEX_DisablePNotP : BoolField<
+    "disable-hexagon-pnotp", "false",
+    "Disable Hexagon PNOT P",
+    /*hidden=*/1>;
+
+defm HEX_DisableOptExtTo64 : BoolField<
+    "disable-hexagon-opt-ext-to-64", "true",
+    "Disable Hexagon opt ext to 64",
+    /*hidden=*/1>;
+
+// --- HexagonQFPOptimizer.cpp ---
+
+defm HEX_DisableQFPOptimizer : BoolField<
+    "disable-qfp-opt", "false",
+    "Disable optimization of Qfloat operations.",
+    /*hidden=*/0>;
+
+defm HEX_DisableQFOptForMul : BoolField<
+    "disable-qfp-opt-mul", "true",
+    "Disable optimization of Qfloat operations for multiply.",
+    /*hidden=*/0>;
+
+// --- HexagonRDFOpt.cpp ---
+
+defm HEX_RDFLimit : OptionalField<
+    "hexagon-rdf-limit", "unsigned",
+    "",
+    /*hidden=*/0>;
+
+defm HEX_RDFDump : BoolField<
+    "hexagon-rdf-dump", "false",
+    "",
+    /*hidden=*/1>;
+
+defm HEX_RDFTrackReserved : BoolField<
+    "hexagon-rdf-track-reserved", "false",
+    "",
+    /*hidden=*/1>;
+
+defm HEX_EnableAggressiveRDFCopy : BoolField<
+    "hexagon-aggressive-rdf-copy", "false",
+    "Enable aggressive RDF copy propagation with super-register support",
+    /*hidden=*/1>;
+
+// --- HexagonRegisterInfo.cpp ---
+
+defm HEX_FrameIndexSearchRange : ValueField<
+    "hexagon-frame-index-search-range", "unsigned", "32",
+    "",
+    /*hidden=*/1>;
+
+defm HEX_FrameIndexReuseLimit : ValueField<
+    "hexagon-frame-index-reuse-limit", "unsigned", "4294967295",
+    "",
+    /*hidden=*/1>;
+
+// --- HexagonSplitDouble.cpp ---
+
+defm HEX_MaxHSDR : ValueField<
+    "max-hsdr", "int", "-1",
+    "",
+    /*hidden=*/1>;
+
+defm HEX_MemRefsFixed : BoolField<
+    "hsdr-no-mem", "true",
+    "",
+    /*hidden=*/1>;
+
+// --- HexagonSubtarget.cpp ---
+
+defm HEX_EnableBSBSched : OptionalValueField<
+    "enable-bsb-sched", "bool", "true",
+    "Enable BSB scheduling",
+    /*hidden=*/1>;
+
+defm HEX_EnableTCLatencySched : BoolField<
+    "enable-tc-latency-sched", "false",
+    "Enable TC latency scheduling",
+    /*hidden=*/1>;
+
+defm HEX_EnableDotCurSched : BoolField<
+    "enable-cur-sched", "true",
+    "Enable dot cur scheduling",
+    /*hidden=*/1>;
+
+defm HEX_OverrideLongCalls : OptionalValueField<
+    "hexagon-long-calls", "bool", "true",
+    "If set, always generate long calls",
+    /*hidden=*/1>;
+
+defm HEX_EnablePredicatedCalls : BoolField<
+    "hexagon-pred-calls", "false",
+    "Consider calls to be predicable",
+    /*hidden=*/1>;
+
+defm HEX_SchedPredsCloser : BoolField<
+    "sched-preds-closer", "true",
+    "Schedule predicate definitions closer to uses",
+    /*hidden=*/1>;
+
+defm HEX_SchedRetvalOptimization : BoolField<
+    "sched-retval-optimization", "true",
+    "Enable retval optimization",
+    /*hidden=*/1>;
+
+defm HEX_EnableCheckBankConflict : BoolField<
+    "hexagon-check-bank-conflict", "true",
+    "Enable bank conflict checking",
+    /*hidden=*/1>;
+
+// --- HexagonTargetMachine.cpp ---
+
+defm HEX_EnableCExtOpt : BoolField<
+    "hexagon-cext", "true",
+    "Enable Hexagon constant-extender optimization",
+    /*hidden=*/1>;
+
+defm HEX_EnableRDFOpt : BoolField<
+    "rdf-opt", "true",
+    "Enable RDF-based optimizations",
+    /*hidden=*/1>;
+
+defm HEX_EnablePostRAHandleQFP : BoolField<
+    "hexagon-handle-qfloat", "true",
+    "Fix up QFloat spills and reloads after register allocation",
+    /*hidden=*/1>;
+
+defm HEX_RDFFuncBlockLimit : ValueField<
+    "rdf-bb-limit", "unsigned", "1000",
+    "Basic block limit for a function for RDF optimizations",
+    /*hidden=*/1>;
+
+defm HEX_DisableHardwareLoops : BoolField<
+    "disable-hexagon-hwloops", "false",
+    "Disable Hardware Loops for Hexagon target",
+    /*hidden=*/1>;
+
+defm HEX_EnableMCR : BoolField<
+    "hexagon-mcr", "true",
+    "Enable the machine combiner pass",
+    /*hidden=*/1>;
+
+defm HEX_DisableAModeOpt : BoolField<
+    "disable-hexagon-amodeopt", "false",
+    "Disable Hexagon Addressing Mode Optimization",
+    /*hidden=*/1>;
+
+defm HEX_DisableCFGOpt : BoolField<
+    "disable-hexagon-cfgopt", "false",
+    "Disable Hexagon CFG Optimization",
+    /*hidden=*/1>;
+
+defm HEX_DisableHCP : BoolField<
+    "disable-hcp", "false",
+    "Disable Hexagon constant propagation",
+    /*hidden=*/1>;
+
+defm HEX_DisableMask : BoolField<
+    "disable-mask", "false",
+    "Disable Hexagon specific Mask generation pass",
+    /*hidden=*/1>;
+
+defm HEX_DisableLiveVars : BoolField<
+    "disable-hlv", "false",
+    "Disable Hexagon specific post-RA live-variable analysis",
+    /*hidden=*/1>;
+
+defm HEX_DisableStoreWidening : BoolField<
+    "disable-store-widen", "false",
+    "Disable store widening",
+    /*hidden=*/1>;
+
+defm HEX_DisableLoadWidening : BoolField<
+    "disable-load-widen", "false",
+    "Disable load widening",
+    /*hidden=*/1>;
+
+defm HEX_EnableExpandCondsets : BoolField<
+    "hexagon-expand-condsets", "true",
+    "Early expansion of MUX",
+    /*hidden=*/1>;
+
+defm HEX_EnableTfrCleanup : BoolField<
+    "hexagon-tfr-cleanup", "true",
+    "Cleanup of TFRs/COPYs",
+    /*hidden=*/1>;
+
+defm HEX_EnableEarlyIf : BoolField<
+    "hexagon-eif", "true",
+    "Enable early if-conversion",
+    /*hidden=*/1>;
+
+defm HEX_EnableCopyHoist : BoolField<
+    "hexagon-copy-hoist", "true",
+    "Enable Hexagon copy hoisting",
+    /*hidden=*/1>;
+
+defm HEX_EnableGenInsert : BoolField<
+    "hexagon-insert", "true",
+    "Generate \"insert\" instructions",
+    /*hidden=*/1>;
+
+defm HEX_EnableCommGEP : BoolField<
+    "hexagon-commgep", "true",
+    "Enable commoning of GEP instructions",
+    /*hidden=*/1>;
+
+defm HEX_EnableGenExtract : BoolField<
+    "hexagon-extract", "true",
+    "Generate \"extract\" instructions",
+    /*hidden=*/1>;
+
+defm HEX_EnableGenMux : BoolField<
+    "hexagon-mux", "true",
+    "Enable converting conditional transfers into MUX instructions",
+    /*hidden=*/1>;
+
+defm HEX_EnableGenPred : BoolField<
+    "hexagon-gen-pred", "true",
+    "Enable conversion of arithmetic operations to predicate instructions",
+    /*hidden=*/1>;
+
+defm HEX_EnableLoopPrefetch : BoolField<
+    "hexagon-loop-prefetch", "false",
+    "Enable loop data prefetch on Hexagon",
+    /*hidden=*/1>;
+
+defm HEX_DisableHSDR : BoolField<
+    "disable-hsdr", "false",
+    "Disable splitting double registers",
+    /*hidden=*/1>;
+
+defm HEX_EnableGenMemAbs : BoolField<
+    "hexagon-mem-abs", "true",
+    "Generate absolute set instructions",
+    /*hidden=*/1>;
+
+defm HEX_EnableBitSimplify : BoolField<
+    "hexagon-bit", "true",
+    "Bit simplification",
+    /*hidden=*/1>;
+
+defm HEX_EnableLoopResched : BoolField<
+    "hexagon-loop-resched", "true",
+    "Loop rescheduling",
+    /*hidden=*/1>;
+
+defm HEX_NoOpt : BoolField<
+    "hexagon-noopt", "false",
+    "Disable backend optimizations",
+    /*hidden=*/1>;
+
+defm HEX_EnableVectorPrint : BoolField<
+    "enable-hexagon-vector-print", "false",
+    "Enable Hexagon Vector print instr pass",
+    /*hidden=*/1>;
+
+defm HEX_EnableVExtractOpt : BoolField<
+    "hexagon-opt-vextract", "true",
+    "Enable vextract optimization",
+    /*hidden=*/1>;
+
+defm HEX_EnableVectorCombine : BoolField<
+    "hexagon-vector-combine", "true",
+    "Enable HVX vector combining",
+    /*hidden=*/1>;
+
+defm HEX_EnableInitialCFGCleanup : BoolField<
+    "hexagon-initial-cfg-cleanup", "true",
+    "Simplify the CFG after atomic expansion pass",
+    /*hidden=*/1>;
+
+defm HEX_EnableInstSimplify : BoolField<
+    "hexagon-instsimplify", "true",
+    "Enable instsimplify",
+    /*hidden=*/1>;
+
+// --- HexagonTargetObjectFile.cpp ---
+
+defm HEX_SmallDataThreshold : ValueField<
+    "hexagon-small-data-threshold", "unsigned", "8",
+    "Maximum size of an object in the sdata section",
+    /*hidden=*/1>;
+
+defm HEX_NoSmallDataSorting : BoolField<
+    "mno-sort-sda", "false",
+    "",
+    /*hidden=*/1>;
+
+defm HEX_StaticInSData : BoolField<
+    "hexagon-statics-in-small-data", "false",
+    "",
+    /*hidden=*/1>;
+
+defm HEX_TraceGVPlacement : BoolField<
+    "trace-gv-placement", "false",
+    "Trace GV placement",
+    /*hidden=*/1>;
+
+defm HEX_EmitJTInText : BoolField<
+    "hexagon-emit-jt-text", "false",
+    "",
+    /*hidden=*/1>;
+
+defm HEX_EmitLUTInText : BoolField<
+    "hexagon-emit-lut-text", "false",
+    "",
+    /*hidden=*/1>;
+
+// --- HexagonTargetTransformInfo.cpp ---
+
+defm HEX_AutoHVX : BoolField<
+    "hexagon-autohvx", "false",
+    "Enable auto-vectorization for HVX",
+    /*hidden=*/1>;
+
+defm HEX_AllowScatterGatherHVX : BoolField<
+    "hexagon-allow-scatter-gather-hvx", "false",
+    "Allow gather/scatter intrinsics for Hexagon",
+    /*hidden=*/1>;
+
+defm HEX_EnableV68FloatAutoHVX : BoolField<
+    "force-hvx-float", "false",
+    "Enable auto-vectorization of floating point types on v68.",
+    /*hidden=*/1>;
+
+defm HEX_EmitLookupTables : BoolField<
+    "hexagon-emit-lookup-tables", "true",
+    "Enable emission of lookup tables",
+    /*hidden=*/1>;
+
+defm HEX_MaskedVMem : BoolField<
+    "hexagon-masked-vmem", "true",
+    "Enable masked vector memory operations",
+    /*hidden=*/1>;
+
+// --- HexagonVExtract.cpp ---
+
+defm HEX_VExtractThreshold : ValueField<
+    "hexagon-vextract-threshold", "unsigned", "1",
+    "",
+    /*hidden=*/1>;
+
+// --- HexagonVLIWPacketizer.cpp ---
+
+defm HEX_DisablePacketizer : BoolField<
+    "disable-packetizer", "false",
+    "Disable Hexagon packetizer pass",
+    /*hidden=*/1>;
+
+defm HEX_Slot1Store : BoolField<
+    "slot1-store-slot0-load", "true",
+    "Allow slot1 store slot0 load",
+    /*hidden=*/1>;
+
+defm HEX_PacketizeVolatiles : BoolField<
+    "hexagon-packetize-volatiles", "true",
+    "Allow packetizing volatile memory accesses",
+    /*hidden=*/1>;
+
+defm HEX_DisableVecDblNVStores : BoolField<
+    "disable-vecdbl-nv-stores", "false",
+    "",
+    /*hidden=*/1>;
+
+// --- HexagonVectorCombine.cpp ---
+
+defm HEX_HVCDumpModule : BoolField<
+    "hvc-dump-module", "false",
+    "",
+    /*hidden=*/1>;
+
+defm HEX_HVCVAEnabled : BoolField<
+    "hvc-va", "true",
+    "",
+    /*hidden=*/1>;
+
+defm HEX_HVCVIEnabled : BoolField<
+    "hvc-vi", "true",
+    "",
+    /*hidden=*/1>;
+
+defm HEX_HVCVADoFullStores : BoolField<
+    "hvc-va-full-stores", "false",
+    "",
+    /*hidden=*/1>;
+
+defm HEX_HVCVAGroupCountLimit : ValueField<
+    "hvc-va-group-count-limit", "unsigned", "4294967295",
+    "",
+    /*hidden=*/1>;
+
+defm HEX_HVCVAGroupSizeLimit : ValueField<
+    "hvc-va-group-size-limit", "unsigned", "4294967295",
+    "",
+    /*hidden=*/1>;
+
+// --- HexagonVectorLoopCarriedReuse.cpp ---
+
+defm HEX_VLCRIterationLim : ValueField<
+    "hexagon-vlcr-iteration-lim", "int", "2",
+    "",
+    /*hidden=*/1>;
+
+// --- HexagonVectorPrint.cpp ---
+
+defm HEX_TraceHexVectorStoresOnly : BoolField<
+    "trace-hex-vector-stores-only", "false",
+    "Trace hex vector stores only",
+    /*hidden=*/1>;
+
+// --- RDFCopy.cpp ---
+
+defm HEX_RDFCpLimit : OptionalField<
+    "rdf-cp-limit", "unsigned",
+    "",
+    /*hidden=*/1>;
+
+// --- MCTargetDesc/HexagonMCTargetDesc.cpp ---
+
+defm HEX_DisableCompound : BoolField<
+    "mno-compound", "false",
     "Disable looking for compound instructions for Hexagon",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-}
+    /*hidden=*/0>;
 
-def HEX_DisableDuplex : Option<
-    "mno-pairing",
+defm HEX_DisableDuplex : BoolField<
+    "mno-pairing", "false",
     "Disable looking for duplex instructions for Hexagon",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-}
+    /*hidden=*/0>;
 
-def HEX_MV5 : Option<
-    "mv5", "Build for Hexagon V5",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
+defm HEX_MV5 : BoolField<
+    "mv5", "false",
+    "Build for Hexagon V5",
+    /*hidden=*/1>;
 
-def HEX_MV55 : Option<
-    "mv55", "Build for Hexagon V55",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
+defm HEX_MV55 : BoolField<
+    "mv55", "false",
+    "Build for Hexagon V55",
+    /*hidden=*/1>;
 
-def HEX_MV60 : Option<
-    "mv60", "Build for Hexagon V60",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
+defm HEX_MV60 : BoolField<
+    "mv60", "false",
+    "Build for Hexagon V60",
+    /*hidden=*/1>;
 
-def HEX_MV62 : Option<
-    "mv62", "Build for Hexagon V62",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
+defm HEX_MV62 : BoolField<
+    "mv62", "false",
+    "Build for Hexagon V62",
+    /*hidden=*/1>;
 
-def HEX_MV65 : Option<
-    "mv65", "Build for Hexagon V65",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
+defm HEX_MV65 : BoolField<
+    "mv65", "false",
+    "Build for Hexagon V65",
+    /*hidden=*/1>;
 
-def HEX_MV66 : Option<
-    "mv66", "Build for Hexagon V66",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
+defm HEX_MV66 : BoolField<
+    "mv66", "false",
+    "Build for Hexagon V66",
+    /*hidden=*/1>;
 
-def HEX_MV67 : Option<
-    "mv67", "Build for Hexagon V67",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
+defm HEX_MV67 : BoolField<
+    "mv67", "false",
+    "Build for Hexagon V67",
+    /*hidden=*/1>;
 
-def HEX_MV67T : Option<
-    "mv67t", "Build for Hexagon V67T",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
+defm HEX_MV67T : BoolField<
+    "mv67t", "false",
+    "Build for Hexagon V67T",
+    /*hidden=*/1>;
 
-def HEX_MV68 : Option<
-    "mv68", "Build for Hexagon V68",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
+defm HEX_MV68 : BoolField<
+    "mv68", "false",
+    "Build for Hexagon V68",
+    /*hidden=*/1>;
 
-def HEX_MV69 : Option<
-    "mv69", "Build for Hexagon V69",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
+defm HEX_MV69 : BoolField<
+    "mv69", "false",
+    "Build for Hexagon V69",
+    /*hidden=*/1>;
 
-def HEX_MV71 : Option<
-    "mv71", "Build for Hexagon V71",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
+defm HEX_MV71 : BoolField<
+    "mv71", "false",
+    "Build for Hexagon V71",
+    /*hidden=*/1>;
 
-def HEX_MV71T : Option<
-    "mv71t", "Build for Hexagon V71T",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
+defm HEX_MV71T : BoolField<
+    "mv71t", "false",
+    "Build for Hexagon V71T",
+    /*hidden=*/1>;
 
-def HEX_MV73 : Option<
-    "mv73", "Build for Hexagon V73",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
+defm HEX_MV73 : BoolField<
+    "mv73", "false",
+    "Build for Hexagon V73",
+    /*hidden=*/1>;
 
-def HEX_MV75 : Option<
-    "mv75", "Build for Hexagon V75",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
+defm HEX_MV75 : BoolField<
+    "mv75", "false",
+    "Build for Hexagon V75",
+    /*hidden=*/1>;
 
-def HEX_MV79 : Option<
-    "mv79", "Build for Hexagon V79",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
+defm HEX_MV79 : BoolField<
+    "mv79", "false",
+    "Build for Hexagon V79",
+    /*hidden=*/1>;
 
-def HEX_MV81 : Option<
-    "mv81", "Build for Hexagon V81",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
+defm HEX_MV81 : BoolField<
+    "mv81", "false",
+    "Build for Hexagon V81",
+    /*hidden=*/1>;
 
-// --- HexArchEnum for HEX_MHVX ---
+// --- MCTargetDesc/HexagonMCTargetDesc.cpp (-mhvx) ---
 
-def HexArchNoArch : EnumValue<"none", ""> {
-  let CppName = "NoArch";
-  let Value = 0;
-}
+// Hand-authored: -mhvx is ValueOptional. Bare "-mhvx" selects Generic,
+// "-mhvx=vNN" selects that version, and when absent the field stays
+// std::nullopt (upstream's NoArch sentinel). This is OptionalValueField<>'s
+// shape spelled out by hand so the Joined def can carry a FieldEnum<>. Like
+// upstream's cl::ValueOptional, there is no "-mhvx vNN" Separate spelling:
+// the bare Flag already owns the "-mhvx" name.
+def HEX_MHVX : Joined<["-", "--"], "mhvx=">,
+    HelpText<"Enable Hexagon Vector eXtensions">,
+    Field<"std::optional<HexHVXArch>", "HEX_MHVX", "std::nullopt">,
+    FieldEnum<HexHVXArchEnum>;
+def HEX_MHVX_bare : Flag<["-", "--"], "mhvx">, Flags<[HelpHidden]>,
+    Assign<"HEX_MHVX", "HexHVXArch::Generic">;
 
-def HexArchGeneric : EnumValue<"", ""> {
-  let CppName = "Generic";
-  let Value = 1;
-}
-
-def HexArchV5 : EnumValue<"v5", ""> {
-  let CppName = "V5";
-  let Value = 2;
-}
-
-def HexArchV55 : EnumValue<"v55", ""> {
-  let CppName = "V55";
-  let Value = 3;
-}
-
-def HexArchV60 : EnumValue<"v60", "Build for HVX v60"> {
-  let CppName = "V60";
-  let Value = 4;
-}
-
-def HexArchV62 : EnumValue<"v62", "Build for HVX v62"> {
-  let CppName = "V62";
-  let Value = 5;
-}
-
-def HexArchV65 : EnumValue<"v65", "Build for HVX v65"> {
-  let CppName = "V65";
-  let Value = 6;
-}
-
-def HexArchV66 : EnumValue<"v66", "Build for HVX v66"> {
-  let CppName = "V66";
-  let Value = 7;
-}
-
-def HexArchV67 : EnumValue<"v67", "Build for HVX v67"> {
-  let CppName = "V67";
-  let Value = 8;
-}
-
-def HexArchV68 : EnumValue<"v68", "Build for HVX v68"> {
-  let CppName = "V68";
-  let Value = 9;
-}
-
-def HexArchV69 : EnumValue<"v69", "Build for HVX v69"> {
-  let CppName = "V69";
-  let Value = 10;
-}
-
-def HexArchV71 : EnumValue<"v71", "Build for HVX v71"> {
-  let CppName = "V71";
-  let Value = 11;
-}
-
-def HexArchV73 : EnumValue<"v73", "Build for HVX v73"> {
-  let CppName = "V73";
-  let Value = 12;
-}
-
-def HexArchV75 : EnumValue<"v75", "Build for HVX v75"> {
-  let CppName = "V75";
-  let Value = 13;
-}
-
-def HexArchV79 : EnumValue<"v79", "Build for HVX v79"> {
-  let CppName = "V79";
-  let Value = 14;
-}
-
-def HexArchV81 : EnumValue<"v81", "Build for HVX v81"> {
-  let CppName = "V81";
-  let Value = 15;
-}
-
-def HexArchEnum : EnumType<"HexArchEnum",
-    [HexArchNoArch, HexArchGeneric, HexArchV5, HexArchV55,
-     HexArchV60, HexArchV62, HexArchV65, HexArchV66,
-     HexArchV67, HexArchV68, HexArchV69, HexArchV71,
-     HexArchV73, HexArchV75, HexArchV79, HexArchV81]>;
-
-def HEX_MHVX : Option<
-    "mhvx", "Enable Hexagon Vector eXtensions",
-    "HexArchEnum"> {
-  let Registry = HexagonOptsReg;
-  let Default = "none";
-  let ValueOptional = 1;
-}
-
-def HEX_EnableHVXIEEEFP : Option<
-    "mhvx-ieee-fp",
+defm HEX_EnableHVXIEEEFP : BoolField<
+    "mhvx-ieee-fp", "false",
     "Enable HVX IEEE floating point",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def HEX_EnableHVXQFloat : Option<
-    "mhvx-qfloat",
-    "Enable HVX QFloat",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
-
-def HEX_EnableCabac : Option<
-    "mcabac",
+defm HEX_EnableCabac : BoolField<
+    "mcabac", "false",
     "tbd",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-}
+    /*hidden=*/0>;
 
 // --- MCTargetDesc/HexagonMCChecker.cpp ---
 
-def HEX_RelaxNVChecks : Option<
-    "relax-nv-checks", "",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
+defm HEX_RelaxNVChecks : BoolField<
+    "relax-nv-checks", "false",
+    "",
+    /*hidden=*/1>;
 
 // --- MCTargetDesc/HexagonMCELFStreamer.cpp ---
 
-def HEX_GPSize : Option<
-    "gpsize",
+defm HEX_GPSize : ValueField<
+    "gpsize", "unsigned", "8",
     "Global Pointer Addressing Size.  The default size is 8.",
-    "unsigned"> {
-  let Registry = HexagonOptsReg;
-  let Default = "8";
-  let Prefix = 1;
-}
+    /*hidden=*/0>;
 
 // --- MCTargetDesc/HexagonMCShuffler.cpp ---
 
-def HEX_DisableShuffle : Option<
-    "disable-hexagon-shuffle",
+defm HEX_DisableShuffle : BoolField<
+    "disable-hexagon-shuffle", "false",
     "Disable Hexagon instruction shuffling",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // --- MCTargetDesc/HexagonAsmBackend.cpp ---
 
-def HEX_DisableFixup : Option<
-    "mno-fixup",
+defm HEX_DisableFixup : BoolField<
+    "mno-fixup", "false",
     "Disable fixing up resolved relocations for Hexagon",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-}
+    /*hidden=*/0>;
 
 // --- AsmParser/HexagonAsmParser.cpp ---
 
-def HEX_WarnMissingParenthesis : Option<
-    "mwarn-missing-parenthesis",
+defm HEX_WarnMissingParenthesis : BoolField<
+    "mwarn-missing-parenthesis", "true",
     "Warn for missing parenthesis around predicate registers",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Default = "1";
-}
+    /*hidden=*/0>;
 
-def HEX_ErrorMissingParenthesis : Option<
-    "merror-missing-parenthesis",
+defm HEX_ErrorMissingParenthesis : BoolField<
+    "merror-missing-parenthesis", "false",
     "Error for missing parenthesis around predicate registers",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-}
+    /*hidden=*/0>;
 
-def HEX_WarnSignedMismatch : Option<
-    "mwarn-sign-mismatch",
+defm HEX_WarnSignedMismatch : BoolField<
+    "mwarn-sign-mismatch", "false",
     "Warn for mismatching a signed and unsigned value",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-}
+    /*hidden=*/0>;
 
-def HEX_WarnNoncontigiousRegister : Option<
-    "mwarn-noncontigious-register",
+defm HEX_WarnNoncontigiousRegister : BoolField<
+    "mwarn-noncontigious-register", "true",
     "Warn for register names that aren't contigious",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Default = "1";
-}
+    /*hidden=*/0>;
 
-def HEX_ErrorNoncontigiousRegister : Option<
-    "merror-noncontigious-register",
+defm HEX_ErrorNoncontigiousRegister : BoolField<
+    "merror-noncontigious-register", "false",
     "Error for register names that aren't contigious",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-}
+    /*hidden=*/0>;
 
-def HEX_AddBuildAttributes : Option<
-    "hexagon-add-build-attributes", "",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-}
+defm HEX_AddBuildAttributes : BoolField<
+    "hexagon-add-build-attributes", "false",
+    "",
+    /*hidden=*/0>;
 
 // --- HexagonSubtarget.cpp (additional) ---
 
-def HEX_DisableHexagonMISched : Option<
-    "disable-hexagon-misched",
+defm HEX_DisableHexagonMISched : OptionalValueField<
+    "disable-hexagon-misched", "bool", "true",
     "Disable Hexagon MI Scheduling",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // --- HexagonPeephole.cpp (additional) ---
 
-def HEX_DisableHexagonPeephole : Option<
-    "disable-hexagon-peephole",
+defm HEX_DisableHexagonPeephole : BoolField<
+    "disable-hexagon-peephole", "false",
     "Disable Peephole Optimization",
-    "bool"> {
-  let Default = "false";
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // --- HexagonVLIWPacketizer.cpp (additional) ---
 
-def HEX_EnableGenAllInsnClass : Option<
-    "enable-gen-insn",
+defm HEX_EnableGenAllInsnClass : BoolField<
+    "enable-gen-insn", "false",
     "Generate all instruction with TC",
-    "bool"> {
-  let Default = "false";
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // --- HexagonSplitDouble.cpp (additional) ---
 
-def HEX_SplitAll : Option<
-    "hsdr-split-all",
+defm HEX_SplitAll : BoolField<
+    "hsdr-split-all", "false",
     "Split all partitions",
-    "bool"> {
-  let Default = "false";
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // --- HexagonLoopAlign.cpp (additional) ---
 
-def HEX_LoopEdgeThreshold : Option<
-    "hexagon-loop-edge-threshold",
+defm HEX_LoopEdgeThreshold : ValueField<
+    "hexagon-loop-edge-threshold", "unsigned", "7500",
     "Set hexagon loop align edge threshold",
-    "unsigned"> {
-  let Registry = HexagonOptsReg;
-  let Default = "7500";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // --- HexagonGlobalScheduler.cpp (additional) ---
 
-def HEX_PerformDualJumps : Option<
-    "dual-jump-in-pull-up",
+defm HEX_PerformDualJumps : BoolField<
+    "dual-jump-in-pull-up", "true",
     "Perform dual jump formation during pull up",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def HEX_AllowBBPeelPullUp : Option<
-    "enable-bb-peel-pull-up",
+defm HEX_AllowBBPeelPullUp : BoolField<
+    "enable-bb-peel-pull-up", "true",
     "Peel a reg copy out of a BBloop",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def HEX_DisableCheckBundles : Option<
-    "disable-hexagon-check-bundles",
+defm HEX_DisableCheckBundles : BoolField<
+    "disable-hexagon-check-bundles", "true",
     "Disable Hexagon check bundles pass",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def HEX_WarnOnBundleSize : Option<
-    "warn-on-bundle-size",
+defm HEX_WarnOnBundleSize : BoolField<
+    "warn-on-bundle-size", "false",
     "Hexagon check bundles and warn on size",
-    "bool"> {
-  let Default = "false";
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def HEX_ForceNoopHazards : Option<
-    "force-noop-hazards",
+defm HEX_ForceNoopHazards : BoolField<
+    "force-noop-hazards", "false",
     "Force noop hazards in scheduler",
-    "bool"> {
-  let Default = "false";
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // --- HexagonInstrInfo.cpp (additional) ---
 
-def HEX_UseDFAHazardRec : Option<
-    "dfa-hazard-rec",
+defm HEX_UseDFAHazardRec : BoolField<
+    "dfa-hazard-rec", "true",
     "Use the DFA based hazard recognizer.",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // --- HexagonISelLowering.cpp (additional) ---
 
-def HEX_ConstantLoadsToImm : Option<
-    "constant-loads-to-imm",
+defm HEX_ConstantLoadsToImm : BoolField<
+    "constant-loads-to-imm", "true",
     "Convert constant loads to immediate values.",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def HEX_DisableArgsMinAlignment : Option<
-    "hexagon-disable-args-min-alignment",
+defm HEX_DisableArgsMinAlignment : BoolField<
+    "hexagon-disable-args-min-alignment", "false",
     "Disable minimum alignment of 1 for "
     "arguments passed by value on stack",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // --- HexagonISelLoweringHVX.cpp (additional) ---
 
-def HEX_EnableFpFastConvert : Option<
-    "hexagon-fp-fast-convert",
+defm HEX_EnableFpFastConvert : BoolField<
+    "hexagon-fp-fast-convert", "false",
     "Enable FP fast conversion routine.",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // --- HexagonFrameLowering.cpp (additional) ---
 
-def HEX_SpillOptMax : Option<
-    "spill-opt-max", "",
-    "unsigned"> {
-  let Registry = HexagonOptsReg;
-  let Default = "4294967295";
-  let Hidden = 1;
-}
+defm HEX_SpillOptMax : OptionalField<
+    "spill-opt-max", "unsigned",
+    "",
+    /*hidden=*/1>;
 
 // --- HexagonGenInsert.cpp (additional) ---
 
-def HEX_VRegIndexCutoff : Option<
-    "insert-vreg-cutoff",
+defm HEX_VRegIndexCutoff : OptionalField<
+    "insert-vreg-cutoff", "unsigned",
     "Vreg# cutoff for insert generation.",
-    "unsigned"> {
-  let Registry = HexagonOptsReg;
-  let Default = "4294967295";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def HEX_MaxORLSize : Option<
-    "insert-max-orl",
+defm HEX_MaxORLSize : ValueField<
+    "insert-max-orl", "unsigned", "4096",
     "Maximum size of OrderedRegisterList",
-    "unsigned"> {
-  let Registry = HexagonOptsReg;
-  let Default = "4096";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def HEX_OptTimingDetail : Option<
-    "insert-timing-detail",
+defm HEX_OptTimingDetail : BoolField<
+    "insert-timing-detail", "false",
     "Enable detailed timing of insert generation",
-    "bool"> {
-  let Default = "false";
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // --- HexagonVectorCombine.cpp (additional) ---
 
-def HEX_MinLoadGroupSizeForAlignment : Option<
-    "hvc-ld-min-group-size-for-alignment", "",
-    "unsigned"> {
-  let Registry = HexagonOptsReg;
-  let Default = "4";
-  let Hidden = 1;
-}
+defm HEX_MinLoadGroupSizeForAlignment : ValueField<
+    "hvc-ld-min-group-size-for-alignment", "unsigned", "4",
+    "",
+    /*hidden=*/1>;
 
 // --- MCTargetDesc/HexagonMCTargetDesc.cpp (additional) ---
 
-def HEX_DisableHVX : Option<
-    "mno-hvx",
+defm HEX_DisableHVX : BoolField<
+    "mno-hvx", "false",
     "Disable Hexagon Vector eXtensions",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // --- HexagonHVXSaveRemark.cpp ---
 
-def HEX_HVXSaveThreshold : Option<
-    "hexagon-hvx-save-threshold",
+defm HEX_HVXSaveThreshold : ValueField<
+    "hexagon-hvx-save-threshold", "unsigned", "1024",
     "Minimum number of bytes of HVX caller-saved register data live "
     "across a call to trigger a remark (default: 8 x 128-byte vectors)",
-    "unsigned"> {
-  let Registry = HexagonOptsReg;
-  let Default = "1024";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // --- HexagonXQFloatGenerator.cpp ---
 
-def HEX_EnableHVXXQFloat : Option<
-    "enable-xqf-gen",
+defm HEX_EnableHVXXQFloat : BoolField<
+    "enable-xqf-gen", "false",
     "Enable HVX XQFloat Generator",
-    "bool"> {
-  let Default = "false";
-  let Registry = HexagonOptsReg;
-}
+    /*hidden=*/0>;
 
-def HEX_EnableConversionsRemoval : Option<
-    "enable-rem-conv",
+defm HEX_EnableConversionsRemoval : BoolField<
+    "enable-rem-conv", "false",
     "Enable extraneous conversions removal",
-    "bool"> {
-  let Default = "false";
-  let Registry = HexagonOptsReg;
-}
+    /*hidden=*/0>;
 
-def HEX_PrintDebugXQF : Option<
-    "debug-print",
+defm HEX_PrintDebugXQF : BoolField<
+    "debug-print", "false",
     "Print debug",
-    "bool"> {
-  let Default = "false";
-  let Registry = HexagonOptsReg;
-}
+    /*hidden=*/0>;
 
 // --- HexagonPostRAHandleQFP.cpp ---
 
-def HEX_DisablePostRAHandleQFloat : Option<
-    "disable-handle-qfp",
+defm HEX_DisablePostRAHandleQFloat : BoolField<
+    "disable-handle-qfp", "false",
     "Disable handling of Qfloat spills/refills after register allocation.",
-    "bool"> {
-  let Default = "false";
-  let Registry = HexagonOptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/0>;
 
-def HEX_EnablePostRAXqfCompliance : Option<
-    "enable-postra-xqf-check",
+defm HEX_EnablePostRAXqfCompliance : BoolField<
+    "enable-postra-xqf-check", "false",
     "Enable ABI compliance for xqf operands post regalloc.",
-    "bool"> {
-  let Default = "false";
-  let Registry = HexagonOptsReg;
-}
+    /*hidden=*/0>;
 
 // --- HexagonTargetMachine.cpp (QFloatMode enum) ---
 
-def QFloatStrictIEEE : EnumValue<"strict-ieee",
-    "Enable code generation for qfloat strict IEEE-754 mode"> {
-  let CppName = "StrictIEEE";
-  let Value = 0;
-}
-
-def QFloatIEEE : EnumValue<"ieee",
-    "Enable code generation for qfloat IEEE-754 mode"> {
-  let CppName = "IEEE";
-  let Value = 1;
-}
-
-def QFloatLossy : EnumValue<"lossy",
-    "Enable code generation for qfloat lossy-subnormals mode"> {
-  let CppName = "Lossy";
-  let Value = 2;
-}
-
-def QFloatLegacy : EnumValue<"legacy",
-    "Enable code generation for qfloat legacy mode"> {
-  let CppName = "Legacy";
-  let Value = 3;
-}
-
-def QFloatMode : EnumType<"QFloatMode",
-    [QFloatStrictIEEE, QFloatIEEE, QFloatLossy, QFloatLegacy]>;
-
-def HEX_QFloatMode : Option<
-    "hexagon-qfloat-mode",
+defm HEX_QFloatMode : EnumField<
+    "hexagon-qfloat-mode", QFloatModeEnum, "QFloatMode::Legacy",
     "Specify the qfloat mode to operate on.",
-    "QFloatMode"> {
-  let Registry = HexagonOptsReg;
-  let Default = "legacy";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // --- HexagonAlignGlobalArrays.cpp ---
 
-def HEX_DisableGlobalArrayAlignment : Option<
-    "hexagon-disable-global-array-align",
+defm HEX_DisableGlobalArrayAlignment : BoolField<
+    "hexagon-disable-global-array-align", "false",
     "Disable aligning global integer arrays to an 8-byte boundary",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Default = "false";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def HEX_DisableAlignOptByteHalf : Option<
-    "hexagon-disable-align-opt-byte-half",
+defm HEX_DisableAlignOptByteHalf : BoolField<
+    "hexagon-disable-align-opt-byte-half", "false",
     "Disable keeping byte and half-word arrays at their natural alignment "
     "when reducing .rodata size",
-    "bool"> {
-  let Registry = HexagonOptsReg;
-  let Default = "false";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;

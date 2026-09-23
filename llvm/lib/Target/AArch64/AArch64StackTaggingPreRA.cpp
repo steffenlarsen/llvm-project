@@ -22,28 +22,21 @@
 #include "llvm/CodeGen/TargetRegisterInfo.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/AArch64/AArch64OptionsOptInfos.h"
+#include "llvm/Target/AArch64/AArch64Options.h"
 
 using namespace llvm;
 
 #define DEBUG_TYPE "aarch64-stack-tagging-pre-ra"
 
-enum UncheckedLdStMode { UncheckedNever, UncheckedSafe, UncheckedAlways };
-
-using A64UncheckedMode = clv2::A64UncheckedLdStMode;
-
-static UncheckedLdStMode getClUncheckedLdSt(const Function &F) {
-  if (auto *O = clv2::getView<&clv2::AArch64OptsReg>(
-          F.getContext().getOptionsContext()))
-    return static_cast<UncheckedLdStMode>(O->get<&clv2::A64_UncheckedLdSt>());
-  return UncheckedSafe;
+static A64UncheckedLdStMode getClUncheckedLdSt(const Function &F) {
+  return F.getContext().getOptions<AArch64Options>().A64_UncheckedLdSt;
 }
 
 static bool getClFirstSlot(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::A64_StackTaggingFirstSlotOpt>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<AArch64Options>()
+      .A64_StackTaggingFirstSlotOpt;
 }
 
 namespace {
@@ -56,7 +49,7 @@ class AArch64StackTaggingPreRAImpl {
   const AArch64RegisterInfo *TRI;
   const AArch64InstrInfo *TII;
 
-  SmallVector<MachineInstr*, 16> ReTags;
+  SmallVector<MachineInstr *, 16> ReTags;
 
 public:
   bool run(MachineFunction &Func);
@@ -166,9 +159,10 @@ static bool isUncheckedLoadOrStoreOpcode(unsigned Opcode) {
 }
 
 bool AArch64StackTaggingPreRAImpl::mayUseUncheckedLoadStore() {
-  if (getClUncheckedLdSt(MF->getFunction()) == UncheckedNever)
+  if (getClUncheckedLdSt(MF->getFunction()) == A64UncheckedLdStMode::Never)
     return false;
-  else if (getClUncheckedLdSt(MF->getFunction()) == UncheckedAlways)
+  else if (getClUncheckedLdSt(MF->getFunction()) ==
+           A64UncheckedLdStMode::Always)
     return true;
 
   // This estimate can be improved if we had harder guarantees about stack frame
@@ -352,7 +346,8 @@ bool AArch64StackTaggingPreRAImpl::run(MachineFunction &Func) {
   MF = &Func;
   MRI = &MF->getRegInfo();
   AFI = MF->getInfo<AArch64FunctionInfo>();
-  TII = static_cast<const AArch64InstrInfo *>(MF->getSubtarget().getInstrInfo());
+  TII =
+      static_cast<const AArch64InstrInfo *>(MF->getSubtarget().getInstrInfo());
   TRI = static_cast<const AArch64RegisterInfo *>(
       MF->getSubtarget().getRegisterInfo());
   MFI = &MF->getFrameInfo();

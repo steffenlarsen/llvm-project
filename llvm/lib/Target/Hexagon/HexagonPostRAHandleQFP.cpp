@@ -77,9 +77,8 @@
 #include "llvm/InitializePasses.h"
 #include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
+#include "llvm/Target/Hexagon/HexagonOptions.h"
 #include "llvm/Target/TargetMachine.h"
 
 #define DEBUG_TYPE "handle-qfp"
@@ -88,18 +87,24 @@ using namespace llvm;
 using namespace rdf;
 
 static bool getDisablePostRAHandleQFloat(const MachineFunction &MF) {
-  return clv2::getOptValOrDefault<&clv2::HEX_DisablePostRAHandleQFloat>(
-      MF.getFunction().getContext().getOptionsContext());
+  return MF.getFunction()
+      .getContext()
+      .getOptions<HexagonOptions>()
+      .HEX_DisablePostRAHandleQFloat;
 }
 
 static bool getEnablePostRAXqfCompliance(const MachineFunction &MF) {
-  return clv2::getOptValOrDefault<&clv2::HEX_EnablePostRAXqfCompliance>(
-      MF.getFunction().getContext().getOptionsContext());
+  return MF.getFunction()
+      .getContext()
+      .getOptions<HexagonOptions>()
+      .HEX_EnablePostRAXqfCompliance;
 }
 
 static QFloatMode getQFloatModeValue(const MachineFunction &MF) {
-  return clv2::getOptValOrDefault<&clv2::HEX_QFloatMode>(
-      MF.getFunction().getContext().getOptionsContext());
+  return MF.getFunction()
+      .getContext()
+      .getOptions<HexagonOptions>()
+      .HEX_QFloatMode;
 }
 
 namespace llvm {

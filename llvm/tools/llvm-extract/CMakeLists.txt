@@ -15,4 +15,5 @@ add_llvm_tool(llvm-extract
 
   DEPENDS
   intrinsics_gen
+  UtilsOptParserTableGen
   )

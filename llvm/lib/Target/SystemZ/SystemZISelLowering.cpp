@@ -27,8 +27,7 @@
 #include "llvm/IR/PatternMatch.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/KnownBits.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/SystemZ/SystemZOptionsOptInfos.h"
+#include "llvm/Target/SystemZ/SystemZOptions.h"
 #include "llvm/Target/TargetMachine.h"
 #include <cctype>
 #include <optional>
@@ -37,21 +36,18 @@ using namespace llvm;
 
 #define DEBUG_TYPE "systemz-lower"
 
+static std::optional<bool> getEnableIntArgExtCheckOpt(const Function &F) {
+  return F.getContext().getOptions<SystemZOptions>().SZ_EnableIntArgExtCheck;
+}
+
 // Temporarily let this be disabled by default until all known problems
 // related to argument extensions are fixed.
-static bool EnableIntArgExtCheckWasSpecified = false;
-static bool EnableIntArgExtCheck = false;
-
 static bool getEnableIntArgExtCheck(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SZ_EnableIntArgExtCheck>(
-      F.getContext().getOptionsContext());
+  return getEnableIntArgExtCheckOpt(F).value_or(false);
 }
 
 static bool getEnableIntArgExtCheckWasSpecified(const Function &F) {
-  if (auto *O = clv2::getView<&clv2::SystemZOptsReg>(
-          F.getContext().getOptionsContext()))
-    return O->specified<&clv2::SZ_EnableIntArgExtCheck>();
-  return EnableIntArgExtCheckWasSpecified;
+  return getEnableIntArgExtCheckOpt(F).has_value();
 }
 
 namespace {

@@ -31,6 +31,7 @@
 #include "llvm/Option/Option.h"
 #include "llvm/Plugins/PassPlugin.h"
 #include "llvm/Support/CommandLineV2.h"
+#include "llvm/Support/PluginLoaderOptions.h"
 #include "llvm/Support/RegisterLLVMOptions.h"
 
 namespace Fortran::frontend {
@@ -226,8 +227,12 @@ bool executeCompilerInvocation(CompilerInstance *flang) {
       P.enableGlobalDynamicEntries();
       llvm::RegisterAllLLVMOptions(P);
       mlir::registerPassManagerCLOptions(P);
-      flang->setOptionsContext(
-          P.parse(allArgs.size(), allArgs.data(), llvm::StringRef()));
+      std::vector<const char *> ArgsAfterPlugins =
+          llvm::loadPluginsAndStripArgs(static_cast<int>(allArgs.size()),
+                                        allArgs.data());
+      flang->setOptionsContext(P.parse(static_cast<int>(ArgsAfterPlugins.size()),
+                                       ArgsAfterPlugins.data(),
+                                       llvm::StringRef()));
     }
   }
 

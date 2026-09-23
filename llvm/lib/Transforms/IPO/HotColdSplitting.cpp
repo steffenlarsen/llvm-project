@@ -29,6 +29,7 @@
 #include "llvm/ADT/PostOrderIterator.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
+#include "llvm/Analysis/AnalysisOptions.h"
 #include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/Analysis/BlockFrequencyInfo.h"
 #include "llvm/Analysis/OptimizationRemarkEmitter.h"
@@ -49,10 +50,9 @@
 #include "llvm/IR/User.h"
 #include "llvm/IR/Value.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/IPO.h"
-#include "llvm/Transforms/IPO/IPOOptionsOptInfos.h"
+#include "llvm/Transforms/IPO/IPOOptions.h"
 #include "llvm/Transforms/Utils/CodeExtractor.h"
 #include <cassert>
 #include <limits>
@@ -68,28 +68,19 @@ using namespace llvm;
 static int ColdBranchProbDenom = 100;
 
 static bool getEnableStaticAnalysis(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::IPO_EnableStaticAnalysis>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<IPOOptions>().IPO_EnableStaticAnalysis;
 }
 static int getSplittingThreshold(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::IPO_SplittingThreshold>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<IPOOptions>().IPO_SplittingThreshold;
 }
 static bool getEnableColdSection(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::IPO_EnableColdSection>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<IPOOptions>().IPO_EnableColdSection;
 }
 static const std::string &getColdSectionName(const Function &F) {
-  if (auto *O =
-          clv2::getView<&clv2::IPOOptsReg>(F.getContext().getOptionsContext()))
-    if (O->specified<&clv2::IPO_ColdSectionName>())
-      return O->get<&clv2::IPO_ColdSectionName>();
-  static const std::string Default = "__llvm_cold";
-  return Default;
+  return F.getContext().getOptions<IPOOptions>().IPO_ColdSectionName;
 }
 static int getMaxParametersForSplit(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::IPO_MaxParametersForSplit>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<IPOOptions>().IPO_MaxParametersForSplit;
 }
 
 namespace {
@@ -108,8 +99,7 @@ bool blockEndsInUnreachable(const BasicBlock &BB) {
   return !(isa<ReturnInst>(I) || isa<IndirectBrInst>(I));
 }
 
-void analyzeProfMetadata(BasicBlock *BB,
-                         BranchProbability ColdProbThresh,
+void analyzeProfMetadata(BasicBlock *BB, BranchProbability ColdProbThresh,
                          SmallPtrSetImpl<BasicBlock *> &AnnotatedColdBlocks) {
   // TODO: Handle branches with > 2 successors.
   CondBrInst *CondBr = dyn_cast<CondBrInst>(BB->getTerminator());
@@ -237,7 +227,8 @@ bool HotColdSplitting::isBasicBlockCold(
     if (PSI->isColdBlock(BB, BFI))
       return true;
   } else {
-    // Find cold blocks of successors of BB during a reverse postorder traversal.
+    // Find cold blocks of successors of BB during a reverse postorder
+    // traversal.
     analyzeProfMetadata(BB, ColdProbThresh, AnnotatedColdBlocks);
 
     // A statically cold BB would be known before it is visited
@@ -670,17 +661,13 @@ bool HotColdSplitting::outlineColdRegions(Function &F, bool HasProfileSummary) {
   TargetTransformInfo &TTI = GetTTI(F);
   OptimizationRemarkEmitter &ORE = (*GetORE)(F);
   AssumptionCache *AC = LookupAC(F);
-  auto ColdProbThresh =
-      TTI.getPredictableBranchThreshold(F.getContext().getOptionsContext())
-          .getCompl();
+  auto ColdProbThresh = TTI.getPredictableBranchThreshold(
+                               F.getContext().getOptions<AnalysisOptions>())
+                            .getCompl();
 
-  {
-    if (auto *O = clv2::getView<&clv2::IPOOptsReg>(
-            F.getContext().getOptionsContext()))
-      if (O->specified<&clv2::IPO_ColdBranchProbDenom>())
-        ColdProbThresh =
-            BranchProbability(1, O->get<&clv2::IPO_ColdBranchProbDenom>());
-  }
+  if (auto Denom =
+          F.getContext().getOptions<IPOOptions>().IPO_ColdBranchProbDenom)
+    ColdProbThresh = BranchProbability(1, *Denom);
 
   unsigned OutlinedFunctionID = 1;
   // Find all cold regions.
@@ -810,8 +797,8 @@ bool HotColdSplitting::run(Module &M) {
   return Changed;
 }
 
-PreservedAnalyses
-HotColdSplittingPass::run(Module &M, ModuleAnalysisManager &AM) {
+PreservedAnalyses HotColdSplittingPass::run(Module &M,
+                                            ModuleAnalysisManager &AM) {
   auto &FAM = AM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
 
   auto LookupAC = [&FAM](Function &F) -> AssumptionCache * {

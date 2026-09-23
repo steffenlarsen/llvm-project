@@ -112,9 +112,8 @@
 #include "llvm/Pass.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
+#include "llvm/Target/Hexagon/HexagonOptions.h"
 #include <cassert>
 #include <iterator>
 #include <map>
@@ -125,29 +124,28 @@
 
 using namespace llvm;
 
-static unsigned OptTfrLimit = ~0U;
-static unsigned OptCoaLimit = ~0U;
-
 static unsigned getOptTfrLimit(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_ExpandCondsetsTfrLimit>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<HexagonOptions>()
+      .HEX_ExpandCondsetsTfrLimit.value_or(~0U);
 }
 
 static bool getOptTfrLimitWasSpecified(const Function &F) {
-  return clv2::wasOptSpecified<&clv2::HexagonOptsReg,
-                               &clv2::HEX_ExpandCondsetsTfrLimit>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<HexagonOptions>()
+      .HEX_ExpandCondsetsTfrLimit.has_value();
 }
 
 static unsigned getOptCoaLimit(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_ExpandCondsetsCoaLimit>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<HexagonOptions>()
+      .HEX_ExpandCondsetsCoaLimit.value_or(~0U);
 }
 
 static bool getOptCoaLimitWasSpecified(const Function &F) {
-  return clv2::wasOptSpecified<&clv2::HexagonOptsReg,
-                               &clv2::HEX_ExpandCondsetsCoaLimit>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<HexagonOptions>()
+      .HEX_ExpandCondsetsCoaLimit.has_value();
 }
 
 namespace {

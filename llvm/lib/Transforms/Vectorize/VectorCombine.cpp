@@ -36,7 +36,6 @@
 #include "llvm/IR/ProfDataUtils.h"
 #include "llvm/Support/KnownBits.h"
 #include "llvm/Support/MathExtras.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
 #include "llvm/Transforms/Vectorize/VectorizeOptions.h"
@@ -61,18 +60,15 @@ STATISTIC(NumScalarCmp, "Number of scalar compares formed");
 STATISTIC(NumScalarIntrinsic, "Number of scalar intrinsic calls formed");
 
 static bool getDisableVectorCombine(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::VEC_DisableVectorCombine>(
-      F.getContext().getOptionsContext());
+  return VectorizeOptions::Current.VEC_DisableVectorCombine;
 }
 
 static bool getDisableBinopExtractShuffle(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::VEC_DisableBinopExtractShuffle>(
-      F.getContext().getOptionsContext());
+  return VectorizeOptions::Current.VEC_DisableBinopExtractShuffle;
 }
 
 static unsigned getMaxInstrsToScan(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::VEC_MaxInstrsToScan>(
-      F.getContext().getOptionsContext());
+  return VectorizeOptions::Current.VEC_MaxInstrsToScan;
 }
 
 static const unsigned InvalidIndex = std::numeric_limits<unsigned>::max();
@@ -2636,10 +2632,12 @@ bool VectorCombine::foldPermuteOfBinops(Instruction &I) {
   }
 
   unsigned NumOpElts = Op0Ty->getNumElements();
-  bool IsIdentity0 = ShuffleDstTy == Op0Ty &&
+  bool IsIdentity0 =
+      ShuffleDstTy == Op0Ty &&
       all_of(NewMask0, [NumOpElts](int M) { return M < (int)NumOpElts; }) &&
       ShuffleVectorInst::isIdentityMask(NewMask0, NumOpElts);
-  bool IsIdentity1 = ShuffleDstTy == Op1Ty &&
+  bool IsIdentity1 =
+      ShuffleDstTy == Op1Ty &&
       all_of(NewMask1, [NumOpElts](int M) { return M < (int)NumOpElts; }) &&
       ShuffleVectorInst::isIdentityMask(NewMask1, NumOpElts);
 
@@ -6425,9 +6423,9 @@ bool VectorCombine::foldDeinterleaveIntrinsics(Instruction &I) {
                            CostKind) *
           2;
   if (OldCost <= NewCost || !NewCost.isValid()) {
-    LLVM_DEBUG(
-        dbgs() << "VC: New deinterleave2 sequence cost (" << NewCost << ")"
-               << " is higher than that of the old one (" << OldCost << ")\n");
+    LLVM_DEBUG(dbgs() << "VC: New deinterleave2 sequence cost (" << NewCost
+                      << ")" << " is higher than that of the old one ("
+                      << OldCost << ")\n");
     return false;
   }
 

@@ -33,7 +33,6 @@
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/Error.h"
-#include "llvm/Support/OptionsContext.h"
 #include <cassert>
 #include <cstdint>
 #include <vector>
@@ -42,9 +41,6 @@ namespace llvm {
 
 struct BitcodeFileContents;
 class StringTableBuilder;
-namespace clv2 {
-class OptionsContext;
-}
 
 namespace irsymtab {
 
@@ -381,8 +377,7 @@ struct FileContents {
 };
 
 /// Reads the contents of a bitcode file, creating its irsymtab if necessary.
-LLVM_ABI Expected<FileContents> readBitcode(const BitcodeFileContents &BFC,
-                                            const clv2::OptionsContext &Ctx);
+LLVM_ABI Expected<FileContents> readBitcode(const BitcodeFileContents &BFC);
 
 } // end namespace irsymtab
 } // end namespace llvm

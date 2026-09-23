@@ -21,7 +21,7 @@
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/CodeGen/AsmPrinter.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsAsmPrint.h"
 #include "llvm/CodeGen/DIE.h"
 #include "llvm/CodeGen/LexicalScopes.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
@@ -38,6 +38,7 @@
 #include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/GlobalVariable.h"
+#include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCContext.h"
@@ -70,9 +71,9 @@ STATISTIC(NumCSParams, "Number of dbg call site params created");
 
 enum DefaultOnOff { Default, Enable, Disable };
 
-static DefaultOnOff getUnknownLocations(const clv2::OptionsContext &Ctx) {
+static DefaultOnOff getUnknownLocations(const LLVMContext &Ctx) {
   return static_cast<DefaultOnOff>(
-      clv2::getOptValOrDefault<&clv2::CGPASS_UseUnknownLocations>(Ctx));
+      Ctx.getOptions<CodeGenAsmPrintOptions>().CGPASS_UseUnknownLocations);
 }
 
 enum LinkageNameOption {
@@ -148,14 +149,13 @@ static constexpr clv2::OptionsRegistry<
     &OI_DwarfOpConvert, &OI_DwarfSectionsAsReferences, &OI_MinimizeAddrInV5>
     DwarfDebugOptsReg;
 
-static bool
-getUseDwarfRangesBaseAddressSpecifier(const clv2::OptionsContext &Ctx);
-static bool getGenerateArangeSection(const clv2::OptionsContext &Ctx);
-static bool getGenerateTypeUnits(const clv2::OptionsContext &Ctx);
-static bool getSplitDwarfCrossCuReferences(const clv2::OptionsContext &Ctx);
-static bool getNoDwarfRangesSection(const clv2::OptionsContext &Ctx);
-static bool getUseGnuDebugMacro(const clv2::OptionsContext &Ctx);
-static bool getDwarfUseKeyInstructions(const clv2::OptionsContext &Ctx);
+static bool getUseDwarfRangesBaseAddressSpecifier(const LLVMContext &Ctx);
+static bool getGenerateArangeSection(const LLVMContext &Ctx);
+static bool getGenerateTypeUnits(const LLVMContext &Ctx);
+static bool getSplitDwarfCrossCuReferences(const LLVMContext &Ctx);
+static bool getNoDwarfRangesSection(const LLVMContext &Ctx);
+static bool getUseGnuDebugMacro(const LLVMContext &Ctx);
+static bool getDwarfUseKeyInstructions(const LLVMContext &Ctx);
 
 static constexpr unsigned ULEB128PadSize = 4;
 
@@ -338,6 +338,7 @@ DwarfDebug::DwarfDebug(AsmPrinter *A)
     DebuggerTuning = DebuggerKind::GDB;
 
   auto &Ctx = Asm->TM.getOptionsContext();
+  LLVMContext &LCtx = MMI->getModule()->getContext();
 
   auto DwarfInlinedStringsVal =
       clv2::getOptValOr<&DwarfDebugOptsReg, &OI_DwarfInlinedStrings>(Ctx,
@@ -348,7 +349,7 @@ DwarfDebug::DwarfDebug(AsmPrinter *A)
     UseInlineStrings = DwarfInlinedStringsVal == Enable;
 
   // Always emit .debug_aranges for SCE tuning.
-  UseARangesSection = getGenerateArangeSection(Ctx) || tuneForSCE();
+  UseARangesSection = getGenerateArangeSection(LCtx) || tuneForSCE();
 
   HasAppleExtensionAttributes = tuneForLLDB();
 
@@ -386,7 +387,7 @@ DwarfDebug::DwarfDebug(AsmPrinter *A)
   if (!Dwarf64 && TT.isArch64Bit() && TT.isOSBinFormatXCOFF())
     report_fatal_error("XCOFF requires DWARF64 for 64-bit mode!");
 
-  UseRangesSection = !getNoDwarfRangesSection(Ctx);
+  UseRangesSection = !getNoDwarfRangesSection(LCtx);
 
   auto DwarfSectionsAsReferencesVal =
       clv2::getOptValOr<&DwarfDebugOptsReg, &OI_DwarfSectionsAsReferences>(
@@ -397,7 +398,7 @@ DwarfDebug::DwarfDebug(AsmPrinter *A)
   // Don't generate type units for unsupported object file formats.
   GenerateTypeUnits = (A->TM.getTargetTriple().isOSBinFormatELF() ||
                        A->TM.getTargetTriple().isOSBinFormatWasm()) &&
-                      getGenerateTypeUnits(Ctx);
+                      getGenerateTypeUnits(LCtx);
 
   TheAccelTableKind =
       computeAccelTableKind(DwarfVersion, GenerateTypeUnits, DebuggerTuning,
@@ -425,7 +426,7 @@ DwarfDebug::DwarfDebug(AsmPrinter *A)
   // It is unclear if the GCC .debug_macro extension is well-specified
   // for split DWARF. For now, do not allow LLVM to emit it.
   UseDebugMacroSection =
-      DwarfVersion >= 5 || (getUseGnuDebugMacro(Ctx) && !useSplitDwarf());
+      DwarfVersion >= 5 || (getUseGnuDebugMacro(LCtx) && !useSplitDwarf());
   auto DwarfOpConvertVal =
       clv2::getOptValOr<&DwarfDebugOptsReg, &OI_DwarfOpConvert>(Ctx, Default);
   if (DwarfOpConvertVal == Default)
@@ -543,8 +544,8 @@ template <typename Func> static void forBothCUs(DwarfCompileUnit &CU, Func F) {
 
 bool DwarfDebug::shareAcrossDWOCUs() const {
   return getSplitDwarfCrossCuReferences(
-      Asm->MF ? Asm->MF->getFunction().getContext().getOptionsContext()
-              : Asm->TM.getOptionsContext());
+      Asm->MF ? Asm->MF->getFunction().getContext()
+              : Asm->MMI->getModule()->getContext());
 }
 
 DwarfCompileUnit &
@@ -2244,8 +2245,7 @@ void DwarfDebug::beginInstruction(const MachineInstr *MI) {
   // into Not-Key-Instructions functions should use Key Instructions is_stmt
   // handling.
   bool ScopeUsesKeyInstructions =
-      getDwarfUseKeyInstructions(
-          MF.getFunction().getContext().getOptionsContext()) &&
+      getDwarfUseKeyInstructions(MF.getFunction().getContext()) &&
       DL && DL->getScope()->getSubprogram()->getKeyInstructionsEnabled();
 
   bool IsKey = false;
@@ -2294,8 +2294,7 @@ void DwarfDebug::beginInstruction(const MachineInstr *MI) {
     if (LastAsmLine == 0)
       return;
     // If user said Don't Do That, don't do that.
-    if (getUnknownLocations(
-            MF.getFunction().getContext().getOptionsContext()) == Disable)
+    if (getUnknownLocations(MF.getFunction().getContext()) == Disable)
       return;
     // See if we have a reason to emit a line-0 record now.
     // Reasons to emit a line-0 record include:
@@ -2304,8 +2303,7 @@ void DwarfDebug::beginInstruction(const MachineInstr *MI) {
     //   possibly debug information; we want it to have a source location.
     // - Instruction is at the top of a block; we don't want to inherit the
     //   location from the physically previous (maybe unrelated) block.
-    if (getUnknownLocations(
-            MF.getFunction().getContext().getOptionsContext()) == Enable ||
+    if (getUnknownLocations(MF.getFunction().getContext()) == Enable ||
         PrevLabel || (PrevInstBB && PrevInstBB != MI->getParent()))
       RecordLineZero();
     return;
@@ -2855,8 +2853,7 @@ void DwarfDebug::beginFunctionImpl(const MachineFunction *MF) {
   // Run both `findForceIsStmtInstrs` and `computeKeyInstructions` because
   // Not-Key-Instructions functions may be inlined into Key Instructions
   // functions and vice versa.
-  if (getDwarfUseKeyInstructions(
-          MF->getFunction().getContext().getOptionsContext()))
+  if (getDwarfUseKeyInstructions(MF->getFunction().getContext()))
     computeKeyInstructions(MF);
   findForceIsStmtInstrs(MF);
 }
@@ -3830,7 +3827,8 @@ static void emitRangeList(DwarfDebug &DD, AsmPrinter *Asm,
       dwarf::DW_RLE_startx_endx, dwarf::DW_RLE_end_of_list,
       llvm::dwarf::RangeListEncodingString,
       List.CU->getCUNode()->getRangesBaseAddress() ||
-          getUseDwarfRangesBaseAddressSpecifier(Asm->TM.getOptionsContext()) ||
+          getUseDwarfRangesBaseAddressSpecifier(
+              Asm->MMI->getModule()->getContext()) ||
           DD.getDwarfVersion() >= 5,
       [](auto) {});
 }
@@ -4379,30 +4377,30 @@ void DwarfDebug::beginCodeAlignment(const MachineBasicBlock &MBB) {
 }
 
 static bool
-getUseDwarfRangesBaseAddressSpecifier(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<
-      &clv2::CGPASS_UseDwarfRangesBaseAddressSpecifier>(Ctx);
+getUseDwarfRangesBaseAddressSpecifier(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenAsmPrintOptions>()
+      .CGPASS_UseDwarfRangesBaseAddressSpecifier;
 }
 
-static bool getGenerateArangeSection(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_GenerateArangeSection>(Ctx);
+static bool getGenerateArangeSection(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenAsmPrintOptions>().CGPASS_GenerateArangeSection;
 }
 
-static bool getGenerateTypeUnits(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_GenerateTypeUnits>(Ctx);
+static bool getGenerateTypeUnits(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenAsmPrintOptions>().CGPASS_GenerateTypeUnits;
 }
 
-static bool getSplitDwarfCrossCuReferences(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_SplitDwarfCrossCuReferences>(
-      Ctx);
+static bool getSplitDwarfCrossCuReferences(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenAsmPrintOptions>()
+      .CGPASS_SplitDwarfCrossCuReferences;
 }
 
-static bool getNoDwarfRangesSection(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_NoDwarfRangesSection>(Ctx);
+static bool getNoDwarfRangesSection(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenAsmPrintOptions>().CGPASS_NoDwarfRangesSection;
 }
 
-static bool getUseGnuDebugMacro(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_UseGnuDebugMacro>(Ctx);
+static bool getUseGnuDebugMacro(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenAsmPrintOptions>().CGPASS_UseGnuDebugMacro;
 }
 
 static const int RegisterDwarfDebugOpts = [] {
@@ -4410,6 +4408,6 @@ static const int RegisterDwarfDebugOpts = [] {
   return 0;
 }();
 
-static bool getDwarfUseKeyInstructions(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_DwarfUseKeyInstructions>(Ctx);
+static bool getDwarfUseKeyInstructions(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenAsmPrintOptions>().CGPASS_DwarfUseKeyInstructions;
 }

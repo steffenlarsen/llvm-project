@@ -199,9 +199,8 @@
 #include "llvm/Pass.h"
 #include "llvm/Support/Format.h"
 #include "llvm/Support/OptimizedStructLayout.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/AMDGPU/AMDGPUOptionsOptInfos.h"
+#include "llvm/Target/AMDGPU/AMDGPUOptions.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 
@@ -212,16 +211,16 @@
 using namespace llvm;
 using namespace AMDGPU;
 
-using LoweringKind = clv2::LDSLoweringKind;
+using LoweringKind = LDSLoweringKind;
 
 static bool getSuperAlignLDSGlobals(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::AMDGPU_SuperAlignLDSGlobals>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<AMDGPUOptions>().AMDGPU_SuperAlignLDSGlobals;
 }
 
 static LoweringKind getLoweringKindLoc(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::AMDGPU_LowerModuleLDSStrategy>(
-      M.getContext().getOptionsContext());
+  return M.getContext()
+      .getOptions<AMDGPUOptions>()
+      .AMDGPU_LowerModuleLDSStrategy;
 }
 
 namespace {
@@ -1050,7 +1049,7 @@ public:
   }
 
   bool runOnModule(Module &M) {
-    if (AMDGPUTargetMachine::getEnableObjectLinking(TM.getOptionsContext()))
+    if (AMDGPUTargetMachine::getEnableObjectLinking(&M.getContext()))
       return runOnModuleLinkTime(M);
     return runOnModuleNormal(M);
   }

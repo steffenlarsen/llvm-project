@@ -17,8 +17,7 @@
 #include "llvm/Demangle/Demangle.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/MDBuilder.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Transforms/IPO/IPOOptionsOptInfos.h"
+#include "llvm/Transforms/IPO/IPOOptions.h"
 #include "llvm/Transforms/Utils/LongestCommonSequence.h"
 #include <unordered_set>
 
@@ -36,48 +35,45 @@ namespace llvm {
 } // end namespace llvm
 
 static unsigned getFuncProfileSimilarityThreshold(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_FuncProfileSimilarityThreshold>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_FuncProfileSimilarityThreshold;
 }
 
 static unsigned getMinFuncCountForCGMatching(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_MinFuncCountForCGMatching>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_MinFuncCountForCGMatching;
 }
 
 static unsigned getMinCallCountForCGMatching(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_MinCallCountForCGMatching>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_MinCallCountForCGMatching;
 }
 
 static bool getLoadFuncProfileforCGMatching(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_LoadFuncProfileforCGMatching>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_LoadFuncProfileforCGMatching;
 }
 
 static unsigned getSalvageUnusedProfileMaxFunctions(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_SalvageUnusedProfileMaxFunctions>(
-      M.getContext().getOptionsContext());
+  return M.getContext()
+      .getOptions<IPOOptions>()
+      .IPO_SalvageUnusedProfileMaxFunctions;
 }
 
 static unsigned getSalvageStaleProfileMaxCallsites(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_SalvageStaleProfileMaxCallsites>(
-      M.getContext().getOptionsContext());
+  return M.getContext()
+      .getOptions<IPOOptions>()
+      .IPO_SalvageStaleProfileMaxCallsites;
 }
 
 static bool getSalvageUnusedProfile(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_SalvageUnusedProfile>(
-      M.getContext().getOptionsContext());
+  return M.getContext()
+      .getOptions<IPOOptions>()
+      .IPO_SalvageUnusedProfile.value_or(false);
 }
 
 static bool getReportProfileStaleness(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_ReportProfileStaleness>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_ReportProfileStaleness;
 }
 
 static bool getPersistProfileStaleness(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_PersistProfileStaleness>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_PersistProfileStaleness;
 }
 
 void SampleProfileMatcher::findIRAnchors(const Function &F,

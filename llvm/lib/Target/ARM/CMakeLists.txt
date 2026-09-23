@@ -21,8 +21,6 @@ tablegen(LLVM ARMGenSystemRegister.inc -gen-searchable-tables)
 add_public_tablegen_target(ARMCommonTableGen)
 
 add_llvm_target(ARMCodeGen
-  ARMOptionsGetters.cpp
-  ARMOptionsRegistration.cpp
   A15SDOptimizer.cpp
   ARMAsmPrinter.cpp
   ARMBaseInstrInfo.cpp
@@ -95,6 +93,9 @@ add_llvm_target(ARMCodeGen
 
   ADD_TO_COMPONENT
   ARM
+
+  DEPENDS
+  ARMOptParserTableGen
   )
 
 add_subdirectory(AsmParser)

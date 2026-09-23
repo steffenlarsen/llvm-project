@@ -18,12 +18,15 @@
 #include "TestRunner.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Bitcode/BitcodeReader.h"
+#include "llvm/CodeGen/CodeGenPassOptionsGISel.h"
 #include "llvm/CodeGen/CommandFlags.h"
 #include "llvm/Config/llvm-config.h"
 #include "llvm/MC/MCTargetOptionsCommandFlags.h"
+#include "llvm/Option/LibraryOptions.h"
 #include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/OptionsContext.h"
+#include "llvm/Support/PluginLoaderOptions.h"
 #include "llvm/Support/Process.h"
 #include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/SupportOptionsOptInfos.h"
@@ -263,8 +266,34 @@ int main(int Argc, const char **Argv) {
   P.add<&ReduceToolReg>();
   RegisterAllLLVMOptions(P);
   P.hideUnrelatedOptions({&LLVMReduceCategory, &ColorOptionsCategory});
+  std::vector<const char *> ArgsAfterPlugins =
+      loadPluginsAndStripArgs(Argc, Argv);
+
+  // llvm::CodeGenGISelOptions has migrated off clv2 onto the new
+  // per-library OptTable struct design (see
+  // llvm/include/llvm/Option/LibraryOptions.h) and is no longer among the
+  // clv2::OptionParser registries configured above. Parse it out of argv
+  // first, forwarding whatever it doesn't recognize to the legacy clv2
+  // parser unchanged.
+  SmallVector<const char *, 32> LibraryOptsRest;
+  {
+    std::string LibraryOptsErrs;
+    raw_string_ostream LibraryOptsErrsOS(LibraryOptsErrs);
+    if (Error Err = opt::parseLibraryOptionsChain<CodeGenGISelOptions>(
+            ArrayRef<const char *>(ArgsAfterPlugins).drop_front(),
+            LibraryOptsRest, LibraryOptsErrsOS)) {
+      errs() << ToolName << ": " << toString(std::move(Err)) << "\n";
+      return 1;
+    }
+    errs() << LibraryOptsErrs;
+  }
+  SmallVector<const char *, 32> ArgvAfterLibraryOpts;
+  ArgvAfterLibraryOpts.push_back(Argv[0]);
+  ArgvAfterLibraryOpts.append(LibraryOptsRest.begin(), LibraryOptsRest.end());
+
   auto OptsCtx = P.parse(
-      Argc, Argv,
+      static_cast<int>(ArgvAfterLibraryOpts.size()),
+      ArgvAfterLibraryOpts.data(),
       "LLVM automatic testcase reducer.\n"
       "See https://llvm.org/docs/CommandGuide/llvm-reduce.html for more "
       "information.\n");

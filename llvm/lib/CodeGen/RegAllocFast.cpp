@@ -28,7 +28,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/SparseSet.h"
 #include "llvm/ADT/Statistic.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsRegAlloc.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
@@ -45,13 +45,12 @@
 #include "llvm/CodeGen/TargetRegisterInfo.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/LLVMContext.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cassert>
 #include <tuple>
@@ -67,8 +66,8 @@ STATISTIC(NumCoalesced, "Number of copies coalesced");
 
 // FIXME: Remove this switch when all testcases are fixed!
 
-static bool getRafastIgnoreMissingDefs(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_RafastIgnoreMissingDefs>(Ctx);
+static bool getRafastIgnoreMissingDefs(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenRegAllocOptions>().CGPASS_RafastIgnoreMissingDefs;
 }
 
 static RegisterRegAlloc fastRegAlloc("fast", "fast register allocator",
@@ -739,10 +738,8 @@ void RegAllocFastImpl::reloadAtBegin(MachineBasicBlock &MBB) {
       continue;
 
     assert((&MBB != &MBB.getParent()->front() ||
-            getRafastIgnoreMissingDefs(MBB.getParent()
-                                           ->getFunction()
-                                           .getContext()
-                                           .getOptionsContext())) &&
+            getRafastIgnoreMissingDefs(
+                MBB.getParent()->getFunction().getContext())) &&
            "no reload in start block. Missing vreg def?");
 
     if (PrologLiveIns.count(PhysReg)) {

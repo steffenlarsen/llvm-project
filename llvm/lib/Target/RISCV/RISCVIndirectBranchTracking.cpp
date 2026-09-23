@@ -21,28 +21,15 @@
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineModuleInfo.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/RISCV/RISCVOptionsOptInfos.h"
+#include "llvm/Target/RISCV/RISCVOptions.h"
 
 #define DEBUG_TYPE "riscv-indirect-branch-tracking"
 #define PASS_NAME "RISC-V Indirect Branch Tracking"
 
 using namespace llvm;
 
-static bool PreferredLandingPadLabelWasSpecified = false;
-static uint32_t PreferredLandingPadLabel = 0;
-
-static uint32_t getPreferredLandingPadLabel(const Function &F) {
-  return clv2::getOptValOr<&clv2::RISCVOptsReg,
-                           &clv2::RV_PreferredLandingPadLabel>(
-      F.getContext().getOptionsContext(), PreferredLandingPadLabel);
-}
-
-static bool getPreferredLandingPadLabelWasSpecified(const Function &F) {
-  if (auto *O = clv2::getView<&clv2::RISCVOptsReg>(
-          F.getContext().getOptionsContext()))
-    return O->specified<&clv2::RV_PreferredLandingPadLabel>();
-  return PreferredLandingPadLabelWasSpecified;
+static std::optional<unsigned> getPreferredLandingPadLabel(const Function &F) {
+  return F.getContext().getOptions<RISCVOptions>().RV_PreferredLandingPadLabel;
 }
 
 namespace {
@@ -87,11 +74,12 @@ bool RISCVIndirectBranchTracking::runOnMachineFunction(MachineFunction &MF) {
     return false;
 
   uint32_t FixedLabel = 0;
-  if (getPreferredLandingPadLabelWasSpecified(MF.getFunction())) {
-    if (!isUInt<20>(getPreferredLandingPadLabel(MF.getFunction())))
+  if (std::optional<unsigned> Val =
+          getPreferredLandingPadLabel(MF.getFunction())) {
+    if (!isUInt<20>(*Val))
       report_fatal_error("riscv-landing-pad-label=<val>, <val> needs to fit in "
                          "unsigned 20-bits");
-    FixedLabel = getPreferredLandingPadLabel(MF.getFunction());
+    FixedLabel = *Val;
   }
 
   bool Changed = false;

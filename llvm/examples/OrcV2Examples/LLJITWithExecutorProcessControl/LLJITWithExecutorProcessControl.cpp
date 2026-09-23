@@ -31,6 +31,7 @@
 #include "llvm/ExecutionEngine/Orc/SelfExecutorProcessControl.h"
 #include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/InitLLVM.h"
+#include "llvm/Support/PluginLoaderOptions.h"
 #include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/raw_ostream.h"
@@ -136,7 +137,10 @@ int main(int argc, char *argv[]) {
   clv2::OptionParser P;
   P.add<&EPCReg>();
   RegisterAllLLVMOptions(P);
-  P.parse(argc, argv, "LLJITWithLazyReexports");
+  std::vector<const char *> ArgsAfterPlugins =
+      loadPluginsAndStripArgs(argc, argv);
+  P.parse(static_cast<int>(ArgsAfterPlugins.size()), ArgsAfterPlugins.data(),
+          "LLJITWithLazyReexports");
   ExitOnErr.setBanner(std::string(argv[0]) + ": ");
 
   // (1) Create LLJIT instance.

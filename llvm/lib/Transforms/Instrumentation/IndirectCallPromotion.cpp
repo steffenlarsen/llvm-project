@@ -16,7 +16,7 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/StringRef.h"
-#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
+#include "llvm/Analysis/AnalysisOptions.h"
 #include "llvm/Analysis/IndirectCallPromotionAnalysis.h"
 #include "llvm/Analysis/IndirectCallVisitor.h"
 #include "llvm/Analysis/OptimizationRemarkEmitter.h"
@@ -34,13 +34,13 @@
 #include "llvm/IR/Value.h"
 #include "llvm/ProfileData/InstrProf.h"
 #include "llvm/ProfileData/ProfileCommon.h"
-#include "llvm/ProfileData/ProfileDataOptionsOptInfos.h"
+#include "llvm/ProfileData/ProfileDataOptions.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Transforms/Instrumentation/InstrumentationOptionsOptInfos.h"
+#include "llvm/Transforms/Instrumentation/InstrumentationOptions.h"
 #include "llvm/Transforms/Instrumentation/PGOInstrumentation.h"
 #include "llvm/Transforms/Utils/CallPromotionUtils.h"
 #include "llvm/Transforms/Utils/Instrumentation.h"
@@ -59,84 +59,79 @@ STATISTIC(NumOfPGOICallPromotion, "Number of indirect call promotions.");
 STATISTIC(NumOfPGOICallsites, "Number of indirect call candidate sites.");
 
 static unsigned getMaxNumVTableAnnotations(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::AN_MaxNumVTableAnnotations>(
-      M.getContext().getOptionsContext());
+  return M.getContext()
+      .getOptions<AnalysisOptions>()
+      .AN_MaxNumVTableAnnotations;
 }
 
-static bool getEnableVTableProfileUse(const Module &M,
-                                      const clv2::OptionsContext &Ctx) {
-  auto *O = clv2::getView<&clv2::ProfileDataOptsReg>(
-      M.getContext().getOptionsContext());
-  if (!O)
-    O = clv2::getView<&clv2::ProfileDataOptsReg>(Ctx);
-  if (O)
-    return O->get<&clv2::PD_EnableVTableProfileUse>();
-  return false;
+static bool getEnableVTableProfileUse(const Module &M) {
+  return M.getContext()
+      .getOptions<ProfileDataOptions>()
+      .PD_EnableVTableProfileUse;
 }
 
 static bool getDisableICP(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::INST_DisableICP>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<InstrumentationOptions>().INST_DisableICP;
 }
 static unsigned getICPCutOff(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::INST_ICPCutOff>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<InstrumentationOptions>().INST_ICPCutOff;
 }
 static unsigned getICPCSSkip(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::INST_ICPCSSkip>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<InstrumentationOptions>().INST_ICPCSSkip;
 }
 static bool getICPAllowDecls(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::INST_ICPAllowDecls>(
-      M.getContext().getOptionsContext());
+  return M.getContext()
+      .getOptions<InstrumentationOptions>()
+      .INST_ICPAllowDecls;
 }
 static int getHotFuncCutoffForICP(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::INST_HotFuncCutoffForICP>(
-      M.getContext().getOptionsContext());
+  return M.getContext()
+      .getOptions<InstrumentationOptions>()
+      .INST_HotFuncCutoffForICP;
 }
 static bool getICPAllowHotOnly(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::INST_ICPAllowHotOnly>(
-      M.getContext().getOptionsContext());
+  return M.getContext()
+      .getOptions<InstrumentationOptions>()
+      .INST_ICPAllowHotOnly;
 }
 static bool getICPAllowCandidateSkip(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::INST_ICPAllowCandidateSkip>(
-      M.getContext().getOptionsContext());
+  return M.getContext()
+      .getOptions<InstrumentationOptions>()
+      .INST_ICPAllowCandidateSkip;
 }
 static bool getICPLTOMode(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::INST_ICPLTOMode>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<InstrumentationOptions>().INST_ICPLTOMode;
 }
 static bool getICPSamplePGOMode(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::INST_ICPSamplePGOMode>(
-      M.getContext().getOptionsContext());
+  return M.getContext()
+      .getOptions<InstrumentationOptions>()
+      .INST_ICPSamplePGOMode;
 }
 static bool getICPCallOnly(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::INST_ICPCallOnly>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<InstrumentationOptions>().INST_ICPCallOnly;
 }
 static bool getICPInvokeOnly(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::INST_ICPInvokeOnly>(
-      M.getContext().getOptionsContext());
+  return M.getContext()
+      .getOptions<InstrumentationOptions>()
+      .INST_ICPInvokeOnly;
 }
 static bool getICPDUMPAFTER(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::INST_ICPDumpAfter>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<InstrumentationOptions>().INST_ICPDumpAfter;
 }
 static float getICPVTablePercentageThreshold(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::INST_ICPVTablePercentageThreshold>(
-      M.getContext().getOptionsContext());
+  return M.getContext()
+      .getOptions<InstrumentationOptions>()
+      .INST_ICPVTablePercentageThreshold;
 }
 static int getICPMaxNumVTableLastCandidate(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::INST_ICPMaxNumVTableLastCandidate>(
-      M.getContext().getOptionsContext());
+  return M.getContext()
+      .getOptions<InstrumentationOptions>()
+      .INST_ICPMaxNumVTableLastCandidate;
 }
 static const std::vector<std::string> &getICPIgnoredBaseTypes(const Module &M) {
-  if (auto *O = clv2::getView<&clv2::InstrumentationOptsReg>(
-          M.getContext().getOptionsContext()))
-    if (O->specified<&clv2::INST_ICPIgnoredBaseTypes>())
-      return O->get<&clv2::INST_ICPIgnoredBaseTypes>();
-  static const std::vector<std::string> Default;
-  return Default;
+  return M.getContext()
+      .getOptions<InstrumentationOptions>()
+      .INST_ICPIgnoredBaseTypes;
 }
 
 namespace {
@@ -543,7 +538,7 @@ Constant *IndirectCallPromoter::getOrCreateVTableAddressPointVar(
 Instruction *IndirectCallPromoter::computeVTableInfos(
     const CallBase *CB, VTableGUIDCountsMap &GUIDCountsMap,
     std::vector<PromotionCandidate> &Candidates) {
-  if (!getEnableVTableProfileUse(M, M.getContext().getOptionsContext()))
+  if (!getEnableVTableProfileUse(M))
     return nullptr;
 
   // Take the following code sequence as an example, here is how the code works
@@ -682,8 +677,7 @@ bool IndirectCallPromoter::tryToPromoteWithFuncCmp(
 
     // Update the count and this entry will be erased later.
     ICallProfDataRef[C.Index].Count = 0;
-    if (!getEnableVTableProfileUse(M, M.getContext().getOptionsContext()) ||
-        C.VTableGUIDAndCounts.empty())
+    if (!getEnableVTableProfileUse(M) || C.VTableGUIDAndCounts.empty())
       continue;
 
     // After a virtual call candidate gets promoted, update the vtable's counts
@@ -739,8 +733,8 @@ void IndirectCallPromoter::updateFuncValueProfiles(
 
 void IndirectCallPromoter::updateVPtrValueProfiles(
     Instruction *VPtr, VTableGUIDCountsMap &VTableGUIDCounts) {
-  if (!getEnableVTableProfileUse(M, M.getContext().getOptionsContext()) ||
-      VPtr == nullptr || !VPtr->getMetadata(LLVMContext::MD_prof))
+  if (!getEnableVTableProfileUse(M) || VPtr == nullptr ||
+      !VPtr->getMetadata(LLVMContext::MD_prof))
     return;
   VPtr->setMetadata(LLVMContext::MD_prof, nullptr);
   std::vector<InstrProfValueData> VTableValueProfiles;
@@ -864,11 +858,11 @@ bool IndirectCallPromoter::processFunction(ProfileSummaryInfo *PSI) {
       // Only promote hot if ICPAllowHotOnly is true. ICP has its own cutoff
       // threshold for hotness, which defaults to ProfileSummaryCutoffHot if
       // unspecified.
-      const int ICPHotCutoff =
-          getHotFuncCutoffForICP(M) == -1
-              ? clv2::getOptValOrDefault<&clv2::PD_ProfileSummaryCutoffHot>(
-                    M.getContext().getOptionsContext())
-              : getHotFuncCutoffForICP(M);
+      const int ICPHotCutoff = getHotFuncCutoffForICP(M) == -1
+                                   ? M.getContext()
+                                         .getOptions<ProfileDataOptions>()
+                                         .PD_ProfileSummaryCutoffHot
+                                   : getHotFuncCutoffForICP(M);
       if (getICPAllowHotOnly(M) &&
           !PSI->isHotCountNthPercentile(ICPHotCutoff, TotalCount)) {
         LLVM_DEBUG(dbgs() << "Don't promote the non-hot candidate: TotalCount="
@@ -900,8 +894,7 @@ bool IndirectCallPromoter::processFunction(ProfileSummaryInfo *PSI) {
 // cannot sink to indirect fallback.
 bool IndirectCallPromoter::isProfitableToCompareVTables(
     const CallBase &CB, ArrayRef<PromotionCandidate> Candidates) {
-  if (!getEnableVTableProfileUse(M, M.getContext().getOptionsContext()) ||
-      Candidates.empty())
+  if (!getEnableVTableProfileUse(M) || Candidates.empty())
     return false;
   LLVM_DEBUG(dbgs() << "\nEvaluating vtable profitability for callsite #"
                     << NumOfPGOICallsites << CB << "\n");
@@ -1054,7 +1047,7 @@ static bool promoteIndirectCalls(Module &M, ProfileSummaryInfo *PSI, bool InLTO,
 
   DenseSet<StringRef> IgnoredBaseTypes;
 
-  if (getEnableVTableProfileUse(M, M.getContext().getOptionsContext())) {
+  if (getEnableVTableProfileUse(M)) {
     computeVirtualCallSiteTypeInfoMap(M, MAM, VirtualCSInfo);
 
     IgnoredBaseTypes.insert_range(getICPIgnoredBaseTypes(M));

@@ -19,8 +19,7 @@
 #include "llvm/ProfileData/MemProfData.inc"
 #include "llvm/ProfileData/MemProfRadixTree.h"
 #include "llvm/ProfileData/MemProfReader.h"
-#include "llvm/ProfileData/ProfileDataOptionsOptInfos.h"
-#include "llvm/Support/OptionsContext.h"
+#include "llvm/ProfileData/ProfileDataOptions.h"
 #include "llvm/Support/raw_ostream.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
@@ -29,7 +28,7 @@
 
 namespace llvm {
 
-// Literal defaults matching the Init{} values in ProfileDataOptionsOptInfos.h.
+// Literal defaults matching the default values in ProfileDataOptions.td.
 static constexpr float MemProfLifetimeAccessDensityColdThreshold = 0.05f;
 static constexpr unsigned MemProfAveLifetimeColdThreshold = 200;
 static constexpr unsigned MemProfMinAveLifetimeAccessDensityHotThreshold = 1000;
@@ -964,30 +963,27 @@ TEST(MemProf, GetAllocType) {
       (uint64_t)(MemProfMinAveLifetimeAccessDensityHotThreshold * AllocCount *
                  100);
 
-  // Make sure the option for detecting hot allocations is set via
-  // OptionsContext.
-  auto PDOpts = clv2::ProfileDataOptsReg.makeDefaults();
-  PDOpts.get<&clv2::PD_MemProfUseHotHints>() = true;
-  clv2::OptionsContext OptsCtx;
-  OptsCtx.addView<&clv2::ProfileDataOptsReg>(PDOpts);
+  // Make sure the option for detecting hot allocations is enabled.
+  ProfileDataOptions HotHintsOpts;
+  HotHintsOpts.PD_MemProfUseHotHints = true;
 
   // Test Hot
   // More accesses per byte per sec than hot threshold is hot.
   EXPECT_EQ(getAllocType(HotTotalLifetimeAccessDensityThreshold + 1, AllocCount,
-                         ColdTotalLifetimeThreshold + 1, OptsCtx),
+                         ColdTotalLifetimeThreshold + 1, HotHintsOpts),
             AllocationType::Hot);
 
   // Without MemProfUseHotHints (default) we should treat simply as NotCold.
   EXPECT_EQ(getAllocType(HotTotalLifetimeAccessDensityThreshold + 1, AllocCount,
                          ColdTotalLifetimeThreshold + 1,
-                         /*Ctx=*/llvm::clv2::defaultOptionsContext()),
+                         /*Opts=*/ProfileDataOptions()),
             AllocationType::NotCold);
 
   // Test Cold
   // Long lived with less accesses per byte per sec than cold threshold is cold.
   EXPECT_EQ(getAllocType(ColdTotalLifetimeAccessDensityThreshold - 1,
                          AllocCount, ColdTotalLifetimeThreshold + 1,
-                         /*Ctx=*/llvm::clv2::defaultOptionsContext()),
+                         /*Opts=*/ProfileDataOptions()),
             AllocationType::Cold);
 
   // Test NotCold
@@ -995,19 +991,19 @@ TEST(MemProf, GetAllocType) {
   // cold.
   EXPECT_EQ(getAllocType(ColdTotalLifetimeAccessDensityThreshold + 1,
                          AllocCount, ColdTotalLifetimeThreshold + 1,
-                         /*Ctx=*/llvm::clv2::defaultOptionsContext()),
+                         /*Opts=*/ProfileDataOptions()),
             AllocationType::NotCold);
   // Short lived with more accesses per byte per sec than cold threshold is not
   // cold.
   EXPECT_EQ(getAllocType(ColdTotalLifetimeAccessDensityThreshold + 1,
                          AllocCount, ColdTotalLifetimeThreshold - 1,
-                         /*Ctx=*/llvm::clv2::defaultOptionsContext()),
+                         /*Opts=*/ProfileDataOptions()),
             AllocationType::NotCold);
   // Short lived with less accesses per byte per sec than cold threshold is not
   // cold.
   EXPECT_EQ(getAllocType(ColdTotalLifetimeAccessDensityThreshold - 1,
                          AllocCount, ColdTotalLifetimeThreshold - 1,
-                         /*Ctx=*/llvm::clv2::defaultOptionsContext()),
+                         /*Opts=*/ProfileDataOptions()),
             AllocationType::NotCold);
 }
 

@@ -61,9 +61,8 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/DynamicLibrary.h"
 #include "llvm/Support/GraphWriter.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/X86/X86OptionsOptInfos.h"
+#include "llvm/Target/X86/X86Options.h"
 
 using namespace llvm;
 
@@ -77,28 +76,23 @@ STATISTIC(NumFunctionsMitigated, "Number of functions for which mitigations "
 STATISTIC(NumGadgets, "Number of LVI gadgets detected during analysis");
 
 static std::string getOptimizePluginPath(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::X86_LVILoadOptPlugin>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<X86Options>().X86_LVILoadOptPlugin;
 }
 
 static bool getNoConditionalBranches(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::X86_LVILoadNoCBranch>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<X86Options>().X86_LVILoadNoCBranch;
 }
 
 static bool getEmitDot(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::X86_LVILoadDot>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<X86Options>().X86_LVILoadDot;
 }
 
 static bool getEmitDotOnly(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::X86_LVILoadDotOnly>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<X86Options>().X86_LVILoadDotOnly;
 }
 
 static bool getEmitDotVerify(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::X86_LVILoadDotVerify>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<X86Options>().X86_LVILoadDotVerify;
 }
 
 static llvm::sys::DynamicLibrary OptimizeDL;
@@ -368,7 +362,7 @@ X86LoadValueInjectionLoadHardeningImpl::getGadgetGraph(
             auto Use = DFG.addr<UseNode *>(UseID);
             if (Use.Addr->getFlags() & NodeAttrs::PhiRef) { // phi node
               NodeAddr<PhiNode *> Phi = Use.Addr->getOwner(DFG);
-              for (const auto& I : L.getRealUses(Phi.Id)) {
+              for (const auto &I : L.getRealUses(Phi.Id)) {
                 if (DFG.getPRI().alias(RegisterRef(I.first), DefReg)) {
                   for (const auto &UA : I.second)
                     Uses.emplace(UA.first);

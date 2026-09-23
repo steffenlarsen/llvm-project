@@ -36,9 +36,8 @@
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
+#include "llvm/Target/Hexagon/HexagonOptions.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include <cassert>
 #include <cstddef>
@@ -60,18 +59,15 @@ static bool OptEnableInv = true;
 static bool OptEnableConst = true;
 
 static bool getOptSpeculate(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_OptSpeculate>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_OptSpeculate;
 }
 
 static bool getOptEnableInv(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_OptEnableInv>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_OptEnableInv;
 }
 
 static bool getOptEnableConst(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_OptEnableConst>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_OptEnableConst;
 }
 
 namespace {

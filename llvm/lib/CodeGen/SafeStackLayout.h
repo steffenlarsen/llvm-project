@@ -16,10 +16,7 @@
 
 namespace llvm {
 
-namespace clv2 {
-class OptionsContext;
-} // namespace clv2
-
+class LLVMContext;
 class raw_ostream;
 class Value;
 
@@ -27,7 +24,7 @@ namespace safestack {
 
 /// Compute the layout of an unsafe stack frame.
 class StackLayout {
-  const clv2::OptionsContext *Ctx;
+  const LLVMContext *Ctx;
   Align MaxAlignment;
 
   struct StackRegion {
@@ -58,7 +55,7 @@ class StackLayout {
   void layoutObject(StackObject &Obj);
 
 public:
-  StackLayout(Align StackAlignment, const clv2::OptionsContext &Ctx)
+  StackLayout(Align StackAlignment, const LLVMContext &Ctx)
       : Ctx(&Ctx), MaxAlignment(StackAlignment) {}
 
   /// Add an object to the stack frame. Value pointer is opaque and used as a

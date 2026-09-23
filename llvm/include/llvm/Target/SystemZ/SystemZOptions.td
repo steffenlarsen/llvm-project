@@ -6,53 +6,33 @@
 //
 //===----------------------------------------------------------------------===//
 
-include "llvm/Support/CLV2Options.td"
+include "llvm/Option/OptParser.td"
 
-def SystemZOptsReg : Registry<"llvm::sz_opts"> {
-  // Getter bodies are compiled once, in SystemZOptionsGetters.cpp.
-  let OutOfLineGetters = 1;
-}
+def SystemZOptions : OptionsStruct<"llvm"> {}
 
-def SZ_EnableMachineCombinerPass : Option<
-    "systemz-machine-combiner",
+defm SZ_EnableMachineCombinerPass : BoolField<
+    "systemz-machine-combiner", "true",
     "Enable the machine combiner pass",
-    "bool"> {
-  let Registry = SystemZOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def SZ_GenericSched : Option<
-    "generic-sched",
+defm SZ_GenericSched : BoolField<
+    "generic-sched", "false",
     "Run the generic pre-ra scheduler instead of the SystemZ scheduler.",
-    "bool"> {
-  let Registry = SystemZOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def SZ_ProcResCostLim : Option<
-    "procres-cost-lim",
+defm SZ_ProcResCostLim : ValueField<
+    "procres-cost-lim", "int", "8",
     "The OOO window for processor resources during scheduling.",
-    "int"> {
-  let Registry = SystemZOptsReg;
-  let Default = "8";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def SZ_UseSubRegLiveness : Option<
-    "systemz-subreg-liveness",
+defm SZ_UseSubRegLiveness : BoolField<
+    "systemz-subreg-liveness", "false",
     "Enable subregister liveness tracking for SystemZ (experimental)",
-    "bool"> {
-  let Registry = SystemZOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def SZ_EnableIntArgExtCheck : Option<
-    "argext-abi-check",
-    "Verify that narrow int args are properly extended per the SystemZ ABI.",
-    "bool"> {
-  let Registry = SystemZOptsReg;
-  let Default = "0";
-}
+// std::optional (not a plain bool) so callers can distinguish "not passed"
+// (falls back to TargetOptions::VerifyArgABICompliance) from an explicit
+// "-argext-abi-check=false" (forces the check off).
+defm SZ_EnableIntArgExtCheck : OptionalValueField<
+    "argext-abi-check", "bool", "true",
+    "Verify that narrow int args are properly extended per the SystemZ ABI.">;

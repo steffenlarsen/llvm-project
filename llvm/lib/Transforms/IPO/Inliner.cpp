@@ -54,7 +54,7 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Transforms/IPO/IPOOptionsOptInfos.h"
+#include "llvm/Transforms/IPO/IPOOptions.h"
 #include "llvm/Transforms/Utils/CallPromotionUtils.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/Local.h"
@@ -71,61 +71,42 @@ STATISTIC(NumInlined, "Number of functions inlined");
 STATISTIC(NumDeleted, "Number of functions deleted because all callers found");
 
 static int getIntraSCCCostMultiplier(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_IntraSCCCostMultiplier>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_IntraSCCCostMultiplier;
 }
 
 static unsigned getInlinerForwardingScanLimit(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::IPO_InlinerForwardingScanLimit>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<IPOOptions>().IPO_InlinerForwardingScanLimit;
 }
 
 static bool getKeepAdvisorForPrinting(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_KeepAdvisorForPrinting>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_KeepAdvisorForPrinting;
 }
 
 static bool getEnablePostSCCAdvisorPrinting(const Module *M,
-                                            const clv2::OptionsContext &Ctx) {
-  const ipo_opts::ParsedOpts *O = nullptr;
-  if (M)
-    O = clv2::getView<&clv2::IPOOptsReg>(M->getContext().getOptionsContext());
-  if (!O)
-    O = clv2::getView<&clv2::IPOOptsReg>(Ctx);
-  if (O && O->specified<&clv2::IPO_EnablePostSCCAdvisorPrinting>())
-    return O->get<&clv2::IPO_EnablePostSCCAdvisorPrinting>();
-  return false;
+                                            const clv2::OptionsContext & /*Ctx*/) {
+  // No LLVMContext is reachable when called from the
+  // ModuleInlinerWrapperPass constructor (only a legacy
+  // clv2::OptionsContext), so fall back to the process-wide default in that
+  // case, same idiom as WholeProgramDevirt.cpp's mustBeUnreachableFunction.
+  return M ? M->getContext().getOptions<IPOOptions>().IPO_EnablePostSCCAdvisorPrinting
+           : IPOOptions::Current.IPO_EnablePostSCCAdvisorPrinting;
 }
 
 static const std::string &getCGSCCInlineReplayFile(const Module &M) {
-  if (auto *O =
-          clv2::getView<&clv2::IPOOptsReg>(M.getContext().getOptionsContext()))
-    if (O->specified<&clv2::IPO_CGSCCInlineReplayFile>())
-      return O->get<&clv2::IPO_CGSCCInlineReplayFile>();
-  static const std::string Default;
-  return Default;
+  return M.getContext().getOptions<IPOOptions>().IPO_CGSCCInlineReplayFile;
 }
 
 static ReplayInlinerSettings::Scope getCGSCCInlineReplayScope(const Module &M) {
-  return clv2::getOptValIfSpecified<&clv2::IPOOptsReg,
-                                    &clv2::IPO_CGSCCInlineReplayScope>(
-      M.getContext().getOptionsContext(),
-      ReplayInlinerSettings::Scope::Function);
+  return M.getContext().getOptions<IPOOptions>().IPO_CGSCCInlineReplayScope;
 }
 
 static ReplayInlinerSettings::Fallback
 getCGSCCInlineReplayFallback(const Module &M) {
-  return clv2::getOptValIfSpecified<&clv2::IPOOptsReg,
-                                    &clv2::IPO_CGSCCInlineReplayFallback>(
-      M.getContext().getOptionsContext(),
-      ReplayInlinerSettings::Fallback::Original);
+  return M.getContext().getOptions<IPOOptions>().IPO_CGSCCInlineReplayFallback;
 }
 
 static CallSiteFormat::Format getCGSCCInlineReplayFormat(const Module &M) {
-  return clv2::getOptValIfSpecified<&clv2::IPOOptsReg,
-                                    &clv2::IPO_CGSCCInlineReplayFormat>(
-      M.getContext().getOptionsContext(),
-      CallSiteFormat::Format::LineColumnDiscriminator);
+  return M.getContext().getOptions<IPOOptions>().IPO_CGSCCInlineReplayFormat;
 }
 
 InlineAdvisor &
@@ -145,7 +126,7 @@ InlinerPass::getAdvisor(const ModuleAnalysisManagerCGSCCProxy::Result &MAM,
     // The one we would get from the MAM can be invalidated as a result of the
     // inliner's activity.
     OwnedAdvisor = std::make_unique<DefaultInlineAdvisor>(
-        M, FAM, getInlineParams(M.getContext().getOptionsContext()),
+        M, FAM, getInlineParams(M.getContext().getOptions<AnalysisOptions>()),
         InlineContext{LTOPhase, InlinePass::CGSCCInliner});
 
     if (!getCGSCCInlineReplayFile(M).empty())

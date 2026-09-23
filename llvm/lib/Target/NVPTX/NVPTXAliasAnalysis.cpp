@@ -16,16 +16,16 @@
 #include "llvm/IR/Argument.h"
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/Instructions.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/NVPTX/NVPTXOptionsOptInfos.h"
+#include "llvm/Target/NVPTX/NVPTXOptions.h"
 
 using namespace llvm;
 
 #define DEBUG_TYPE "NVPTX-aa"
 
 static unsigned getTraverseAddressSpacesLimit(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::NVPTX_TraverseAddressSpacesLimit>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<NVPTXOptions>()
+      .NVPTX_TraverseAddressSpacesLimit;
 }
 
 /// Extract the parent Function from a Value (Instruction or Argument).

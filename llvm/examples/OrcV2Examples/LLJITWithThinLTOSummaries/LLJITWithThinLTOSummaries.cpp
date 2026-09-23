@@ -44,6 +44,7 @@
 #include "llvm/Support/Error.h"
 #include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/PluginLoaderOptions.h"
 #include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/raw_ostream.h"
@@ -190,7 +191,11 @@ int main(int Argc, char *Argv[]) {
   clv2::OptionParser P;
   P.add<&ThinLTOReg>();
   RegisterAllLLVMOptions(P);
-  auto OptsCtx = P.parse(Argc, Argv, "LLJITWithThinLTOSummaries");
+  std::vector<const char *> ArgsAfterPlugins =
+      loadPluginsAndStripArgs(Argc, Argv);
+  auto OptsCtx =
+      P.parse(static_cast<int>(ArgsAfterPlugins.size()),
+              ArgsAfterPlugins.data(), "LLJITWithThinLTOSummaries");
   auto *Opts = OptsCtx->getViewPtr<&ThinLTOReg>();
 
   ExitOnError ExitOnErr;

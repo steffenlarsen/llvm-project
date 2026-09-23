@@ -34,9 +34,8 @@
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
+#include "llvm/Target/Hexagon/HexagonOptions.h"
 #include <cassert>
 #include <limits>
 
@@ -48,34 +47,30 @@ static unsigned RDFCount = 0;
 static unsigned RDFLimit = std::numeric_limits<unsigned>::max();
 
 static unsigned getRDFFuncBlockLimit(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_RDFFuncBlockLimit>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_RDFFuncBlockLimit;
 }
 
 static bool getEnableAggressiveRDFCopy(const Function &F) {
-  return clv2::getOptValOr<&clv2::HexagonOptsReg,
-                           &clv2::HEX_EnableAggressiveRDFCopy>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext()
+      .getOptions<HexagonOptions>()
+      .HEX_EnableAggressiveRDFCopy;
 }
 
 static unsigned getRDFLimit(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_RDFLimit>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_RDFLimit.value_or(
+      std::numeric_limits<unsigned>::max());
 }
 
 static bool getRDFLimitWasSpecified(const Function &F) {
-  return clv2::wasOptSpecified<&clv2::HexagonOptsReg, &clv2::HEX_RDFLimit>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_RDFLimit.has_value();
 }
 
 static bool getRDFDump(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_RDFDump>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_RDFDump;
 }
 
 static bool getRDFTrackReserved(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_RDFTrackReserved>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_RDFTrackReserved;
 }
 
 namespace {

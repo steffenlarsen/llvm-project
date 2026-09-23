@@ -311,6 +311,7 @@ public:
   // Provide an ordered list of schedule DAG mutations for the post-RA
   // scheduler.
   virtual void getPostRAMutations(
+      const MachineFunction &MF,
       std::vector<std::unique_ptr<ScheduleDAGMutation>> &Mutations) const {
   }
 

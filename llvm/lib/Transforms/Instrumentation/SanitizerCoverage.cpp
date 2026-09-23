@@ -34,7 +34,7 @@
 #include "llvm/Support/SpecialCaseList.h"
 #include "llvm/Support/VirtualFileSystem.h"
 #include "llvm/TargetParser/Triple.h"
-#include "llvm/Transforms/Instrumentation/InstrumentationOptionsOptInfos.h"
+#include "llvm/Transforms/Instrumentation/InstrumentationOptions.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/EscapeEnumerator.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
@@ -95,76 +95,58 @@ const char SanCovLowestStackName[] = "__sancov_lowest_stack";
 const char SanCovCallbackGateName[] = "__sancov_should_track";
 
 static int getClCoverageLevel(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::INST_SanCovLevel>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<InstrumentationOptions>().INST_SanCovLevel;
 }
 static bool getClTracePC(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::INST_SanCovTracePC>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<InstrumentationOptions>().INST_SanCovTracePC;
 }
 static bool getClTracePCEntryExit(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::INST_SanCovTracePCEntryExit>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<InstrumentationOptions>().INST_SanCovTracePCEntryExit;
 }
 static bool getClTracePCGuard(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::INST_SanCovTracePCGuard>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<InstrumentationOptions>().INST_SanCovTracePCGuard;
 }
 static bool getClCreatePCTable(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::INST_SanCovCreatePCTable>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<InstrumentationOptions>().INST_SanCovCreatePCTable;
 }
 static bool getClInline8bitCounters(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::INST_SanCovInline8bitCounters>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<InstrumentationOptions>().INST_SanCovInline8bitCounters;
 }
 static bool getClSancovDropCtors(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::INST_SanCovDropCtors>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<InstrumentationOptions>().INST_SanCovDropCtors;
 }
 static bool getClInlineBoolFlag(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::INST_SanCovInlineBoolFlag>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<InstrumentationOptions>().INST_SanCovInlineBoolFlag;
 }
 static bool getClCMPTracing(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::INST_SanCovTraceCompares>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<InstrumentationOptions>().INST_SanCovTraceCompares;
 }
 static bool getClDIVTracing(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::INST_SanCovTraceDivs>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<InstrumentationOptions>().INST_SanCovTraceDivs;
 }
 static bool getClLoadTracing(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::INST_SanCovTraceLoads>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<InstrumentationOptions>().INST_SanCovTraceLoads;
 }
 static bool getClStoreTracing(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::INST_SanCovTraceStores>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<InstrumentationOptions>().INST_SanCovTraceStores;
 }
 static bool getClGEPTracing(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::INST_SanCovTraceGeps>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<InstrumentationOptions>().INST_SanCovTraceGeps;
 }
 static bool getClPruneBlocks(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::INST_SanCovPruneBlocks>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<InstrumentationOptions>().INST_SanCovPruneBlocks;
 }
 static bool getClStackDepth(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::INST_SanCovStackDepth>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<InstrumentationOptions>().INST_SanCovStackDepth;
 }
 static int getClStackDepthCallbackMin(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::INST_SanCovStackDepthCallbackMin>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<InstrumentationOptions>().INST_SanCovStackDepthCallbackMin;
 }
 static bool getClCollectCF(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::INST_SanCovControlFlow>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<InstrumentationOptions>().INST_SanCovControlFlow;
 }
 static bool getClGatedCallbacks(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::INST_SanCovGatedCallbacks>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<InstrumentationOptions>().INST_SanCovGatedCallbacks;
 }
 
 namespace {

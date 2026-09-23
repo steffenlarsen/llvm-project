@@ -1,8 +1,10 @@
-# RUN: llvm-mca --help-hidden | FileCheck %s --check-prefix=HIDDEN
+# --sched-model-reservation-station-scale-factor is no longer a cl::opt (it
+# now lives in MCLibraryOptions, see llvm/include/llvm/MC/MCOptions.td, and is
+# consumed straight out of argv by parseLibraryOptionsChain before the
+# cl::opt-based help printer ever sees it), so it no longer appears in either
+# --help or --help-hidden output.
+# RUN: llvm-mca --help-hidden | FileCheck %s --check-prefix=HELP
 # RUN: llvm-mca --help | FileCheck %s --check-prefix=HELP
-
-# HIDDEN: Machine scheduling model options:
-# HIDDEN:   --sched-model-reservation-station-scale-factor=<number>
 
 # HELP-NOT: Machine scheduling model options:
 # HELP-NOT: sched-model-reservation-station-scale-factor

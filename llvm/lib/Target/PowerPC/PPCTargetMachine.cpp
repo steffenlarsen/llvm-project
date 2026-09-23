@@ -38,8 +38,7 @@
 #include "llvm/Support/CodeGen.h"
 #include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/Compiler.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/PowerPC/PowerPCOptionsOptInfos.h"
+#include "llvm/Target/PowerPC/PowerPCOptions.h"
 #include "llvm/Target/TargetLoweringObjectFile.h"
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/TargetParser/Triple.h"
@@ -51,60 +50,50 @@
 
 using namespace llvm;
 
-static bool getDisableCTRLoops(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::PowerPCOptsReg, &clv2::PPC_DisableCTRLoops>(
-      Ctx, false);
+static bool getDisableCTRLoops() {
+  return PowerPCOptions::Current.PPC_DisableCTRLoops;
 }
-static bool getDisableInstrFormPrep(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::PowerPCOptsReg,
-                           &clv2::PPC_DisableInstrFormPrep>(Ctx, false);
+static bool getDisableInstrFormPrep() {
+  return PowerPCOptions::Current.PPC_DisableInstrFormPrep;
 }
-static bool getDisableVSXSwapRemoval(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::PowerPCOptsReg,
-                           &clv2::PPC_DisableVSXSwapRemoval>(Ctx, false);
+static bool getDisableVSXSwapRemoval() {
+  return PowerPCOptions::Current.PPC_DisableVSXSwapRemoval;
 }
-static bool getDisableMIPeephole(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::PowerPCOptsReg, &clv2::PPC_DisableMIPeephole>(
-      Ctx, false);
+static bool getDisableMIPeephole() {
+  return PowerPCOptions::Current.PPC_DisableMIPeephole;
 }
-static bool getEnableBranchCoalescing(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::PowerPCOptsReg,
-                           &clv2::PPC_EnableBranchCoalescing>(Ctx, false);
+static bool getEnableBranchCoalescing() {
+  return PowerPCOptions::Current.PPC_EnableBranchCoalescing;
 }
-static bool getVSXFMAMutateEarly(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::PowerPCOptsReg, &clv2::PPC_VSXFMAMutateEarly>(
-      Ctx, false);
+static bool getVSXFMAMutateEarly() {
+  return PowerPCOptions::Current.PPC_VSXFMAMutateEarly;
 }
-static bool getEnableGEPOpt(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::PPC_EnableGEPOpt>(Ctx);
+static bool getEnableGEPOpt() {
+  return PowerPCOptions::Current.PPC_EnableGEPOpt;
 }
-static bool getEnablePrefetchWasSpecified(const clv2::OptionsContext &Ctx) {
-  return clv2::wasOptSpecified<&clv2::PowerPCOptsReg,
-                               &clv2::PPC_EnablePrefetch>(Ctx);
+static bool getEnablePrefetchWasSpecified() {
+  return PowerPCOptions::Current.PPC_EnablePrefetch.has_value();
 }
-static bool getEnableExtraTOCRegDeps(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::PPC_EnableExtraTOCRegDeps>(Ctx);
+static bool getEnableExtraTOCRegDeps() {
+  return PowerPCOptions::Current.PPC_EnableExtraTOCRegDeps;
 }
-static bool getEnableMachineCombinerPass(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::PPC_EnableMachineCombinerPass>(Ctx);
+static bool getEnableMachineCombinerPass() {
+  return PowerPCOptions::Current.PPC_EnableMachineCombinerPass;
 }
-static bool getReduceCRLogical(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::PPC_ReduceCRLogical>(Ctx);
+static bool getReduceCRLogical() {
+  return PowerPCOptions::Current.PPC_ReduceCRLogical;
 }
-static bool getEnablePPCGenScalarMASSEntries(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::PowerPCOptsReg,
-                           &clv2::PPC_EnableGenScalarMASSEntries>(Ctx, false);
+static bool getEnablePPCGenScalarMASSEntries() {
+  return PowerPCOptions::Current.PPC_EnableGenScalarMASSEntries;
 }
-static bool getEnableGlobalMerge(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::PowerPCOptsReg, &clv2::PPC_EnableGlobalMerge>(
-      Ctx, false);
+static bool getEnableGlobalMerge() {
+  return PowerPCOptions::Current.PPC_EnableGlobalMerge.value_or(false);
 }
-static bool getEnableGlobalMergeWasSpecified(const clv2::OptionsContext &Ctx) {
-  return clv2::wasOptSpecified<&clv2::PowerPCOptsReg,
-                               &clv2::PPC_EnableGlobalMerge>(Ctx);
+static bool getEnableGlobalMergeWasSpecified() {
+  return PowerPCOptions::Current.PPC_EnableGlobalMerge.has_value();
 }
-static unsigned getGlobalMergeMaxOffset(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::PPC_GlobalMergeMaxOffset>(Ctx);
+static unsigned getGlobalMergeMaxOffset() {
+  return PowerPCOptions::Current.PPC_GlobalMergeMaxOffset;
 }
 
 extern "C" LLVM_ABI LLVM_EXTERNAL_VISIBILITY void
@@ -252,7 +241,6 @@ getEffectivePPCCodeModel(const Triple &TT, std::optional<CodeModel::Model> CM,
   return CodeModel::Medium;
 }
 
-
 static ScheduleDAGInstrs *createPPCMachineScheduler(MachineSchedContext *C) {
   const PPCSubtarget &ST = C->MF->getSubtarget<PPCSubtarget>();
   ScheduleDAGMILive *DAG = ST.usePPCPreRASchedStrategy()
@@ -262,8 +250,8 @@ static ScheduleDAGInstrs *createPPCMachineScheduler(MachineSchedContext *C) {
   if (ST.hasStoreFusion())
     DAG->addMutation(createStoreClusterDAGMutation(DAG->TII, DAG->TRI));
   if (ST.hasFusion())
-    DAG->addMutation(createPowerPCMacroFusionDAGMutation(
-        C->MF->getFunction().getContext().getOptionsContext()));
+    DAG->addMutation(
+        createPowerPCMacroFusionDAGMutation(C->MF->getFunction().getContext()));
 
   return DAG;
 }
@@ -278,8 +266,8 @@ createPPCPostMachineScheduler(MachineSchedContext *C) {
   if (ST.hasStoreFusion())
     DAG->addMutation(createStoreClusterDAGMutation(DAG->TII, DAG->TRI));
   if (ST.hasFusion())
-    DAG->addMutation(createPowerPCMacroFusionDAGMutation(
-        C->MF->getFunction().getContext().getOptionsContext()));
+    DAG->addMutation(
+        createPowerPCMacroFusionDAGMutation(C->MF->getFunction().getContext()));
   return DAG;
 }
 
@@ -369,7 +357,7 @@ namespace {
 class PPCPassConfig : public TargetPassConfig {
 public:
   PPCPassConfig(PPCTargetMachine &TM, PassManagerBase &PM)
-    : TargetPassConfig(TM, PM) {
+      : TargetPassConfig(TM, PM) {
     // At any optimization level above -O0 we use the Machine Scheduler and not
     // the default Post RA List Scheduler.
     if (TM.getOptLevel() != CodeGenOptLevel::None)
@@ -413,15 +401,14 @@ void PPCPassConfig::addIRPasses() {
   // Generate PowerPC target-specific entries for scalar math functions
   // that are available in IBM MASS (scalar) library.
   if (TM->getOptLevel() == CodeGenOptLevel::Aggressive &&
-      getEnablePPCGenScalarMASSEntries(TM->getOptionsContext()))
+      getEnablePPCGenScalarMASSEntries())
     addPass(createPPCGenScalarMASSEntriesPass());
 
   // If explicitly requested, add explicit data prefetch intrinsics.
-  if (getEnablePrefetchWasSpecified(TM->getOptionsContext()))
+  if (getEnablePrefetchWasSpecified())
     addPass(createLoopDataPrefetchPass());
 
-  if (TM->getOptLevel() >= CodeGenOptLevel::Default &&
-      getEnableGEPOpt(TM->getOptionsContext())) {
+  if (TM->getOptLevel() >= CodeGenOptLevel::Default && getEnableGEPOpt()) {
     // Call SeparateConstOffsetFromGEP pass to extract constants within indices
     // and lower a GEP with multiple indices to either arithmetic operations or
     // multiple GEPs with single index.
@@ -443,19 +430,16 @@ void PPCPassConfig::addIRPasses() {
 bool PPCPassConfig::addPreISel() {
   // The GlobalMerge pass is intended to be on by default on AIX.
   // Specifying the command line option overrides the AIX default.
-  if (getEnableGlobalMergeWasSpecified(TM->getOptionsContext())
-          ? getEnableGlobalMerge(TM->getOptionsContext())
+  if (getEnableGlobalMergeWasSpecified()
+          ? getEnableGlobalMerge()
           : getOptLevel() != CodeGenOptLevel::None)
-    addPass(createGlobalMergePass(
-        TM, getGlobalMergeMaxOffset(TM->getOptionsContext()), false, false,
-        true, true));
+    addPass(createGlobalMergePass(TM, getGlobalMergeMaxOffset(), false, false,
+                                  true, true));
 
-  if (!getDisableInstrFormPrep(TM->getOptionsContext()) &&
-      getOptLevel() != CodeGenOptLevel::None)
+  if (!getDisableInstrFormPrep() && getOptLevel() != CodeGenOptLevel::None)
     addPass(createPPCLoopInstrFormPrepPass(getPPCTargetMachine()));
 
-  if (!getDisableCTRLoops(TM->getOptionsContext()) &&
-      getOptLevel() != CodeGenOptLevel::None)
+  if (!getDisableCTRLoops() && getOptLevel() != CodeGenOptLevel::None)
     addPass(createHardwareLoopsLegacyPass());
 
   return false;
@@ -464,7 +448,7 @@ bool PPCPassConfig::addPreISel() {
 bool PPCPassConfig::addILPOpts() {
   addPass(&EarlyIfConverterLegacyID);
 
-  if (getEnableMachineCombinerPass(TM->getOptionsContext()))
+  if (getEnableMachineCombinerPass())
     addPass(&MachineCombinerID);
 
   return true;
@@ -475,8 +459,7 @@ bool PPCPassConfig::addInstSelector() {
   addPass(createPPCISelDag(getPPCTargetMachine(), getOptLevel()));
 
 #ifndef NDEBUG
-  if (!getDisableCTRLoops(TM->getOptionsContext()) &&
-      getOptLevel() != CodeGenOptLevel::None)
+  if (!getDisableCTRLoops() && getOptLevel() != CodeGenOptLevel::None)
     addPass(createPPCCTRLoopsVerify());
 #endif
 
@@ -487,28 +470,25 @@ bool PPCPassConfig::addInstSelector() {
 void PPCPassConfig::addMachineSSAOptimization() {
   // Run CTR loops pass before any cfg modification pass to prevent the
   // canonical form of hardware loop from being destroied.
-  if (!getDisableCTRLoops(TM->getOptionsContext()) &&
-      getOptLevel() != CodeGenOptLevel::None)
+  if (!getDisableCTRLoops() && getOptLevel() != CodeGenOptLevel::None)
     addPass(createPPCCTRLoopsPass());
 
   // PPCBranchCoalescingPass need to be done before machine sinking
   // since it merges empty blocks.
-  if (getEnableBranchCoalescing(TM->getOptionsContext()) &&
-      getOptLevel() != CodeGenOptLevel::None)
+  if (getEnableBranchCoalescing() && getOptLevel() != CodeGenOptLevel::None)
     addPass(createPPCBranchCoalescingPass());
   TargetPassConfig::addMachineSSAOptimization();
   // For little endian, remove where possible the vector swap instructions
   // introduced at code generation to normalize vector element order.
   if (TM->getTargetTriple().getArch() == Triple::ppc64le &&
-      !getDisableVSXSwapRemoval(TM->getOptionsContext()))
+      !getDisableVSXSwapRemoval())
     addPass(createPPCVSXSwapRemovalPass());
   // Reduce the number of cr-logical ops.
-  if (getReduceCRLogical(TM->getOptionsContext()) &&
-      getOptLevel() != CodeGenOptLevel::None)
+  if (getReduceCRLogical() && getOptLevel() != CodeGenOptLevel::None)
     addPass(createPPCReduceCRLogicalsPass());
   // Target-specific peephole cleanups performed after instruction
   // selection.
-  if (!getDisableMIPeephole(TM->getOptionsContext())) {
+  if (!getDisableMIPeephole()) {
     addPass(createPPCMIPeepholePass());
     addPass(&DeadMachineInstructionElimID);
   }
@@ -516,9 +496,8 @@ void PPCPassConfig::addMachineSSAOptimization() {
 
 void PPCPassConfig::addPreRegAlloc() {
   if (getOptLevel() != CodeGenOptLevel::None) {
-    insertPass(getVSXFMAMutateEarly(TM->getOptionsContext())
-                   ? &TwoAddressInstructionPassID
-                   : &MachineSchedulerID,
+    insertPass(getVSXFMAMutateEarly() ? &TwoAddressInstructionPassID
+                                      : &MachineSchedulerID,
                &PPCVSXFMAMutateID);
   }
 
@@ -531,7 +510,7 @@ void PPCPassConfig::addPreRegAlloc() {
     addPass(&LiveVariablesID);
     addPass(createPPCTLSDynamicCallPass());
   }
-  if (getEnableExtraTOCRegDeps(TM->getOptionsContext()))
+  if (getEnableExtraTOCRegDeps())
     addPass(createPPCTOCRegDepsPass());
 
   if (getOptLevel() != CodeGenOptLevel::None)
@@ -577,14 +556,13 @@ MachineFunctionInfo *PPCTargetMachine::createMachineFunctionInfo(
 }
 
 static MachineSchedRegistry
-PPCPreRASchedRegistry("ppc-prera",
-                      "Run PowerPC PreRA specific scheduler",
-                      createPPCMachineScheduler);
+    PPCPreRASchedRegistry("ppc-prera", "Run PowerPC PreRA specific scheduler",
+                          createPPCMachineScheduler);
 
 static MachineSchedRegistry
-PPCPostRASchedRegistry("ppc-postra",
-                       "Run PowerPC PostRA specific scheduler",
-                       createPPCPostMachineScheduler);
+    PPCPostRASchedRegistry("ppc-postra",
+                           "Run PowerPC PostRA specific scheduler",
+                           createPPCPostMachineScheduler);
 
 // Global ISEL
 bool PPCPassConfig::addIRTranslator() {

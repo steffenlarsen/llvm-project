@@ -35,7 +35,7 @@ if(LLVM_ENABLE_PIC)
   endif()
 
   add_llvm_library(${LTO_LIBRARY_NAME} ${LTO_LIBRARY_TYPE} INSTALL_WITH_TOOLCHAIN
-      ${SOURCES} DEPENDS intrinsics_gen)
+      ${SOURCES} DEPENDS intrinsics_gen LTOOptParserTableGen)
 
   install(FILES ${LLVM_MAIN_INCLUDE_DIR}/llvm-c/lto.h
     DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/llvm-c"

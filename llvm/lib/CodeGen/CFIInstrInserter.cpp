@@ -19,7 +19,7 @@
 
 #include "llvm/CodeGen/CFIInstrInserter.h"
 #include "llvm/ADT/DepthFirstIterator.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsCore1.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/Passes.h"
@@ -30,12 +30,10 @@
 #include "llvm/InitializePasses.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCDwarf.h"
-#include "llvm/Support/CommandLineV2.h"
-#include "llvm/Support/OptionsContext.h"
 using namespace llvm;
 
-static bool getVerifyCfiinstrs(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_VerifyCfiinstrs>(Ctx);
+static bool getVerifyCfiinstrs(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore1Options>().CGPASS_VerifyCfiinstrs;
 }
 
 namespace {
@@ -48,7 +46,7 @@ public:
     MBBVector.resize(MF.getNumBlockIDs());
     calculateCFAInfo(MF);
 
-    if (getVerifyCfiinstrs(MF.getFunction().getContext().getOptionsContext())) {
+    if (getVerifyCfiinstrs(MF.getFunction().getContext())) {
       if (unsigned ErrorNum = verify(MF))
         report_fatal_error("Found " + Twine(ErrorNum) +
                            " in/out CFI information errors.");

@@ -24,8 +24,7 @@
 #include "llvm/CodeGen/MachineModuleInfo.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
 #include "llvm/IR/GlobalValue.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/AMDGPU/AMDGPUOptionsOptInfos.h"
+#include "llvm/Target/AMDGPU/AMDGPUOptions.h"
 #include "llvm/Target/TargetMachine.h"
 
 using namespace llvm;
@@ -41,29 +40,28 @@ char &llvm::AMDGPUResourceUsageAnalysisID =
 // time if we don't know the true stack size. Assume a smaller number if this is
 // only due to dynamic / non-entry block allocas.
 static uint32_t getAssumedStackSizeForExternalCall(const Function &F) {
-  return clv2::getOptValOrDefault<
-      &clv2::AMDGPU_AssumedStackSizeForExternalCall>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<AMDGPUOptions>()
+      .AMDGPU_AssumedStackSizeForExternalCall.value_or(16384);
 }
 
 static bool getAssumedStackSizeForExternalCallWasSpecified(const Function &F) {
-  return clv2::wasOptSpecified<&clv2::AMDGPUOptsReg,
-                               &clv2::AMDGPU_AssumedStackSizeForExternalCall>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<AMDGPUOptions>()
+      .AMDGPU_AssumedStackSizeForExternalCall.has_value();
 }
 
 static uint32_t getAssumedStackSizeForDynamicSizeObjects(const Function &F) {
-  return clv2::getOptValOrDefault<
-      &clv2::AMDGPU_AssumedStackSizeForDynamicSizeObjects>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<AMDGPUOptions>()
+      .AMDGPU_AssumedStackSizeForDynamicSizeObjects.value_or(4096);
 }
 
 static bool
 getAssumedStackSizeForDynamicSizeObjectsWasSpecified(const Function &F) {
-  return clv2::wasOptSpecified<
-      &clv2::AMDGPUOptsReg,
-      &clv2::AMDGPU_AssumedStackSizeForDynamicSizeObjects>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<AMDGPUOptions>()
+      .AMDGPU_AssumedStackSizeForDynamicSizeObjects.has_value();
 }
 
 INITIALIZE_PASS(AMDGPUResourceUsageAnalysisWrapperPass, DEBUG_TYPE,
@@ -305,7 +303,7 @@ AMDGPUResourceUsageAnalysisImpl::analyzeResourceUsage(
         // conservative assumptions so that the locally emitted metadata
         // describes this function's own usage only.
         if (AMDGPUTargetMachine::getEnableObjectLinking(
-                MF.getTarget().getOptionsContext()))
+                &MF.getFunction().getContext()))
           continue;
 
         // FIXME: Call site could have norecurse on it

@@ -25,16 +25,14 @@
 #include "llvm/CodeGen/MachineModuleInfo.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Module.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/X86/X86OptionsOptInfos.h"
+#include "llvm/Target/X86/X86Options.h"
 
 using namespace llvm;
 
 #define DEBUG_TYPE "x86-indirect-branch-tracking"
 
 static bool getIndirectBranchTracking(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::X86_IndirectBranchTracking>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<X86Options>().X86_IndirectBranchTracking;
 }
 
 STATISTIC(NumEndBranchAdded, "Number of ENDBR instructions added");
@@ -176,7 +174,7 @@ static bool runIndirectBranchTracking(MachineFunction &MF) {
           break;
         }
       }
-    } else if (MBB.isEHPad()){
+    } else if (MBB.isEHPad()) {
       for (MachineBasicBlock::iterator I = MBB.begin(); I != MBB.end(); ++I) {
         if (!I->isEHLabel())
           continue;

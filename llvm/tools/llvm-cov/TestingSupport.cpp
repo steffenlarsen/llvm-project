@@ -15,6 +15,7 @@
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/LEB128.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/PluginLoaderOptions.h"
 #include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/raw_ostream.h"
 #include <functional>
@@ -37,7 +38,11 @@ int convertForTestingMain(int argc, const char *argv[]) {
   clv2::OptionParser P;
   P.add<&TSReg>();
   RegisterAllLLVMOptions(P);
-  auto OptsCtx = P.parse(argc, argv, "LLVM code coverage tool\n");
+  std::vector<const char *> ArgsAfterPlugins =
+      loadPluginsAndStripArgs(argc, argv);
+  auto OptsCtx =
+      P.parse(static_cast<int>(ArgsAfterPlugins.size()),
+              ArgsAfterPlugins.data(), "LLVM code coverage tool\n");
   auto *Opts = OptsCtx->getViewPtr<&TSReg>();
 
   auto ObjErr = llvm::object::ObjectFile::createObjectFile(

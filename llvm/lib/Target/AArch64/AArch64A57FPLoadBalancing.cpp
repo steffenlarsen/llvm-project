@@ -40,21 +40,22 @@
 #include "llvm/CodeGen/RegisterScavenging.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/AArch64/AArch64OptionsOptInfos.h"
+#include "llvm/Target/AArch64/AArch64Options.h"
 using namespace llvm;
 
 #define DEBUG_TYPE "aarch64-a57-fp-load-balancing"
 
 static bool getTransformAll(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::A64_A57FPLoadBalancingForceAll>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<AArch64Options>()
+      .A64_A57FPLoadBalancingForceAll;
 }
 
 static unsigned getOverrideBalance(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::A64_A57FPLoadBalancingOverride>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<AArch64Options>()
+      .A64_A57FPLoadBalancingOverride;
 }
 
 //===----------------------------------------------------------------------===//
@@ -73,7 +74,8 @@ static bool isMul(MachineInstr *MI) {
   }
 }
 
-// Is the instruction a type of FP multiply-accumulate on 64-bit (or 32-bit) FPRs?
+// Is the instruction a type of FP multiply-accumulate on 64-bit (or 32-bit)
+// FPRs?
 static bool isMla(MachineInstr *MI) {
   switch (MI->getOpcode()) {
   case AArch64::FMSUBSrrr:
@@ -97,7 +99,7 @@ namespace {
 /// but the algorithm is conceptually doing two-color graph coloring.
 enum class Color { Even, Odd };
 #ifndef NDEBUG
-static const char *ColorNames[2] = { "Even", "Odd" };
+static const char *ColorNames[2] = {"Even", "Odd"};
 #endif
 
 class Chain;
@@ -148,7 +150,7 @@ public:
     MachineFunctionPass::getAnalysisUsage(AU);
   }
 };
-}
+} // namespace
 
 char AArch64A57FPLoadBalancingLegacy::ID = 0;
 
@@ -192,7 +194,7 @@ public:
   /// appears. These are stored so we can do quick interval tests.
   unsigned StartInstIdx, LastInstIdx, KillInstIdx;
   /// All instructions in the chain.
-  std::set<MachineInstr*> Insts;
+  std::set<MachineInstr *> Insts;
   /// True if KillInst cannot be modified. If this is true,
   /// we cannot change LastInst's outgoing register.
   /// This will be true for tied values and regmasks.
@@ -203,9 +205,8 @@ public:
   Color LastColor;
 
   Chain(MachineInstr *MI, unsigned Idx, Color C)
-      : StartInst(MI), LastInst(MI), KillInst(nullptr),
-        StartInstIdx(Idx), LastInstIdx(Idx), KillInstIdx(0),
-        LastColor(C) {
+      : StartInst(MI), LastInst(MI), KillInst(nullptr), StartInstIdx(Idx),
+        LastInstIdx(Idx), KillInstIdx(0), LastColor(C) {
     Insts.insert(MI);
   }
 
@@ -226,9 +227,7 @@ public:
   bool contains(MachineInstr &MI) { return Insts.count(&MI) > 0; }
 
   /// Return the number of instructions in the chain.
-  unsigned size() const {
-    return Insts.size();
-  }
+  unsigned size() const { return Insts.size(); }
 
   /// Inform the chain that its last active register (the dest register of
   /// LastInst) is killed by MI with no intervening uses or defs.
@@ -269,8 +268,7 @@ public:
   /// Return true if this chain (StartInst..KillInst) overlaps with Other.
   bool rangeOverlapsWith(const Chain &Other) const {
     unsigned End = KillInst ? KillInstIdx : LastInstIdx;
-    unsigned OtherEnd = Other.KillInst ?
-      Other.KillInstIdx : Other.LastInstIdx;
+    unsigned OtherEnd = Other.KillInst ? Other.KillInstIdx : Other.LastInstIdx;
 
     return StartInstIdx <= OtherEnd && Other.StartInstIdx <= End;
   }
@@ -291,19 +289,18 @@ public:
     raw_string_ostream OS(S);
 
     OS << "{";
-    StartInst->print(OS, /* SkipOpers= */true);
+    StartInst->print(OS, /* SkipOpers= */ true);
     OS << " -> ";
-    LastInst->print(OS, /* SkipOpers= */true);
+    LastInst->print(OS, /* SkipOpers= */ true);
     if (KillInst) {
       OS << " (kill @ ";
-      KillInst->print(OS, /* SkipOpers= */true);
+      KillInst->print(OS, /* SkipOpers= */ true);
       OS << ")";
     }
     OS << "}";
 
     return OS.str();
   }
-
 };
 
 } // end anonymous namespace
@@ -357,7 +354,7 @@ bool AArch64A57FPLoadBalancingImpl::runOnBasicBlock(MachineBasicBlock &MBB) {
   // The currently "active" chains - chains that can be added to and haven't
   // been killed yet. This is keyed by register - all chains can only have one
   // "link" register between each inst in the chain.
-  std::map<unsigned, Chain*> ActiveChains;
+  std::map<unsigned, Chain *> ActiveChains;
   std::vector<std::unique_ptr<Chain>> AllChains;
   unsigned Idx = 0;
   for (auto &MI : MBB)
@@ -370,10 +367,11 @@ bool AArch64A57FPLoadBalancingImpl::runOnBasicBlock(MachineBasicBlock &MBB) {
   // a poor-man's version of graph coloring. Ideally we'd create an interference
   // graph and perform full-on graph coloring on that, but;
   //   (a) That's rather heavyweight for only two colors.
-  //   (b) We expect multiple disjoint interference regions - in practice the live
+  //   (b) We expect multiple disjoint interference regions - in practice the
+  //   live
   //       range of chains is quite small and they are clustered between loads
   //       and stores.
-  EquivalenceClasses<Chain*> EC;
+  EquivalenceClasses<Chain *> EC;
   for (auto &I : AllChains)
     EC.insert(I.get());
 
@@ -384,15 +382,17 @@ bool AArch64A57FPLoadBalancingImpl::runOnBasicBlock(MachineBasicBlock &MBB) {
   LLVM_DEBUG(dbgs() << "Created " << EC.getNumClasses() << " disjoint sets.\n");
 
   // Now we assume that every member of an equivalence class interferes
-  // with every other member of that class, and with no members of other classes.
+  // with every other member of that class, and with no members of other
+  // classes.
 
   // Convert the EquivalenceClasses to a simpler set of sets.
-  std::vector<std::vector<Chain*> > V;
+  std::vector<std::vector<Chain *>> V;
   for (const auto &E : EC) {
     if (!E->isLeader())
       continue;
     std::vector<Chain *> Cs(EC.member_begin(*E), EC.member_end());
-    if (Cs.empty()) continue;
+    if (Cs.empty())
+      continue;
     V.push_back(std::move(Cs));
   }
 
@@ -430,9 +430,9 @@ Chain *AArch64A57FPLoadBalancingImpl::getAndEraseNext(Color PreferredColor,
   // We try and get the best candidate from L to color next, given that our
   // preferred color is "PreferredColor". L is ordered from larger to smaller
   // chains. It is beneficial to color the large chains before the small chains,
-  // but if we can't find a chain of the maximum length with the preferred color,
-  // we fuzz the size and look for slightly smaller chains before giving up and
-  // returning a chain that must be recolored.
+  // but if we can't find a chain of the maximum length with the preferred
+  // color, we fuzz the size and look for slightly smaller chains before giving
+  // up and returning a chain that must be recolored.
 
   // FIXME: Does this need to be configurable?
   const unsigned SizeFuzz = 1;
@@ -668,7 +668,8 @@ void AArch64A57FPLoadBalancingImpl::scanInstruction(
         // Add to chain.
         LLVM_DEBUG(dbgs() << "Instruction was successfully added to chain.\n");
         ActiveChains[AccumReg]->add(MI, Idx, getColor(DestReg));
-        // Handle cases where the destination is not the same as the accumulator.
+        // Handle cases where the destination is not the same as the
+        // accumulator.
         if (DestReg != AccumReg) {
           ActiveChains[DestReg] = ActiveChains[AccumReg];
           ActiveChains.erase(AccumReg);
@@ -716,8 +717,7 @@ void AArch64A57FPLoadBalancingImpl::maybeKillChain(
 
   } else if (MO.isRegMask()) {
 
-    for (auto I = ActiveChains.begin(), E = ActiveChains.end();
-         I != E;) {
+    for (auto I = ActiveChains.begin(), E = ActiveChains.end(); I != E;) {
       if (MO.clobbersPhysReg(I->first)) {
         LLVM_DEBUG(dbgs() << "Kill (regmask) seen for chain "
                           << printReg(I->first, TRI) << "\n");
@@ -726,7 +726,6 @@ void AArch64A57FPLoadBalancingImpl::maybeKillChain(
       } else
         ++I;
     }
-
   }
 }
 
@@ -737,7 +736,8 @@ Color AArch64A57FPLoadBalancingImpl::getColor(unsigned Reg) {
     return Color::Odd;
 }
 
-// Factory function used by AArch64TargetMachine to add the pass to the passmanager.
+// Factory function used by AArch64TargetMachine to add the pass to the
+// passmanager.
 FunctionPass *llvm::createAArch64A57FPLoadBalancingLegacyPass() {
   return new AArch64A57FPLoadBalancingLegacy();
 }

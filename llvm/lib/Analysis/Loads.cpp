@@ -12,7 +12,7 @@
 
 #include "llvm/Analysis/Loads.h"
 #include "llvm/Analysis/AliasAnalysis.h"
-#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
+#include "llvm/Analysis/AnalysisOptions.h"
 #include "llvm/Analysis/AssumeBundleQueries.h"
 #include "llvm/Analysis/LoopAccessAnalysis.h"
 #include "llvm/Analysis/LoopInfo.h"
@@ -26,8 +26,6 @@
 #include "llvm/IR/GetElementPtrTypeIterator.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Operator.h"
-#include "llvm/Support/CommandLineCompat.h"
-#include "llvm/Support/OptionsContext.h"
 
 using namespace llvm;
 
@@ -178,7 +176,6 @@ static bool isDereferenceableAndAlignedPointer(
 
   /// TODO refactor this function to be able to search independently for
   /// Dereferencability and Alignment requirements.
-
 
   if (const auto *Call = dyn_cast<CallBase>(V)) {
     if (auto *RP = getArgumentAliasingToReturnedPointer(
@@ -547,8 +544,8 @@ bool llvm::isSafeToLoadUnconditionally(Value *V, Type *Ty, Align Alignment,
 /// threading in part by eliminating partially redundant loads.
 /// At that point, the value of MaxInstsToScan was already set to '6'
 /// without documented explanation.
-unsigned llvm::getDefMaxInstsToScan(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::AN_DefMaxInstsToScan>(Ctx);
+unsigned llvm::getDefMaxInstsToScan(const AnalysisOptions &Opts) {
+  return Opts.AN_DefMaxInstsToScan;
 }
 
 Value *llvm::FindAvailableLoadedValue(LoadInst *Load, BasicBlock *ScanBB,
@@ -585,10 +582,8 @@ static bool areNonOverlapSameBaseLoadAndStore(const Value *LoadPtr,
     return false;
   auto LoadAccessSize = LocationSize::precise(DL.getTypeStoreSize(LoadTy));
   auto StoreAccessSize = LocationSize::precise(DL.getTypeStoreSize(StoreTy));
-  ConstantRange LoadRange(LoadOffset,
-                          LoadOffset + LoadAccessSize.toRaw());
-  ConstantRange StoreRange(StoreOffset,
-                           StoreOffset + StoreAccessSize.toRaw());
+  ConstantRange LoadRange(LoadOffset, LoadOffset + LoadAccessSize.toRaw());
+  ConstantRange StoreRange(StoreOffset, StoreOffset + StoreAccessSize.toRaw());
   return LoadRange.intersectWith(StoreRange).isEmptySet();
 }
 
@@ -786,8 +781,8 @@ Value *llvm::FindAvailableLoadedValue(LoadInst *Load, BatchAAResults &AA,
   // queries until later.
   Value *Available = nullptr;
   SmallVector<Instruction *> MustNotAliasInsts;
-  for (Instruction &Inst : make_range(++Load->getReverseIterator(),
-                                      ScanBB->rend())) {
+  for (Instruction &Inst :
+       make_range(++Load->getReverseIterator(), ScanBB->rend())) {
     if (Inst.isDebugOrPseudoInst())
       continue;
 

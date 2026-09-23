@@ -14,15 +14,13 @@
 
 namespace llvm {
 
-namespace clv2 {
-class OptionsContext;
-} // namespace clv2
+class LLVMContext;
 
 /// Note that you have to add:
 ///   DAG.addMutation(createAMDGPUMacroFusionDAGMutation());
 /// to AMDGPUTargetMachine::createMachineScheduler() to have an effect.
 std::unique_ptr<ScheduleDAGMutation>
-createAMDGPUMacroFusionDAGMutation(const clv2::OptionsContext &Ctx);
+createAMDGPUMacroFusionDAGMutation(const LLVMContext &Ctx);
 
 } // llvm
 

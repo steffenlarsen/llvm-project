@@ -38,7 +38,7 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/OptionsContext.h"
 #include "llvm/TargetParser/Triple.h"
-#include "llvm/Transforms/Instrumentation/InstrumentationOptionsOptInfos.h"
+#include "llvm/Transforms/Instrumentation/InstrumentationOptions.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 
@@ -73,51 +73,43 @@ constexpr char MemProfFilenameVar[] = "__memprof_profile_filename";
 
 constexpr char MemProfHistogramFlagVar[] = "__memprof_histogram";
 
-#define MEMPROF_GETTER(VarName, DescName, Default)                             \
-  static auto get##VarName(const Module &M) {                                  \
-    if (auto *O = clv2::getView<&clv2::InstrumentationOptsReg>(                \
-            M.getContext().getOptionsContext()))                               \
-      if (O->specified<&clv2::DescName>())                                     \
-        return O->get<&clv2::DescName>();                                      \
-    return Default;                                                            \
+#define MEMPROF_GETTER(VarName, FieldName)                                    \
+  static auto get##VarName(const Module &M) {                                 \
+    return M.getContext().getOptions<InstrumentationOptions>().FieldName;     \
   }
 
-MEMPROF_GETTER(ClInsertVersionCheck, INST_MemprofGuardAgainstVersionMismatch,
-               true)
-MEMPROF_GETTER(ClInstrumentReads, INST_MemprofInstrumentReads, true)
-MEMPROF_GETTER(ClInstrumentWrites, INST_MemprofInstrumentWrites, true)
-MEMPROF_GETTER(ClInstrumentAtomics, INST_MemprofInstrumentAtomics, true)
-MEMPROF_GETTER(ClUseCalls, INST_MemprofUseCallbacks, false)
-MEMPROF_GETTER(ClMappingScale, INST_MemprofMappingScale,
-               static_cast<int>(DefaultShadowScale))
-MEMPROF_GETTER(ClMappingGranularity, INST_MemprofMappingGranularity,
-               static_cast<int>(DefaultMemGranularity))
-MEMPROF_GETTER(ClStack, INST_MemprofInstrumentStack, false)
-MEMPROF_GETTER(ClDebug, INST_MemprofDebug, 0)
-MEMPROF_GETTER(ClDebugMin, INST_MemprofDebugMin, -1)
-MEMPROF_GETTER(ClDebugMax, INST_MemprofDebugMax, -1)
-MEMPROF_GETTER(ClHistogram, INST_MemprofHistogram, false)
+MEMPROF_GETTER(ClInsertVersionCheck, INST_MemprofGuardAgainstVersionMismatch)
+MEMPROF_GETTER(ClInstrumentReads, INST_MemprofInstrumentReads)
+MEMPROF_GETTER(ClInstrumentWrites, INST_MemprofInstrumentWrites)
+MEMPROF_GETTER(ClInstrumentAtomics, INST_MemprofInstrumentAtomics)
+MEMPROF_GETTER(ClUseCalls, INST_MemprofUseCallbacks)
+MEMPROF_GETTER(ClMappingScale, INST_MemprofMappingScale)
+MEMPROF_GETTER(ClMappingGranularity, INST_MemprofMappingGranularity)
+MEMPROF_GETTER(ClStack, INST_MemprofInstrumentStack)
+MEMPROF_GETTER(ClDebug, INST_MemprofDebug)
+MEMPROF_GETTER(ClDebugMin, INST_MemprofDebugMin)
+MEMPROF_GETTER(ClDebugMax, INST_MemprofDebugMax)
+MEMPROF_GETTER(ClHistogram, INST_MemprofHistogram)
 
 #undef MEMPROF_GETTER
 
 // String getters need explicit return types (no macro).
 static std::string getClMemoryAccessCallbackPrefix(const Module &M) {
-  return clv2::getOptValIfSpecified<
-      &clv2::InstrumentationOptsReg,
-      &clv2::INST_MemprofMemoryAccessCallbackPrefix>(
-      M.getContext().getOptionsContext(), "__memprof_");
+  return M.getContext()
+      .getOptions<InstrumentationOptions>()
+      .INST_MemprofMemoryAccessCallbackPrefix;
 }
 
 static std::string getClDebugFunc(const Module &M) {
-  return clv2::getOptValIfSpecified<&clv2::InstrumentationOptsReg,
-                                    &clv2::INST_MemprofDebugFunc>(
-      M.getContext().getOptionsContext(), std::string{});
+  return M.getContext()
+      .getOptions<InstrumentationOptions>()
+      .INST_MemprofDebugFunc;
 }
 
 static std::string getMemprofRuntimeDefaultOptions(const Module &M) {
-  return clv2::getOptValIfSpecified<&clv2::InstrumentationOptsReg,
-                                    &clv2::INST_MemprofRuntimeDefaultOptions>(
-      M.getContext().getOptionsContext(), std::string{});
+  return M.getContext()
+      .getOptions<InstrumentationOptions>()
+      .INST_MemprofRuntimeDefaultOptions;
 }
 
 // Instrumentation statistics

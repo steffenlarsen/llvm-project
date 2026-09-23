@@ -13,9 +13,10 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/IR/GlobalValue.h"
+#include "llvm/Option/LibraryOptions.h"
 #include "llvm/ProfileData/PGOCtxProfReader.h"
 #include "llvm/ProfileData/PGOCtxProfWriter.h"
-#include "llvm/ProfileData/ProfileDataOptionsOptInfos.h"
+#include "llvm/ProfileData/ProfileDataOptions.h"
 #include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -89,52 +90,36 @@ Error convertToYaml(StringRef Input, StringRef Output) {
 } // namespace
 
 int main(int argc, const char **argv) {
+  // llvm::ProfileDataOptions (e.g. -ctx-prof-include-empty, read by
+  // PGOCtxProfileWriter's ctor) has migrated off clv2 onto the new
+  // per-library OptTable struct design (see
+  // llvm/include/llvm/Option/LibraryOptions.h) and is no longer among the
+  // clv2::OptionParser registries configured below. Parse its options out of
+  // argv first, forwarding whatever it doesn't recognize to the legacy clv2
+  // parser unchanged.
+  SmallVector<const char *, 32> Rest;
+  {
+    std::string Errs;
+    raw_string_ostream ErrsOS(Errs);
+    if (Error Err = opt::parseLibraryOptionsChain<ProfileDataOptions>(
+            ArrayRef<const char *>(argv + 1, argv + argc), Rest, ErrsOS)) {
+      errs() << "llvm-ctxprof-util: " << toString(std::move(Err)) << "\n";
+      return 1;
+    }
+    errs() << Errs;
+  }
+  SmallVector<const char *, 32> ArgvAfterProfileData;
+  ArgvAfterProfileData.push_back(argv[0]);
+  ArgvAfterProfileData.append(Rest.begin(), Rest.end());
+
   clv2::OptionParser P;
   P.add<&CtxProfToolReg>();
-  P.add<&clv2::ProfileDataOptsReg>();
   RegisterCoreLLVMOptions(P);
   P.showOptions({"disable-auto-upgrade-debug-info", "disable-i2p-p2i-opt",
                  "elide-all-zero-branch-weights"});
-  {
-    // Visible versions of options that are Hidden in ProfileDataOptsReg
-    static constexpr clv2::OptionInfo<bool> V4{
-        "enable-name-compression", "Enable name/filename string compression",
-        clv2::Init{true}};
-    static constexpr clv2::OptionInfo<bool> V5{
-        "enable-vtable-profile-use",
-        "If ThinLTO and WPD is enabled and this option is true, vtable "
-        "profiles will be used by ICP pass for more efficient indirect "
-        "call sequence. If false, type profiles won't be used.",
-        clv2::Init{false}};
-    static constexpr clv2::OptionInfo<bool> V6{
-        "enable-vtable-value-profiling",
-        "If true, the virtual table address will be instrumented to know "
-        "the types of a C++ pointer. The information is used in indirect "
-        "call promotion to do selective vtable-based comparison.",
-        clv2::Init{false}};
-    static constexpr clv2::OptionInfo<bool> V7{
-        "generate-merged-base-profiles",
-        "When generating nested context-sensitive profiles, always generate "
-        "extra base profile for function with all its context profiles merged "
-        "into it.",
-        clv2::Init{false}};
-    static constexpr clv2::OptionInfo<bool> V8{
-        "ctx-prof-include-empty",
-        "Also write profiles with all-zero counters. Intended for "
-        "testing/debugging.",
-        clv2::Init{false}};
-    static constexpr clv2::OptionsRegistry<&V4, &V5, &V6, &V7, &V8> VisReg;
-    using PT = decltype(VisReg)::ParsedOptionsT;
-    auto *S = new PT();
-    decltype(VisReg)::applyDefaultsTo(*S);
-    std::vector<clv2::detail::OptionEntry> Es;
-    std::vector<clv2::detail::AliasEntry> As;
-    std::vector<clv2::detail::SubCommandSpec> Ss;
-    decltype(VisReg)::staticBuildInto(*S, Es, As, Ss);
-    for (auto &E : Es)
-      P.addDynamicEntry(std::move(E));
-  }
-  auto OptsCtx = P.parse(argc, argv, "LLVM Contextual Profile Utils\n");
+  auto OptsCtx =
+      P.parse(static_cast<int>(ArgvAfterProfileData.size()),
+              ArgvAfterProfileData.data(), "LLVM Contextual Profile Utils\n");
   auto *Opts = OptsCtx->getViewPtr<&CtxProfToolReg>();
 
   auto HandleErr = [&](Error E) -> int {

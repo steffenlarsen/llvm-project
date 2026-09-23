@@ -74,14 +74,13 @@
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/MemoryBuffer.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/TrailingObjects.h"
 #include "llvm/Support/YAMLTraits.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/TargetParser/Triple.h"
 #include "llvm/Transforms/IPO.h"
-#include "llvm/Transforms/IPO/IPOOptionsOptInfos.h"
+#include "llvm/Transforms/IPO/IPOOptions.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 #include <algorithm>
@@ -105,37 +104,23 @@ STATISTIC(NumTypeTestCallsLowered, "Number of type test calls lowered");
 STATISTIC(NumTypeIdDisjointSets, "Number of disjoint sets of type identifiers");
 
 static bool getAvoidReuse(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_AvoidReuse>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_AvoidReuse;
 }
 
 static PassSummaryAction getClSummaryAction(const Module &M) {
-  return clv2::getOptValIfSpecified<&clv2::IPOOptsReg,
-                                    &clv2::IPO_LowerTypeTestsSummaryAction>(
-      M.getContext().getOptionsContext(), PassSummaryAction::None);
+  return M.getContext().getOptions<IPOOptions>().IPO_LowerTypeTestsSummaryAction;
 }
 
 static const std::string &getClReadSummary(const Module &M) {
-  if (auto *O =
-          clv2::getView<&clv2::IPOOptsReg>(M.getContext().getOptionsContext()))
-    if (O->specified<&clv2::IPO_LowerTypeTestsReadSummary>())
-      return O->get<&clv2::IPO_LowerTypeTestsReadSummary>();
-  static const std::string Default = "";
-  return Default;
+  return M.getContext().getOptions<IPOOptions>().IPO_LowerTypeTestsReadSummary;
 }
 
 static const std::string &getClWriteSummary(const Module &M) {
-  if (auto *O =
-          clv2::getView<&clv2::IPOOptsReg>(M.getContext().getOptionsContext()))
-    if (O->specified<&clv2::IPO_LowerTypeTestsWriteSummary>())
-      return O->get<&clv2::IPO_LowerTypeTestsWriteSummary>();
-  static const std::string Default = "";
-  return Default;
+  return M.getContext().getOptions<IPOOptions>().IPO_LowerTypeTestsWriteSummary;
 }
 
 static bool getEnableJumpTableDebugInfo(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_EnableJumpTableDebugInfo>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_EnableJumpTableDebugInfo;
 }
 
 bool BitSetInfo::containsGlobalOffset(uint64_t Offset) const {

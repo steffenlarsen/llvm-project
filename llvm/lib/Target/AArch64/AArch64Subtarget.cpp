@@ -20,14 +20,13 @@
 #include "GISel/AArch64LegalizerInfo.h"
 #include "GISel/AArch64RegisterBankInfo.h"
 #include "MCTargetDesc/AArch64AddressingModes.h"
-#include "llvm/ADT/StringSwitch.h"
 #include "llvm/CodeGen/GlobalISel/InstructionSelect.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineScheduler.h"
 #include "llvm/IR/GlobalValue.h"
 #include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/SipHash.h"
-#include "llvm/Target/AArch64/AArch64OptionsOptInfos.h"
+#include "llvm/Target/AArch64/AArch64Options.h"
 #include "llvm/TargetParser/AArch64TargetParser.h"
 
 using namespace llvm;
@@ -38,124 +37,25 @@ using namespace llvm;
 #define GET_SUBTARGETINFO_TARGET_DESC
 #include "AArch64GenSubtargetInfo.inc"
 
-static SmallVector<std::string, 4> ReservedRegsForRA;
-
-static bool getEnableEarlyIfConvert(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::A64_EnableEarlyIfConvert>(Ctx);
-}
-
-static bool getUseAddressTopByteIgnored(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::A64_UseAddressTopByteIgnored>(Ctx);
-}
-
-static bool getMachOUseNonLazyBind(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::AArch64OptsReg,
-                           &clv2::A64_MachOUseNonLazyBind>(Ctx, false);
-}
-
-static bool getUseAA(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::A64_UseAA>(Ctx);
-}
-
-static bool getEnableSubregLivenessTracking(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::A64_EnableSubregLivenessTracking>(Ctx);
-}
-
-static bool getUseScalarIncVL(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::A64_UseScalarIncVL>(Ctx);
-}
-
-static bool getUseScalarIncVLWasSpecified(const clv2::OptionsContext &Ctx) {
-  return clv2::wasOptSpecified<&clv2::AArch64OptsReg,
-                               &clv2::A64_UseScalarIncVL>(Ctx);
-}
-
-static unsigned
-getOverrideVectorInsertExtractBaseCost(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::AArch64OptsReg,
-                           &clv2::A64_OverrideVectorInsertExtractBaseCost>(Ctx,
-                                                                           0u);
-}
-
-static bool getOverrideVectorInsertExtractBaseCostWasSpecified(
-    const clv2::OptionsContext &Ctx) {
-  return clv2::wasOptSpecified<&clv2::AArch64OptsReg,
-                               &clv2::A64_OverrideVectorInsertExtractBaseCost>(
-      Ctx);
-}
-
-static unsigned
-getAArch64MinimumJumpTableEntries(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::A64_MinimumJumpTableEntries>(Ctx);
-}
-
-static bool
-getAArch64MinimumJumpTableEntriesWasSpecified(const clv2::OptionsContext &Ctx) {
-  return clv2::wasOptSpecified<&clv2::AArch64OptsReg,
-                               &clv2::A64_MinimumJumpTableEntries>(Ctx);
-}
-
-static unsigned getAArch64StreamingHazardSize(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::A64_StreamingHazardSize>(Ctx);
-}
-
-static bool
-getAArch64StreamingHazardSizeWasSpecified(const clv2::OptionsContext &Ctx) {
-  return clv2::wasOptSpecified<&clv2::AArch64OptsReg,
-                               &clv2::A64_StreamingHazardSize>(Ctx);
-}
-
-static unsigned getVScaleForTuningOpt(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::AArch64OptsReg, &clv2::A64_VScaleForTuning>(
-      Ctx, 0u);
-}
-
-static bool getVScaleForTuningOptWasSpecified(const clv2::OptionsContext &Ctx) {
-  return clv2::wasOptSpecified<&clv2::AArch64OptsReg,
-                               &clv2::A64_VScaleForTuning>(Ctx);
-}
-
-static AArch64PAuth::AuthCheckMethod parseAuthCheckMethod(StringRef S) {
-  return StringSwitch<AArch64PAuth::AuthCheckMethod>(S)
-      .Case("load", AArch64PAuth::AuthCheckMethod::DummyLoad)
-      .Case("high-bits-notbi", AArch64PAuth::AuthCheckMethod::HighBitsNoTBI)
-      .Case("xpac", AArch64PAuth::AuthCheckMethod::XPAC)
-      .Case("xpac-hint", AArch64PAuth::AuthCheckMethod::XPACHint)
-      .Default(AArch64PAuth::AuthCheckMethod::None);
-}
-
-static AArch64PAuth::AuthCheckMethod
-getAuthenticatedLRCheckMethodValue(const Function &F) {
-  if (auto *O = clv2::getView<&clv2::AArch64OptsReg>(
-          F.getContext().getOptionsContext()))
-    return parseAuthCheckMethod(
-        O->get<&clv2::A64_AuthenticatedLRCheckMethod>());
-  return AArch64PAuth::AuthCheckMethod::None;
-}
-
-static bool getAuthenticatedLRCheckMethodWasSpecified(const Function &F) {
-  return clv2::wasOptSpecified<&clv2::AArch64OptsReg,
-                               &clv2::A64_AuthenticatedLRCheckMethod>(
-      F.getContext().getOptionsContext());
-}
-
-static const SmallVector<std::string, 4> &
-getReservedRegsForRA(const clv2::OptionsContext &Ctx) {
-  if (auto *O = clv2::getView<&clv2::AArch64OptsReg>(Ctx)) {
-    static SmallVector<std::string, 4> Cached;
-    const auto &V = O->get<&clv2::A64_ReservedRegsForRA>();
-    if (Cached.empty() && !V.empty())
-      for (auto &S : V)
-        Cached.push_back(S);
-    return Cached;
+static AArch64PAuth::AuthCheckMethod toAuthCheckMethod(A64AuthCheckMethod M) {
+  switch (M) {
+  case A64AuthCheckMethod::None:
+    return AArch64PAuth::AuthCheckMethod::None;
+  case A64AuthCheckMethod::DummyLoad:
+    return AArch64PAuth::AuthCheckMethod::DummyLoad;
+  case A64AuthCheckMethod::HighBitsNoTBI:
+    return AArch64PAuth::AuthCheckMethod::HighBitsNoTBI;
+  case A64AuthCheckMethod::XPAC:
+    return AArch64PAuth::AuthCheckMethod::XPAC;
+  case A64AuthCheckMethod::XPACHint:
+    return AArch64PAuth::AuthCheckMethod::XPACHint;
   }
-  return ReservedRegsForRA;
+  llvm_unreachable("Unknown A64AuthCheckMethod");
 }
 
 unsigned AArch64Subtarget::getVectorInsertExtractBaseCost() const {
-  if (getOverrideVectorInsertExtractBaseCostWasSpecified(getOptionsContext()))
-    return getOverrideVectorInsertExtractBaseCost(getOptionsContext());
-  return VectorInsertExtractBaseCost;
+  return AArch64Options::Current.A64_OverrideVectorInsertExtractBaseCost
+      .value_or(VectorInsertExtractBaseCost);
 }
 
 AArch64Subtarget &AArch64Subtarget::initializeSubtargetDependencies(
@@ -393,12 +293,12 @@ void AArch64Subtarget::initializeProperties(bool HasMinSize) {
     break;
   }
 
-  if (getAArch64MinimumJumpTableEntriesWasSpecified(getOptionsContext()) ||
+  if (AArch64Options::Current.A64_MinimumJumpTableEntries.has_value() ||
       !HasMinSize)
     MinimumJumpTableEntries =
-        getAArch64MinimumJumpTableEntries(getOptionsContext());
-  if (getVScaleForTuningOptWasSpecified(getOptionsContext()))
-    VScaleForTuning = getVScaleForTuningOpt(getOptionsContext());
+        AArch64Options::Current.A64_MinimumJumpTableEntries.value_or(10);
+  if (auto V = AArch64Options::Current.A64_VScaleForTuning)
+    VScaleForTuning = *V;
 }
 
 AArch64Subtarget::AArch64Subtarget(const Triple &TT, StringRef CPU,
@@ -415,11 +315,7 @@ AArch64Subtarget::AArch64Subtarget(const Triple &TT, StringRef CPU,
       CustomCallSavedXRegs(AArch64::GPR64commonRegClass.getNumRegs()),
       IsLittle(LittleEndian), IsStreaming(IsStreaming),
       IsStreamingCompatible(IsStreamingCompatible),
-      StreamingHazardSize(
-          getAArch64StreamingHazardSizeWasSpecified(TM.getOptionsContext())
-              ? std::optional<unsigned>(
-                    getAArch64StreamingHazardSize(TM.getOptionsContext()))
-              : std::nullopt),
+      StreamingHazardSize(AArch64Options::Current.A64_StreamingHazardSize),
       MinSVEVectorSizeInBits(MinSVEVectorSizeInBitsOverride),
       MaxSVEVectorSizeInBits(MaxSVEVectorSizeInBitsOverride),
       EnableSRLTSubregToRegMitigation(EnableSRLTSubregToRegMitigation),
@@ -430,8 +326,9 @@ AArch64Subtarget::AArch64Subtarget(const Triple &TT, StringRef CPU,
       //  https://github.com/llvm/llvm-project/pull/174188
       // and:
       //  https://github.com/llvm/llvm-project/pull/168353
-      EnableSubregLiveness(IsStreaming || getEnableSubregLivenessTracking(
-                                              TM.getOptionsContext())),
+      EnableSubregLiveness(
+          IsStreaming ||
+          AArch64Options::Current.A64_EnableSubregLivenessTracking),
       TargetTriple(TT),
       InstrInfo((setTargetMachine(&TM), initializeSubtargetDependencies(
                                             FS, CPU, TuneCPU, HasMinSize))),
@@ -457,7 +354,7 @@ AArch64Subtarget::AArch64Subtarget(const Triple &TT, StringRef CPU,
 
   auto TRI = getRegisterInfo();
   StringSet<> ReservedRegNames(llvm::from_range,
-                               getReservedRegsForRA(getOptionsContext()));
+                               AArch64Options::Current.A64_ReservedRegsForRA);
   for (unsigned i = 0; i < 29; ++i) {
     if (ReservedRegNames.count(TRI->getName(AArch64::X0 + i)))
       ReserveXRegisterForRA.set(i);
@@ -479,7 +376,8 @@ AArch64Subtarget::AArch64Subtarget(const Triple &TT, StringRef CPU,
   if (IsStreaming)
     EnableSubregLiveness = true;
   else
-    EnableSubregLiveness = getEnableSubregLivenessTracking(getOptionsContext());
+    EnableSubregLiveness =
+        AArch64Options::Current.A64_EnableSubregLivenessTracking;
 }
 
 const CallLowering *AArch64Subtarget::getCallLowering() const {
@@ -555,8 +453,9 @@ unsigned AArch64Subtarget::classifyGlobalFunctionReference(
 
   // NonLazyBind goes via GOT unless we know it's available locally.
   auto *F = dyn_cast<Function>(GV);
-  if ((!isTargetMachO() ||
-       (F && getMachOUseNonLazyBind(F->getContext().getOptionsContext()))) &&
+  if ((!isTargetMachO() || (F && F->getContext()
+                                     .getOptions<AArch64Options>()
+                                     .A64_MachOUseNonLazyBind)) &&
       F && F->hasFnAttribute(Attribute::NonLazyBind) &&
       !TM.shouldAssumeDSOLocal(GV))
     return AArch64II::MO_GOT;
@@ -635,11 +534,11 @@ void AArch64Subtarget::adjustSchedDependency(
 }
 
 bool AArch64Subtarget::enableEarlyIfConversion() const {
-  return getEnableEarlyIfConvert(getOptionsContext());
+  return AArch64Options::Current.A64_EnableEarlyIfConvert;
 }
 
 bool AArch64Subtarget::supportsAddressTopByteIgnored() const {
-  if (!getUseAddressTopByteIgnored(getOptionsContext()))
+  if (!AArch64Options::Current.A64_UseAddressTopByteIgnored)
     return false;
 
   if (TargetTriple.isDriverKit())
@@ -666,13 +565,15 @@ void AArch64Subtarget::mirFileLoaded(MachineFunction &MF) const {
     MFI.computeMaxCallFrameSize(MF);
 }
 
-bool AArch64Subtarget::useAA() const { return getUseAA(getOptionsContext()); }
+bool AArch64Subtarget::useAA() const {
+  return AArch64Options::Current.A64_UseAA;
+}
 
 bool AArch64Subtarget::useScalarIncVL() const {
   // If SVE2 or SME is present (we are not SVE-1 only) and UseScalarIncVL
   // is not otherwise set, enable it by default.
-  if (getUseScalarIncVLWasSpecified(getOptionsContext()))
-    return getUseScalarIncVL(getOptionsContext());
+  if (AArch64Options::Current.A64_UseScalarIncVL.has_value())
+    return *AArch64Options::Current.A64_UseScalarIncVL;
   return hasSVE2() || hasSME();
 }
 
@@ -696,12 +597,13 @@ AArch64PAuth::AuthCheckMethod AArch64Subtarget::getAuthenticatedLRCheckMethod(
   if (MF.getFunction().hasFnAttribute("ptrauth-returns") &&
       MF.getFunction().hasFnAttribute("ptrauth-auth-traps"))
     return AArch64PAuth::AuthCheckMethod::HighBitsNoTBI;
-  if (getAuthenticatedLRCheckMethodWasSpecified(MF.getFunction()))
-    return getAuthenticatedLRCheckMethodValue(MF.getFunction());
 
   // At now, use None by default because checks may introduce an unexpected
   // performance regression or incompatibility with execute-only mappings.
-  return AArch64PAuth::AuthCheckMethod::None;
+  return toAuthCheckMethod(MF.getFunction()
+                               .getContext()
+                               .getOptions<AArch64Options>()
+                               .A64_AuthenticatedLRCheckMethod);
 }
 
 std::optional<uint16_t>

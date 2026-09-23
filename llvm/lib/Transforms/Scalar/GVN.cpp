@@ -69,9 +69,8 @@
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
+#include "llvm/Transforms/Scalar/ScalarOptions.h"
 #include "llvm/Transforms/Utils/AssumeBundleBuilder.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Local.h"
@@ -111,65 +110,52 @@ STATISTIC(MaxBBSpeculationCutoffReachedTimes,
           "preventing further exploration");
 
 static bool getGVNEnableScalarPRE(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_EnablePre>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<ScalarOptions>().SC_EnablePre;
 }
 static bool getGVNEnableLoadPRE(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_EnableLoadPre>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<ScalarOptions>().SC_EnableLoadPre;
 }
 static bool getGVNEnableLoadInLoopPRE(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_EnableLoadInLoopPre>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<ScalarOptions>().SC_EnableLoadInLoopPre;
 }
 static bool getGVNEnableSplitBackedgeInLoadPRE(const Function &F) {
-  return clv2::getOptValOr<&clv2::ScalarOptsReg,
-                           &clv2::SC_EnableSplitBackedgeInLoadPre>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_EnableSplitBackedgeInLoadPre;
 }
 static bool getGVNEnableMemDep(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_EnableGvnMemdep>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<ScalarOptions>().SC_EnableGvnMemdep.value_or(
+      true);
 }
 static bool getGVNEnableMemorySSA(const Function &F) {
-  return clv2::getOptValOr<&clv2::ScalarOptsReg, &clv2::SC_EnableGvnMemoryssa>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_EnableGvnMemoryssa.value_or(false);
 }
 // True iff both -enable-gvn-memdep and -enable-gvn-memoryssa were explicitly
 // requested (to true) rather than left at their defaults.
 static bool areGVNMemDepAndMemorySSABothExplicitlyEnabled(const Function &F) {
-  auto *O =
-      clv2::getView<&clv2::ScalarOptsReg>(F.getContext().getOptionsContext());
-  if (!O)
-    return false;
-  return O->specified<&clv2::SC_EnableGvnMemdep>() &&
-         O->get<&clv2::SC_EnableGvnMemdep>() &&
-         O->specified<&clv2::SC_EnableGvnMemoryssa>() &&
-         O->get<&clv2::SC_EnableGvnMemoryssa>();
+  const ScalarOptions &Opts = F.getContext().getOptions<ScalarOptions>();
+  return Opts.SC_EnableGvnMemdep.value_or(false) &&
+         Opts.SC_EnableGvnMemoryssa.value_or(false);
 }
 static unsigned getScanUsersLimit(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_GvnScanUsersLimit>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<ScalarOptions>().SC_GvnScanUsersLimit;
 }
 static uint32_t getMaxNumReachingBlocks(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_GvnMaxNumReachingBlocks>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<ScalarOptions>().SC_GvnMaxNumReachingBlocks;
 }
 static uint32_t getMaxNumDeps(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_GvnMaxNumDeps>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<ScalarOptions>().SC_GvnMaxNumDeps;
 }
 static uint32_t getMaxBBSpeculations(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_GvnMaxBlockSpeculations>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<ScalarOptions>().SC_GvnMaxBlockSpeculations;
 }
 static uint32_t getMaxNumVisitedInsts(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_GvnMaxNumVisitedInsts>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<ScalarOptions>().SC_GvnMaxNumVisitedInsts;
 }
 static uint32_t getMaxNumInsnsPerBlock(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_GvnMaxNumInsns>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<ScalarOptions>().SC_GvnMaxNumInsns;
 }
 
 struct llvm::GVNPass::Expression {

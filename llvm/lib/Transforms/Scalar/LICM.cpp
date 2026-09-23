@@ -1,5 +1,3 @@
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
 //===-- LICM.cpp - Loop Invariant Code Motion Pass ------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -80,8 +78,10 @@
 #include "llvm/IR/PredIteratorCache.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Scalar.h"
+#include "llvm/Transforms/Scalar/ScalarOptions.h"
 #include "llvm/Transforms/Utils/AssumeBundleBuilder.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Local.h"
@@ -122,30 +122,27 @@ STATISTIC(NumBOAssociationsHoisted, "Number of invariant BinaryOp expressions "
 
 /// Memory promotion is enabled by default.
 static bool getDisablePromotion(const Function &F) {
-  return clv2::getOptValOr<&clv2::ScalarOptsReg,
-                           &clv2::SC_DisableLicmPromotion>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext().getOptions<ScalarOptions>().SC_DisableLicmPromotion;
 }
 
 static bool getControlFlowHoisting(const Function &F) {
-  return clv2::getOptValOr<&clv2::ScalarOptsReg,
-                           &clv2::SC_LicmControlFlowHoisting>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext().getOptions<ScalarOptions>().SC_LicmControlFlowHoisting;
 }
 
 static uint32_t getMaxNumUsesTraversed(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_LicmMaxNumUsesTraversed>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<ScalarOptions>().SC_LicmMaxNumUsesTraversed;
 }
 
 static unsigned getFPAssociationUpperLimit(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_LicmMaxNumFpReassociations>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_LicmMaxNumFpReassociations;
 }
 
 static unsigned getIntAssociationUpperLimit(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_LicmMaxNumIntReassociations>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_LicmMaxNumIntReassociations;
 }
 
 // Experimental option to allow imprecision in LICM in pathological cases, in
@@ -156,25 +153,23 @@ static unsigned getIntAssociationUpperLimit(const Function &F) {
 // which may not be precise, since optimizeUses is capped. The result is
 // correct, but we may not get as "far up" as possible to get which access is
 // clobbering the one queried.
-// No context at this call site (LICMOptions' default constructor); the
-// descriptor's default is the same value and is a compile-time constant.
+// No context at the call sites (LICMOptions' default constructor and
+// PipelineTuningOptions), so read the process-wide parsed options.
 unsigned llvm::getSetLicmMssaOptCap() {
-  return clv2::SC_LicmMssaOptimizationCap.DefaultValue;
+  return ScalarOptions::Current.SC_LicmMssaOptimizationCap;
 }
 static unsigned getSetLicmMssaOptCapFrom(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_LicmMssaOptimizationCap>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<ScalarOptions>().SC_LicmMssaOptimizationCap;
 }
 
 // Experimentally, memory promotion carries less importance than sinking and
 // hoisting. Limit when we do promotion when using MemorySSA, in order to save
 // compile time.
 unsigned llvm::getSetLicmMssaNoAccForPromotionCap() {
-  return clv2::SC_LicmMssaMaxAccPromotion.DefaultValue;
+  return ScalarOptions::Current.SC_LicmMssaMaxAccPromotion;
 }
 static unsigned getSetLicmMssaNoAccForPromotionCapFrom(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_LicmMssaMaxAccPromotion>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<ScalarOptions>().SC_LicmMssaMaxAccPromotion;
 }
 
 static bool inSubLoop(BasicBlock *BB, Loop *CurLoop, LoopInfo *LI);

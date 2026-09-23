@@ -24,8 +24,7 @@
 #include "llvm/IR/DiagnosticInfo.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Module.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/X86/X86OptionsOptInfos.h"
+#include "llvm/Target/X86/X86Options.h"
 
 using namespace llvm;
 
@@ -38,33 +37,25 @@ STATISTIC(FailsUnwindV2Criteria,
 
 static unsigned UnwindCodeThreshold = UINT8_MAX;
 
-static bool ForceModeWasSpecified = false;
-
 // This threshold is for the *approximate* number of instructions, see the
 // comment in runAnalysisOnFuncOrFunclet for more details.
 static unsigned InstructionCountThreshold = 600;
 
 static unsigned getUnwindCodeThreshold(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::X86_WinEHUnwindV2UnwindCodesThreshold>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<X86Options>()
+      .X86_WinEHUnwindV2UnwindCodesThreshold;
 }
 
 static unsigned getInstructionCountThreshold(const Function &F) {
-  return clv2::getOptValOrDefault<
-      &clv2::X86_WinEHUnwindV2InstructionCountThreshold>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<X86Options>()
+      .X86_WinEHUnwindV2InstructionCountThreshold;
 }
 
-static bool getForceModeWasSpecified(const Function &F) {
-  if (auto *O =
-          clv2::getView<&clv2::X86OptsReg>(F.getContext().getOptionsContext()))
-    return O->specified<&clv2::X86_WinEHUnwindV2ForceMode>();
-  return ForceModeWasSpecified;
-}
-
-static unsigned getForceMode(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::X86_WinEHUnwindV2ForceMode>(
-      F.getContext().getOptionsContext());
+// std::nullopt when -x86-wineh-unwindv2-force-mode was never given.
+static std::optional<unsigned> getForceMode(const Function &F) {
+  return F.getContext().getOptions<X86Options>().X86_WinEHUnwindV2ForceMode;
 }
 
 namespace {
@@ -389,10 +380,10 @@ runAnalysisOnFuncOrFunclet(MachineFunction &MF, MachineFunction::iterator &Iter,
 }
 
 bool runX86WinEHUnwindV2(MachineFunction &MF) {
+  auto ForcedMode = getForceMode(MF.getFunction());
   WinX64EHUnwindMode Mode =
-      getForceModeWasSpecified(MF.getFunction())
-          ? static_cast<WinX64EHUnwindMode>(getForceMode(MF.getFunction()))
-          : MF.getFunction().getParent()->getWinX64EHUnwindMode();
+      ForcedMode ? static_cast<WinX64EHUnwindMode>(*ForcedMode)
+                 : MF.getFunction().getParent()->getWinX64EHUnwindMode();
 
   // Only act on V2 modes; V1 = disabled, V3 handled by the V3 pass.
   if (Mode != WinX64EHUnwindMode::V2BestEffort &&

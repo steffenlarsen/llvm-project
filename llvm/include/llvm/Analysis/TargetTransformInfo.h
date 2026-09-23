@@ -73,9 +73,7 @@ class Type;
 class VPIntrinsic;
 struct KnownBits;
 
-namespace clv2 {
-class OptionsContext;
-}
+class AnalysisOptions;
 
 /// Information about a load/store intrinsic defined by the target.
 struct MemIntrinsicInfo {
@@ -240,9 +238,7 @@ public:
   const SmallVectorImpl<const Value *> &getArgs() const { return Arguments; }
   const SmallVectorImpl<Type *> &getArgTypes() const { return ParamTys; }
 
-  bool isTypeBasedOnly() const {
-    return Arguments.empty();
-  }
+  bool isTypeBasedOnly() const { return Arguments.empty(); }
 
   bool skipScalarizationCost() const { return ScalarizationCost.isValid(); }
 };
@@ -491,7 +487,7 @@ public:
   /// If a branch or a select condition is skewed in one direction by more than
   /// this factor, it is very likely to be predicted correctly.
   LLVM_ABI BranchProbability
-  getPredictableBranchThreshold(const clv2::OptionsContext &Ctx) const;
+  getPredictableBranchThreshold(const AnalysisOptions &Opts) const;
 
   /// Returns estimated penalty of a branch misprediction in latency. Indicates
   /// how aggressive the target wants for eliminating unpredictable branches. A
@@ -1245,9 +1241,9 @@ public:
     SK_PermuteSingleSrc, ///< Shuffle elements of single source vector with any
                          ///< shuffle mask.
     SK_Splice            ///< Concatenates elements from the first input vector
-                         ///< with elements of the second input vector. Returning
-                         ///< a vector of the same type as the input vectors.
-                         ///< Index indicates start offset in first input vector.
+              ///< with elements of the second input vector. Returning
+              ///< a vector of the same type as the input vectors.
+              ///< Index indicates start offset in first input vector.
   };
 
   /// Additional information about an operand's possible values.
@@ -1273,21 +1269,16 @@ public:
     OperandValueProperties Properties = OP_None;
 
     bool isConstant() const {
-      return Kind == OK_UniformConstantValue || Kind == OK_NonUniformConstantValue;
+      return Kind == OK_UniformConstantValue ||
+             Kind == OK_NonUniformConstantValue;
     }
     bool isUniform() const {
       return Kind == OK_UniformConstantValue || Kind == OK_UniformValue;
     }
-    bool isPowerOf2() const {
-      return Properties == OP_PowerOf2;
-    }
-    bool isNegatedPowerOf2() const {
-      return Properties == OP_NegatedPowerOf2;
-    }
+    bool isPowerOf2() const { return Properties == OP_PowerOf2; }
+    bool isNegatedPowerOf2() const { return Properties == OP_NegatedPowerOf2; }
 
-    OperandValueInfo getNoProps() const {
-      return {Kind, OP_None};
-    }
+    OperandValueInfo getNoProps() const { return {Kind, OP_None}; }
 
     OperandValueInfo mergeWith(const OperandValueInfo OpInfoY) {
       OperandValueKind MergeKind = OK_AnyValue;
@@ -1388,7 +1379,7 @@ public:
       const Instruction &I, bool &AllowPromotionWithoutCommonHeader) const;
 
   /// \return The size of a cache line in bytes.
-  LLVM_ABI unsigned getCacheLineSize(const clv2::OptionsContext &Ctx) const;
+  LLVM_ABI unsigned getCacheLineSize(const AnalysisOptions &Opts) const;
 
   /// The possible cache levels
   enum class CacheLevel {
@@ -1409,7 +1400,7 @@ public:
 
   /// \return The minimum architectural page size for the target.
   LLVM_ABI std::optional<unsigned>
-  getMinPageSize(const clv2::OptionsContext &Ctx) const;
+  getMinPageSize(const AnalysisOptions &Opts) const;
 
   /// \return How much before a load we should place the prefetch
   /// instruction.  This is currently measured in number of

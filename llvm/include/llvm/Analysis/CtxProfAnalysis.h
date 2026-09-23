@@ -10,6 +10,7 @@
 #define LLVM_ANALYSIS_CTXPROFANALYSIS_H
 
 #include "llvm/ADT/SetVector.h"
+#include "llvm/Analysis/AnalysisOptions.h"
 #include "llvm/Analysis/CtxProfPrintMode.h"
 #include "llvm/IR/GlobalValue.h"
 #include "llvm/IR/InstrTypes.h"
@@ -17,15 +18,14 @@
 #include "llvm/IR/PassManager.h"
 #include "llvm/ProfileData/PGOCtxProfReader.h"
 #include "llvm/Support/Compiler.h"
-#include "llvm/Support/OptionsContext.h"
 #include <optional>
 
 namespace llvm {
 
-LLVM_ABI std::string getUseCtxProfile(const clv2::OptionsContext &Ctx);
-LLVM_ABI bool getForceIsInSpecializedModule(const clv2::OptionsContext &Ctx);
+LLVM_ABI std::string getUseCtxProfile(const AnalysisOptions &Opts);
+LLVM_ABI bool getForceIsInSpecializedModule(const AnalysisOptions &Opts);
 LLVM_ABI bool
-getForceIsInSpecializedModuleWasSpecified(const clv2::OptionsContext &Ctx);
+getForceIsInSpecializedModuleWasSpecified(const AnalysisOptions &Opts);
 
 class CtxProfAnalysis;
 
@@ -51,7 +51,7 @@ class PGOContextualProfile {
   bool IsInSpecializedModule = false;
 
   // Cached from the Module's LLVMContext at construction time.
-  const clv2::OptionsContext *OptsCtx = &clv2::defaultOptionsContext();
+  const AnalysisOptions *Opts = &AnalysisOptions::Current;
 
   // For the GUIDs in this module, associate metadata about each function which
   // we'll need when we maintain the profiles during IPO transformations.

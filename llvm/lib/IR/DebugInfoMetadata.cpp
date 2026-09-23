@@ -18,27 +18,28 @@
 #include "llvm/BinaryFormat/Dwarf.h"
 #include "llvm/IR/DebugProgramInstruction.h"
 #include "llvm/IR/Function.h"
-#include "llvm/IR/IROptionsOptInfos.h"
+#include "llvm/IR/IROptions.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Value.h"
-#include "llvm/Support/OptionsContext.h"
-
-#include "llvm/IR/IROptionsOptInfos.h"
 #include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/OptionsContext.h"
 #include <numeric>
 #include <optional>
 
 using namespace llvm;
-using namespace llvm::clv2;
 
-bool llvm::getEnableFSDiscriminator(const clv2::OptionsContext &Ctx) {
-  return getOptValIfSpecified<&IROptsReg, &IR_EnableFSDiscriminator>(Ctx,
-                                                                     false);
+// TargetMachine::getOptionsContext() (the caller for the overload below) only
+// ever plumbs a bare clv2::OptionsContext, with no reachable LLVMContext --
+// see the analogous getOpts(const clv2::OptionsContext &) overload in
+// PrintPasses.cpp. The parameter is kept (unnamed) only for call-site/ABI
+// stability.
+bool llvm::getEnableFSDiscriminator(const clv2::OptionsContext &) {
+  return IROptions::Current.IR_EnableFSDiscriminator;
 }
 
 bool llvm::getEnableFSDiscriminator(const LLVMContext &Ctx) {
-  return getEnableFSDiscriminator(Ctx.getOptionsContext());
+  return Ctx.getOptions<IROptions>().IR_EnableFSDiscriminator;
 }
 
 uint32_t DIType::getAlignInBits() const {
@@ -231,9 +232,8 @@ DILocation *DILocation::getMergedLocation(DILocation *LocA, DILocation *LocB) {
   bool PickMerged = false;
   {
     const DILocation *Loc = LocA ? LocA : LocB;
-    if (auto *O = clv2::getView<&clv2::IROptsReg>(
-            Loc->getContext().getOptionsContext()))
-      PickMerged = O->get<&clv2::IR_PickMergedSourceLocations>();
+    PickMerged =
+        Loc->getContext().getOptions<IROptions>().IR_PickMergedSourceLocations;
   }
   if (PickMerged) {
     if (!LocA || !LocB)
@@ -1426,10 +1426,9 @@ DISubprogram *DISubprogram::getImpl(
                          RetainedNodes, ThrownTypes, Annotations,
                          TargetFuncName, UsesKeyInstructions));
   SmallVector<Metadata *, 13> Ops = {
-      File,           Scope,          Name,        LinkageName,
-      Type,           Unit,           Declaration, RetainedNodes,
-      ContainingType, TemplateParams, ThrownTypes, Annotations,
-      TargetFuncName};
+      File,        Scope,       Name,          LinkageName,    Type,
+      Unit,        Declaration, RetainedNodes, ContainingType, TemplateParams,
+      ThrownTypes, Annotations, TargetFuncName};
   if (!TargetFuncName) {
     Ops.pop_back();
     if (!Annotations) {
@@ -2110,7 +2109,7 @@ void DIExpression::appendOffset(SmallVectorImpl<uint64_t> &Ops,
     Ops.push_back(dwarf::DW_OP_constu);
     // Avoid UB when encountering LLONG_MIN, because in 2's complement
     // abs(LLONG_MIN) is LLONG_MAX+1.
-    uint64_t AbsMinusOne = -(Offset+1);
+    uint64_t AbsMinusOne = -(Offset + 1);
     Ops.push_back(AbsMinusOne + 1);
     Ops.push_back(dwarf::DW_OP_minus);
   }

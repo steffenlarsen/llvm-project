@@ -14,7 +14,7 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/ProfileSummaryInfo.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsMachine1.h"
 #include "llvm/CodeGen/LazyMachineBlockFrequencyInfo.h"
 #include "llvm/CodeGen/MachineBlockFrequencyInfo.h"
 #include "llvm/CodeGen/MachineCombinerPattern.h"
@@ -33,9 +33,7 @@
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/IR/Function.h"
 #include "llvm/InitializePasses.h"
-#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 
 using namespace llvm;
@@ -44,26 +42,22 @@ using namespace llvm;
 
 STATISTIC(NumInstCombined, "Number of machineinst combined");
 
-static unsigned
-getMachineCombinerIncThreshold(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_MachineCombinerIncThreshold>(
-      Ctx);
+static unsigned getMachineCombinerIncThreshold(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenMachine1Options>()
+      .CGPASS_MachineCombinerIncThreshold;
 }
 
-static bool getMachineCombinerDumpSubstIntrs(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_MachineCombinerDumpSubstIntrs>(
-      Ctx);
+static bool getMachineCombinerDumpSubstIntrs(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenMachine1Options>()
+      .CGPASS_MachineCombinerDumpSubstIntrs;
 }
 
-static bool
-getMachineCombinerVerifyPatternOrder(const clv2::OptionsContext &Ctx) {
-  if (auto *O = clv2::getView<&clv2::CGPassMachine1Reg>(Ctx))
-    return O->get<&clv2::CGPASS_MachineCombinerVerifyPatternOrder>();
-#ifdef EXPENSIVE_CHECKS
-  return true;
-#else
-  return false;
-#endif
+// Note: pre-migration this had a getView<>()-null / EXPENSIVE_CHECKS fallback
+// that is not representable with LLVMContext::getOptions<T>(); dropped here
+// (narrow, disclosed behavior change, see CodeGenPassOptionsMachine1.td).
+static bool getMachineCombinerVerifyPatternOrder(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenMachine1Options>()
+      .CGPASS_MachineCombinerVerifyPatternOrder;
 }
 
 namespace {
@@ -601,10 +595,7 @@ bool MachineCombinerImpl::combineInstructions(MachineBasicBlock *MBB) {
         continue;
 
       LLVM_DEBUG(if (getMachineCombinerDumpSubstIntrs(
-                         MBB->getParent()
-                             ->getFunction()
-                             .getContext()
-                             .getOptionsContext())) {
+                         MBB->getParent()->getFunction().getContext())) {
         dbgs() << "\tFor the Pattern (" << (int)P
                << ") these instructions could be removed\n";
         for (auto const *InstrPtr : DelInstrs)
@@ -619,10 +610,8 @@ bool MachineCombinerImpl::combineInstructions(MachineBasicBlock *MBB) {
       // Check that the difference between original and new latency is
       // decreasing for later patterns. This helps to discover sub-optimal
       // pattern orderings.
-      if (getMachineCombinerVerifyPatternOrder(MBB->getParent()
-                                                   ->getFunction()
-                                                   .getContext()
-                                                   .getOptionsContext()) &&
+      if (getMachineCombinerVerifyPatternOrder(
+              MBB->getParent()->getFunction().getContext()) &&
           TSchedModel.hasInstrSchedModelOrItineraries()) {
         auto [NewRootLatency, RootLatency] = getLatenciesForInstrSequences(
             MI, InsInstrs, DelInstrs, TraceEnsemble->getTrace(MBB));
@@ -642,11 +631,8 @@ bool MachineCombinerImpl::combineInstructions(MachineBasicBlock *MBB) {
       if (DoRegPressureReduce &&
           getCombinerObjective(P) ==
               CombinerObjective::MustReduceRegisterPressure) {
-        if (MBB->size() >
-            getMachineCombinerIncThreshold(MBB->getParent()
-                                               ->getFunction()
-                                               .getContext()
-                                               .getOptionsContext())) {
+        if (MBB->size() > getMachineCombinerIncThreshold(
+                               MBB->getParent()->getFunction().getContext())) {
           // Use incremental depth updates for basic blocks above threshold
           IncrementalUpdate = true;
           LastUpdate = BlockIter;
@@ -692,11 +678,8 @@ bool MachineCombinerImpl::combineInstructions(MachineBasicBlock *MBB) {
                                     InstrIdxForVirtReg, P,
                                     !IncrementalUpdate) &&
             preservesResourceLen(MBB, BlockTrace, InsInstrs, DelInstrs)) {
-          if (MBB->size() >
-              getMachineCombinerIncThreshold(MBB->getParent()
-                                                 ->getFunction()
-                                                 .getContext()
-                                                 .getOptionsContext())) {
+          if (MBB->size() > getMachineCombinerIncThreshold(
+                                 MBB->getParent()->getFunction().getContext())) {
             // Use incremental depth updates for basic blocks above treshold
             IncrementalUpdate = true;
             LastUpdate = BlockIter;

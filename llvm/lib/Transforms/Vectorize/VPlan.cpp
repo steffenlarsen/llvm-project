@@ -43,7 +43,6 @@
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/GraphWriter.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/LoopVersioning.h"
@@ -67,23 +66,18 @@ const char LLVMLoopVectorizeFollowupEpilogue[] =
 /// @}
 
 static unsigned getForceTargetInstructionCost(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::VEC_ForceTargetInstructionCost>(
-      F.getContext().getOptionsContext());
+  return VectorizeOptions::Current.VEC_ForceTargetInstructionCost.value_or(0);
 }
 static bool isForceTargetInstructionCostSpecified(const Function &F) {
-  return clv2::wasOptSpecified<&clv2::VectorizeOptsReg,
-                               &clv2::VEC_ForceTargetInstructionCost>(
-      F.getContext().getOptionsContext());
+  return VectorizeOptions::Current.VEC_ForceTargetInstructionCost.has_value();
 }
 
 static unsigned getNumberOfStoresToPredicate(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::VEC_NumberOfStoresToPredicate>(
-      F.getContext().getOptionsContext());
+  return VectorizeOptions::Current.VEC_NumberOfStoresToPredicate;
 }
 
-static bool getPrintVPlansInDotFormat(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::VectorizeOptsReg,
-                           &clv2::VEC_PrintVPlansInDotFormat>(Ctx, false);
+static bool getPrintVPlansInDotFormat() {
+  return VectorizeOptions::Current.VEC_PrintVPlansInDotFormat;
 }
 
 #define DEBUG_TYPE "loop-vectorize"
@@ -1352,13 +1346,13 @@ void VPlanPrinter::dump() {
 
   {
     // Print live-ins.
-  std::string Str;
-  raw_string_ostream SS(Str);
-  Plan.printLiveIns(SS);
-  SmallVector<StringRef, 0> Lines;
-  StringRef(Str).rtrim('\n').split(Lines, "\n");
-  for (auto Line : Lines)
-    OS << DOT::EscapeString(Line.str()) << "\\n";
+    std::string Str;
+    raw_string_ostream SS(Str);
+    Plan.printLiveIns(SS);
+    SmallVector<StringRef, 0> Lines;
+    StringRef(Str).rtrim('\n').split(Lines, "\n");
+    for (auto Line : Lines)
+      OS << DOT::EscapeString(Line.str()) << "\\n";
   }
 
   OS << "\"]\n";
@@ -1863,10 +1857,7 @@ void LoopVectorizationPlanner::printPlans(raw_ostream &O) {
     return;
   }
   for (const auto &Plan : VPlans)
-    if (getPrintVPlansInDotFormat(OrigLoop->getHeader()
-                                      ->getParent()
-                                      ->getContext()
-                                      .getOptionsContext()))
+    if (getPrintVPlansInDotFormat())
       Plan->printDOT(O);
     else
       Plan->print(O);

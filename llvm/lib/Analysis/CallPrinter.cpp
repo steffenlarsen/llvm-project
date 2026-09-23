@@ -15,7 +15,7 @@
 
 #include "llvm/Analysis/CallPrinter.h"
 #include "llvm/ADT/DenseMap.h"
-#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
+#include "llvm/Analysis/AnalysisOptions.h"
 #include "llvm/Analysis/BlockFrequencyInfo.h"
 #include "llvm/Analysis/CallGraph.h"
 #include "llvm/Analysis/HeatUtils.h"
@@ -25,7 +25,6 @@
 #include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/DOTGraphTraits.h"
 #include "llvm/Support/GraphWriter.h"
-#include "llvm/Support/OptionsContext.h"
 
 using namespace llvm;
 
@@ -38,23 +37,21 @@ template <class GraphType> struct GraphTraits;
 // Need to show real counts when profile data is available
 
 static bool getCallGraphShowHeatColors(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::AN_CallGraphHeatColors>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<AnalysisOptions>().AN_CallGraphHeatColors;
 }
 
 static bool getCallGraphShowEdgeWeight(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::AN_CallGraphShowWeights>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<AnalysisOptions>().AN_CallGraphShowWeights;
 }
 
 static bool getCallMultiGraph(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::AN_CallMultiGraph>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<AnalysisOptions>().AN_CallMultiGraph;
 }
 
 static std::string getCallGraphDotFilenamePrefix(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::AN_CallGraphDotFilenamePrefix>(
-      M.getContext().getOptionsContext());
+  return M.getContext()
+      .getOptions<AnalysisOptions>()
+      .AN_CallGraphDotFilenamePrefix;
 }
 
 namespace llvm {
@@ -196,8 +193,7 @@ struct DOTGraphTraits<CallGraphDOTInfo *> : public DefaultDOTGraphTraits {
       return "";
 
     uint64_t Counter = getNumOfCalls(*Caller, *Callee);
-    double Width =
-        1 + 2 * (double(Counter) / CGInfo->getMaxFreq());
+    double Width = 1 + 2 * (double(Counter) / CGInfo->getMaxFreq());
     std::string Attrs = "label=\"" + std::to_string(Counter) +
                         "\" penwidth=" + std::to_string(Width);
     return Attrs;

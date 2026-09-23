@@ -7,13 +7,13 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Transforms/Scalar/LoopPassManager.h"
-#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
+#include "llvm/Analysis/AnalysisOptions.h"
 #include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/Analysis/MemorySSA.h"
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
-#include "llvm/IR/IROptionsOptInfos.h"
+#include "llvm/IR/IROptions.h"
 #include "llvm/Support/OptionsContext.h"
 
 using namespace llvm;
@@ -256,17 +256,17 @@ PreservedAnalyses FunctionToLoopPassAdaptor::run(Function &F,
   }
 
 #ifndef NDEBUG
-  PI.pushBeforeNonSkippedPassCallback([&LAR, &LI](StringRef PassID,
-                                                  IRUnitRef IR) {
-    if (isSpecialPass(PassID, {"PassManager"}))
-      return;
-    const Loop *L = cast<Loop>(IR);
+  PI.pushBeforeNonSkippedPassCallback(
+      [&LAR, &LI](StringRef PassID, IRUnitRef IR) {
+        if (isSpecialPass(PassID, {"PassManager"}))
+          return;
+        const Loop *L = cast<Loop>(IR);
 
-    // Verify the loop structure and LCSSA form before visiting the loop.
-    L->verifyLoop();
-    assert(L->isRecursivelyLCSSAForm(LAR.DT, LI) &&
-           "Loops must remain in LCSSA form!");
-  });
+        // Verify the loop structure and LCSSA form before visiting the loop.
+        L->verifyLoop();
+        assert(L->isRecursivelyLCSSAForm(LAR.DT, LI) &&
+               "Loops must remain in LCSSA form!");
+      });
 #endif
 
   do {
@@ -303,16 +303,12 @@ PreservedAnalyses FunctionToLoopPassAdaptor::run(Function &F,
 #ifndef NDEBUG
     // LoopAnalysisResults should always be valid.
     {
-      bool DoVerifyDom = false;
-      if (auto *O = clv2::getView<&clv2::IROptsReg>(
-              F.getContext().getOptionsContext()))
-        DoVerifyDom = O->get<&clv2::IR_VerifyDomInfo>();
-      if (DoVerifyDom)
+      if (F.getContext().getOptions<IROptions>().IR_VerifyDomInfo)
         LAR.DT.verify();
     }
-    if (getVerifyLoopInfo(F.getContext().getOptionsContext()))
+    if (getVerifyLoopInfo(F.getContext().getOptions<AnalysisOptions>()))
       LAR.LI.verify();
-    if (getVerifySCEV(F.getContext().getOptionsContext()))
+    if (getVerifySCEV(F.getContext().getOptions<AnalysisOptions>()))
       LAR.SE.verify();
     if (LAR.MSSA && getVerifyMemorySSA(F.getContext().getOptionsContext()))
       LAR.MSSA->verifyMemorySSA();

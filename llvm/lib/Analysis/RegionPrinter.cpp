@@ -9,7 +9,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Analysis/RegionPrinter.h"
-#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
+#include "llvm/Analysis/AnalysisOptions.h"
 #include "llvm/Analysis/DOTGraphTraitsPass.h"
 #include "llvm/Analysis/RegionInfo.h"
 #include "llvm/Analysis/RegionIterator.h"
@@ -24,7 +24,6 @@ using namespace llvm;
 
 //===----------------------------------------------------------------------===//
 /// onlySimpleRegion - Show only the simple regions in the RegionViewer.
-static bool onlySimpleRegions = false;
 
 std::string
 llvm::DOTGraphTraits<RegionNode *>::getNodeLabel(RegionNode *Node,
@@ -45,8 +44,8 @@ template <>
 struct llvm::DOTGraphTraits<RegionInfo *>
     : public llvm::DOTGraphTraits<RegionNode *> {
 
-  DOTGraphTraits (bool isSimple = false)
-    : DOTGraphTraits<RegionNode*>(isSimple) {}
+  DOTGraphTraits(bool isSimple = false)
+      : DOTGraphTraits<RegionNode *>(isSimple) {}
 
   static std::string getGraphName(const RegionInfo *) { return "Region Graph"; }
 
@@ -84,33 +83,35 @@ struct llvm::DOTGraphTraits<RegionInfo *>
   // Print the cluster of the subregions. This groups the single basic blocks
   // and adds a different background color for each group.
   static void printRegionCluster(const Region &R, GraphWriter<RegionInfo *> &GW,
+                                 const AnalysisOptions &Opts,
                                  unsigned depth = 0) {
     raw_ostream &O = GW.getOStream();
-    O.indent(2 * depth) << "subgraph cluster_" << static_cast<const void*>(&R)
-      << " {\n";
+    O.indent(2 * depth) << "subgraph cluster_" << static_cast<const void *>(&R)
+                        << " {\n";
     O.indent(2 * (depth + 1)) << "label = \"\";\n";
 
-    if (!onlySimpleRegions || R.isSimple()) {
+    if (!Opts.AN_OnlySimpleRegions || R.isSimple()) {
       O.indent(2 * (depth + 1)) << "style = filled;\n";
-      O.indent(2 * (depth + 1)) << "color = "
-        << ((R.getDepth() * 2 % 12) + 1) << "\n";
+      O.indent(2 * (depth + 1))
+          << "color = " << ((R.getDepth() * 2 % 12) + 1) << "\n";
 
     } else {
       O.indent(2 * (depth + 1)) << "style = solid;\n";
-      O.indent(2 * (depth + 1)) << "color = "
-        << ((R.getDepth() * 2 % 12) + 2) << "\n";
+      O.indent(2 * (depth + 1))
+          << "color = " << ((R.getDepth() * 2 % 12) + 2) << "\n";
     }
 
     for (const auto &RI : R)
-      printRegionCluster(*RI, GW, depth + 1);
+      printRegionCluster(*RI, GW, Opts, depth + 1);
 
-    const RegionInfo &RI = *static_cast<const RegionInfo*>(R.getRegionInfo());
+    const RegionInfo &RI = *static_cast<const RegionInfo *>(R.getRegionInfo());
 
     for (auto *BB : R.blocks())
       if (RI.getRegionFor(BB) == &R)
-        O.indent(2 * (depth + 1)) << "Node"
-          << static_cast<const void*>(RI.getTopLevelRegion()->getBBNode(BB))
-          << ";\n";
+        O.indent(2 * (depth + 1))
+            << "Node"
+            << static_cast<const void *>(RI.getTopLevelRegion()->getBBNode(BB))
+            << ";\n";
 
     O.indent(2 * depth) << "}\n";
   }
@@ -119,7 +120,12 @@ struct llvm::DOTGraphTraits<RegionInfo *>
                                      GraphWriter<RegionInfo *> &GW) {
     raw_ostream &O = GW.getOStream();
     O << "\tcolorscheme = \"paired12\"\n";
-    printRegionCluster(*G->getTopLevelRegion(), GW, 4);
+    const AnalysisOptions &Opts = G->getTopLevelRegion()
+                                      ->getEntry()
+                                      ->getParent()
+                                      ->getContext()
+                                      .getOptions<AnalysisOptions>();
+    printRegionCluster(*G->getTopLevelRegion(), GW, Opts, 4);
   }
 };
 
@@ -174,7 +180,7 @@ struct RegionOnlyViewer
 };
 char RegionOnlyViewer::ID = 0;
 
-} //end anonymous namespace
+} // end anonymous namespace
 
 INITIALIZE_PASS(RegionPrinter, "dot-regions",
                 "Print regions of function to 'dot' file", true, true)
@@ -184,12 +190,12 @@ INITIALIZE_PASS(
     "Print regions of function to 'dot' file (with no function bodies)", true,
     true)
 
-INITIALIZE_PASS(RegionViewer, "view-regions", "View regions of function",
-                true, true)
+INITIALIZE_PASS(RegionViewer, "view-regions", "View regions of function", true,
+                true)
 
 INITIALIZE_PASS(RegionOnlyViewer, "view-regions-only",
-                "View regions of function (with no function bodies)",
-                true, true)
+                "View regions of function (with no function bodies)", true,
+                true)
 
 FunctionPass *llvm::createRegionPrinterPass() { return new RegionPrinter(); }
 
@@ -197,11 +203,9 @@ FunctionPass *llvm::createRegionOnlyPrinterPass() {
   return new RegionOnlyPrinter();
 }
 
-FunctionPass* llvm::createRegionViewerPass() {
-  return new RegionViewer();
-}
+FunctionPass *llvm::createRegionViewerPass() { return new RegionViewer(); }
 
-FunctionPass* llvm::createRegionOnlyViewerPass() {
+FunctionPass *llvm::createRegionOnlyViewerPass() {
   return new RegionOnlyViewer();
 }
 

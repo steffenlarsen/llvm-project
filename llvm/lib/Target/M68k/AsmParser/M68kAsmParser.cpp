@@ -18,8 +18,7 @@
 #include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/MC/TargetRegistry.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/M68k/M68kOptionsOptInfos.h"
+#include "llvm/Target/M68k/M68kOptions.h"
 
 #include <sstream>
 
@@ -27,10 +26,8 @@
 
 using namespace llvm;
 
-static bool RegisterPrefixOptional = false;
-
-static bool getRegisterPrefixOptional(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::M68K_RegisterPrefixOptional>(Ctx);
+static bool getRegisterPrefixOptional() {
+  return M68kOptions::Current.M68K_RegisterPrefixOptional;
 }
 
 namespace {
@@ -751,7 +748,7 @@ ParseStatus M68kAsmParser::parseRegister(MCRegister &RegNo,
   if (getTok().is(AsmToken::Percent)) {
     HasPercent = true;
     PercentToken = Lex();
-  } else if (!getRegisterPrefixOptional(getContext().getOptionsContext())) {
+  } else if (!getRegisterPrefixOptional()) {
     return ParseStatus::NoMatch;
   }
 

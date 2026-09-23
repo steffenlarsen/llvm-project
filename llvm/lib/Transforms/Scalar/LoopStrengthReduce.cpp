@@ -1,5 +1,3 @@
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
 //===- LoopStrengthReduce.cpp - Strength Reduce IVs in Loops --------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -113,6 +111,7 @@
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Scalar/LoopStrengthReduce.h"
+#include "llvm/Transforms/Scalar/ScalarOptions.h"
 #include "llvm/Transforms/Utils.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Local.h"
@@ -148,92 +147,83 @@ static const unsigned MaxSCEVSalvageExpressionSize = 64;
 
 // Cleanup congruent phis after LSR phi expansion.
 static bool getEnablePhiElim(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_EnableLsrPhielim>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<ScalarOptions>().SC_EnableLsrPhielim;
 }
 
 // The flag adds instruction count to solutions cost comparison.
 static bool getInsnsCost(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_LsrInsnsCost>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<ScalarOptions>().SC_LsrInsnsCost.value_or(
+      true);
 }
 static bool isInsnsCostSpecified(const Function &F) {
-  return clv2::wasOptSpecified<&clv2::ScalarOptsReg, &clv2::SC_LsrInsnsCost>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<ScalarOptions>().SC_LsrInsnsCost.has_value();
 }
 
 // Flag to choose how to narrow complex lsr solution
 static bool getLSRExpNarrow(const Function &F) {
-  return clv2::getOptValOr<&clv2::ScalarOptsReg, &clv2::SC_LsrExpNarrow>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext().getOptions<ScalarOptions>().SC_LsrExpNarrow;
 }
 
 // Flag to narrow search space by filtering non-optimal formulae with
 // the same ScaledReg and Scale.
 static bool getFilterSameScaledReg(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_LsrFilterSameScaledReg>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<ScalarOptions>().SC_LsrFilterSameScaledReg;
 }
 
 static TTI::AddressingModeKind getPreferredAddresingMode(const Function &F) {
-  if (auto *O = clv2::getView<&clv2::ScalarOptsReg>(
-          F.getContext().getOptionsContext())) {
-    if (O->specified<&clv2::SC_LsrPreferredAddressingMode>()) {
-      auto V = O->get<&clv2::SC_LsrPreferredAddressingMode>();
-      switch (V) {
-      case clv2::AddressingModeKindV2::None:
-        return TTI::AMK_None;
-      case clv2::AddressingModeKindV2::PreIndexed:
-        return TTI::AMK_PreIndexed;
-      case clv2::AddressingModeKindV2::PostIndexed:
-        return TTI::AMK_PostIndexed;
-      case clv2::AddressingModeKindV2::All:
-        return TTI::AMK_All;
-      }
+  if (std::optional<AddressingModeKindV2> V =
+          F.getContext()
+              .getOptions<ScalarOptions>()
+              .SC_LsrPreferredAddressingMode) {
+    switch (*V) {
+    case AddressingModeKindV2::None:
+      return TTI::AMK_None;
+    case AddressingModeKindV2::PreIndexed:
+      return TTI::AMK_PreIndexed;
+    case AddressingModeKindV2::PostIndexed:
+      return TTI::AMK_PostIndexed;
+    case AddressingModeKindV2::All:
+      return TTI::AMK_All;
     }
   }
   return TTI::AMK_None;
 }
 static bool isPreferredAddresingModeSpecified(const Function &F) {
-  return clv2::wasOptSpecified<&clv2::ScalarOptsReg,
-                               &clv2::SC_LsrPreferredAddressingMode>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_LsrPreferredAddressingMode.has_value();
 }
 
 static unsigned getComplexityLimit(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_LsrComplexityLimit>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<ScalarOptions>().SC_LsrComplexityLimit;
 }
 
 static unsigned getSetupCostDepthLimit(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_LsrSetupcostDepthLimit>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<ScalarOptions>().SC_LsrSetupcostDepthLimit;
 }
 
 static cl::boolOrDefault
 getAllowDropSolutionIfLessProfitable(const Function &F) {
-  if (auto *O = clv2::getView<&clv2::ScalarOptsReg>(
-          F.getContext().getOptionsContext())) {
-    if (O->specified<&clv2::SC_LsrDropSolution>())
-      return O->get<&clv2::SC_LsrDropSolution>() ? cl::boolOrDefault::BOU_TRUE
-                                                 : cl::boolOrDefault::BOU_FALSE;
-  }
+  if (std::optional<bool> V =
+          F.getContext().getOptions<ScalarOptions>().SC_LsrDropSolution)
+    return *V ? cl::boolOrDefault::BOU_TRUE : cl::boolOrDefault::BOU_FALSE;
   return cl::boolOrDefault::BOU_UNSET;
 }
 
 static bool getEnableVScaleImmediates(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_LsrEnableVscaleImmediates>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_LsrEnableVscaleImmediates;
 }
 
 static bool getDropScaledForVScale(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_LsrDropScaledRegForVscale>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_LsrDropScaledRegForVscale;
 }
 
 static bool getStressIVChain(const Function &F) {
-  return clv2::getOptValOr<&clv2::ScalarOptsReg, &clv2::SC_StressIvChain>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext().getOptions<ScalarOptions>().SC_StressIvChain;
 }
 
 namespace {

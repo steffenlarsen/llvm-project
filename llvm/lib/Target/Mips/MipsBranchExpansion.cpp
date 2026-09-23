@@ -94,8 +94,7 @@
 #include "llvm/IR/DebugLoc.h"
 #include "llvm/IR/Function.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/Mips/MipsOptionsOptInfos.h"
+#include "llvm/Target/Mips/MipsOptions.h"
 #include "llvm/Target/TargetMachine.h"
 #include <algorithm>
 #include <cassert>
@@ -111,13 +110,11 @@ STATISTIC(NumInsertedNops, "Number of nops inserted");
 STATISTIC(LongBranches, "Number of long branches.");
 
 static bool getSkipLongBranch(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::MIPS_SkipLongBranch>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<MipsOptions>().MIPS_SkipLongBranch;
 }
 
 static bool getForceLongBranch(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::MIPS_ForceLongBranch>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<MipsOptions>().MIPS_ForceLongBranch;
 }
 
 namespace {
@@ -434,7 +431,8 @@ void MipsBranchExpansion::expandToLongBranch(MBBInfo &I) {
     const unsigned BalOp =
         STI->hasMips32r6()
             ? STI->inMicroMipsMode() ? Mips::BALC_MMR6 : Mips::BALC
-            : STI->inMicroMipsMode() ? Mips::BAL_BR_MM : Mips::BAL_BR;
+        : STI->inMicroMipsMode() ? Mips::BAL_BR_MM
+                                 : Mips::BAL_BR;
 
     if (!ABI.IsN64()) {
       // Pre R6:

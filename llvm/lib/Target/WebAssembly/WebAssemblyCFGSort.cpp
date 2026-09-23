@@ -31,9 +31,8 @@
 #include "llvm/IR/Analysis.h"
 #include "llvm/IR/Function.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/WebAssembly/WebAssemblyOptionsOptInfos.h"
+#include "llvm/Target/WebAssembly/WebAssemblyOptions.h"
 using namespace llvm;
 using WebAssembly::SortRegion;
 using WebAssembly::SortRegionInfo;
@@ -42,11 +41,8 @@ using WebAssembly::SortRegionInfo;
 
 // Option to disable EH pad first sorting. Only for testing unwind destination
 // mismatches in CFGStackify.
-static bool WasmDisableEHPadSort = false;
-
 static bool getDisableEHPadSort(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::WASM_DisableEHPadSort>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<WebAssemblyOptions>().WASM_DisableEHPadSort;
 }
 
 namespace {

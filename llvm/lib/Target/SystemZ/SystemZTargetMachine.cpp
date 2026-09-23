@@ -24,8 +24,7 @@
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/CodeGen.h"
 #include "llvm/Support/Compiler.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/SystemZ/SystemZOptionsOptInfos.h"
+#include "llvm/Target/SystemZ/SystemZOptions.h"
 #include "llvm/Target/TargetLoweringObjectFile.h"
 #include "llvm/Transforms/Scalar.h"
 #include <memory>
@@ -35,8 +34,7 @@
 using namespace llvm;
 
 static bool getGenericSched(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SZ_GenericSched>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<SystemZOptions>().SZ_GenericSched;
 }
 
 // NOLINTNEXTLINE(readability-identifier-naming)
@@ -241,9 +239,7 @@ bool SystemZPassConfig::addInstSelector() {
 bool SystemZPassConfig::addILPOpts() {
   addPass(&EarlyIfConverterLegacyID);
 
-  if (clv2::getOptValOr<&clv2::SystemZOptsReg,
-                        &clv2::SZ_EnableMachineCombinerPass>(
-          TM->getOptionsContext(), true))
+  if (SystemZOptions::Current.SZ_EnableMachineCombinerPass)
     addPass(&MachineCombinerID);
 
   return true;

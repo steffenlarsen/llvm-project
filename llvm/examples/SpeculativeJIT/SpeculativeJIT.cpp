@@ -16,6 +16,7 @@
 #include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/InitLLVM.h"
+#include "llvm/Support/PluginLoaderOptions.h"
 #include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/TargetSelect.h"
@@ -163,7 +164,10 @@ int main(int argc, char *argv[]) {
   clv2::OptionParser P;
   P.add<&SpecJITReg>();
   RegisterAllLLVMOptions(P);
-  auto OptsCtx = P.parse(argc, argv, "SpeculativeJIT");
+  std::vector<const char *> ArgsAfterPlugins =
+      loadPluginsAndStripArgs(argc, argv);
+  auto OptsCtx = P.parse(static_cast<int>(ArgsAfterPlugins.size()),
+                         ArgsAfterPlugins.data(), "SpeculativeJIT");
   auto *Opts = OptsCtx->getViewPtr<&SpecJITReg>();
   ExitOnErr.setBanner(std::string(argv[0]) + ": ");
 

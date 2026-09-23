@@ -36,22 +36,19 @@
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/AArch64/AArch64OptionsOptInfos.h"
+#include "llvm/Target/AArch64/AArch64Options.h"
 
 using namespace llvm;
 
 #define DEBUG_TYPE "aarch64-ccmp"
 
 static unsigned getBlockInstrLimit(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::A64_CCMPLimit>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<AArch64Options>().A64_CCMPLimit;
 }
 
 static bool getStress(const Function &F) {
-  return clv2::getOptValOr<&clv2::AArch64OptsReg, &clv2::A64_StressCCMP>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext().getOptions<AArch64Options>().A64_StressCCMP;
 }
 
 STATISTIC(NumConsidered, "Number of ccmps considered");
@@ -694,18 +691,46 @@ void SSACCmpConv::convert(SmallVectorImpl<MachineBasicBlock *> &RemovedBlocks) {
   switch (CmpMI->getOpcode()) {
   default:
     llvm_unreachable("Unknown compare opcode");
-  case AArch64::SUBSWri:    Opc = AArch64::CCMPWi; break;
-  case AArch64::SUBSWrr:    Opc = AArch64::CCMPWr; break;
-  case AArch64::SUBSXri:    Opc = AArch64::CCMPXi; break;
-  case AArch64::SUBSXrr:    Opc = AArch64::CCMPXr; break;
-  case AArch64::ADDSWri:    Opc = AArch64::CCMNWi; break;
-  case AArch64::ADDSWrr:    Opc = AArch64::CCMNWr; break;
-  case AArch64::ADDSXri:    Opc = AArch64::CCMNXi; break;
-  case AArch64::ADDSXrr:    Opc = AArch64::CCMNXr; break;
-  case AArch64::FCMPSrr:    Opc = AArch64::FCCMPSrr; FirstOp = 0; break;
-  case AArch64::FCMPDrr:    Opc = AArch64::FCCMPDrr; FirstOp = 0; break;
-  case AArch64::FCMPESrr:   Opc = AArch64::FCCMPESrr; FirstOp = 0; break;
-  case AArch64::FCMPEDrr:   Opc = AArch64::FCCMPEDrr; FirstOp = 0; break;
+  case AArch64::SUBSWri:
+    Opc = AArch64::CCMPWi;
+    break;
+  case AArch64::SUBSWrr:
+    Opc = AArch64::CCMPWr;
+    break;
+  case AArch64::SUBSXri:
+    Opc = AArch64::CCMPXi;
+    break;
+  case AArch64::SUBSXrr:
+    Opc = AArch64::CCMPXr;
+    break;
+  case AArch64::ADDSWri:
+    Opc = AArch64::CCMNWi;
+    break;
+  case AArch64::ADDSWrr:
+    Opc = AArch64::CCMNWr;
+    break;
+  case AArch64::ADDSXri:
+    Opc = AArch64::CCMNXi;
+    break;
+  case AArch64::ADDSXrr:
+    Opc = AArch64::CCMNXr;
+    break;
+  case AArch64::FCMPSrr:
+    Opc = AArch64::FCCMPSrr;
+    FirstOp = 0;
+    break;
+  case AArch64::FCMPDrr:
+    Opc = AArch64::FCCMPDrr;
+    FirstOp = 0;
+    break;
+  case AArch64::FCMPESrr:
+    Opc = AArch64::FCCMPESrr;
+    FirstOp = 0;
+    break;
+  case AArch64::FCMPEDrr:
+    Opc = AArch64::FCCMPEDrr;
+    FirstOp = 0;
+    break;
   case AArch64::CBZW:
   case AArch64::CBNZW:
     Opc = AArch64::CCMPWi;

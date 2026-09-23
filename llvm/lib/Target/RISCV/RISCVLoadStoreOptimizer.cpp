@@ -32,8 +32,7 @@
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/RISCV/RISCVOptionsOptInfos.h"
+#include "llvm/Target/RISCV/RISCVOptions.h"
 #include "llvm/Target/TargetOptions.h"
 
 using namespace llvm;
@@ -43,11 +42,8 @@ using namespace llvm;
 
 // The LdStLimit limits number of instructions how far we search for load/store
 // pairs.
-static unsigned LdStLimit = 128;
-
 static unsigned getLdStLimit(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::RV_LdStLimit>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<RISCVOptions>().RV_LdStLimit;
 }
 STATISTIC(NumLD2LW, "Number of LD instructions split back to LW");
 STATISTIC(NumSD2SW, "Number of SD instructions split back to SW");

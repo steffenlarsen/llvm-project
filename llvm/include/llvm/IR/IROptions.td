@@ -1,4 +1,4 @@
-//===- IROptions.td - CLV2 option defs for IR ---------------*- tablegen -*-===//
+//===- IROptions.td - IR options -*- tablegen -*-===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -6,528 +6,371 @@
 //
 //===----------------------------------------------------------------------===//
 
-include "llvm/Support/CLV2Options.td"
+include "llvm/Option/OptParser.td"
 
-def IROptsReg : Registry<"llvm::ir_opts"> {
-  // Getter bodies are compiled once, in IROptionsGetters.cpp.
-  let OutOfLineGetters = 1;
-}
+def IROptions : OptionsStruct<"llvm"> {}
 
 // =========================================================================
 // External enum: ChangePrinter (from PrintPasses.h)
 // =========================================================================
 
-def ChangePrinterQuiet : EnumValue<"quiet", "Run in quiet mode"> {
-  let CppName = "Quiet";
-}
-
-def ChangePrinterDiffVerbose : EnumValue<"diff", "Display patch-like changes"> {
-  let CppName = "DiffVerbose";
-}
-
-def ChangePrinterDiffQuiet : EnumValue<"diff-quiet",
-    "Display patch-like changes in quiet mode"> {
-  let CppName = "DiffQuiet";
-}
-
-def ChangePrinterColourDiffVerbose : EnumValue<"cdiff",
-    "Display patch-like changes with color"> {
-  let CppName = "ColourDiffVerbose";
-}
-
-def ChangePrinterColourDiffQuiet : EnumValue<"cdiff-quiet",
-    "Display patch-like changes in quiet mode with color"> {
-  let CppName = "ColourDiffQuiet";
-}
-
-def ChangePrinterDotCfgVerbose : EnumValue<"dot-cfg",
-    "Create a website with graphical changes"> {
-  let CppName = "DotCfgVerbose";
-}
-
-def ChangePrinterDotCfgQuiet : EnumValue<"dot-cfg-quiet",
-    "Create a website with graphical changes in quiet mode"> {
-  let CppName = "DotCfgQuiet";
-}
-
-def ChangePrinterVerbose : EnumValue<"", ""> {
-  let CppName = "Verbose";
-}
-
-def ChangePrinterEnum : EnumType<"ChangePrinter",
-    [ChangePrinterQuiet, ChangePrinterDiffVerbose, ChangePrinterDiffQuiet,
-     ChangePrinterColourDiffVerbose, ChangePrinterColourDiffQuiet,
-     ChangePrinterDotCfgVerbose, ChangePrinterDotCfgQuiet,
-     ChangePrinterVerbose]> {
+// ChangePrinter::None (the compile-time default, never explicitly
+// selectable) is deliberately not an EnumMember: it has no
+// "-print-changed=<spelling>" form of its own.
+//
+// ChangePrinter::Verbose DOES need an EnumMember with an empty spelling:
+// upstream's cl::opt<ChangePrinter> used cl::ValueOptional plus a sentinel
+// clEnumValN(ChangePrinter::Verbose, "", "") entry, so both the bare
+// "-print-changed" flag AND the explicit-but-empty "-print-changed=" spelling
+// resolve to Verbose (see llvm/test/Other/change-printer.ll's two identical
+// CHECK-SIMPLE RUN lines). IR_PrintChangedBare's Assign<> below covers the
+// bare spelling; this empty-string member covers "-print-changed=" so the
+// Joined option's enum lookup doesn't reject it as an unknown value.
+def ChangePrinterEnum : OptionEnum<"llvm::ChangePrinter", [
+    EnumMember<"Verbose", "">,
+    EnumMember<"Quiet", "quiet">,
+    EnumMember<"DiffVerbose", "diff">,
+    EnumMember<"DiffQuiet", "diff-quiet">,
+    EnumMember<"ColourDiffVerbose", "cdiff">,
+    EnumMember<"ColourDiffQuiet", "cdiff-quiet">,
+    EnumMember<"DotCfgVerbose", "dot-cfg">,
+    EnumMember<"DotCfgQuiet", "dot-cfg-quiet">]> {
   let External = 1;
+  let Ident = "ChangePrinter";
 }
 
 // =========================================================================
 // Inline enum: PassDebugLevel
 // =========================================================================
 
-def PassDebugLevelDisabled : EnumValue<"Disabled", "disable debug output"> {
-  let CppName = "Disabled";
-}
-
-def PassDebugLevelArguments : EnumValue<"Arguments",
-    "print pass arguments to pass to 'opt'"> {
-  let CppName = "Arguments";
-}
-
-def PassDebugLevelStructure : EnumValue<"Structure",
-    "print pass structure before run()"> {
-  let CppName = "Structure";
-}
-
-def PassDebugLevelExecutions : EnumValue<"Executions",
-    "print pass name before it is executed"> {
-  let CppName = "Executions";
-}
-
-def PassDebugLevelDetails : EnumValue<"Details",
-    "print pass details when it is executed"> {
-  let CppName = "Details";
-}
-
-def PassDebugLevelEnum : EnumType<"PassDebugLevel",
-    [PassDebugLevelDisabled, PassDebugLevelArguments,
-     PassDebugLevelStructure, PassDebugLevelExecutions,
-     PassDebugLevelDetails]>;
+def PassDebugLevelEnum : OptionEnum<"PassDebugLevel", [
+    EnumMember<"Disabled", "Disabled">,
+    EnumMember<"Arguments", "Arguments">,
+    EnumMember<"Structure", "Structure">,
+    EnumMember<"Executions", "Executions">,
+    EnumMember<"Details", "Details">]>;
 
 // =========================================================================
 // Options — PrintPasses.cpp
 // =========================================================================
 
-def IR_PrintBefore : ListOption<
-    "print-before", "Print IR before specified passes",
-    "std::string"> {
-  let Registry = IROptsReg;
-  let Hidden = 1;
-  let CommaSeparated = 1;
-}
+defm IR_PrintBefore : ListField<
+    "print-before", "std::string", "Print IR before specified passes",
+    /*commaJoined=*/1, /*appendEquals=*/1, /*hidden=*/1>;
 
-def IR_PrintAfter : ListOption<
-    "print-after", "Print IR after specified passes",
-    "std::string"> {
-  let Registry = IROptsReg;
-  let Hidden = 1;
-  let CommaSeparated = 1;
-}
+defm IR_PrintAfter : ListField<
+    "print-after", "std::string", "Print IR after specified passes",
+    /*commaJoined=*/1, /*appendEquals=*/1, /*hidden=*/1>;
 
-def IR_PrintBeforeAll : Option<
-    "print-before-all", "Print IR before each pass",
-    "bool"> {
-  let Registry = IROptsReg;
-  let Hidden = 1;
-}
+defm IR_PrintBeforeAll : BoolField<
+    "print-before-all", "false", "Print IR before each pass", /*hidden=*/1>;
 
-def IR_PrintAfterAll : Option<
-    "print-after-all", "Print IR after each pass",
-    "bool"> {
-  let Registry = IROptsReg;
-  let Hidden = 1;
-}
+defm IR_PrintAfterAll : BoolField<
+    "print-after-all", "false", "Print IR after each pass", /*hidden=*/1>;
 
-def IR_PrintChanged : Option<
-    "print-changed", "Print changed IRs",
-    "ChangePrinter"> {
-  let Registry = IROptsReg;
-  let Hidden = 1;
-  let ValueOptional = 1;
-}
+// Not EnumField<>: that multiclass also emits an always-hidden Separate
+// ("-print-changed value") alias, which OptTable rejects as equivalent to
+// the bare Flag<> spelling below (both would match a lone "-print-changed"
+// token) -- same reasoning as CGPASS_EnableMachineOutliner in
+// CodeGenPassOptionsSched1.td. The old clv2 option's ValueOptional bit only
+// ever supported Joined ("=value") and the bare flag, never a
+// separate-token spelling, so omitting the Separate alias here matches its
+// actual behavior, not just a design accident.
+def IR_PrintChanged : Joined<["-", "--"], "print-changed=">,
+    HelpText<"Print changed IRs">, Flags<[HelpHidden]>,
+    Field<"llvm::ChangePrinter", "IR_PrintChanged", "llvm::ChangePrinter::None">,
+    FieldEnum<ChangePrinterEnum>;
 
-def IR_DiffBinary : Option<
-    "print-changed-diff-path", "system diff used by change reporters",
-    "std::string"> {
-  let Registry = IROptsReg;
-  let Default = "\"diff\"";
-  let Hidden = 1;
-}
+// Bare "-print-changed" (no "=value") is equivalent to
+// "-print-changed=verbose", matching the old clv2 ValueOptional spelling.
+def IR_PrintChangedBare : Flag<["-", "--"], "print-changed">,
+    Flags<[HelpHidden]>,
+    Assign<"IR_PrintChanged", "llvm::ChangePrinter::Verbose">;
 
-def IR_PrintModuleScope : Option<
-    "print-module-scope",
+defm IR_DiffBinary : ValueField<
+    "print-changed-diff-path", "std::string", "\"diff\"",
+    "system diff used by change reporters", /*hidden=*/1>;
+
+defm IR_PrintModuleScope : BoolField<
+    "print-module-scope", "false",
     "When printing IR for print-[before|after]{-all} "
-    "always print a module IR",
-    "bool"> {
-  let Registry = IROptsReg;
-  let Hidden = 1;
-}
+    "always print a module IR", /*hidden=*/1>;
 
-def IR_LoopPrintFuncScope : Option<
-    "print-loop-func-scope",
+defm IR_LoopPrintFuncScope : BoolField<
+    "print-loop-func-scope", "false",
     "When printing IR for print-[before|after]{-all} "
-    "for a loop pass, always print function IR",
-    "bool"> {
-  let Registry = IROptsReg;
-  let Hidden = 1;
-}
+    "for a loop pass, always print function IR", /*hidden=*/1>;
 
-def IR_FilterPasses : ListOption<
-    "filter-passes",
+defm IR_FilterPasses : ListField<
+    "filter-passes", "std::string",
     "Only consider IR changes for passes whose names "
     "match the specified value. No-op without -print-changed",
-    "std::string"> {
-  let Registry = IROptsReg;
-  let ValueDesc = "pass names";
-  let Hidden = 1;
-  let CommaSeparated = 1;
-}
+    /*commaJoined=*/1, /*appendEquals=*/1, /*hidden=*/1,
+    /*metaVar=*/"pass names">;
 
-def IR_PrintFuncsList : ListOption<
-    "filter-print-funcs",
+defm IR_PrintFuncsList : ListField<
+    "filter-print-funcs", "std::string",
     "Only print IR for functions whose name "
     "match this for all print-[before|after][-all] options",
-    "std::string"> {
-  let Registry = IROptsReg;
-  let ValueDesc = "function names";
-  let Hidden = 1;
-  let CommaSeparated = 1;
-}
+    /*commaJoined=*/1, /*appendEquals=*/1, /*hidden=*/1,
+    /*metaVar=*/"function names">;
 
-def IR_PrintSourceLocs : ListOption<
-    "filter-print-source-locs",
+// Deliberately not comma-split (commaJoined = 0): the old clv2 ListOption
+// had no CommaSeparated bit, so a single occurrence's value is kept whole
+// (a "file:line[,line-line][,line]" filter can itself contain commas) and
+// only repeated flags accumulate additional entries.
+defm IR_PrintSourceLocs : ListField<
+    "filter-print-source-locs", "std::string",
     "Only print IR containing matching source locations",
-    "std::string"> {
-  let Registry = IROptsReg;
-  let ValueDesc = "file:line[,line-line][,line]";
-  let Hidden = 1;
-}
+    /*commaJoined=*/0, /*appendEquals=*/1, /*hidden=*/1,
+    /*metaVar=*/"file:line[,line-line][,line]">;
 
 // =========================================================================
 // Options — AsmWriter.cpp
 // =========================================================================
 
-def IR_PrintInstAddrs : Option<
-    "print-inst-addrs", "Add an address after each instruction",
-    "bool"> {
-  let Registry = IROptsReg;
-  let Hidden = 1;
-}
+defm IR_PrintInstAddrs : BoolField<
+    "print-inst-addrs", "false",
+    "Add an address after each instruction", /*hidden=*/1>;
 
-def IR_PreserveAssemblyUseListOrder : Option<
-    "preserve-ll-uselistorder",
-    "Preserve use-list order when writing LLVM assembly.",
-    "bool"> {
-  let Registry = IROptsReg;
-  let Hidden = 1;
-}
+// std::optional<bool>: AssemblyWriter's constructor only overrides its own
+// caller-supplied ShouldPreserveUseListOrder default when the flag was
+// actually specified on the command line -- hence hand-authored (mirroring
+// CGPASS_PostRaScheduler in CodeGenPassOptionsSched1.td) instead of a plain
+// BoolField, whose resolved-or-default "false" can't distinguish the two.
+def IR_PreserveAssemblyUseListOrder : Flag<
+    ["-", "--"], "preserve-ll-uselistorder">,
+    HelpText<"Preserve use-list order when writing LLVM assembly.">,
+    Flags<[HelpHidden]>,
+    Field<"std::optional<bool>", "IR_PreserveAssemblyUseListOrder",
+          "std::nullopt">,
+    Assign<"IR_PreserveAssemblyUseListOrder", "true">;
+def IR_PreserveAssemblyUseListOrder_no : Flag<
+    ["-", "--"], "no-preserve-ll-uselistorder">,
+    Flags<[HelpHidden]>,
+    Assign<"IR_PreserveAssemblyUseListOrder", "false">;
+def IR_PreserveAssemblyUseListOrder_eq : Joined<
+    ["-", "--"], "preserve-ll-uselistorder=">,
+    Flags<[HelpHidden]>, BoolAssign<"IR_PreserveAssemblyUseListOrder">;
 
-def IR_PrintInstDebugLocs : Option<
-    "print-inst-debug-locs",
+defm IR_PrintInstDebugLocs : BoolField<
+    "print-inst-debug-locs", "false",
     "Add a debug location after each instruction, if available",
-    "bool"> {
-  let Registry = IROptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def IR_PrintProfData : Option<
-    "print-prof-data",
-    "Print profile data attached to instructions",
-    "bool"> {
-  let Registry = IROptsReg;
-  let Hidden = 1;
-}
+defm IR_PrintProfData : BoolField<
+    "print-prof-data", "false",
+    "Print profile data attached to instructions", /*hidden=*/1>;
 
-def IR_PrintAddrspaceName : Option<
-    "print-addrspace-name",
-    "Print the name of addrspace, if available",
-    "bool"> {
-  let Registry = IROptsReg;
-  let Hidden = 1;
-}
+defm IR_PrintAddrspaceName : BoolField<
+    "print-addrspace-name", "false",
+    "Print the name of addrspace, if available", /*hidden=*/1>;
 
 // =========================================================================
 // Options — OptBisect.cpp
 // =========================================================================
 
-def IR_OptBisectLimit : Option<
-    "opt-bisect-limit",
-    "Maximum optimization to perform (equivalent to -opt-bisect=1-N)",
-    "int"> {
-  let Registry = IROptsReg;
-  let Default = "-1";
-  let Hidden = 1;
-}
+// std::optional<int>: initOptBisectFromOptions() must distinguish "never
+// specified" (leave bisection disabled) from an explicit "-opt-bisect-limit"
+// value (including an explicit -1, which means "run all passes" and thereby
+// enables verbose bisect output) -- a plain ValueField's resolved-or-default
+// "-1" can't tell those two cases apart. Hand-authored (not OptionalValueField)
+// since this option has never had a bare-flag spelling.
+def IR_OptBisectLimit : Joined<["-", "--"], "opt-bisect-limit=">,
+    HelpText<"Maximum optimization to perform (equivalent to -opt-bisect=1-N)">,
+    Flags<[HelpHidden]>,
+    Field<"std::optional<int>", "IR_OptBisectLimit", "std::nullopt">;
+def IR_OptBisectLimit_sep : Separate<["-", "--"], "opt-bisect-limit">,
+    Flags<[HelpHidden]>, Alias<IR_OptBisectLimit>;
 
-def IR_OptBisectIntervals : Option<
-    "opt-bisect",
-    "Run optimization passes only for the specified intervals. "
+// Same "specified" rationale as IR_OptBisectLimit above.
+def IR_OptBisectIntervals : Joined<["-", "--"], "opt-bisect=">,
+    HelpText<"Run optimization passes only for the specified intervals. "
     "Format: '1-10,20-30,45' runs passes 1-10, 20-30, and 45, where "
     "index 1 is the first pass. Supply '0' to run no passes and -1 to "
-    "run all passes.",
-    "std::string"> {
-  let Registry = IROptsReg;
-  let Hidden = 1;
-}
+    "run all passes.">,
+    Flags<[HelpHidden]>,
+    Field<"std::optional<std::string>", "IR_OptBisectIntervals",
+          "std::nullopt">;
+def IR_OptBisectIntervals_sep : Separate<["-", "--"], "opt-bisect">,
+    Flags<[HelpHidden]>, Alias<IR_OptBisectIntervals>;
 
-def IR_OptBisectVerbose : Option<
-    "opt-bisect-verbose",
+defm IR_OptBisectVerbose : BoolField<
+    "opt-bisect-verbose", "true",
     "Show verbose output when opt-bisect-limit and/or opt-disable are set",
-    "bool"> {
-  let Registry = IROptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def IR_OptDisablePasses : ListOption<
-    "opt-disable", "Optimization pass(es) to disable (comma-separated list)",
-    "std::string"> {
-  let Registry = IROptsReg;
-  let Hidden = 1;
-  let CommaSeparated = 1;
-}
+defm IR_OptDisablePasses : ListField<
+    "opt-disable", "std::string",
+    "Optimization pass(es) to disable (comma-separated list)",
+    /*commaJoined=*/1, /*appendEquals=*/1, /*hidden=*/1>;
 
 // =========================================================================
 // Options — Constants.cpp
 // =========================================================================
 
-def IR_UseConstantIntForFixedLengthSplat : Option<
-    "use-constant-int-for-fixed-length-splat",
+defm IR_UseConstantIntForFixedLengthSplat : BoolField<
+    "use-constant-int-for-fixed-length-splat", "false",
     "Use ConstantInt's native fixed-length vector splat support.",
-    "bool"> {
-  let Registry = IROptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def IR_UseConstantIntForScalableSplat : Option<
-    "use-constant-int-for-scalable-splat",
+defm IR_UseConstantIntForScalableSplat : BoolField<
+    "use-constant-int-for-scalable-splat", "false",
     "Use ConstantInt's native scalable vector splat support.",
-    "bool"> {
-  let Registry = IROptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // =========================================================================
 // Options — ModuleSummaryIndex.cpp
 // =========================================================================
 
-def IR_AlwaysRenamePromotedLocals : Option<
-    "always-rename-promoted-locals",
-    "Always rename promoted locals.",
-    "bool"> {
-  let Registry = IROptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm IR_AlwaysRenamePromotedLocals : BoolField<
+    "always-rename-promoted-locals", "true",
+    "Always rename promoted locals.", /*hidden=*/1>;
 
-def IR_PropagateAttrs : Option<
-    "propagate-attrs", "Propagate attributes in index",
-    "bool"> {
-  let Registry = IROptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm IR_PropagateAttrs : BoolField<
+    "propagate-attrs", "true", "Propagate attributes in index",
+    /*hidden=*/1>;
 
-def IR_ImportConstantsWithRefs : Option<
-    "import-constants-with-refs",
-    "Import constant global variables with references",
-    "bool"> {
-  let Registry = IROptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm IR_ImportConstantsWithRefs : BoolField<
+    "import-constants-with-refs", "true",
+    "Import constant global variables with references", /*hidden=*/1>;
 
 // =========================================================================
 // Options — DiagnosticHandler.cpp
 // =========================================================================
 
-def IR_PassRemarks : ListOption<
-    "pass-remarks",
+// The old clv2 Validate callbacks (validateRegexOption) have no OptTable
+// schema equivalent and are dropped here, matching every prior clv2 ->
+// OptTable migration that had per-option Validate callbacks (see e.g. the
+// ProfileData / BPF migrations): an invalid regex is still caught, just
+// later, when DiagnosticHandler.cpp itself compiles the pattern with
+// llvm::Regex rather than at CLI-parse time.
+
+defm IR_PassRemarks : ListField<
+    "pass-remarks", "std::string",
     "Enable optimization remarks from passes whose name match "
     "the given regular expression",
-    "std::string"> {
-  let Registry = IROptsReg;
-  let ValueDesc = "pattern";
-  let Hidden = 1;
-  let CommaSeparated = 1;
-  let Validate = [{
-    return clv2::detail::validateRegexOption(Value, OptName, Diag);
-  }];
-}
+    /*commaJoined=*/1, /*appendEquals=*/1, /*hidden=*/1,
+    /*metaVar=*/"pattern">;
 
-def IR_PassRemarksMissed : ListOption<
-    "pass-remarks-missed",
+defm IR_PassRemarksMissed : ListField<
+    "pass-remarks-missed", "std::string",
     "Enable missed optimization remarks from passes whose name match "
     "the given regular expression",
-    "std::string"> {
-  let Registry = IROptsReg;
-  let ValueDesc = "pattern";
-  let Hidden = 1;
-  let CommaSeparated = 1;
-  let Validate = [{
-    return clv2::detail::validateRegexOption(Value, OptName, Diag);
-  }];
-}
+    /*commaJoined=*/1, /*appendEquals=*/1, /*hidden=*/1,
+    /*metaVar=*/"pattern">;
 
-def IR_PassRemarksAnalysis : ListOption<
-    "pass-remarks-analysis",
+defm IR_PassRemarksAnalysis : ListField<
+    "pass-remarks-analysis", "std::string",
     "Enable optimization analysis remarks from passes whose name match "
     "the given regular expression",
-    "std::string"> {
-  let Registry = IROptsReg;
-  let ValueDesc = "pattern";
-  let Hidden = 1;
-  let CommaSeparated = 1;
-  let Validate = [{
-    return clv2::detail::validateRegexOption(Value, OptName, Diag);
-  }];
-}
+    /*commaJoined=*/1, /*appendEquals=*/1, /*hidden=*/1,
+    /*metaVar=*/"pattern">;
 
 // =========================================================================
 // Options — ProfDataUtils.cpp
 // =========================================================================
 
-def IR_ElideAllZeroBranchWeights : Option<
-    "elide-all-zero-branch-weights", "",
-    "bool"> {
-  let Registry = IROptsReg;
-  let Default = "1";
-}
+defm IR_ElideAllZeroBranchWeights : BoolField<
+    "elide-all-zero-branch-weights", "true", "">;
 
 // =========================================================================
 // Options — Instruction.cpp
 // =========================================================================
 
-def IR_ProfcheckDisableMetadataFixes : Option<
-    "profcheck-disable-metadata-fixes",
+defm IR_ProfcheckDisableMetadataFixes : BoolField<
+    "profcheck-disable-metadata-fixes", "false",
     "Disable metadata propagation fixes discovered through Issue #147390",
-    "bool"> {
-  let Registry = IROptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // =========================================================================
 // Options — PassTimingInfo.cpp
 // =========================================================================
 
-def IR_TimePasses : Option<
+defm IR_TimePasses : BoolField<
     "time-passes",
-    "Time each pass, printing elapsed time for each on exit",
-    "bool"> {
-  let Registry = IROptsReg;
-  let Hidden = 1;
-}
+    "false", "Time each pass, printing elapsed time for each on exit",
+    /*hidden=*/1>;
 
-def IR_TimePassesPerRun : Option<
-    "time-passes-per-run",
+defm IR_TimePassesPerRun : BoolField<
+    "time-passes-per-run", "false",
     "Time each pass run, printing elapsed time for each run on exit",
-    "bool"> {
-  let Registry = IROptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // =========================================================================
 // Options — DebugInfoMetadata.cpp
 // =========================================================================
 
-def IR_EnableFSDiscriminator : Option<
-    "enable-fs-discriminator",
-    "Enable adding flow sensitive discriminators",
-    "bool"> {
-  let Registry = IROptsReg;
-  let Hidden = 1;
-}
+defm IR_EnableFSDiscriminator : BoolField<
+    "enable-fs-discriminator", "false",
+    "Enable adding flow sensitive discriminators", /*hidden=*/1>;
 
-def IR_PickMergedSourceLocations : Option<
-    "pick-merged-source-locations",
+defm IR_PickMergedSourceLocations : BoolField<
+    "pick-merged-source-locations", "false",
     "Preserve line and column number when merging locations.",
-    "bool"> {
-  let Registry = IROptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // =========================================================================
 // Options — Verifier.cpp
 // =========================================================================
 
-def IR_VerifyNoAliasScopeDomination : Option<
-    "verify-noalias-scope-decl-dom",
+defm IR_VerifyNoAliasScopeDomination : BoolField<
+    "verify-noalias-scope-decl-dom", "false",
     "Ensure that llvm.experimental.noalias.scope.decl for identical "
-    "scopes are not dominating",
-    "bool"> {
-  let Registry = IROptsReg;
-  let Hidden = 1;
-}
+    "scopes are not dominating", /*hidden=*/1>;
 
 // =========================================================================
 // Options — Value.cpp
 // =========================================================================
 
-def IR_UseDerefAtPointSemantics : Option<
-    "use-dereferenceable-at-point-semantics",
+defm IR_UseDerefAtPointSemantics : BoolField<
+    "use-dereferenceable-at-point-semantics", "true",
     "Deref attributes and metadata infer facts at definition only",
-    "bool"> {
-  let Registry = IROptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // =========================================================================
 // Options — SafepointIRVerifier.cpp
 // =========================================================================
 
-def IR_SafepointIRVerifierPrintOnly : Option<
-    "safepoint-ir-verifier-print-only", "",
-    "bool"> {
-  let Default = "false";
-  let Registry = IROptsReg;
-}
+defm IR_SafepointIRVerifierPrintOnly : BoolField<
+    "safepoint-ir-verifier-print-only", "false", "">;
 
 // =========================================================================
 // Options — LegacyPassManager.cpp
 // =========================================================================
 
-def IR_PassDebugging : Option<
-    "debug-pass", "Print legacy PassManager debugging information",
-    "PassDebugLevel"> {
-  let Registry = IROptsReg;
-  let Default = "Disabled";
-  let Hidden = 1;
-}
+defm IR_PassDebugging : EnumField<
+    "debug-pass", PassDebugLevelEnum, "PassDebugLevel::Disabled",
+    "Print legacy PassManager debugging information", /*hidden=*/1>;
 
 // =========================================================================
 // Options — Instructions.cpp
 // =========================================================================
 
-def IR_DisableI2pP2iOpt : Option<
-    "disable-i2p-p2i-opt",
-    "Disables inttoptr/ptrtoint roundtrip optimization",
-    "bool"> {
-  let Registry = IROptsReg;
-}
+defm IR_DisableI2pP2iOpt : BoolField<
+    "disable-i2p-p2i-opt", "false",
+    "Disables inttoptr/ptrtoint roundtrip optimization">;
 
 // =========================================================================
 // Options — Function.cpp
 // =========================================================================
 
-def IR_NonGlobalValueMaxNameSize : Option<
-    "non-global-value-max-name-size",
-    "Maximum size for the name of non-global values.",
-    "int"> {
-  let Registry = IROptsReg;
-  let Default = "1024";
-  let Hidden = 1;
-}
+defm IR_NonGlobalValueMaxNameSize : ValueField<
+    "non-global-value-max-name-size", "int", "1024",
+    "Maximum size for the name of non-global values.", /*hidden=*/1>;
 
 // =========================================================================
 // Options — Dominators.cpp
 // =========================================================================
 
-def IR_VerifyDomInfo : Option<
-    "verify-dom-info", "Verify dominator info (time consuming)",
-    "bool"> {
-  let Registry = IROptsReg;
-  let Hidden = 1;
-}
+defm IR_VerifyDomInfo : BoolField<
+    "verify-dom-info", "false",
+    "Verify dominator info (time consuming)", /*hidden=*/1>;
 
 // =========================================================================
 // Options — AutoUpgrade.cpp
 // =========================================================================
 
-def IR_DisableAutoUpgradeDebugInfo : Option<
-    "disable-auto-upgrade-debug-info", "Disable autoupgrade of debug info",
-    "bool"> {
-  let Default = "false";
-  let Registry = IROptsReg;
-}
+defm IR_DisableAutoUpgradeDebugInfo : BoolField<
+    "disable-auto-upgrade-debug-info", "false",
+    "Disable autoupgrade of debug info">;

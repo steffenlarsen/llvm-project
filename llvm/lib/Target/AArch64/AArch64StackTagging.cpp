@@ -42,9 +42,8 @@
 #include "llvm/Pass.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/AArch64/AArch64OptionsOptInfos.h"
+#include "llvm/Target/AArch64/AArch64Options.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/MemoryTaggingSupport.h"
 #include <cassert>
@@ -54,61 +53,14 @@ using namespace llvm;
 
 #define DEBUG_TYPE "aarch64-stack-tagging"
 
-
-// Mode for selecting how to insert frame record info into the stack ring
-// buffer.
-enum StackTaggingRecordStackHistoryMode {
-  // Do not record frame record info.
-  none,
-
-  // Insert instructions into the prologue for storing into the stack ring
-  // buffer directly.
-  instr,
-};
-
-using A64RecHistMode = clv2::A64StackTaggingRecordStackHistoryMode;
-
 static unsigned getClScanLimit(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::A64_StackTaggingScanLimit>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<AArch64Options>().A64_StackTaggingScanLimit;
 }
 
 static unsigned getClMergeInitSizeLimit(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::A64_StackTaggingMergeInitSizeLimit>(
-      F.getContext().getOptionsContext());
-}
-
-static bool getClMergeInit(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::A64_StackTaggingMergeInit>(Ctx);
-}
-
-static bool getClMergeInitWasSpecified(const clv2::OptionsContext &Ctx) {
-  return clv2::wasOptSpecified<&clv2::AArch64OptsReg,
-                               &clv2::A64_StackTaggingMergeInit>(Ctx);
-}
-
-static bool getClUseStackSafety(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::A64_StackTaggingUseStackSafety>(Ctx);
-}
-
-static bool getClUseStackSafetyWasSpecified(const clv2::OptionsContext &Ctx) {
-  return clv2::wasOptSpecified<&clv2::AArch64OptsReg,
-                               &clv2::A64_StackTaggingUseStackSafety>(Ctx);
-}
-
-static StackTaggingRecordStackHistoryMode
-getClRecordStackHistory(const Function &F) {
-  if (auto *O = clv2::getView<&clv2::AArch64OptsReg>(
-          F.getContext().getOptionsContext()))
-    return static_cast<StackTaggingRecordStackHistoryMode>(
-        O->get<&clv2::A64_RecordStackHistory>());
-  return none;
-}
-
-static bool getClRecordStackHistoryWasSpecified(const Function &F) {
-  return clv2::wasOptSpecified<&clv2::AArch64OptsReg,
-                               &clv2::A64_RecordStackHistory>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<AArch64Options>()
+      .A64_StackTaggingMergeInitSizeLimit;
 }
 
 static const Align kTagGranuleSize = Align(16);
@@ -468,8 +420,11 @@ static Value *getSlotPtr(IRBuilder<> &IRB, const Triple &TargetTriple,
   if (!HasInstrumentedAllocas)
     return nullptr;
 
-  if (getClRecordStackHistory(F) == instr ||
-      (!getClRecordStackHistoryWasSpecified(F) && TargetTriple.isOSDarwin())) {
+  const std::optional<A64StackTaggingRecordStackHistoryMode>
+      &RecordStackHistory =
+          F.getContext().getOptions<AArch64Options>().A64_RecordStackHistory;
+  if (RecordStackHistory == A64StackTaggingRecordStackHistoryMode::Instr ||
+      (!RecordStackHistory.has_value() && TargetTriple.isOSDarwin())) {
     if (TargetTriple.isAndroid() && TargetTriple.isAArch64() &&
         !TargetTriple.isAndroidVersionLT(35))
       return memtag::getAndroidSlotPtr(IRB, -3);
@@ -534,13 +489,9 @@ bool AArch64StackTagging::runOnFunction(Function &Fn) {
     return false;
 
   // Re-read options with Function context now that it's available.
-  MergeInit = getClMergeInitWasSpecified(Fn.getContext().getOptionsContext())
-                  ? getClMergeInit(Fn.getContext().getOptionsContext())
-                  : !IsOptNone;
-  UseStackSafety =
-      getClUseStackSafetyWasSpecified(Fn.getContext().getOptionsContext())
-          ? getClUseStackSafety(Fn.getContext().getOptionsContext())
-          : !IsOptNone;
+  const AArch64Options &Opts = Fn.getContext().getOptions<AArch64Options>();
+  MergeInit = Opts.A64_StackTaggingMergeInit.value_or(!IsOptNone);
+  UseStackSafety = Opts.A64_StackTaggingUseStackSafety.value_or(!IsOptNone);
 
   if (UseStackSafety)
     SSI = &getAnalysis<StackSafetyGlobalInfoWrapperPass>().getResult();

@@ -81,8 +81,7 @@ struct IRSymtabFile {
 };
 
 /// Reads a bitcode file, creating its irsymtab if necessary.
-LLVM_ABI Expected<IRSymtabFile> readIRSymtab(MemoryBufferRef MBRef,
-                                             const clv2::OptionsContext &Ctx);
+LLVM_ABI Expected<IRSymtabFile> readIRSymtab(MemoryBufferRef MBRef);
 }
 
 } // namespace llvm

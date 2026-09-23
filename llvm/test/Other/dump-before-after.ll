@@ -2,7 +2,7 @@
 
 ; Basic dump before and after a single module pass
 
-; RUN: opt %s -disable-output -passes='no-op-module' -ir-dump-directory %t/logs -print-after=no-op-module -print-before=no-op-module
+; RUN: opt %s -disable-output -passes='no-op-module' -ir-dump-directory=%t/logs -print-after=no-op-module -print-before=no-op-module
 ; RUN: ls %t/logs | FileCheck %s --check-prefix=SINGLE-PASS
 ; RUN: ls %t/logs | count 2
 ; SINGLE-PASS-DAG: 1-[[MODULE_NAME_HASH:[a-z0-9]+]]-module-NoOpModulePass-after.ll
@@ -28,7 +28,7 @@
 ; but not printed, still increment the count -- leading to gaps in the printed
 ; integers.
 
-; RUN: opt %s -disable-output -passes='no-op-module,no-op-module,no-op-module' -ir-dump-directory %t/logs -print-after=no-op-module -print-before=no-op-module
+; RUN: opt %s -disable-output -passes='no-op-module,no-op-module,no-op-module' -ir-dump-directory=%t/logs -print-after=no-op-module -print-before=no-op-module
 ; RUN: ls %t/logs | FileCheck %s --check-prefix=MULTIPLE-PASSES
 ; RUN: ls %t/logs | count 6
 ; MULTIPLE-PASSES-DAG: 1-[[MODULE_NAME_HASH:[a-z0-9]+]]-module-NoOpModulePass-after.ll
@@ -41,7 +41,7 @@
 
 ; Dump before and after multiple passes, of various levels of granularity
 
-; RUN: opt %s -disable-output -passes='no-op-module,cgscc(no-op-cgscc),function(no-op-function),function(loop(no-op-loop)),no-op-module' -ir-dump-directory %t/logs -print-after=no-op-module,no-op-cgscc,no-op-function,no-op-loop -print-before=no-op-module,no-op-cgscc,no-op-function,no-op-loop
+; RUN: opt %s -disable-output -passes='no-op-module,cgscc(no-op-cgscc),function(no-op-function),function(loop(no-op-loop)),no-op-module' -ir-dump-directory=%t/logs -print-after=no-op-module,no-op-cgscc,no-op-function,no-op-loop -print-before=no-op-module,no-op-cgscc,no-op-function,no-op-loop
 ; RUN: ls %t/logs | FileCheck %s --check-prefix=MULTIPLE-GRANULAR-PASSES
 ; RUN: ls %t/logs | count 14
 ; MULTIPLE-GRANULAR-PASSES-DAG: 1-[[MODULE_NAME_HASH:[a-z0-9]+]]-module-NoOpModulePass-after.ll
@@ -61,7 +61,7 @@
 ; RUN: rm -rf %t/logs
 
 ; Validate that analysis passes are excluded from dump.
-; RUN: opt %s -disable-output -passes='require<inline-advisor>,invalidate<inline-advisor>,no-op-module' -ir-dump-directory %t/logs -print-after=no-op-module
+; RUN: opt %s -disable-output -passes='require<inline-advisor>,invalidate<inline-advisor>,no-op-module' -ir-dump-directory=%t/logs -print-after=no-op-module
 ; RUN: ls %t/logs | FileCheck %s --check-prefix=EXCLUDE-ANALYSIS-PASSES
 ; RUN: ls %t/logs | count 1
 ; EXCLUDE-ANALYSIS-PASSES: 1-[[MODULE_NAME_HASH:[a-z0-9]+]]-module-NoOpModulePass-after.ll

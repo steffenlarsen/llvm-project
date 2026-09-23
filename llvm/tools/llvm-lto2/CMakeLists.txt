@@ -24,5 +24,23 @@ add_llvm_tool(llvm-lto2
 
   DEPENDS
   intrinsics_gen
+  BitcodeMemProfOptParserTableGen
+  CGDataOptParserTableGen
+  CodeGenAsmPrintOptParserTableGen
+  CodeGenCore1OptParserTableGen
+  CodeGenCore2OptParserTableGen
+  CodeGenGISelOptParserTableGen
+  CodeGenMachine1OptParserTableGen
+  CodeGenMachine2OptParserTableGen
+  CodeGenRegAllocOptParserTableGen
+  CodeGenSched1OptParserTableGen
+  CodeGenSched2OptParserTableGen
+  CodeGenSelDAGOptParserTableGen
+  InstCombineOptParserTableGen
+  InstrumentationOptParserTableGen
+  IPOOptParserTableGen
+  ScalarOptParserTableGen
+  LTOOptParserTableGen
+  UtilsOptParserTableGen
   )
 export_executable_symbols_for_plugins(llvm-lto2)

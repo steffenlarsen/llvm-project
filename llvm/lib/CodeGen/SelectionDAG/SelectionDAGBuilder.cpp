@@ -32,7 +32,7 @@
 #include "llvm/CodeGen/Analysis.h"
 #include "llvm/CodeGen/AssignmentTrackingAnalysis.h"
 #include "llvm/CodeGen/CodeGenCommonISel.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsSelDAG.h"
 #include "llvm/CodeGen/FunctionLoweringInfo.h"
 #include "llvm/CodeGen/GCMetadata.h"
 #include "llvm/CodeGen/ISDOpcodes.h"
@@ -93,12 +93,10 @@
 #include "llvm/MC/MCContext.h"
 #include "llvm/Support/AtomicOrdering.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/InstructionCost.h"
 #include "llvm/Support/MathExtras.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOptions.h"
@@ -118,16 +116,16 @@ using namespace SwitchCG;
 /// LimitFloatPrecision - Generate low-precision inline sequences for
 /// some float libcalls (6, 8 or 12 bits).
 
-static bool getInsertAssertAlign(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_InsertAssertAlign>(Ctx);
+static bool getInsertAssertAlign(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenSelDAGOptions>().CGPASS_InsertAssertAlign;
 }
 
-static unsigned getLimitFloatPrecision(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_LimitFloatPrecision>(Ctx);
+static unsigned getLimitFloatPrecision(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenSelDAGOptions>().CGPASS_LimitFloatPrecision;
 }
 
-static unsigned getSwitchPeelThreshold(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_SwitchPeelThreshold>(Ctx);
+static unsigned getSwitchPeelThreshold(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenSelDAGOptions>().CGPASS_SwitchPeelThreshold;
 }
 
 // Limit the width of DAG chains. This is important in general to prevent
@@ -5559,8 +5557,7 @@ SDValue SelectionDAGBuilder::handleTargetIntrinsicRet(const CallBase &I,
   if (MaybeAlign Alignment = I.getRetAlign();
       getInsertAssertAlign(DAG.getMachineFunction()
                                .getFunction()
-                               .getContext()
-                               .getOptionsContext()) &&
+                               .getContext()) &&
       Alignment) {
     // Insert `assertalign` node if there's an alignment.
     Result = DAG.getAssertAlign(getCurSDLoc(), Result, Alignment.valueOrOne());
@@ -5706,8 +5703,7 @@ static SDValue getLimitedPrecisionExp2(SDValue t0, const SDLoc &dl,
   SDValue TwoToFractionalPartOfX;
   if (getLimitFloatPrecision(DAG.getMachineFunction()
                                  .getFunction()
-                                 .getContext()
-                                 .getOptionsContext()) <= 6) {
+                                 .getContext()) <= 6) {
     // For floating-point precision of 6:
     //
     //   TwoToFractionalPartOfX =
@@ -5724,8 +5720,7 @@ static SDValue getLimitedPrecisionExp2(SDValue t0, const SDLoc &dl,
                                          getF32Constant(DAG, 0x3f7f5e7e, dl));
   } else if (getLimitFloatPrecision(DAG.getMachineFunction()
                                         .getFunction()
-                                        .getContext()
-                                        .getOptionsContext()) <= 12) {
+                                        .getContext()) <= 12) {
     // For floating-point precision of 12:
     //
     //   TwoToFractionalPartOfX =
@@ -5789,12 +5784,10 @@ static SDValue expandExp(const SDLoc &dl, SDValue Op, SelectionDAG &DAG,
   if (Op.getValueType() == MVT::f32 &&
       getLimitFloatPrecision(DAG.getMachineFunction()
                                  .getFunction()
-                                 .getContext()
-                                 .getOptionsContext()) > 0 &&
+                                 .getContext()) > 0 &&
       getLimitFloatPrecision(DAG.getMachineFunction()
                                  .getFunction()
-                                 .getContext()
-                                 .getOptionsContext()) <= 18) {
+                                 .getContext()) <= 18) {
 
     // Put the exponent in the right bit position for later addition to the
     // final result:
@@ -5820,12 +5813,10 @@ static SDValue expandLog(const SDLoc &dl, SDValue Op, SelectionDAG &DAG,
   if (Op.getValueType() == MVT::f32 &&
       getLimitFloatPrecision(DAG.getMachineFunction()
                                  .getFunction()
-                                 .getContext()
-                                 .getOptionsContext()) > 0 &&
+                                 .getContext()) > 0 &&
       getLimitFloatPrecision(DAG.getMachineFunction()
                                  .getFunction()
-                                 .getContext()
-                                 .getOptionsContext()) <= 18) {
+                                 .getContext()) <= 18) {
     SDValue Op1 = DAG.getNode(ISD::BITCAST, dl, MVT::i32, Op);
 
     // Scale the exponent by log(2).
@@ -5841,8 +5832,7 @@ static SDValue expandLog(const SDLoc &dl, SDValue Op, SelectionDAG &DAG,
     SDValue LogOfMantissa;
     if (getLimitFloatPrecision(DAG.getMachineFunction()
                                    .getFunction()
-                                   .getContext()
-                                   .getOptionsContext()) <= 6) {
+                                   .getContext()) <= 6) {
       // For floating-point precision of 6:
       //
       //   LogofMantissa =
@@ -5859,8 +5849,7 @@ static SDValue expandLog(const SDLoc &dl, SDValue Op, SelectionDAG &DAG,
                                   getF32Constant(DAG, 0x3f949a29, dl));
     } else if (getLimitFloatPrecision(DAG.getMachineFunction()
                                           .getFunction()
-                                          .getContext()
-                                          .getOptionsContext()) <= 12) {
+                                          .getContext()) <= 12) {
       // For floating-point precision of 12:
       //
       //   LogOfMantissa =
@@ -5932,12 +5921,10 @@ static SDValue expandLog2(const SDLoc &dl, SDValue Op, SelectionDAG &DAG,
   if (Op.getValueType() == MVT::f32 &&
       getLimitFloatPrecision(DAG.getMachineFunction()
                                  .getFunction()
-                                 .getContext()
-                                 .getOptionsContext()) > 0 &&
+                                 .getContext()) > 0 &&
       getLimitFloatPrecision(DAG.getMachineFunction()
                                  .getFunction()
-                                 .getContext()
-                                 .getOptionsContext()) <= 18) {
+                                 .getContext()) <= 18) {
     SDValue Op1 = DAG.getNode(ISD::BITCAST, dl, MVT::i32, Op);
 
     // Get the exponent.
@@ -5952,8 +5939,7 @@ static SDValue expandLog2(const SDLoc &dl, SDValue Op, SelectionDAG &DAG,
     SDValue Log2ofMantissa;
     if (getLimitFloatPrecision(DAG.getMachineFunction()
                                    .getFunction()
-                                   .getContext()
-                                   .getOptionsContext()) <= 6) {
+                                   .getContext()) <= 6) {
       // For floating-point precision of 6:
       //
       //   Log2ofMantissa = -1.6749035f + (2.0246817f - .34484768f * x) * x;
@@ -5968,8 +5954,7 @@ static SDValue expandLog2(const SDLoc &dl, SDValue Op, SelectionDAG &DAG,
                                    getF32Constant(DAG, 0x3fd6633d, dl));
     } else if (getLimitFloatPrecision(DAG.getMachineFunction()
                                           .getFunction()
-                                          .getContext()
-                                          .getOptionsContext()) <= 12) {
+                                          .getContext()) <= 12) {
       // For floating-point precision of 12:
       //
       //   Log2ofMantissa =
@@ -6042,12 +6027,10 @@ static SDValue expandLog10(const SDLoc &dl, SDValue Op, SelectionDAG &DAG,
   if (Op.getValueType() == MVT::f32 &&
       getLimitFloatPrecision(DAG.getMachineFunction()
                                  .getFunction()
-                                 .getContext()
-                                 .getOptionsContext()) > 0 &&
+                                 .getContext()) > 0 &&
       getLimitFloatPrecision(DAG.getMachineFunction()
                                  .getFunction()
-                                 .getContext()
-                                 .getOptionsContext()) <= 18) {
+                                 .getContext()) <= 18) {
     SDValue Op1 = DAG.getNode(ISD::BITCAST, dl, MVT::i32, Op);
 
     // Scale the exponent by log10(2) [0.30102999f].
@@ -6062,8 +6045,7 @@ static SDValue expandLog10(const SDLoc &dl, SDValue Op, SelectionDAG &DAG,
     SDValue Log10ofMantissa;
     if (getLimitFloatPrecision(DAG.getMachineFunction()
                                    .getFunction()
-                                   .getContext()
-                                   .getOptionsContext()) <= 6) {
+                                   .getContext()) <= 6) {
       // For floating-point precision of 6:
       //
       //   Log10ofMantissa =
@@ -6080,8 +6062,7 @@ static SDValue expandLog10(const SDLoc &dl, SDValue Op, SelectionDAG &DAG,
                                     getF32Constant(DAG, 0x3f011300, dl));
     } else if (getLimitFloatPrecision(DAG.getMachineFunction()
                                           .getFunction()
-                                          .getContext()
-                                          .getOptionsContext()) <= 12) {
+                                          .getContext()) <= 12) {
       // For floating-point precision of 12:
       //
       //   Log10ofMantissa =
@@ -6143,12 +6124,10 @@ static SDValue expandExp2(const SDLoc &dl, SDValue Op, SelectionDAG &DAG,
   if (Op.getValueType() == MVT::f32 &&
       getLimitFloatPrecision(DAG.getMachineFunction()
                                  .getFunction()
-                                 .getContext()
-                                 .getOptionsContext()) > 0 &&
+                                 .getContext()) > 0 &&
       getLimitFloatPrecision(DAG.getMachineFunction()
                                  .getFunction()
-                                 .getContext()
-                                 .getOptionsContext()) <= 18)
+                                 .getContext()) <= 18)
     return getLimitedPrecisionExp2(Op, dl, DAG);
 
   // No special expansion.
@@ -6164,12 +6143,10 @@ static SDValue expandPow(const SDLoc &dl, SDValue LHS, SDValue RHS,
   if (LHS.getValueType() == MVT::f32 && RHS.getValueType() == MVT::f32 &&
       getLimitFloatPrecision(DAG.getMachineFunction()
                                  .getFunction()
-                                 .getContext()
-                                 .getOptionsContext()) > 0 &&
+                                 .getContext()) > 0 &&
       getLimitFloatPrecision(DAG.getMachineFunction()
                                  .getFunction()
-                                 .getContext()
-                                 .getOptionsContext()) <= 18) {
+                                 .getContext()) <= 18) {
     if (ConstantFPSDNode *LHSC = dyn_cast<ConstantFPSDNode>(LHS)) {
       APFloat Ten(10.0f);
       IsExp10 = LHSC->isExactlyValue(Ten);
@@ -12852,8 +12829,7 @@ MachineBasicBlock *SelectionDAGBuilder::peelDominantCaseCluster(
   // Don't perform if there is only one cluster or optimizing for size.
   if (getSwitchPeelThreshold(DAG.getMachineFunction()
                                  .getFunction()
-                                 .getContext()
-                                 .getOptionsContext()) > 100 ||
+                                 .getContext()) > 100 ||
       !FuncInfo.BPI || Clusters.size() < 2 ||
       TM.getOptLevel() == CodeGenOptLevel::None ||
       SwitchMBB->getParent()->getFunction().hasMinSize())
@@ -12862,8 +12838,7 @@ MachineBasicBlock *SelectionDAGBuilder::peelDominantCaseCluster(
   BranchProbability TopCaseProb =
       BranchProbability(getSwitchPeelThreshold(DAG.getMachineFunction()
                                                    .getFunction()
-                                                   .getContext()
-                                                   .getOptionsContext()),
+                                                   .getContext()),
                         100);
   unsigned PeeledCaseIndex = 0;
   bool SwitchPeeled = false;

@@ -43,7 +43,7 @@
 #include "llvm/Support/RandomNumberGenerator.h"
 #include "llvm/Support/SipHash.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Transforms/Instrumentation/InstrumentationOptionsOptInfos.h"
+#include "llvm/Transforms/Instrumentation/InstrumentationOptions.h"
 #include <cassert>
 #include <cstdint>
 #include <memory>
@@ -65,46 +65,41 @@ bool ClCoverReplaceableNew = true;
 uint64_t ClFallbackToken = 0;
 
 std::string getClFuncPrefix(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::INST_AllocTokenPrefix>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<InstrumentationOptions>().INST_AllocTokenPrefix;
 }
 
 uint64_t getClFallbackToken(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::INST_AllocTokenFallback>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<InstrumentationOptions>().INST_AllocTokenFallback;
 }
 
 bool isClMaxTokensSpecified(const Module &M) {
-  return clv2::wasOptSpecified<&clv2::InstrumentationOptsReg,
-                               &clv2::INST_AllocTokenMax>(
-      M.getContext().getOptionsContext());
+  return M.getContext()
+      .getOptions<InstrumentationOptions>()
+      .INST_AllocTokenMax.has_value();
 }
 
 uint64_t getClMaxTokens(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::INST_AllocTokenMax>(
-      M.getContext().getOptionsContext());
+  return *M.getContext().getOptions<InstrumentationOptions>().INST_AllocTokenMax;
 }
 
 bool isClFastABISpecified(const Module &M) {
-  return clv2::wasOptSpecified<&clv2::InstrumentationOptsReg,
-                               &clv2::INST_AllocTokenFastABI>(
-      M.getContext().getOptionsContext());
+  return M.getContext()
+      .getOptions<InstrumentationOptions>()
+      .INST_AllocTokenFastABI.has_value();
 }
 
 bool getClFastABI(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::INST_AllocTokenFastABI>(
-      M.getContext().getOptionsContext());
+  return *M.getContext().getOptions<InstrumentationOptions>().INST_AllocTokenFastABI;
 }
 
 bool isClExtendedSpecified(const Module &M) {
-  return clv2::wasOptSpecified<&clv2::InstrumentationOptsReg,
-                               &clv2::INST_AllocTokenExtended>(
-      M.getContext().getOptionsContext());
+  return M.getContext()
+      .getOptions<InstrumentationOptions>()
+      .INST_AllocTokenExtended.has_value();
 }
 
 bool getClExtended(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::INST_AllocTokenExtended>(
-      M.getContext().getOptionsContext());
+  return *M.getContext().getOptions<InstrumentationOptions>().INST_AllocTokenExtended;
 }
 
 // C++ defines ::operator new (and variants) as replaceable (vs. standard
@@ -112,8 +107,7 @@ bool getClExtended(const Module &M) {
 // isAllocationFn(). Cover by default, as users of AllocToken are already
 // required to provide token-aware allocation functions (no defaults).
 bool getClCoverReplaceableNew(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::INST_AllocTokenCoverReplaceableNew>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<InstrumentationOptions>().INST_AllocTokenCoverReplaceableNew;
 }
 
 //===--- Statistics -------------------------------------------------------===//

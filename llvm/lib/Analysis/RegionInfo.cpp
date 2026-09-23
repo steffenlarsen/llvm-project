@@ -15,7 +15,6 @@
 #ifndef NDEBUG
 #include "llvm/Analysis/RegionPrinter.h"
 #endif
-#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
 #include "llvm/Analysis/Passes.h"
 #include "llvm/Analysis/RegionInfoImpl.h"
 #include "llvm/Config/llvm-config.h"
@@ -36,7 +35,7 @@ template class LLVM_EXPORT_TEMPLATE RegionInfoBase<RegionTraits<Function>>;
 
 } // end namespace llvm
 
-STATISTIC(numRegions,       "The # of regions");
+STATISTIC(numRegions, "The # of regions");
 STATISTIC(numSimpleRegions, "The # of simple regions");
 
 // Always verify if expensive checking is enabled.
@@ -47,12 +46,9 @@ STATISTIC(numSimpleRegions, "The # of simple regions");
 // Region implementation
 //
 
-Region::Region(BasicBlock *Entry, BasicBlock *Exit,
-               RegionInfo* RI,
-               DominatorTree *DT, Region *Parent) :
-  RegionBase<RegionTraits<Function>>(Entry, Exit, RI, DT, Parent) {
-
-}
+Region::Region(BasicBlock *Entry, BasicBlock *Exit, RegionInfo *RI,
+               DominatorTree *DT, Region *Parent)
+    : RegionBase<RegionTraits<Function>>(Entry, Exit, RI, DT, Parent) {}
 
 Region::~Region() = default;
 
@@ -87,8 +83,7 @@ void RegionInfo::recalculate(Function &F, DominatorTree *DT_,
   PDT = PDT_;
   DF = DF_;
 
-  TopLevelRegion = new Region(&F.getEntryBlock(), nullptr,
-                              this, DT, nullptr);
+  TopLevelRegion = new Region(&F.getEntryBlock(), nullptr, this, DT, nullptr);
   updateStatistics(TopLevelRegion);
   calculate(F);
 }
@@ -118,13 +113,9 @@ bool RegionInfoPass::runOnFunction(Function &F) {
   return false;
 }
 
-void RegionInfoPass::releaseMemory() {
-  RI.releaseMemory();
-}
+void RegionInfoPass::releaseMemory() { RI.releaseMemory(); }
 
-void RegionInfoPass::verifyAnalysis() const {
-    RI.verifyAnalysis();
-}
+void RegionInfoPass::verifyAnalysis() const { RI.verifyAnalysis(); }
 
 void RegionInfoPass::getAnalysisUsage(AnalysisUsage &AU) const {
   AU.setPreservesAll();
@@ -138,20 +129,18 @@ void RegionInfoPass::print(raw_ostream &OS, const Module *) const {
 }
 
 #if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
-LLVM_DUMP_METHOD void RegionInfoPass::dump() const {
-  RI.dump();
-}
+LLVM_DUMP_METHOD void RegionInfoPass::dump() const { RI.dump(); }
 #endif
 
 char RegionInfoPass::ID = 0;
 
 INITIALIZE_PASS_BEGIN(RegionInfoPass, "regions",
-                "Detect single entry single exit regions", true, true)
+                      "Detect single entry single exit regions", true, true)
 INITIALIZE_PASS_DEPENDENCY(DominatorTreeWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(PostDominatorTreeWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(DominanceFrontierWrapperPass)
 INITIALIZE_PASS_END(RegionInfoPass, "regions",
-                "Detect single entry single exit regions", true, true)
+                    "Detect single entry single exit regions", true, true)
 
 // Create methods available outside of this file, to use them
 // "include/llvm/LinkAllPasses.h". Otherwise the pass would be deleted by
@@ -159,9 +148,7 @@ INITIALIZE_PASS_END(RegionInfoPass, "regions",
 
 namespace llvm {
 
-  FunctionPass *createRegionInfoPass() {
-    return new RegionInfoPass();
-  }
+FunctionPass *createRegionInfoPass() { return new RegionInfoPass(); }
 
 } // end namespace llvm
 

@@ -9,6 +9,7 @@
 #ifndef LLVM_TRANSFORMS_IPO_INLINER_H
 #define LLVM_TRANSFORMS_IPO_INLINER_H
 
+#include "llvm/Analysis/AnalysisOptions.h"
 #include "llvm/Analysis/CGSCCPassManager.h"
 #include "llvm/Analysis/InlineAdvisor.h"
 #include "llvm/Analysis/InlineCost.h"
@@ -70,8 +71,7 @@ class ModuleInlinerWrapperPass
 public:
   LLVM_ABI ModuleInlinerWrapperPass(
       const clv2::OptionsContext &OptsCtx,
-      InlineParams Params =
-          getInlineParams(llvm::clv2::defaultOptionsContext()),
+      InlineParams Params = getInlineParams(AnalysisOptions::Current),
       bool MandatoryFirst = true, InlineContext IC = {},
       InliningAdvisorMode Mode = InliningAdvisorMode::Default,
       unsigned MaxDevirtIterations = 0);

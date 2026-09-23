@@ -14,7 +14,7 @@
 #include "llvm/ADT/BitVector.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsCore2.h"
 #include "llvm/CodeGen/LiveDebugVariables.h"
 #include "llvm/CodeGen/LiveInterval.h"
 #include "llvm/CodeGen/LiveIntervalUnion.h"
@@ -52,12 +52,12 @@ using namespace llvm;
 
 #define DEBUG_TYPE "stack-slot-coloring"
 
-static bool getNoStackSlotSharing(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_NoStackSlotSharing>(Ctx);
+static bool getNoStackSlotSharing(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore2Options>().CGPASS_NoStackSlotSharing;
 }
 
-static int getSscDceLimit(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_SscDceLimit>(Ctx);
+static int getSscDceLimit(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore2Options>().CGPASS_SscDceLimit;
 }
 
 STATISTIC(NumEliminated, "Number of stack slots eliminated due to coloring");
@@ -317,7 +317,7 @@ int StackSlotColoring::ColorSlot(LiveInterval *li) {
   int FI = li->reg().stackSlotIndex();
   uint8_t StackID = MFI->getStackID(FI);
 
-  if (!getNoStackSlotSharing(F->getContext().getOptionsContext())) {
+  if (!getNoStackSlotSharing(F->getContext())) {
 
     // Check if it's possible to reuse any of the used colors.
     Color = UsedColors[StackID].find_first();
@@ -471,13 +471,9 @@ bool StackSlotColoring::RemoveDeadStores(MachineBasicBlock* MBB) {
 
   for (MachineBasicBlock::iterator I = MBB->begin(), E = MBB->end();
        I != E; ++I) {
-    if (getSscDceLimit(
-            MBB->getParent()->getFunction().getContext().getOptionsContext()) !=
-            -1 &&
-        (int)NumDead >= getSscDceLimit(MBB->getParent()
-                                           ->getFunction()
-                                           .getContext()
-                                           .getOptionsContext()))
+    if (getSscDceLimit(MBB->getParent()->getFunction().getContext()) != -1 &&
+        (int)NumDead >=
+            getSscDceLimit(MBB->getParent()->getFunction().getContext()))
       break;
     int FirstSS, SecondSS;
     if (TII->isStackSlotCopy(*I, FirstSS, SecondSS) && FirstSS == SecondSS &&

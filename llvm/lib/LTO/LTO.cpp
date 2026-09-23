@@ -22,14 +22,14 @@
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/Bitcode/BitcodeWriter.h"
-#include "llvm/CGData/CGDataOptionsOptInfos.h"
+#include "llvm/CGData/CGDataOptions.h"
 #include "llvm/CGData/CodeGenData.h"
 #include "llvm/CodeGen/Analysis.h"
 #include "llvm/Config/llvm-config.h"
 #include "llvm/IR/AutoUpgrade.h"
 #include "llvm/IR/DiagnosticPrinter.h"
 #include "llvm/IR/GlobalValue.h"
-#include "llvm/IR/IROptionsOptInfos.h"
+#include "llvm/IR/IROptions.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/LLVMRemarkStreamer.h"
 #include "llvm/IR/LegacyPassManager.h"
@@ -38,7 +38,7 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/RuntimeLibcalls.h"
 #include "llvm/LTO/LTOBackend.h"
-#include "llvm/LTO/LTOOptionsOptInfos.h"
+#include "llvm/LTO/LTOOptions.h"
 #include "llvm/Linker/IRMover.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Object/IRObjectFile.h"
@@ -61,7 +61,7 @@
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/Transforms/IPO.h"
-#include "llvm/Transforms/IPO/IPOOptionsOptInfos.h"
+#include "llvm/Transforms/IPO/IPOOptions.h"
 #include "llvm/Transforms/IPO/MemProfContextDisambiguation.h"
 #include "llvm/Transforms/IPO/WholeProgramDevirt.h"
 #include "llvm/Transforms/Utils/FunctionImportUtils.h"
@@ -111,26 +111,25 @@ void LTO::emitRemark(OptimizationRemark &Remark) {
 }
 
 static bool getDumpThinCGSCCs(const Module &M) {
-  return clv2::getOptValIfSpecified<&clv2::LTOOptsReg,
-                                    &clv2::LTO_DumpThinCGSCCs>(
-      M.getContext().getOptionsContext(), false);
+  return M.getContext().getOptions<LTOOptions>().LTO_DumpThinCGSCCs;
 }
 
 static bool getEnableLTOInternalization(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::LTO_EnableInternalization>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<LTOOptions>().LTO_EnableInternalization;
 }
 
 // Overload for contexts without IR Module (e.g. summary-based
-// internalization). Reads from the Config's OptionsContext.
-static bool getEnableLTOInternalization(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::LTO_EnableInternalization>(Ctx);
+// internalization). No LLVMContext is reachable here (only a
+// clv2::OptionsContext, which is unrelated to the new-system per-context
+// storage LTOOptions relies on), so this reads the process-wide
+// LTOOptions::Current default directly instead, the same no-context
+// fallback used by e.g. CGDataOptions/BitcodeMemProfOptions.
+static bool getEnableLTOInternalization(const clv2::OptionsContext &) {
+  return LTOOptions::Current.LTO_EnableInternalization;
 }
 
 static bool getLTOKeepSymbolCopies(const Module &M) {
-  return clv2::getOptValIfSpecified<&clv2::LTOOptsReg,
-                                    &clv2::LTO_KeepSymbolCopies>(
-      M.getContext().getOptionsContext(), false);
+  return M.getContext().getOptions<LTOOptions>().LTO_KeepSymbolCopies;
 }
 
 // Computes a unique hash for the Module considering the current list of
@@ -463,7 +462,13 @@ static void thinLTOResolvePrevailingGUID(
     // but also its linkage is set correctly (to External) already.
     else if (!isa<AliasSummary>(S.get()) &&
              !GlobalInvolvedWithAlias.count(S.get()) &&
-             !clv2::getOptValOrDefault<&clv2::IPO_ForceImportAll>(*C.OptsCtx) &&
+             // No LLVMContext is reachable here (index-only ThinLTO summary
+             // path; only Config::OptsCtx, a legacy clv2::OptionsContext
+             // unrelated to IPOOptions' per-context storage, is available),
+             // so read the process-wide default directly, the same
+             // no-context fallback used by e.g. CGDataOptions/LTOOptions
+             // elsewhere in this file.
+             !IPOOptions::Current.IPO_ForceImportAll &&
              !S->wasPromoted())
       S->setLinkage(GlobalValue::AvailableExternallyLinkage);
 
@@ -632,11 +637,10 @@ void llvm::thinLTOInternalizeAndPromoteInIndex(
 // Requires a destructor for std::vector<InputModule>.
 InputFile::~InputFile() = default;
 
-Expected<std::unique_ptr<InputFile>>
-InputFile::create(MemoryBufferRef Object, const clv2::OptionsContext &Ctx) {
+Expected<std::unique_ptr<InputFile>> InputFile::create(MemoryBufferRef Object) {
   std::unique_ptr<InputFile> File(new InputFile);
 
-  Expected<IRSymtabFile> FOrErr = readIRSymtab(Object, Ctx);
+  Expected<IRSymtabFile> FOrErr = readIRSymtab(Object);
   if (!FOrErr)
     return FOrErr.takeError();
 
@@ -1365,7 +1369,7 @@ Error LTO::run(AddStreamFn AddStream, FileCache Cache) {
   // an internal option (which would still be needed for tests, however). For
   // example, if the library exported a symbol like __malloc_hot_cold the linker
   // could recognize that and set a flag in the lto::Config.
-  if (clv2::getOptValOrDefault<&clv2::IPO_SupportsHotColdNew>(*Conf.OptsCtx))
+  if (RegularLTO.Ctx.getOptions<IPOOptions>().IPO_SupportsHotColdNew)
     ThinLTO.CombinedIndex.setWithSupportsHotColdNew();
 
   Error Result = runRegularLTO(AddStream);
@@ -2148,7 +2152,7 @@ Error LTO::runThinLTO(AddStreamFn AddStream, FileCache Cache,
   // It is non-null only when whole-program visibility is enabled and
   // renaming is not forced. Otherwise, the default renaming behavior applies.
   bool AlwaysRename =
-      clv2::getOptValOrDefault<&IR_AlwaysRenamePromotedLocals>(*Conf.OptsCtx);
+      RegularLTO.Ctx.getOptions<IROptions>().IR_AlwaysRenamePromotedLocals;
   DenseSet<StringRef> *ExternallyVisibleSymbolNamesPtr =
       (WholeProgramVisibilityEnabledInLTO && !AlwaysRename)
           ? &ExternallyVisibleSymbolNames
@@ -2160,9 +2164,8 @@ Error LTO::runThinLTO(AddStreamFn AddStream, FileCache Cache,
   auto isPrevailing = [&](GlobalValue::GUID GUID, const GlobalValueSummary *S) {
     return ThinLTO.isPrevailingModuleForGUID(GUID, S->modulePath());
   };
-  if (clv2::getOptValOr<&clv2::IPOOptsReg,
-                        &clv2::IPO_EnableMemProfContextDisambiguation>(
-          *Conf.OptsCtx, false)) {
+  if (RegularLTO.Ctx.getOptions<IPOOptions>()
+          .IPO_EnableMemProfContextDisambiguation) {
     MemProfContextDisambiguation ContextDisambiguation;
     ContextDisambiguation.run(
         ThinLTO.CombinedIndex, isPrevailing, RegularLTO.Ctx,
@@ -2302,8 +2305,10 @@ Error LTO::runThinLTO(AddStreamFn AddStream, FileCache Cache,
     return BackendProcess->wait();
   };
 
-  if (!clv2::getOptValOr<&CGDataOptsReg, &CGD_CodeGenDataThinLTOTwoRounds>(
-          *Conf.OptsCtx, false)) {
+  // No LLVMContext is reachable here (only Conf.OptsCtx, an unrelated legacy
+  // clv2::OptionsContext), so read the process-wide default directly (same
+  // idiom as WebAssemblyOptions::Current elsewhere).
+  if (!CGDataOptions::Current.CGD_CodeGenDataThinLTOTwoRounds) {
     std::unique_ptr<ThinBackendProc> BackendProc =
         ThinLTO.Backend(Conf, ThinLTO.CombinedIndex, ModuleToDefinedGVSummaries,
                         AddStream, Cache, BitcodeLibFuncs);

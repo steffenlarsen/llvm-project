@@ -13,10 +13,9 @@
 
 #include "llvm/Transforms/Utils/FunctionImportUtils.h"
 #include "llvm/IR/Function.h"
-#include "llvm/IR/IROptionsOptInfos.h"
-#include "llvm/Support/OptionsContext.h"
+#include "llvm/IR/IROptions.h"
 #include "llvm/Support/TimeProfiler.h"
-#include "llvm/Transforms/Utils/UtilsOptionsOptInfos.h"
+#include "llvm/Transforms/Utils/UtilsOptions.h"
 
 using namespace llvm;
 
@@ -25,17 +24,14 @@ namespace llvm {
 /// Uses the "source_filename" instead of a Module hash ID for the suffix of
 /// promoted locals during LTO. NOTE: This requires that the source filename
 /// has a unique name / path to avoid name collisions.
-std::vector<GlobalValue::GUID> MoveSymbolGUID;
 static bool getUseSourceFilenameForPromotedLocals(const Module &M) {
-  return clv2::getOptValIfSpecified<
-      &clv2::TransformUtilsOptsReg,
-      &clv2::TU_UseSourceFilenameForPromotedLocals>(
-      M.getContext().getOptionsContext(), false);
+  return M.getContext()
+      .getOptions<UtilsOptions>()
+      .TU_UseSourceFilenameForPromotedLocals;
 }
 
-static std::vector<GlobalValue::GUID> getMoveSymbolGUID(const Module &M) {
-  return clv2::getOptValOr<&clv2::TU_MoveSymbolGUID>(
-      M.getContext().getOptionsContext(), MoveSymbolGUID);
+static const std::vector<uint64_t> &getMoveSymbolGUID(const Module &M) {
+  return M.getContext().getOptions<UtilsOptions>().TU_MoveSymbolGUID;
 }
 
 } // end namespace llvm
@@ -149,10 +145,10 @@ FunctionImportGlobalProcessing::getPromotedName(const GlobalValue *SGV) {
   if (!M.empty() && getUseSourceFilenameForPromotedLocals(M) &&
       !SGV->getParent()->getSourceFileName().empty()) {
     SmallString<256> Suffix(SGV->getParent()->getSourceFileName());
-    std::replace_if(std::begin(Suffix), std::end(Suffix),
-                    [&](char ch) { return !isAlnum(ch); }, '_');
-    return ModuleSummaryIndex::getGlobalNameForLocal(
-        SGV->getName(), Suffix);
+    std::replace_if(
+        std::begin(Suffix), std::end(Suffix),
+        [&](char ch) { return !isAlnum(ch); }, '_');
+    return ModuleSummaryIndex::getGlobalNameForLocal(SGV->getName(), Suffix);
   }
 
   return ModuleSummaryIndex::getGlobalNameForLocal(
@@ -318,10 +314,10 @@ void FunctionImportGlobalProcessing::processGlobalForThinLTO(GlobalValue &GV) {
   if (GV.hasLocalLinkage() && shouldPromoteLocalToGlobal(&GV, Summary)) {
     // Save the original name string before we rename GV below.
     auto Name = GV.getName().str();
-    bool AlwaysRename = true;
-    if (auto *O = clv2::getView<&clv2::IROptsReg>(
-            GV.getParent()->getContext().getOptionsContext()))
-      AlwaysRename = O->get<&clv2::IR_AlwaysRenamePromotedLocals>();
+    bool AlwaysRename = GV.getParent()
+                            ->getContext()
+                            .getOptions<IROptions>()
+                            .IR_AlwaysRenamePromotedLocals;
     if (AlwaysRename || !Summary || !Summary->noRenameOnPromotion())
       GV.setName(getPromotedName(&GV));
 

@@ -14,8 +14,6 @@ tablegen(LLVM XCoreGenSubtargetInfo.inc -gen-subtarget)
 add_public_tablegen_target(XCoreCommonTableGen)
 
 add_llvm_target(XCoreCodeGen
-  XCoreOptionsGetters.cpp
-  XCoreOptionsRegistration.cpp
   XCoreAsmPrinter.cpp
   XCoreFrameLowering.cpp
   XCoreInstrInfo.cpp
@@ -48,6 +46,9 @@ add_llvm_target(XCoreCodeGen
 
   ADD_TO_COMPONENT
   XCore
+
+  DEPENDS
+  XCoreOptParserTableGen
   )
 
 add_subdirectory(Disassembler)

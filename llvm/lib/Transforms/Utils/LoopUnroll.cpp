@@ -55,7 +55,6 @@
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/GenericDomTree.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Cloning.h"
@@ -64,7 +63,7 @@
 #include "llvm/Transforms/Utils/LoopUtils.h"
 #include "llvm/Transforms/Utils/SimplifyIndVar.h"
 #include "llvm/Transforms/Utils/UnrollLoop.h"
-#include "llvm/Transforms/Utils/UtilsOptionsOptInfos.h"
+#include "llvm/Transforms/Utils/UtilsOptions.h"
 #include "llvm/Transforms/Utils/ValueMapper.h"
 #include <assert.h>
 #include <cmath>
@@ -87,21 +86,21 @@ STATISTIC(NumUnrolledNotLatch, "Number of loops unrolled without a conditional "
                                "latch (completely or otherwise)");
 
 static bool getUnrollRuntimeEpilog(const Function &F) {
-  return clv2::getOptValIfSpecified<&clv2::TransformUtilsOptsReg,
-                                    &clv2::TU_UnrollRuntimeEpilog>(
-      F.getContext().getOptionsContext(), false);
+  // Dead fallback: only called when isUnrollRuntimeEpilogSpecified() is true.
+  return F.getContext()
+      .getOptions<UtilsOptions>()
+      .TU_UnrollRuntimeEpilog.value_or(false);
 }
 static bool isUnrollRuntimeEpilogSpecified(const Function &F) {
-  return clv2::wasOptSpecified<&clv2::TransformUtilsOptsReg,
-                               &clv2::TU_UnrollRuntimeEpilog>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<UtilsOptions>()
+      .TU_UnrollRuntimeEpilog.has_value();
 }
 
 static bool getUnrollVerifyDomtree(const Function &F) {
-  if (auto *O = clv2::getView<&clv2::TransformUtilsOptsReg>(
-          F.getContext().getOptionsContext()))
-    if (O->specified<&clv2::TU_UnrollVerifyDomtree>())
-      return O->get<&clv2::TU_UnrollVerifyDomtree>();
+  if (std::optional<bool> V =
+          F.getContext().getOptions<UtilsOptions>().TU_UnrollVerifyDomtree)
+    return *V;
 #ifdef EXPENSIVE_CHECKS
   return true;
 #else
@@ -110,15 +109,13 @@ static bool getUnrollVerifyDomtree(const Function &F) {
 }
 
 static bool getUnrollUniformWeights(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::TU_UnrollUniformWeights>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<UtilsOptions>().TU_UnrollUniformWeights;
 }
 
 static bool getUnrollVerifyLoopInfo(const Function &F) {
-  if (auto *O = clv2::getView<&clv2::TransformUtilsOptsReg>(
-          F.getContext().getOptionsContext()))
-    if (O->specified<&clv2::TU_UnrollVerifyLoopInfo>())
-      return O->get<&clv2::TU_UnrollVerifyLoopInfo>();
+  if (std::optional<bool> V =
+          F.getContext().getOptions<UtilsOptions>().TU_UnrollVerifyLoopInfo)
+    return *V;
 #ifdef EXPENSIVE_CHECKS
   return true;
 #else
@@ -127,14 +124,16 @@ static bool getUnrollVerifyLoopInfo(const Function &F) {
 }
 
 static bool getUnrollAddParallelReductions(const Function &F) {
-  return clv2::getOptValIfSpecified<&clv2::TransformUtilsOptsReg,
-                                    &clv2::TU_UnrollAddParallelReductions>(
-      F.getContext().getOptionsContext(), false);
+  // Dead fallback: only called when isUnrollAddParallelReductionsSpecified()
+  // is true.
+  return F.getContext()
+      .getOptions<UtilsOptions>()
+      .TU_UnrollAddParallelReductions.value_or(false);
 }
 static bool isUnrollAddParallelReductionsSpecified(const Function &F) {
-  return clv2::wasOptSpecified<&clv2::TransformUtilsOptsReg,
-                               &clv2::TU_UnrollAddParallelReductions>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<UtilsOptions>()
+      .TU_UnrollAddParallelReductions.has_value();
 }
 
 /// Check if unrolling created a situation where we need to insert phi nodes to
@@ -171,7 +170,7 @@ static bool needToInsertPhisForLCSSA(Loop *L,
 /// and adds a mapping from the original loop to the new loop to NewLoops.
 /// Returns nullptr if no new loop was created and a pointer to the
 /// original loop OriginalBB was part of otherwise.
-const Loop* llvm::addClonedBlockToLoopInfo(BasicBlock *OriginalBB,
+const Loop *llvm::addClonedBlockToLoopInfo(BasicBlock *OriginalBB,
                                            BasicBlock *ClonedBB, LoopInfo *LI,
                                            NewLoopsMap &NewLoops) {
   // Figure out which loop New is in.
@@ -1049,10 +1048,10 @@ llvm::UnrollLoop(Loop *L, UnrollLoopOptions ULO, LoopInfo *LI,
   // it in-place after the transformation, or entirely rebuild LCSSA. TODO: For
   // now we just recompute LCSSA for the outer loop, but it should be possible
   // to fix it in-place.
-  bool NeedToFixLCSSA =
-      PreserveLCSSA && CompletelyUnroll &&
-      any_of(ExitBlocks,
-             [](const BasicBlock *BB) { return isa<PHINode>(BB->begin()); });
+  bool NeedToFixLCSSA = PreserveLCSSA && CompletelyUnroll &&
+                        any_of(ExitBlocks, [](const BasicBlock *BB) {
+                          return isa<PHINode>(BB->begin());
+                        });
 
   // The current loop unroll pass can unroll loops that have
   // (1) single latch; and
@@ -1156,7 +1155,7 @@ llvm::UnrollLoop(Loop *L, UnrollLoopOptions ULO, LoopInfo *LI,
   // For the first iteration of the loop, we should use the precloned values for
   // PHI nodes.  Insert associations now.
   ValueToValueMapTy LastValueMap;
-  std::vector<PHINode*> OrigPHINode;
+  std::vector<PHINode *> OrigPHINode;
   for (BasicBlock::iterator I = Header->begin(); isa<PHINode>(I); ++I) {
     OrigPHINode.push_back(cast<PHINode>(I));
   }
@@ -1211,7 +1210,7 @@ llvm::UnrollLoop(Loop *L, UnrollLoopOptions ULO, LoopInfo *LI,
   LoopBlocksDFS::RPOIterator BlockBegin = DFS.beginRPO();
   LoopBlocksDFS::RPOIterator BlockEnd = DFS.endRPO();
 
-  std::vector<BasicBlock*> UnrolledLoopBlocks = L->getBlocks();
+  std::vector<BasicBlock *> UnrolledLoopBlocks = L->getBlocks();
 
   // Loop Unrolling might create new loops. While we do preserve LoopInfo, we
   // might break loop-simplified form for these loops (as they, e.g., would
@@ -1457,7 +1456,7 @@ llvm::UnrollLoop(Loop *L, UnrollLoopOptions ULO, LoopInfo *LI,
     auto *Term = cast<CondBrInst>(Src->getTerminator());
     const unsigned Idx = ExitOnTrue ^ WillExit;
     BasicBlock *Dest = Term->getSuccessor(Idx);
-    BasicBlock *DeadSucc = Term->getSuccessor(1-Idx);
+    BasicBlock *DeadSucc = Term->getSuccessor(1 - Idx);
 
     // Remove predecessors from all non-Dest successors.
     DeadSucc->removePredecessor(Src, /* KeepOneInputPHIs */ true);
@@ -1745,7 +1744,8 @@ llvm::UnrollLoop(Loop *L, UnrollLoopOptions ULO, LoopInfo *LI,
   // TODO: For now we just recompute LCSSA for the outer loop in this case, but
   // it should be possible to fix it in-place.
   if (PreserveLCSSA && OuterL && CompletelyUnroll && !NeedToFixLCSSA)
-    NeedToFixLCSSA |= ::needToInsertPhisForLCSSA(OuterL, UnrolledLoopBlocks, LI);
+    NeedToFixLCSSA |=
+        ::needToInsertPhisForLCSSA(OuterL, UnrolledLoopBlocks, LI);
 
   // Make sure that loop-simplify form is preserved. We want to simplify
   // at least one layer outside of the loop that was unrolled so that any

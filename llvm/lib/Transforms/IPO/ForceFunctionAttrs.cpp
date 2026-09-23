@@ -12,39 +12,23 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/LineIterator.h"
 #include "llvm/Support/MemoryBuffer.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Transforms/IPO/IPOOptionsOptInfos.h"
+#include "llvm/Transforms/IPO/IPOOptions.h"
 using namespace llvm;
 
 #define DEBUG_TYPE "forceattrs"
 
 static const std::vector<std::string> &getForceAttributes(const Module &M) {
-  if (auto *O =
-          clv2::getView<&clv2::IPOOptsReg>(M.getContext().getOptionsContext()))
-    if (O->specified<&clv2::IPO_ForceAttributes>())
-      return O->get<&clv2::IPO_ForceAttributes>();
-  static const std::vector<std::string> Default;
-  return Default;
+  return M.getContext().getOptions<IPOOptions>().IPO_ForceAttributes;
 }
 
 static const std::vector<std::string> &
 getForceRemoveAttributes(const Module &M) {
-  if (auto *O =
-          clv2::getView<&clv2::IPOOptsReg>(M.getContext().getOptionsContext()))
-    if (O->specified<&clv2::IPO_ForceRemoveAttributes>())
-      return O->get<&clv2::IPO_ForceRemoveAttributes>();
-  static const std::vector<std::string> Default;
-  return Default;
+  return M.getContext().getOptions<IPOOptions>().IPO_ForceRemoveAttributes;
 }
 
 static const std::string &getCSVFilePath(const Module &M) {
-  if (auto *O =
-          clv2::getView<&clv2::IPOOptsReg>(M.getContext().getOptionsContext()))
-    if (O->specified<&clv2::IPO_CSVFilePath>())
-      return O->get<&clv2::IPO_CSVFilePath>();
-  static const std::string Default;
-  return Default;
+  return M.getContext().getOptions<IPOOptions>().IPO_CSVFilePath;
 }
 
 static bool hasConflictingFnAttr(Attribute::AttrKind Kind, Function &F) {

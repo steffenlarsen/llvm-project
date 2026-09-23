@@ -11,7 +11,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Analysis/MemoryProfileInfo.h"
-#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
+#include "llvm/Analysis/AnalysisOptions.h"
 #include "llvm/Analysis/OptimizationRemarkEmitter.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
@@ -19,7 +19,6 @@
 #include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Format.h"
-#include "llvm/Support/OptionsContext.h"
 
 using namespace llvm;
 using namespace llvm::memprof;
@@ -29,60 +28,59 @@ using namespace llvm::memprof;
 namespace llvm {} // end namespace llvm
 
 static bool getMemProfReportHintedSizes(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AN_MemProfReportHintedSizes>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<AnalysisOptions>()
+      .AN_MemProfReportHintedSizes;
 }
 
 static bool getMemProfUseAmbiguousAttributes(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AN_MemProfUseAmbiguousAttributes>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<AnalysisOptions>()
+      .AN_MemProfUseAmbiguousAttributes;
 }
 
 // No-arg getter overloads for context-free utility functions.
-// These check clv2::getView when Function context is available, otherwise fall
-// back to clv2::getView<&clv2::AnalysisOptsReg>() for the global override, then
-// the raw global.
-static bool getMemProfReportHintedSizes(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::AN_MemProfReportHintedSizes>(Ctx);
+static bool getMemProfReportHintedSizes(const AnalysisOptions &Opts) {
+  return Opts.AN_MemProfReportHintedSizes;
 }
 
-static bool getMemProfKeepAllNotColdContexts(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::AN_MemProfKeepAllNotColdContexts>(Ctx);
+static bool getMemProfKeepAllNotColdContexts(const AnalysisOptions &Opts) {
+  return Opts.AN_MemProfKeepAllNotColdContexts;
 }
 
-static unsigned getMinClonedColdBytePercent(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::AN_MinClonedColdBytePercent>(Ctx);
+static unsigned getMinClonedColdBytePercent(const AnalysisOptions &Opts) {
+  return Opts.AN_MinClonedColdBytePercent;
 }
 
-static unsigned getMinCallsiteColdBytePercent(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::AN_MinCallsiteColdBytePercent>(Ctx);
+static unsigned getMinCallsiteColdBytePercent(const AnalysisOptions &Opts) {
+  return Opts.AN_MinCallsiteColdBytePercent;
 }
 
-static unsigned getMinPercentMaxColdSize(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::AN_MinPercentMaxColdSize>(Ctx);
+static unsigned getMinPercentMaxColdSize(const AnalysisOptions &Opts) {
+  return Opts.AN_MinPercentMaxColdSize;
 }
 
-static bool getMemProfKeepContextSizeInfo(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::AN_MemProfKeepContextSizeInfo>(Ctx);
+static bool getMemProfKeepContextSizeInfo(const AnalysisOptions &Opts) {
+  return Opts.AN_MemProfKeepContextSizeInfo;
 }
 
 bool llvm::memprof::metadataIncludesAllContextSizeInfo(
-    const clv2::OptionsContext &Ctx) {
-  return getMemProfReportHintedSizes(Ctx) ||
-         getMemProfKeepContextSizeInfo(Ctx) ||
-         getMinClonedColdBytePercent(Ctx) < 100;
+    const AnalysisOptions &Opts) {
+  return getMemProfReportHintedSizes(Opts) ||
+         getMemProfKeepContextSizeInfo(Opts) ||
+         getMinClonedColdBytePercent(Opts) < 100;
 }
 
 bool llvm::memprof::metadataMayIncludeContextSizeInfo(
-    const clv2::OptionsContext &Ctx) {
-  return metadataIncludesAllContextSizeInfo(Ctx) ||
-         getMinPercentMaxColdSize(Ctx) < 100;
+    const AnalysisOptions &Opts) {
+  return metadataIncludesAllContextSizeInfo(Opts) ||
+         getMinPercentMaxColdSize(Opts) < 100;
 }
 
 bool llvm::memprof::recordContextSizeInfoForAnalysis(
-    const clv2::OptionsContext &Ctx) {
-  return metadataMayIncludeContextSizeInfo(Ctx) ||
-         getMinCallsiteColdBytePercent(Ctx) < 100;
+    const AnalysisOptions &Opts) {
+  return metadataMayIncludeContextSizeInfo(Opts) ||
+         getMinCallsiteColdBytePercent(Opts) < 100;
 }
 
 MDNode *llvm::memprof::buildCallstackMetadata(ArrayRef<uint64_t> CallStack,
@@ -249,7 +247,8 @@ static MDNode *createMIBNode(LLVMContext &Ctx, ArrayRef<uint64_t> MIBCallStack,
     // handle a user-provided percent larger than 100. However, we may not have
     // this information if we built the Trie from existing MD_memprof metadata.
     assert(BuiltFromExistingMetadata ||
-           getMinCallsiteColdBytePercent(Ctx.getOptionsContext()) >= 100);
+           getMinCallsiteColdBytePercent(Ctx.getOptions<AnalysisOptions>()) >=
+               100);
     return MDNode::get(Ctx, MIBPayload);
   }
 
@@ -267,19 +266,20 @@ static MDNode *createMIBNode(LLVMContext &Ctx, ArrayRef<uint64_t> MIBCallStack,
       // context size info in existence on the metadata should be propagated.
       if (BuiltFromExistingMetadata ||
           (MaxColdSize > 0 &&
-           getMinPercentMaxColdSize(Ctx.getOptionsContext()) < 100 &&
+           getMinPercentMaxColdSize(Ctx.getOptions<AnalysisOptions>()) < 100 &&
            TotalSize * 100 >=
-               MaxColdSize * getMinPercentMaxColdSize(Ctx.getOptionsContext())))
+               MaxColdSize *
+                   getMinPercentMaxColdSize(Ctx.getOptions<AnalysisOptions>())))
         LargeColdContext = true;
     }
     // Only add the context size info as metadata if we need it in the thin
     // link (currently if reporting of hinted sizes is enabled, we have
     // specified a threshold for marking allocations cold after cloning, or we
     // have identified this as a large cold context of interest above).
-    auto &MOptsCtx = Ctx.getOptionsContext();
-    if (getMemProfReportHintedSizes(MOptsCtx) ||
-        getMemProfKeepContextSizeInfo(MOptsCtx) ||
-        getMinClonedColdBytePercent(MOptsCtx) < 100 || LargeColdContext) {
+    const AnalysisOptions &MOpts = Ctx.getOptions<AnalysisOptions>();
+    if (getMemProfReportHintedSizes(MOpts) ||
+        getMemProfKeepContextSizeInfo(MOpts) ||
+        getMinClonedColdBytePercent(MOpts) < 100 || LargeColdContext) {
       auto *FullStackIdMD = ValueAsMetadata::get(
           ConstantInt::get(Type::getInt64Ty(Ctx), FullStackId));
       auto *TotalSizeMD = ValueAsMetadata::get(
@@ -326,7 +326,7 @@ static void saveFilteredNewMIBNodes(std::vector<Metadata *> &NewMIBNodes,
                                     unsigned CallerContextLength,
                                     uint64_t TotalBytes, uint64_t ColdBytes,
                                     bool BuiltFromExistingMetadata,
-                                    const clv2::OptionsContext &OptsCtx) {
+                                    const AnalysisOptions &OptsCtx) {
   const bool MostlyCold =
       // If we have built the Trie from existing MD_memprof metadata, we may or
       // may not have context size information (in which case ColdBytes and
@@ -498,7 +498,8 @@ bool CallStackTrie::buildMIBNodes(CallStackTrieNode *Node, LLVMContext &Ctx,
     // which is the current stack length plus 1.
     saveFilteredNewMIBNodes(NewMIBNodes, MIBNodes, MIBCallStack.size() + 1,
                             CallerTotalBytes, CallerColdBytes,
-                            BuiltFromExistingMetadata, Ctx.getOptionsContext());
+                            BuiltFromExistingMetadata,
+                            Ctx.getOptions<AnalysisOptions>());
     TotalBytes += CallerTotalBytes;
     ColdBytes += CallerColdBytes;
 

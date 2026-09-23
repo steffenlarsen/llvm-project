@@ -29,8 +29,7 @@
 #include "llvm/Pass.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/JSON.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Transforms/Utils/UtilsOptionsOptInfos.h"
+#include "llvm/Transforms/Utils/UtilsOptions.h"
 #include <cmath>
 #include <optional>
 #if LLVM_ENABLE_DEBUGLOC_TRACKING_ORIGIN
@@ -45,34 +44,23 @@ using namespace llvm;
 
 namespace {
 
-using Level = clv2::DebugifyLevel;
+using Level = DebugifyLevel;
 
 static bool getApplyAtomGroups(const Function &F) {
-  return clv2::getOptValOr<&clv2::TransformUtilsOptsReg,
-                           &clv2::TU_ApplyAtomGroups>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext().getOptions<UtilsOptions>().TU_ApplyAtomGroups;
 }
 
 static uint64_t getDebugifyFunctionsLimit(const Function &F) {
-  return clv2::getOptValIfSpecified<&clv2::TransformUtilsOptsReg,
-                                    &clv2::TU_DebugifyFunctionsLimit>(
-      F.getContext().getOptionsContext(), UINT_MAX);
+  return F.getContext().getOptions<UtilsOptions>().TU_DebugifyFunctionsLimit;
 }
 
 static Level getDebugifyLevel(const Function &F) {
-  return clv2::getOptValIfSpecified<&clv2::TransformUtilsOptsReg,
-                                    &clv2::TU_DebugifyLevel>(
-      F.getContext().getOptionsContext(), Level::LocationsAndVariables);
-}
-
-raw_ostream &dbg(const clv2::OptionsContext &Ctx) {
-  bool Q = clv2::getOptValOr<&clv2::TransformUtilsOptsReg, &clv2::TU_Quiet>(
-      Ctx, false);
-  return Q ? nulls() : errs();
+  return F.getContext().getOptions<UtilsOptions>().TU_DebugifyLevel;
 }
 
 raw_ostream &dbg(const Module &M) {
-  return dbg(M.getContext().getOptionsContext());
+  bool Q = M.getContext().getOptions<UtilsOptions>().TU_Quiet;
+  return Q ? nulls() : errs();
 }
 
 raw_ostream &dbg() { return errs(); }
@@ -571,9 +559,9 @@ static bool checkVars(const Module &M, const DebugVarMap &DIVarsBefore,
       else
         dbg(M) << "WARNING: " << NameOfWrappedPass
                << " drops dbg.value()/dbg.declare() for " << V.first->getName()
-               << " from "
-               << "function " << V.first->getScope()->getSubprogram()->getName()
-               << " (file " << FileNameFromCU << ")\n";
+               << " from " << "function "
+               << V.first->getScope()->getSubprogram()->getName() << " (file "
+               << FileNameFromCU << ")\n";
       Preserved = false;
     }
   }
@@ -929,12 +917,12 @@ struct CheckDebugifyModulePass : public ModulePass {
     bool Result;
     if (Mode == DebugifyMode::SyntheticDebugInfo)
       Result = checkDebugifyMetadata(M, M.functions(), NameOfWrappedPass,
-                                   "CheckModuleDebugify", Strip, StatsMap);
+                                     "CheckModuleDebugify", Strip, StatsMap);
     else
       Result = checkDebugInfoMetadata(
-        M, M.functions(), *DebugInfoBeforePass,
-        "CheckModuleDebugify (original debuginfo)", NameOfWrappedPass,
-        OrigDIVerifyBugsReportFilePath);
+          M, M.functions(), *DebugInfoBeforePass,
+          "CheckModuleDebugify (original debuginfo)", NameOfWrappedPass,
+          OrigDIVerifyBugsReportFilePath);
 
     return Result;
   }
@@ -947,8 +935,8 @@ struct CheckDebugifyModulePass : public ModulePass {
       StringRef OrigDIVerifyBugsReportFilePath = "")
       : ModulePass(ID), NameOfWrappedPass(NameOfWrappedPass),
         OrigDIVerifyBugsReportFilePath(OrigDIVerifyBugsReportFilePath),
-        StatsMap(StatsMap), DebugInfoBeforePass(DebugInfoBeforePass), Mode(Mode),
-        Strip(Strip) {}
+        StatsMap(StatsMap), DebugInfoBeforePass(DebugInfoBeforePass),
+        Mode(Mode), Strip(Strip) {}
 
   void getAnalysisUsage(AnalysisUsage &AU) const override {
     AU.setPreservesAll();
@@ -974,13 +962,13 @@ struct CheckDebugifyFunctionPass : public FunctionPass {
     bool Result;
     if (Mode == DebugifyMode::SyntheticDebugInfo)
       Result = checkDebugifyMetadata(M, make_range(FuncIt, std::next(FuncIt)),
-                                   NameOfWrappedPass, "CheckFunctionDebugify",
-                                   Strip, StatsMap);
+                                     NameOfWrappedPass, "CheckFunctionDebugify",
+                                     Strip, StatsMap);
     else
       Result = checkDebugInfoMetadata(
-        M, make_range(FuncIt, std::next(FuncIt)), *DebugInfoBeforePass,
-        "CheckFunctionDebugify (original debuginfo)", NameOfWrappedPass,
-        OrigDIVerifyBugsReportFilePath);
+          M, make_range(FuncIt, std::next(FuncIt)), *DebugInfoBeforePass,
+          "CheckFunctionDebugify (original debuginfo)", NameOfWrappedPass,
+          OrigDIVerifyBugsReportFilePath);
 
     return Result;
   }
@@ -993,8 +981,8 @@ struct CheckDebugifyFunctionPass : public FunctionPass {
       StringRef OrigDIVerifyBugsReportFilePath = "")
       : FunctionPass(ID), NameOfWrappedPass(NameOfWrappedPass),
         OrigDIVerifyBugsReportFilePath(OrigDIVerifyBugsReportFilePath),
-        StatsMap(StatsMap), DebugInfoBeforePass(DebugInfoBeforePass), Mode(Mode),
-        Strip(Strip) {}
+        StatsMap(StatsMap), DebugInfoBeforePass(DebugInfoBeforePass),
+        Mode(Mode), Strip(Strip) {}
 
   void getAnalysisUsage(AnalysisUsage &AU) const override {
     AU.setPreservesAll();
@@ -1067,7 +1055,7 @@ PreservedAnalyses NewPMDebugifyPass::run(Module &M, ModuleAnalysisManager &AM) {
   } else {
     collectDebugInfoMetadata(M, M.functions(), *DebugInfoBeforePass,
                              "ModuleDebugify (original debuginfo)",
-                              NameOfWrappedPass);
+                             NameOfWrappedPass);
   }
 
   PreservedAnalyses PA;
@@ -1105,12 +1093,11 @@ PreservedAnalyses NewPMCheckDebugifyPass::run(Module &M,
                                               ModuleAnalysisManager &) {
   if (Mode == DebugifyMode::SyntheticDebugInfo)
     checkDebugifyMetadata(M, M.functions(), NameOfWrappedPass,
-                                   "CheckModuleDebugify", Strip, StatsMap);
+                          "CheckModuleDebugify", Strip, StatsMap);
   else
-    checkDebugInfoMetadata(
-      M, M.functions(), *DebugInfoBeforePass,
-      "CheckModuleDebugify (original debuginfo)", NameOfWrappedPass,
-      OrigDIVerifyBugsReportFilePath);
+    checkDebugInfoMetadata(M, M.functions(), *DebugInfoBeforePass,
+                           "CheckModuleDebugify (original debuginfo)",
+                           NameOfWrappedPass, OrigDIVerifyBugsReportFilePath);
 
   return PreservedAnalyses::all();
 }
@@ -1124,24 +1111,24 @@ static bool isIgnoredPass(StringRef PassID) {
 
 void DebugifyEachInstrumentation::registerCallbacks(
     PassInstrumentationCallbacks &PIC, ModuleAnalysisManager &MAM) {
-  PIC.registerBeforeNonSkippedPassCallback([this, &MAM](StringRef P,
-                                                        IRUnitRef IR) {
-    if (isIgnoredPass(P))
-      return;
-    PreservedAnalyses PA;
-    PA.preserveSet<CFGAnalyses>();
-    if (const auto *CF = dyn_cast<Function>(IR)) {
-      Function &F = *const_cast<Function *>(CF);
-      applyDebugify(F, Mode, DebugInfoBeforePass, P);
-      MAM.getResult<FunctionAnalysisManagerModuleProxy>(*F.getParent())
-          .getManager()
-          .invalidate(F, PA);
-    } else if (const auto *CM = dyn_cast<Module>(IR)) {
-      Module &M = *const_cast<Module *>(CM);
-      applyDebugify(M, Mode, DebugInfoBeforePass, P);
-      MAM.invalidate(M, PA);
-    }
-  });
+  PIC.registerBeforeNonSkippedPassCallback(
+      [this, &MAM](StringRef P, IRUnitRef IR) {
+        if (isIgnoredPass(P))
+          return;
+        PreservedAnalyses PA;
+        PA.preserveSet<CFGAnalyses>();
+        if (const auto *CF = dyn_cast<Function>(IR)) {
+          Function &F = *const_cast<Function *>(CF);
+          applyDebugify(F, Mode, DebugInfoBeforePass, P);
+          MAM.getResult<FunctionAnalysisManagerModuleProxy>(*F.getParent())
+              .getManager()
+              .invalidate(F, PA);
+        } else if (const auto *CM = dyn_cast<Module>(IR)) {
+          Module &M = *const_cast<Module *>(CM);
+          applyDebugify(M, Mode, DebugInfoBeforePass, P);
+          MAM.invalidate(M, PA);
+        }
+      });
   PIC.registerAfterPassCallback(
       [this, &MAM](StringRef P, IRUnitRef IR, const PreservedAnalyses &PassPA) {
         if (isIgnoredPass(P))

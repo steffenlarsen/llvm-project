@@ -35,8 +35,7 @@
 #include "llvm/InitializePasses.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/Compiler.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/RISCV/RISCVOptionsOptInfos.h"
+#include "llvm/Target/RISCV/RISCVOptions.h"
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/Transforms/IPO.h"
 #include "llvm/Transforms/Scalar.h"
@@ -122,9 +121,7 @@ RISCVTargetMachine::RISCVTargetMachine(const Target &T, const Triple &TT,
   if (TT.isOSFuchsia() && !TT.isArch64Bit())
     report_fatal_error("Fuchsia is only supported for 64-bit");
 
-  setCFIFixup(
-      !clv2::getOptValOr<&clv2::RISCVOptsReg, &clv2::RV_EnableCFIInstrInserter>(
-          getOptionsContext(), false));
+  setCFIFixup(!RISCVOptions::Current.RV_EnableCFIInstrInserter);
 }
 
 const RISCVSubtarget *
@@ -140,21 +137,20 @@ RISCVTargetMachine::getSubtargetImpl(const Function &F) const {
   std::string FS =
       FSAttr.isValid() ? FSAttr.getValueAsString().str() : TargetFS;
 
-  unsigned RVVBitsMin = clv2::getOptValOrDefault<&clv2::RV_VVectorBitsMin>(
-      F.getContext().getOptionsContext());
-  unsigned RVVBitsMax =
-      clv2::getOptValOr<&clv2::RISCVOptsReg, &clv2::RV_VVectorBitsMax>(
-          F.getContext().getOptionsContext(), 0);
+  const RISCVOptions &Opts = F.getContext().getOptions<RISCVOptions>();
+  // RV_VVectorBitsMin is std::optional<int>; its "unset" default is folded to
+  // -1U below so downstream code can keep testing `RVVBitsMin != -1U`.
+  unsigned RVVBitsMin = Opts.RV_VVectorBitsMin
+                            ? static_cast<unsigned>(*Opts.RV_VVectorBitsMin)
+                            : -1U;
+  unsigned RVVBitsMax = Opts.RV_VVectorBitsMax.value_or(0);
 
   Attribute VScaleRangeAttr = F.getFnAttribute(Attribute::VScaleRange);
   if (VScaleRangeAttr.isValid()) {
-    if (!clv2::wasOptSpecified<&clv2::RISCVOptsReg, &clv2::RV_VVectorBitsMin>(
-            F.getContext().getOptionsContext()))
+    if (!Opts.RV_VVectorBitsMin)
       RVVBitsMin = VScaleRangeAttr.getVScaleRangeMin() * RISCV::RVVBitsPerBlock;
     std::optional<unsigned> VScaleMax = VScaleRangeAttr.getVScaleRangeMax();
-    if (VScaleMax.has_value() &&
-        !clv2::wasOptSpecified<&clv2::RISCVOptsReg, &clv2::RV_VVectorBitsMax>(
-            F.getContext().getOptionsContext()))
+    if (VScaleMax.has_value() && !Opts.RV_VVectorBitsMax)
       RVVBitsMax = *VScaleMax * RISCV::RVVBitsPerBlock;
   }
 
@@ -226,8 +222,8 @@ RISCVTargetMachine::createMachineScheduler(MachineSchedContext *C) const {
   // Add MacroFusion mutation first with a higher priority than later clustering
   const auto &MacroFusions = ST.getMacroFusions();
   if (!MacroFusions.empty())
-    DAG->addMutation(
-        createMacroFusionDAGMutation(getOptionsContext(), MacroFusions));
+    DAG->addMutation(createMacroFusionDAGMutation(
+        C->MF->getFunction().getContext(), MacroFusions));
 
   if (ST.enableMISchedLoadClustering())
     DAG->addMutation(createLoadClusterDAGMutation(
@@ -237,9 +233,10 @@ RISCVTargetMachine::createMachineScheduler(MachineSchedContext *C) const {
     DAG->addMutation(createStoreClusterDAGMutation(
         DAG->TII, DAG->TRI, /*ReorderWhileClustering=*/true));
 
-  if (!clv2::getOptValOr<&clv2::RISCVOptsReg,
-                         &clv2::RV_DisableVectorMaskMutation>(
-          getOptionsContext(), false) &&
+  if (!C->MF->getFunction()
+           .getContext()
+           .getOptions<RISCVOptions>()
+           .RV_DisableVectorMaskMutation &&
       ST.hasVInstructions())
     DAG->addMutation(createRISCVVectorMaskDAGMutation(DAG->TRI));
 
@@ -254,8 +251,8 @@ RISCVTargetMachine::createPostMachineScheduler(MachineSchedContext *C) const {
   // Add MacroFusion mutation first with a higher priority than later clustering
   const auto &MacroFusions = ST.getMacroFusions();
   if (!MacroFusions.empty())
-    DAG->addMutation(
-        createMacroFusionDAGMutation(getOptionsContext(), MacroFusions));
+    DAG->addMutation(createMacroFusionDAGMutation(
+        C->MF->getFunction().getContext(), MacroFusions));
 
   if (ST.enablePostMISchedLoadClustering())
     DAG->addMutation(createLoadClusterDAGMutation(
@@ -330,8 +327,7 @@ public:
       : TargetPassConfig(TM, PM) {
     if (TM.getOptLevel() != CodeGenOptLevel::None)
       substitutePass(&PostRASchedulerID, &PostMachineSchedulerID);
-    setEnableSinkAndFold(clv2::getOptValOrDefault<&clv2::RV_EnableSinkFold>(
-        TM.getOptionsContext()));
+    setEnableSinkAndFold(RISCVOptions::Current.RV_EnableSinkFold);
     EnableLoopTermFold = true;
   }
 
@@ -392,9 +388,7 @@ bool RISCVPassConfig::addRegAssignAndRewriteFast() {
   addPass(createRVVRegAllocPass(false));
   addPass(createRISCVInsertVSETVLIPass());
   if (TM->getOptLevel() != CodeGenOptLevel::None &&
-      clv2::getOptValOr<&clv2::RISCVOptsReg,
-                        &clv2::RV_EnableDeadRegisterElimination>(
-          TM->getOptionsContext(), true))
+      RISCVOptions::Current.RV_EnableDeadRegisterElimination)
     addPass(createRISCVDeadRegisterDefinitionsPass());
   return TargetPassConfig::addRegAssignAndRewriteFast();
 }
@@ -404,9 +398,7 @@ bool RISCVPassConfig::addRegAssignAndRewriteOptimized() {
   addPass(createVirtRegRewriter(false));
   addPass(createRISCVInsertVSETVLIPass());
   if (TM->getOptLevel() != CodeGenOptLevel::None &&
-      clv2::getOptValOr<&clv2::RISCVOptsReg,
-                        &clv2::RV_EnableDeadRegisterElimination>(
-          TM->getOptionsContext(), true))
+      RISCVOptions::Current.RV_EnableDeadRegisterElimination)
     addPass(createRISCVDeadRegisterDefinitionsPass());
   return TargetPassConfig::addRegAssignAndRewriteOptimized();
 }
@@ -416,9 +408,7 @@ void RISCVPassConfig::addIRPasses() {
   addPass(createRISCVZacasABIFixLegacyPass());
 
   if (getOptLevel() != CodeGenOptLevel::None) {
-    if (clv2::getOptValOr<&clv2::RISCVOptsReg,
-                          &clv2::RV_EnableLoopDataPrefetch>(
-            TM->getOptionsContext(), true))
+    if (RISCVOptions::Current.RV_EnableLoopDataPrefetch)
       addPass(createLoopDataPrefetchPass());
 
     addPass(createRISCVGatherScatterLoweringLegacyPass());
@@ -429,8 +419,7 @@ void RISCVPassConfig::addIRPasses() {
   TargetPassConfig::addIRPasses();
 
   if (getOptLevel() == CodeGenOptLevel::Aggressive &&
-      clv2::getOptValOr<&clv2::RISCVOptsReg, &clv2::RV_EnableSelectOpt>(
-          TM->getOptionsContext(), true))
+      RISCVOptions::Current.RV_EnableSelectOpt)
     addPass(createSelectOptimizePass());
 }
 
@@ -444,14 +433,9 @@ bool RISCVPassConfig::addPreISel() {
     addPass(createBarrierNoopPass());
   }
 
-  bool RVGMSpecified =
-      clv2::wasOptSpecified<&clv2::RISCVOptsReg, &clv2::RV_EnableGlobalMerge>(
-          TM->getOptionsContext());
-  bool RVGMValue =
-      clv2::getOptValOr<&clv2::RISCVOptsReg, &clv2::RV_EnableGlobalMerge>(
-          TM->getOptionsContext(), false);
-  if ((!RVGMSpecified && TM->getOptLevel() != CodeGenOptLevel::None) ||
-      (RVGMSpecified && RVGMValue)) {
+  std::optional<bool> RVGM = RISCVOptions::Current.RV_EnableGlobalMerge;
+  if ((!RVGM && TM->getOptLevel() != CodeGenOptLevel::None) ||
+      (RVGM && *RVGM)) {
     // FIXME: Like AArch64, we disable extern global merging by default due to
     // concerns it might regress some workloads. Unlike AArch64, we don't
     // currently support enabling the pass in an "OnlyOptimizeForSize" mode.
@@ -525,8 +509,7 @@ void RISCVPassConfig::addPreEmitPass() {
   // currently leads to incorrect code-gen, where copies to registers within
   // outlined functions are removed erroneously.
   if (TM->getOptLevel() >= CodeGenOptLevel::Default &&
-      clv2::getOptValOr<&clv2::RISCVOptsReg, &clv2::RV_EnableCopyPropagation>(
-          TM->getOptionsContext(), true))
+      RISCVOptions::Current.RV_EnableCopyPropagation)
     addPass(createMachineCopyPropagationPass(true));
   if (TM->getOptLevel() >= CodeGenOptLevel::Default)
     addPass(createRISCVLateBranchOptPass());
@@ -562,8 +545,7 @@ void RISCVPassConfig::addPreEmitPass2() {
     return MF.getFunction().getParent()->getModuleFlag("kcfi");
   }));
 
-  if (clv2::getOptValOr<&clv2::RISCVOptsReg, &clv2::RV_EnableCFIInstrInserter>(
-          TM->getOptionsContext(), false))
+  if (RISCVOptions::Current.RV_EnableCFIInstrInserter)
     addPass(createCFIInstrInserterLegacy());
 }
 
@@ -604,8 +586,7 @@ void RISCVPassConfig::addPreRegAlloc() {
   addPass(createRISCVLandingPadSetupPass());
 
   if (TM->getOptLevel() != CodeGenOptLevel::None &&
-      clv2::getOptValOr<&clv2::RISCVOptsReg, &clv2::RV_EnableMachinePipeliner>(
-          TM->getOptionsContext(), false))
+      RISCVOptions::Current.RV_EnableMachinePipeliner)
     addPass(&MachinePipelinerID);
 
   addPass(createRISCVVMV0EliminationPass());
@@ -616,18 +597,14 @@ void RISCVPassConfig::addFastRegAlloc() {
   TargetPassConfig::addFastRegAlloc();
 }
 
-
 void RISCVPassConfig::addPostRegAlloc() {
   if (TM->getOptLevel() != CodeGenOptLevel::None &&
-      clv2::getOptValOr<&clv2::RISCVOptsReg,
-                        &clv2::RV_EnableRedundantCopyElimination>(
-          TM->getOptionsContext(), true))
+      RISCVOptions::Current.RV_EnableRedundantCopyElimination)
     addPass(createRISCVRedundantCopyEliminationPass());
 }
 
 bool RISCVPassConfig::addILPOpts() {
-  if (clv2::getOptValOr<&clv2::RISCVOptsReg, &clv2::RV_EnableMachineCombiner>(
-          TM->getOptionsContext(), true))
+  if (RISCVOptions::Current.RV_EnableMachineCombiner)
     addPass(&MachineCombinerID);
 
   return true;

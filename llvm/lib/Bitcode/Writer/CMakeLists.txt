@@ -6,6 +6,7 @@ add_llvm_component_library(LLVMBitWriter
 
   DEPENDS
   intrinsics_gen
+  BitcodeOptParserTableGen
 
   LINK_COMPONENTS
   Analysis

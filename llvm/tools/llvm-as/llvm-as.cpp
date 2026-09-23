@@ -14,19 +14,26 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/AsmParser/Parser.h"
+#include "llvm/Bitcode/BitcodeMemProfOptions.h"
 #include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/Bitcode/BitcodeWriter.h"
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/IROptions.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/ModuleSummaryIndex.h"
 #include "llvm/IR/PassTimingInfo.h"
 #include "llvm/IR/Verifier.h"
+#include "llvm/Option/LibraryOptions.h"
 #include "llvm/Support/CommandLineV2.h"
+#include "llvm/Support/Error.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/OptionsContext.h"
+#include "llvm/Support/PluginLoaderOptions.h"
 #include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/SystemUtils.h"
@@ -70,14 +77,10 @@ static constexpr OptionInfo<unsigned> BitcodeMDIndexThreshold{
     "Number of metadatas above which we emit an index to enable lazy-loading",
     Hidden, Init{25u}, Cat(AsCat)};
 
-static constexpr OptionInfo<bool> TimePassesOpt{
-    "time-passes", "Time each pass, printing elapsed time for each on exit",
-    Hidden, Cat(AsCat)};
-
-static constexpr OptionInfo<bool> TimePassesPerRunOpt{
-    "time-passes-per-run",
-    "Time each pass run, printing elapsed time for each run on exit", Hidden,
-    Cat(AsCat)};
+// --time-passes and --time-passes-per-run come from llvm::IROptions, which
+// has migrated off clv2 onto the new per-library OptTable struct design (see
+// llvm/include/llvm/Option/LibraryOptions.h); llvm-as parses it out of argv
+// itself in main() below rather than declaring local duplicates here.
 
 static constexpr OptionInfo<bool> AllowIncompleteIROpt{
     "allow-incomplete-ir",
@@ -85,14 +88,16 @@ static constexpr OptionInfo<bool> AllowIncompleteIROpt{
     "metadata will be dropped)",
     Hidden, Cat(AsCat)};
 
-// --combined-index-memprof-context comes from BitcodeOptsReg, which
-// RegisterAllLLVMOptions() already adds; llvm-as used to declare a second
-// option with the same name and mirror it into a global.
+// --combined-index-memprof-context and --print-summary-global-ids come from
+// llvm::BitcodeMemProfOptions, which has migrated off clv2 onto the new
+// per-library OptTable struct design (see
+// llvm/include/llvm/Option/LibraryOptions.h); llvm-as parses it out of argv
+// itself in main() below rather than declaring it here.
 
 static constexpr OptionsRegistry<
     &InputFilename, &OutputFilename, &Force, &DisableOutput, &EmitModuleHash,
     &DumpAsm, &DisableVerify, &ClDataLayout, &BitcodeMDIndexThreshold,
-    &TimePassesOpt, &TimePassesPerRunOpt, &AllowIncompleteIROpt>
+    &AllowIncompleteIROpt>
     AsToolReg;
 
 static void WriteOutputFile(const Module *M, const ModuleSummaryIndex *Index,
@@ -142,18 +147,63 @@ int main(int argc, char **argv) {
   P.add<&AsToolReg>();
   RegisterAllLLVMOptions(P);
   P.hideUnrelatedOptions({&AsCat});
-  // Owned by BitcodeOptsReg rather than AsCat, but llvm-as has always
-  // listed it, so keep it visible.
-  P.showOptions({"combined-index-memprof-context"});
-  auto OptsCtx = P.parse(argc, argv, "llvm .ll -> .bc assembler\n");
-  auto *Opts = OptsCtx->getViewPtr<&AsToolReg>();
+  std::vector<const char *> ArgsAfterPlugins =
+      loadPluginsAndStripArgs(argc, argv);
 
-  if (Opts->get<&TimePassesPerRunOpt>()) {
-    llvm::TimePassesIsEnabled = true;
-    llvm::TimePassesPerRun = true;
-  } else {
-    llvm::TimePassesIsEnabled = Opts->get<&TimePassesOpt>();
+  // llvm::BitcodeMemProfOptions and llvm::IROptions have migrated off clv2
+  // onto the new per-library OptTable struct design (see
+  // llvm/include/llvm/Option/LibraryOptions.h) and are no longer among the
+  // clv2::OptionParser registries configured above. Parse them out of argv
+  // first, forwarding whatever neither recognizes to the legacy clv2 parser
+  // unchanged.
+  //
+  // parseLibraryOptionsChain operates on the literal argv tokens, so a
+  // library-owned flag (e.g. -time-passes) stashed inside an "@file" response
+  // file would otherwise go unseen here and then be rejected as unknown by
+  // the legacy clv2 parser below (which no longer carries a local
+  // duplicate to catch it, and can no longer discover it dynamically now
+  // that it isn't a self-registering clv2::OptionsRegistry either) -- see
+  // llvm/test/Other/ResponseFile.ll. Expand response files up front so both
+  // parsers see the same, fully-expanded token stream; clv2::OptionParser's
+  // own internal expansion below then finds nothing left to expand.
+  // Alloc must outlive ExpandedArgsAfterPlugins (it owns the storage behind
+  // the expanded tokens' const char* pointers), so both stay alive for the
+  // rest of main() rather than being confined to a temporary scope.
+  BumpPtrAllocator ResponseFileAlloc;
+  SmallVector<const char *, 32> ExpandedArgsAfterPlugins;
+  if (!clv2::detail::expandArgs(clv2::OnError::ExitProcess,
+                                static_cast<int>(ArgsAfterPlugins.size()),
+                                ArgsAfterPlugins.data(), ResponseFileAlloc,
+                                ExpandedArgsAfterPlugins, &errs()))
+    return 1;
+
+  SmallVector<const char *, 32> BitcodeMemProfOptsRest;
+  {
+    std::string BitcodeMemProfOptsErrs;
+    raw_string_ostream BitcodeMemProfOptsErrsOS(BitcodeMemProfOptsErrs);
+    if (Error Err =
+            opt::parseLibraryOptionsChain<BitcodeMemProfOptions, IROptions>(
+                ArrayRef<const char *>(ExpandedArgsAfterPlugins).drop_front(),
+                BitcodeMemProfOptsRest, BitcodeMemProfOptsErrsOS)) {
+      errs() << "llvm-as: " << toString(std::move(Err)) << "\n";
+      return 1;
+    }
+    errs() << BitcodeMemProfOptsErrs;
   }
+  // IROptions has no automatic apply step (unlike BitcodeMemProfOptions,
+  // which is read on demand via Ctx.getOptions<T>()); it must sync a couple
+  // of legacy globals (TimePassesIsEnabled/TimePassesPerRun and the
+  // OptBisect singleton) explicitly. See llvm/lib/IR/IROptions.cpp.
+  llvm::ir_opts::applyIROptions();
+  SmallVector<const char *, 32> ArgvAfterBitcodeMemProfOpts;
+  ArgvAfterBitcodeMemProfOpts.push_back(argv[0]);
+  ArgvAfterBitcodeMemProfOpts.append(BitcodeMemProfOptsRest.begin(),
+                                     BitcodeMemProfOptsRest.end());
+
+  auto OptsCtx = P.parse(static_cast<int>(ArgvAfterBitcodeMemProfOpts.size()),
+                         ArgvAfterBitcodeMemProfOpts.data(),
+                         "llvm .ll -> .bc assembler\n");
+  auto *Opts = OptsCtx->getViewPtr<&AsToolReg>();
 
   llvm::setAllowIncompleteIRParsing(Opts->get<&AllowIncompleteIROpt>());
 

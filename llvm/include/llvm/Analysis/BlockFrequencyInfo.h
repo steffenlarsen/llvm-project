@@ -25,13 +25,11 @@
 
 namespace llvm {
 
+class AnalysisOptions;
 class BasicBlock;
 class BranchProbabilityInfo;
 class CycleInfo;
 class Module;
-namespace clv2 {
-class OptionsContext;
-}
 class raw_ostream;
 template <class BlockT> class BlockFrequencyInfoImpl;
 
@@ -57,7 +55,7 @@ public:
   LLVM_ABI bool invalidate(Function &F, const PreservedAnalyses &PA,
                            FunctionAnalysisManager::Invalidator &);
 
-  LLVM_ABI void setOptionsContext(const clv2::OptionsContext &Ctx);
+  LLVM_ABI void setOptionsContext(const AnalysisOptions &Opts);
   LLVM_ABI const Function *getFunction() const;
   LLVM_ABI const BranchProbabilityInfo *getBPI() const;
   LLVM_ABI void view(StringRef = "BlockFrequencyDAGs") const;

@@ -1,5 +1,3 @@
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
 //===- LoopFlatten.cpp - Loop flattening pass------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -69,8 +67,10 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/PatternMatch.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Scalar/LoopPassManager.h"
+#include "llvm/Transforms/Scalar/ScalarOptions.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
 #include "llvm/Transforms/Utils/LoopVersioning.h"
@@ -86,24 +86,21 @@ using namespace llvm::PatternMatch;
 STATISTIC(NumFlattened, "Number of loops flattened");
 
 static unsigned getRepeatedInstructionThreshold(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_LoopFlattenCostThreshold>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<ScalarOptions>().SC_LoopFlattenCostThreshold;
 }
 
 static bool getAssumeNoOverflow(const Function &F) {
-  return clv2::getOptValOr<&clv2::ScalarOptsReg,
-                           &clv2::SC_LoopFlattenAssumeNoOverflow>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_LoopFlattenAssumeNoOverflow;
 }
 
 static bool getWidenIV(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_LoopFlattenWidenIv>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<ScalarOptions>().SC_LoopFlattenWidenIv;
 }
 
 static bool getVersionLoops(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_LoopFlattenVersionLoops>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<ScalarOptions>().SC_LoopFlattenVersionLoops;
 }
 
 namespace {

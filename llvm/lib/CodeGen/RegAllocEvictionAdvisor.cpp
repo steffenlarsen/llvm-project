@@ -12,7 +12,7 @@
 #include "llvm/CodeGen/RegAllocEvictionAdvisor.h"
 #include "AllocationOrder.h"
 #include "RegAllocGreedy.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsRegAlloc.h"
 #include "llvm/CodeGen/LiveRegMatrix.h"
 #include "llvm/CodeGen/MachineBlockFrequencyInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
@@ -21,37 +21,32 @@
 #include "llvm/CodeGen/RegisterClassInfo.h"
 #include "llvm/CodeGen/VirtRegMap.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Target/TargetMachine.h"
 #include <optional>
 
 using namespace llvm;
 
 static RegAllocEvictionAdvisorAnalysisLegacy::AdvisorMode
-getAdvisorMode(const clv2::OptionsContext &Ctx) {
+getAdvisorMode(const LLVMContext &Ctx) {
   return static_cast<RegAllocEvictionAdvisorAnalysisLegacy::AdvisorMode>(
-      clv2::getOptValOrDefault<&clv2::CGPASS_RegallocEnableAdvisor>(Ctx));
+      Ctx.getOptions<CodeGenRegAllocOptions>().CGPASS_RegallocEnableAdvisor);
 }
 
-static unsigned getEvictInterferenceCutoff(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<
-      &clv2::CGPASS_RegallocEvictionMaxInterferenceCutoff>(Ctx);
+static unsigned getEvictInterferenceCutoff(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenRegAllocOptions>()
+      .CGPASS_RegallocEvictionMaxInterferenceCutoff;
 }
 
 // -enable-local-reassign used to be a tri-state cl::opt<cl::boolOrDefault>:
 // explicitly-false must override the subtarget default below, which a plain
 // bool (unset indistinguishable from false) cannot represent. Return the
 // explicitly-specified value, or std::nullopt if the option was left unset.
-static std::optional<bool>
-getEnableLocalReassignExplicit(const clv2::OptionsContext &Ctx) {
-  auto *O = clv2::getView<&clv2::CGPassRegAllocReg>(Ctx);
-  if (!O || !O->specified<&clv2::CGPASS_EnableLocalReassign>())
-    return std::nullopt;
-  return O->get<&clv2::CGPASS_EnableLocalReassign>();
+static std::optional<bool> getEnableLocalReassignExplicit(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenRegAllocOptions>().CGPASS_EnableLocalReassign;
 }
 
 #define DEBUG_TYPE "regalloc"
@@ -109,8 +104,8 @@ private:
 };
 
 /// Deferred advisor analysis that reads the mode from the Module's
-/// LLVMContext OptionsContext in doInitialization, rather than at
-/// construction time when no context is available.
+/// LLVMContext in doInitialization, rather than at construction time when no
+/// context is available.
 class DeferredEvictionAdvisorAnalysisLegacy final
     : public RegAllocEvictionAdvisorAnalysisLegacy {
 public:
@@ -119,7 +114,7 @@ public:
 
   bool doInitialization(Module &M) override {
     auto &Ctx = M.getContext();
-    AdvisorMode Mode = ::getAdvisorMode(Ctx.getOptionsContext());
+    AdvisorMode Mode = ::getAdvisorMode(Ctx);
     switch (Mode) {
     case AdvisorMode::Default:
       Provider.reset(
@@ -187,16 +182,15 @@ RegAllocEvictionAdvisorAnalysis::Result
 RegAllocEvictionAdvisorAnalysis::run(MachineFunction &MF,
                                      MachineFunctionAnalysisManager &MFAM) {
   // Lazy initialization of the provider.
-  initializeProvider(
-      getAdvisorMode(MF.getFunction().getContext().getOptionsContext()),
-      MF.getFunction().getContext());
+  initializeProvider(getAdvisorMode(MF.getFunction().getContext()),
+                      MF.getFunction().getContext());
   return Result{Provider.get()};
 }
 
 template <>
 Pass *llvm::callDefaultCtor<RegAllocEvictionAdvisorAnalysisLegacy>() {
   // Defer mode selection to doInitialization where the Module's
-  // LLVMContext OptionsContext is available for reading CLI options.
+  // LLVMContext is available for reading CLI options.
   return new DeferredEvictionAdvisorAnalysisLegacy();
 }
 
@@ -219,8 +213,7 @@ RegAllocEvictionAdvisor::RegAllocEvictionAdvisor(const MachineFunction &MF,
       MRI(&VRM->getRegInfo()), TRI(MF.getSubtarget().getRegisterInfo()),
       RegClassInfo(RA.getRegClassInfo()), RegCosts(TRI->getRegisterCosts(MF)),
       EnableLocalReassign(
-          getEnableLocalReassignExplicit(
-              MF.getFunction().getContext().getOptionsContext())
+          getEnableLocalReassignExplicit(MF.getFunction().getContext())
               .value_or(MF.getSubtarget().enableRALocalReassignment(
                   MF.getTarget().getOptLevel()))) {}
 
@@ -311,8 +304,8 @@ bool DefaultEvictionAdvisor::canEvictInterferenceBasedOnCost(
   for (MCRegUnit Unit : TRI->regunits(PhysReg)) {
     LiveIntervalUnion::Query &Q = Matrix->query(VirtReg, Unit);
     // If there is 10 or more interferences, chances are one is heavier.
-    unsigned InterferenceCutoff = getEvictInterferenceCutoff(
-        MF.getFunction().getContext().getOptionsContext());
+    unsigned InterferenceCutoff =
+        getEvictInterferenceCutoff(MF.getFunction().getContext());
     const auto &Interferences = Q.interferingVRegs(InterferenceCutoff);
     if (Interferences.size() >= InterferenceCutoff)
       return false;

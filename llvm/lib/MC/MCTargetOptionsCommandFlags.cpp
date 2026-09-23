@@ -12,48 +12,27 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/MC/MCTargetOptionsCommandFlags.h"
-#include "llvm/MC/MCOptionsOptInfos.h"
+#include "llvm/MC/MCOptions.h"
 #include "llvm/MC/MCTargetOptions.h"
 
 using namespace llvm;
 
-// Each getter reads the session's parsed options.  There is no process-wide
-// snapshot, so two parses in one process see their own values and a second
-// parse cannot inherit the first's.
-// The value these getters produce when the option was not given: the
-// descriptor's Init default, which is why these read through getOptValOr:
-// it returns the parsed slot.
-// getOptValIfSpecified would ignore the slot and hand back TY{}, silently
-// flipping every option whose default is not the zero value (there are ~28,
-// including -x86-relax-relocations and -unique-section-names).
-
-// The value these getters must produce when the registry is absent from the
-// context: the descriptor's Init default if it has one, else the zero value.
-// This is what the old primed snapshot produced, and it matters --
-// CG_BBSections defaults to "none", and TY{} ("") instead routes
-// getBBSectionsMode() into the function-list branch and tries to open a file
-// named "".
+// Each getter reads the process-wide MCLibraryOptions::Current struct
+// populated by parseLibraryOptionsChain<...>() (see
+// llvm/include/llvm/Option/LibraryOptions.h); the passed clv2::OptionsContext
+// is unused and kept only so this file's stable, LLVM_ABI-exported getter
+// signatures don't change out from under their ~8 external callers.
 
 #define MCOPT(TY, NAME)                                                        \
-  TY llvm::mc::get##NAME(const clv2::OptionsContext &Ctx) {                    \
-    return clv2::getOptValOr<&clv2::MC_##NAME>(Ctx, TY{});                     \
+  TY llvm::mc::get##NAME(const clv2::OptionsContext &) {                       \
+    return MCLibraryOptions::Current.MC_##NAME;                                \
   }
 
 #define MCSTROPT(NAME)                                                         \
-  std::string llvm::mc::get##NAME(const clv2::OptionsContext &Ctx) {           \
-    return clv2::getOptValOr<&clv2::MC_##NAME>(Ctx, std::string{});            \
+  std::string llvm::mc::get##NAME(const clv2::OptionsContext &) {              \
+    return MCLibraryOptions::Current.MC_##NAME;                                \
   }
 
-#define MCOPT_EXP(TY, NAME)                                                    \
-  MCOPT(TY, NAME)                                                              \
-  std::optional<TY> llvm::mc::getExplicit##NAME(                               \
-      const clv2::OptionsContext &Ctx) {                                       \
-    if (clv2::wasOptSpecified<&clv2::MC_##NAME>(Ctx))                          \
-      return clv2::getOptValOr<&clv2::MC_##NAME>(Ctx, TY{});                   \
-    return std::nullopt;                                                       \
-  }
-
-MCOPT_EXP(bool, RelaxAll)
 MCOPT(bool, IncrementalLinkerCompatible)
 MCOPT(bool, FDPIC)
 MCOPT(int, DwarfVersion)
@@ -76,37 +55,49 @@ MCOPT(bool, LargeEHEncoding)
 MCSTROPT(ABIName)
 MCSTROPT(AsSecureLogFile)
 
-// Unlike the others this one always propagated its Init default, so it reads
-// the descriptor default rather than TY{} -- TY{} is Always(0), not Default(2).
-EmitDwarfUnwindType
-llvm::mc::getEmitDwarfUnwind(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::MC_EmitDwarfUnwind>(Ctx);
-}
-
-// Tri-state: the CLI enum's Default means "no opinion", which stays nullopt.
-std::optional<bool>
-llvm::mc::getDwarfExtendedLoc(const clv2::OptionsContext &Ctx) {
-  if (!clv2::wasOptSpecified<&clv2::MC_DwarfExtendedLoc>(Ctx))
-    return std::nullopt;
-  auto Val = clv2::getOptValOrDefault<&clv2::MC_DwarfExtendedLoc>(Ctx);
-  if (Val == clv2::DefaultOnOff::Default)
-    return std::nullopt;
-  return Val == clv2::DefaultOnOff::Enable;
+// RelaxAll needs optional semantics for getExplicitRelaxAll() (nullopt means
+// "never specified"), hence the underlying field is std::optional<bool>
+// (see MCOptions.td) rather than a plain bool; getRelaxAll() resolves it to
+// a plain bool, defaulting to false when unspecified.
+bool llvm::mc::getRelaxAll(const clv2::OptionsContext &) {
+  return MCLibraryOptions::Current.MC_RelaxAll.value_or(false);
 }
 
 std::optional<bool>
-llvm::mc::getUseLEB128Directives(const clv2::OptionsContext &Ctx) {
-  if (!clv2::wasOptSpecified<&clv2::MC_UseLEB128Directives>(Ctx))
+llvm::mc::getExplicitRelaxAll(const clv2::OptionsContext &) {
+  return MCLibraryOptions::Current.MC_RelaxAll;
+}
+
+EmitDwarfUnwindType llvm::mc::getEmitDwarfUnwind(const clv2::OptionsContext &) {
+  return MCLibraryOptions::Current.MC_EmitDwarfUnwind;
+}
+
+// Tri-state: the CLI enum's Default member means "no opinion", which
+// collapses to nullopt (both when the option was never specified -- it then
+// carries its compile-time default of DefaultOnOff::Default -- and when it
+// was explicitly specified as "Default").
+std::optional<bool>
+llvm::mc::getDwarfExtendedLoc(const clv2::OptionsContext &) {
+  DefaultOnOff Val = MCLibraryOptions::Current.MC_DwarfExtendedLoc;
+  if (Val == DefaultOnOff::Default)
     return std::nullopt;
-  return clv2::getOptValOr<&clv2::MC_UseLEB128Directives>(Ctx, false);
+  return Val == DefaultOnOff::Enable;
 }
 
-bool llvm::mc::getLFIEnableRewriter(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::MC_LFIEnableRewriter>(Ctx, true);
+// UseLEB128Directives needs optional semantics (see MCAsmInfo.cpp /
+// MCAsmInfoXCOFF.cpp, which distinguish "never specified" from an explicit
+// value), hence the underlying field is std::optional<bool>.
+std::optional<bool>
+llvm::mc::getUseLEB128Directives(const clv2::OptionsContext &) {
+  return MCLibraryOptions::Current.MC_UseLEB128Directives;
 }
 
-unsigned llvm::mc::getAsmMacroMaxNestingDepth(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::MC_AsmMacroMaxNestingDepth>(Ctx, 100u);
+bool llvm::mc::getLFIEnableRewriter(const clv2::OptionsContext &) {
+  return MCLibraryOptions::Current.MC_LFIEnableRewriter;
+}
+
+unsigned llvm::mc::getAsmMacroMaxNestingDepth(const clv2::OptionsContext &) {
+  return MCLibraryOptions::Current.MC_AsmMacroMaxNestingDepth;
 }
 
 // Retained as a no-op: tools instantiate it to declare that they want the MC

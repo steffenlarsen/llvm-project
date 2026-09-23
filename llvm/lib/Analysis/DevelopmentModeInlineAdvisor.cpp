@@ -15,7 +15,7 @@
 #if defined(LLVM_HAVE_TFLITE)
 
 #include "llvm/ADT/BitVector.h"
-#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
+#include "llvm/Analysis/AnalysisOptions.h"
 #include "llvm/Analysis/CallGraph.h"
 #include "llvm/Analysis/MLInlineAdvisor.h"
 #include "llvm/Analysis/ModelUnderTrainingRunner.h"
@@ -26,7 +26,6 @@
 #include "llvm/IR/Module.h"
 #include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/ManagedStatic.h"
-#include "llvm/Support/OptionsContext.h"
 
 #include <optional>
 #include <vector>
@@ -36,23 +35,19 @@ using namespace llvm;
 static std::string TFFeedPrefix = "action_";
 
 static std::string getTrainingLog(const LLVMContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::AN_TrainingLog>(
-      Ctx.getOptionsContext());
+  return Ctx.getOptions<AnalysisOptions>().AN_TrainingLog;
 }
 
 static std::string getTFModelUnderTrainingPath(const LLVMContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::AN_TFModelUnderTrainingPath>(
-      Ctx.getOptionsContext());
+  return Ctx.getOptions<AnalysisOptions>().AN_TFModelUnderTrainingPath;
 }
 
 static std::string getTFOutputSpecOverride(const LLVMContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::AN_TFOutputSpecOverride>(
-      Ctx.getOptionsContext());
+  return Ctx.getOptions<AnalysisOptions>().AN_TFOutputSpecOverride;
 }
 
 static std::string getTFFeedPrefix(const LLVMContext &Ctx) {
-  return clv2::getOptValOr<&clv2::AnalysisOptsReg, &clv2::AN_TFFeedPrefix>(
-      Ctx.getOptionsContext(), TFFeedPrefix);
+  return Ctx.getOptions<AnalysisOptions>().AN_TFFeedPrefix;
 }
 
 namespace {

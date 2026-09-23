@@ -20,6 +20,7 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/PluginLoaderOptions.h"
 #include "llvm/Support/RegisterLLVMOptions.h"
 
 #include <cstdint>
@@ -397,7 +398,10 @@ int main(int Argc, char **Argv) {
   P.add<&ReplayReg>();
   RegisterAllLLVMOptions(P);
   P.hideUnrelatedOptions({&ReplayOptions});
-  auto OptsCtx = P.parse(Argc, Argv, TOOL_NAME "\n");
+  std::vector<const char *> ArgsAfterPlugins =
+      loadPluginsAndStripArgs(Argc, Argv);
+  auto OptsCtx = P.parse(static_cast<int>(ArgsAfterPlugins.size()),
+                         ArgsAfterPlugins.data(), TOOL_NAME "\n");
   auto *Opts = OptsCtx->getViewPtr<&ReplayReg>();
   KernelReplayOptions ReplayOpts;
   ReplayOpts.JsonFilename = Opts->get<&JsonFilenameOpt>();

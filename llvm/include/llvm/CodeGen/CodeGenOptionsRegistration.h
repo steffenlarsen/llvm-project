@@ -26,16 +26,6 @@ class OptionParser;
 } // namespace clv2
 
 void registerCGOptsOptions(clv2::OptionParser &P);
-void registerCGPassAsmPrintOptions(clv2::OptionParser &P);
-void registerCGPassCore1Options(clv2::OptionParser &P);
-void registerCGPassCore2Options(clv2::OptionParser &P);
-void registerCGPassGISelOptions(clv2::OptionParser &P);
-void registerCGPassMachine1Options(clv2::OptionParser &P);
-void registerCGPassMachine2Options(clv2::OptionParser &P);
-void registerCGPassAllocOptions(clv2::OptionParser &P);
-void registerCGPassSched1Options(clv2::OptionParser &P);
-void registerCGPassSched2Options(clv2::OptionParser &P);
-void registerCGPassSelDAGOptions(clv2::OptionParser &P);
 
 } // namespace llvm
 

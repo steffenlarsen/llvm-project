@@ -21,17 +21,14 @@
 #include "llvm/IR/Module.h"
 #include "llvm/MC/MCInst.h"
 #include "llvm/MC/MCStreamer.h"
-#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/SPIRV/SPIRVOptionsOptInfos.h"
+#include "llvm/Target/SPIRV/SPIRVOptions.h"
 
 using namespace llvm;
 
 static bool getSPVPreserveAuxData(const Module &M) {
-  return clv2::getOptValOr<&clv2::SPIRVOptsReg, &clv2::SPIRV_PreserveAuxData>(
-      M.getContext().getOptionsContext(), false);
+  return M.getContext().getOptions<SPIRVOptions>().SPIRV_PreserveAuxData;
 }
 
 namespace {

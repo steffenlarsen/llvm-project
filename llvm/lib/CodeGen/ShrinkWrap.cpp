@@ -55,7 +55,7 @@
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/CFG.h"
 #include "llvm/Analysis/ValueTracking.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsCore2.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineBlockFrequencyInfo.h"
 #include "llvm/CodeGen/MachineDominators.h"
@@ -80,10 +80,8 @@
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/CommandLineCompat.h"
-#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
 #include <cassert>
@@ -98,13 +96,13 @@ STATISTIC(NumCandidates, "Number of shrink-wrapping candidates");
 STATISTIC(NumCandidatesDropped,
           "Number of shrink-wrapping candidates dropped because of frequency");
 
-static cl::boolOrDefault getEnableShrinkWrap(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_EnableShrinkWrap>(Ctx);
+static std::optional<bool> getEnableShrinkWrap(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore2Options>().CGPASS_EnableShrinkWrap;
 }
 
-static bool getEnableShrinkWrapRegionSplit(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_EnableShrinkWrapRegionSplit>(
-      Ctx);
+static bool getEnableShrinkWrapRegionSplit(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore2Options>()
+      .CGPASS_EnableShrinkWrapRegionSplit;
 }
 
 namespace {
@@ -588,8 +586,7 @@ bool ShrinkWrapImpl::checkIfRestoreSplittable(
 
 bool ShrinkWrapImpl::postShrinkWrapping(bool HasCandidate, MachineFunction &MF,
                                         RegScavenger *RS) {
-  if (!getEnableShrinkWrapRegionSplit(
-          MF.getFunction().getContext().getOptionsContext()))
+  if (!getEnableShrinkWrapRegionSplit(MF.getFunction().getContext()))
     return false;
 
   MachineBasicBlock *InitSave = nullptr;
@@ -1045,9 +1042,9 @@ PreservedAnalyses ShrinkWrapPass::run(MachineFunction &MF,
 bool ShrinkWrapImpl::isShrinkWrapEnabled(const MachineFunction &MF) {
   const TargetFrameLowering *TFI = MF.getSubtarget().getFrameLowering();
 
-  switch (
-      getEnableShrinkWrap(MF.getFunction().getContext().getOptionsContext())) {
-  case cl::boolOrDefault::BOU_UNSET:
+  std::optional<bool> EnableShrinkWrap =
+      getEnableShrinkWrap(MF.getFunction().getContext());
+  if (!EnableShrinkWrap)
     return TFI->enableShrinkWrapping(MF) &&
            // Windows with CFI has some limitations that make it impossible
            // to use shrink-wrapping.
@@ -1064,10 +1061,5 @@ bool ShrinkWrapImpl::isShrinkWrapEnabled(const MachineFunction &MF) {
   // If EnableShrinkWrap is set, it takes precedence on whatever the
   // target sets. The rational is that we assume we want to test
   // something related to shrink-wrapping.
-  case cl::boolOrDefault::BOU_TRUE:
-    return true;
-  case cl::boolOrDefault::BOU_FALSE:
-    return false;
-  }
-  llvm_unreachable("Invalid shrink-wrapping state");
+  return *EnableShrinkWrap;
 }

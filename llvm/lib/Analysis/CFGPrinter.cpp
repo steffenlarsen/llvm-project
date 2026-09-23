@@ -19,48 +19,39 @@
 
 #include "llvm/Analysis/CFGPrinter.h"
 #include "llvm/ADT/PostOrderIterator.h"
-#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
+#include "llvm/Analysis/AnalysisOptions.h"
 #include "llvm/IR/ModuleSlotTracker.h"
 #include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/GraphWriter.h"
-#include "llvm/Support/OptionsContext.h"
 
 using namespace llvm;
 
 double HideColdPaths = 0.0;
 
 static std::string getCFGFuncName(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AN_CFGFuncName>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<AnalysisOptions>().AN_CFGFuncName;
 }
 static std::string getCFGDotFilenamePrefix(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AN_CFGDotFilenamePrefix>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<AnalysisOptions>().AN_CFGDotFilenamePrefix;
 }
 static bool getHideUnreachablePaths(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AN_HideUnreachablePaths>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<AnalysisOptions>().AN_HideUnreachablePaths;
 }
 static bool getHideDeoptimizePaths(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AN_HideDeoptimizePaths>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<AnalysisOptions>().AN_HideDeoptimizePaths;
 }
 static double getHideColdPaths(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AN_HideColdPaths>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<AnalysisOptions>().AN_HideColdPaths;
 }
 static bool getShowHeatColors(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AN_CfgShowHeatColors>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<AnalysisOptions>().AN_CfgShowHeatColors;
 }
 static bool getUseRawEdgeWeight(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AN_CfgUseRawEdgeWeight>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<AnalysisOptions>().AN_CfgUseRawEdgeWeight;
 }
 static bool getShowEdgeWeight(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AN_CfgShowEdgeWeight>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<AnalysisOptions>().AN_CfgShowEdgeWeight;
 }
 
 static void writeCFGToDotFile(Function &F, BlockFrequencyInfo *BFI,
@@ -195,8 +186,8 @@ void Function::viewCFGOnly(const BlockFrequencyInfo *BFI,
   viewCFG(true, BFI, BPI);
 }
 
-/// Find all blocks on the paths which terminate with a deoptimize or 
-/// unreachable (i.e. all blocks which are post-dominated by a deoptimize 
+/// Find all blocks on the paths which terminate with a deoptimize or
+/// unreachable (i.e. all blocks which are post-dominated by a deoptimize
 /// or unreachable). These paths are hidden if the corresponding cl::opts
 /// are enabled.
 void DOTGraphTraits<DOTFuncInfo *>::computeDeoptOrUnreachablePaths(

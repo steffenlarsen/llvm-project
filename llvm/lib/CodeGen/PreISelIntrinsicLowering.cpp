@@ -17,7 +17,7 @@
 #include "llvm/Analysis/ObjCARCUtil.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsCore2.h"
 #include "llvm/CodeGen/ExpandVectorPredication.h"
 #include "llvm/CodeGen/LibcallLoweringInfo.h"
 #include "llvm/CodeGen/Passes.h"
@@ -38,8 +38,6 @@
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLineV2.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Transforms/Scalar/LowerConstantIntrinsics.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
@@ -55,8 +53,9 @@ using namespace llvm;
 /// size larger than this will be expanded by the pass. Calls of unknown or
 /// lower size will be left for expansion in codegen.
 
-static int64_t getMemIntrinsicExpandSize(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_MemIntrinsicExpandSize>(Ctx);
+static std::optional<int64_t>
+getMemIntrinsicExpandSize(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore2Options>().CGPASS_MemIntrinsicExpandSize;
 }
 
 namespace {
@@ -235,13 +234,9 @@ bool PreISelIntrinsicLowering::shouldExpandMemIntrinsicWithSize(
   ConstantInt *CI = dyn_cast<ConstantInt>(Size);
   if (!CI)
     return true;
-  const clv2::OptionsContext &Ctx = CI->getContext().getOptionsContext();
   uint64_t Threshold =
-      (false ||
-       clv2::wasOptSpecified<&clv2::CGPassCore2Reg,
-                             &clv2::CGPASS_MemIntrinsicExpandSize>(Ctx))
-          ? getMemIntrinsicExpandSize(Ctx)
-          : TTI.getMaxMemIntrinsicInlineSizeThreshold();
+      getMemIntrinsicExpandSize(CI->getContext())
+          .value_or(TTI.getMaxMemIntrinsicInlineSizeThreshold());
   uint64_t SizeVal = CI->getZExtValue();
 
   // Treat a threshold of 0 as a special case to force expansion of all

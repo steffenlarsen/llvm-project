@@ -26,6 +26,7 @@
 #include "llvm/IR/GlobalValue.h"
 #include "llvm/ProfileData/FunctionId.h"
 #include "llvm/ProfileData/HashKeyMap.h"
+#include "llvm/ProfileData/ProfileDataOptions.h"
 #include "llvm/Support/Allocator.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
@@ -43,10 +44,6 @@
 #include <utility>
 
 namespace llvm {
-namespace clv2 {
-class OptionsContext;
-}
-
 class DILocation;
 class raw_ostream;
 
@@ -1613,7 +1610,7 @@ sortFuncProfiles(const SampleProfileMap &ProfileMap,
 /// sure ProfileMap's key is consistent with FunctionSample's name/context.
 class SampleContextTrimmer {
 public:
-  SampleContextTrimmer(SampleProfileMap &Profiles) : ProfileMap(Profiles) {};
+  SampleContextTrimmer(SampleProfileMap &Profiles) : ProfileMap(Profiles){};
   // Trim and merge cold context profile when requested. TrimBaseProfileOnly
   // should only be effective when TrimColdContext is true. On top of
   // TrimColdContext, TrimBaseProfileOnly can be used to specify to trim all
@@ -1640,12 +1637,12 @@ public:
   LLVM_ABI ProfileConverter(SampleProfileMap &Profiles);
   // Convert a full context-sensitive flat sample profile into a nested sample
   // profile.
-  LLVM_ABI void convertCSProfiles(const clv2::OptionsContext &Ctx);
+  LLVM_ABI void convertCSProfiles(const ProfileDataOptions &Opts);
   struct FrameNode {
     FrameNode(FunctionId FName = FunctionId(),
               FunctionSamples *FSamples = nullptr,
               LineLocation CallLoc = {0, 0})
-        : FuncName(FName), FuncSamples(FSamples), CallSiteLoc(CallLoc) {};
+        : FuncName(FName), FuncSamples(FSamples), CallSiteLoc(CallLoc){};
 
     // Map line+discriminator location to child frame
     std::map<uint64_t, FrameNode> AllChildFrames;
@@ -1739,7 +1736,7 @@ private:
   }
 
   // Nest all children profiles into the profile of Node.
-  void convertCSProfiles(FrameNode &Node, const clv2::OptionsContext &Ctx);
+  void convertCSProfiles(FrameNode &Node, const ProfileDataOptions &Opts);
   FrameNode *getOrCreateContextPath(const SampleContext &Context);
 
   SampleProfileMap &ProfileMap;
@@ -1801,7 +1798,7 @@ public:
   bool isMD5() const { return IsMD5; }
 
   LLVM_ABI std::error_code read(const uint8_t *Data, uint64_t ListSize,
-                                const clv2::OptionsContext &Ctx);
+                                const ProfileDataOptions &Opts);
   LLVM_ABI std::error_code write(raw_ostream &OS);
   LLVM_ABI void dump(raw_ostream &OS = dbgs()) const;
 

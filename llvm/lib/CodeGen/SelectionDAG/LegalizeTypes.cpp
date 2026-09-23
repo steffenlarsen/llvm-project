@@ -14,20 +14,18 @@
 
 #include "LegalizeTypes.h"
 #include "llvm/ADT/SetVector.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsSelDAG.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/Function.h"
-#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 using namespace llvm;
 
 #define DEBUG_TYPE "legalize-types"
 
-static bool getEnableLegalizeTypesChecking(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_EnableLegalizeTypesChecking>(
-      Ctx);
+static bool getEnableLegalizeTypesChecking(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenSelDAGOptions>()
+      .CGPASS_EnableLegalizeTypesChecking;
 }
 
 /// Do extensive, expensive, basic correctness checking.
@@ -226,10 +224,8 @@ bool DAGTypeLegalizer::run() {
   // Now that we have a set of nodes to process, handle them all.
   while (!Worklist.empty()) {
 #ifndef EXPENSIVE_CHECKS
-    if (getEnableLegalizeTypesChecking(DAG.getMachineFunction()
-                                           .getFunction()
-                                           .getContext()
-                                           .getOptionsContext()))
+    if (getEnableLegalizeTypesChecking(
+            DAG.getMachineFunction().getFunction().getContext()))
 #endif
       PerformExpensiveChecks();
 
@@ -431,10 +427,8 @@ NodeDone:
   }
 
 #ifndef EXPENSIVE_CHECKS
-  if (getEnableLegalizeTypesChecking(DAG.getMachineFunction()
-                                         .getFunction()
-                                         .getContext()
-                                         .getOptionsContext()))
+  if (getEnableLegalizeTypesChecking(
+          DAG.getMachineFunction().getFunction().getContext()))
 #endif
     PerformExpensiveChecks();
 

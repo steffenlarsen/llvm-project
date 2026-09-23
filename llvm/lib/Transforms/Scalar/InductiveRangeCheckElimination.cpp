@@ -1,5 +1,3 @@
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
 //===- InductiveRangeCheckElimination.cpp - -------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -81,6 +79,7 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Transforms/Scalar/ScalarOptions.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/LoopConstrainer.h"
@@ -97,52 +96,45 @@ using namespace llvm;
 using namespace llvm::PatternMatch;
 
 static unsigned getLoopSizeCutoff(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_IrceLoopSizeCutoff>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<ScalarOptions>().SC_IrceLoopSizeCutoff;
 }
 
 static bool getPrintChangedLoops(const Function &F) {
-  return clv2::getOptValOr<&clv2::ScalarOptsReg,
-                           &clv2::SC_IrcePrintChangedLoops>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext().getOptions<ScalarOptions>().SC_IrcePrintChangedLoops;
 }
 
 static bool getPrintRangeChecks(const Function &F) {
-  return clv2::getOptValOr<&clv2::ScalarOptsReg,
-                           &clv2::SC_IrcePrintRangeChecks>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext().getOptions<ScalarOptions>().SC_IrcePrintRangeChecks;
 }
 
 static bool getSkipProfitabilityChecks(const Function &F) {
-  return clv2::getOptValOr<&clv2::ScalarOptsReg,
-                           &clv2::SC_IrceSkipProfitabilityChecks>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_IrceSkipProfitabilityChecks;
 }
 
 static unsigned getMinEliminatedChecks(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_IrceMinEliminatedChecks>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<ScalarOptions>().SC_IrceMinEliminatedChecks;
 }
 
 static bool getAllowUnsignedLatchCondition(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_IrceAllowUnsignedLatch>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<ScalarOptions>().SC_IrceAllowUnsignedLatch;
 }
 
 static bool getAllowNarrowLatchCondition(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_IrceAllowNarrowLatch>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<ScalarOptions>().SC_IrceAllowNarrowLatch;
 }
 
 static unsigned getMaxTypeSizeForOverflowCheck(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_IrceMaxTypeSizeForOverflowCheck>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_IrceMaxTypeSizeForOverflowCheck;
 }
 
 static bool getPrintScaledBoundaryRangeChecks(const Function &F) {
-  return clv2::getOptValOr<&clv2::ScalarOptsReg,
-                           &clv2::SC_IrcePrintScaledBoundaryRangeChecks>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_IrcePrintScaledBoundaryRangeChecks;
 }
 
 #define DEBUG_TYPE "irce"

@@ -13,23 +13,20 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Analysis/DDGPrinter.h"
-#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
+#include "llvm/Analysis/AnalysisOptions.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/GraphWriter.h"
-#include "llvm/Support/OptionsContext.h"
 
 using namespace llvm;
 
 namespace llvm {} // namespace llvm
 
 static bool getDotOnly(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AN_DotOnly>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<AnalysisOptions>().AN_DotOnly;
 }
 static std::string getDDGDotFilenamePrefix(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AN_DDGDotFilenamePrefix>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<AnalysisOptions>().AN_DDGDotFilenamePrefix;
 }
 
 static void writeDDGToDotFile(DataDependenceGraph &G, const Function &F,

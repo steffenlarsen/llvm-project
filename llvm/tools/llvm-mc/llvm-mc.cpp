@@ -13,22 +13,25 @@
 
 #include "Disassembler.h"
 #include "llvm/ADT/ScopeExit.h"
-#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
-#include "llvm/AsmParser/AsmParserOptionsOptInfos.h"
-#include "llvm/Bitcode/BitcodeOptionsOptInfos.h"
+#include "llvm/AsmParser/AsmParserOptions.h"
 #include "llvm/Config/Targets.h"
 #include "llvm/DWARFCFIChecker/DWARFCFIFunctionFrameAnalyzer.h"
 #include "llvm/DWARFCFIChecker/DWARFCFIFunctionFrameStreamer.h"
-#include "llvm/IR/IROptionsOptInfos.h"
-#include "llvm/LTO/LTOOptionsOptInfos.h"
+#include "llvm/IR/IROptions.h"
 #if LLVM_HAS_ARC_TARGET
-#include "llvm/Target/ARC/ARCOptionsOptInfos.h"
+#include "llvm/Target/ARC/ARCOptions.h"
 #endif
 #if LLVM_HAS_CSKY_TARGET
-#include "llvm/Target/CSKY/CSKYOptionsOptInfos.h"
+#include "llvm/Target/CSKY/CSKYOptions.h"
+#endif
+#if LLVM_HAS_LANAI_TARGET
+#include "llvm/Target/Lanai/LanaiOptions.h"
 #endif
 #if LLVM_HAS_M68K_TARGET
-#include "llvm/Target/M68k/M68kOptionsOptInfos.h"
+#include "llvm/Target/M68k/M68kOptions.h"
+#endif
+#if LLVM_HAS_SYSTEMZ_TARGET
+#include "llvm/Target/SystemZ/SystemZOptions.h"
 #endif
 #include "llvm/MC/MCAsmBackend.h"
 #include "llvm/MC/MCAsmInfo.h"
@@ -39,7 +42,7 @@
 #include "llvm/MC/MCLFI.h"
 #include "llvm/MC/MCObjectFileInfo.h"
 #include "llvm/MC/MCObjectWriter.h"
-#include "llvm/MC/MCOptionsOptInfos.h"
+#include "llvm/MC/MCOptions.h"
 #include "llvm/MC/MCParser/AsmLexer.h"
 #include "llvm/MC/MCParser/MCTargetAsmParser.h"
 #include "llvm/MC/MCRegisterInfo.h"
@@ -47,9 +50,9 @@
 #include "llvm/MC/MCSubtargetInfo.h"
 #include "llvm/MC/MCTargetOptionsCommandFlags.h"
 #include "llvm/MC/TargetRegistry.h"
-#include "llvm/Object/ObjectOptionsOptInfos.h"
-#include "llvm/Passes/PassesOptionsOptInfos.h"
-#include "llvm/Remarks/RemarksOptionsOptInfos.h"
+#include "llvm/Object/ObjectOptions.h"
+#include "llvm/Option/LibraryOptions.h"
+#include "llvm/Remarks/RemarksOptions.h"
 #include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Compression.h"
@@ -60,39 +63,30 @@
 #include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/SupportOptions.h"
+#include "llvm/Support/SupportOptionsOptInfos.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/TimeProfiler.h"
 #include "llvm/Support/ToolOutputFile.h"
 #include "llvm/Support/VirtualFileSystem.h"
 #include "llvm/Support/WithColor.h"
-#include "llvm/Target/AArch64/AArch64OptionsOptInfos.h"
-#include "llvm/Target/AMDGPU/AMDGPUOptionsOptInfos.h"
-#include "llvm/Target/ARM/ARMOptionsOptInfos.h"
-#include "llvm/Target/BPF/BPFOptionsOptInfos.h"
-#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
-#include "llvm/Target/Lanai/LanaiOptionsOptInfos.h"
-#include "llvm/Target/LoongArch/LoongArchOptionsOptInfos.h"
-#include "llvm/Target/MSP430/MSP430OptionsOptInfos.h"
-#include "llvm/Target/Mips/MipsOptionsOptInfos.h"
-#include "llvm/Target/NVPTX/NVPTXOptionsOptInfos.h"
-#include "llvm/Target/PowerPC/PowerPCOptionsOptInfos.h"
-#include "llvm/Target/RISCV/RISCVOptionsOptInfos.h"
-#include "llvm/Target/SPIRV/SPIRVOptionsOptInfos.h"
-#include "llvm/Target/Sparc/SparcOptionsOptInfos.h"
-#include "llvm/Target/SystemZ/SystemZOptionsOptInfos.h"
-#include "llvm/Target/WebAssembly/WebAssemblyOptionsOptInfos.h"
-#include "llvm/Target/X86/X86OptionsOptInfos.h"
-#include "llvm/Target/XCore/XCoreOptionsOptInfos.h"
+#include "llvm/Target/AArch64/AArch64Options.h"
+#include "llvm/Target/AMDGPU/AMDGPUOptions.h"
+#include "llvm/Target/ARM/ARMOptions.h"
+#include "llvm/Target/BPF/BPFOptions.h"
+#include "llvm/Target/Hexagon/HexagonOptions.h"
+#include "llvm/Target/LoongArch/LoongArchOptions.h"
+#include "llvm/Target/MSP430/MSP430Options.h"
+#include "llvm/Target/Mips/MipsOptions.h"
+#include "llvm/Target/NVPTX/NVPTXOptions.h"
+#include "llvm/Target/PowerPC/PowerPCOptions.h"
+#include "llvm/Target/RISCV/RISCVOptions.h"
+#include "llvm/Target/SPIRV/SPIRVOptions.h"
+#include "llvm/Target/Sparc/SparcOptions.h"
+#include "llvm/Target/WebAssembly/WebAssemblyOptions.h"
+#include "llvm/Target/X86/X86Options.h"
+#include "llvm/Target/XCore/XCoreOptions.h"
 #include "llvm/TargetParser/Host.h"
-#include "llvm/Transforms/AggressiveInstCombine/AggressiveInstCombineOptionsOptInfos.h"
-#include "llvm/Transforms/Coroutines/CoroutinesOptionsOptInfos.h"
-#include "llvm/Transforms/IPO/IPOOptionsOptInfos.h"
-#include "llvm/Transforms/InstCombine/InstCombineOptionsOptInfos.h"
-#include "llvm/Transforms/Instrumentation/InstrumentationOptionsOptInfos.h"
-#include "llvm/Transforms/ObjCARC/ObjCARCOptionsOptInfos.h"
-#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
-#include "llvm/Transforms/Utils/UtilsOptionsOptInfos.h"
-#include "llvm/Transforms/Vectorize/VectorizeOptionsOptInfos.h"
+#include "llvm/Transforms/Instrumentation/InstrumentationOptions.h"
 #include <memory>
 
 using namespace llvm;
@@ -308,39 +302,6 @@ static void configureMCRegistries(clv2::OptionParser &P) {
   // It previously also registered the optimizer's registries, which it cannot
   // use -- ~1.7k options parsed on every run for a tool that exposes 49.
   P.add<&MCToolReg>();
-  P.add<&MCOptsReg>();
-  P.add<&SupportOptsReg, support::applySupportOptions>();
-  P.add<&RemarksOptsReg>();
-  P.add<&ObjectOptsReg>();
-  P.add<&AsmParserOptsReg>();
-  P.add<&IROptsReg>();
-#if LLVM_HAS_ARC_TARGET
-  P.add<&clv2::ARCOptsReg>();
-#endif
-#if LLVM_HAS_CSKY_TARGET
-  P.add<&clv2::CSKYOptsReg>();
-#endif
-#if LLVM_HAS_M68K_TARGET
-  P.add<&clv2::M68kOptsReg>();
-#endif
-  P.add<&X86OptsReg>();
-  P.add<&AArch64OptsReg>();
-  P.add<&AMDGPUOptsReg>();
-  P.add<&ARMOptsReg>();
-  P.add<&HexagonOptsReg>();
-  P.add<&RISCVOptsReg>();
-  P.add<&PowerPCOptsReg>();
-  P.add<&MipsOptsReg>();
-  P.add<&SystemZOptsReg>();
-  P.add<&SparcOptsReg>();
-  P.add<&WebAssemblyOptsReg>();
-  P.add<&LoongArchOptsReg>();
-  P.add<&NVPTXOptsReg>();
-  P.add<&LanaiOptsReg>();
-  P.add<&BPFOptsReg>();
-  P.add<&SPIRVOptsReg>();
-  P.add<&MSP430OptsReg>();
-  P.add<&XCoreOptsReg>();
 }
 } // namespace
 
@@ -379,8 +340,7 @@ struct MCArgs {
   bool LexMotorolaIntegers;
   bool NoExecStack;
   bool ValidateCFI;
-  clv2::X86AsmSyntaxKind X86Syntax;
-  bool X86SyntaxSpecified;
+  std::optional<X86AsmSyntaxKind> X86Syntax;
   ActionType Action;
   unsigned NumBenchmarkRuns;
   bool TimeTrace;
@@ -449,8 +409,7 @@ static int AssembleInput(const char *ProgName, const Target *TheTarget,
                          MCAsmInfo &MAI, MCSubtargetInfo &STI,
                          MCInstrInfo &MCII, MCTargetOptions const &MCOptions,
                          const MCArgs &Args) {
-  std::unique_ptr<MCAsmParser> Parser(
-      createMCAsmParser(SrcMgr, Ctx, Str, MAI));
+  std::unique_ptr<MCAsmParser> Parser(createMCAsmParser(SrcMgr, Ctx, Str, MAI));
   std::unique_ptr<MCTargetAsmParser> TAP(
       TheTarget->createMCAsmParser(STI, *Parser, MCII));
 
@@ -494,12 +453,64 @@ int main(int argc, char **argv) {
   llvm::InitializeAllDisassemblers();
   // Hide all library options.
 
+  // llvm::ObjectOptions, llvm::RemarksOptions, llvm::AsmParserOptions,
+  // llvm::XCoreOptions, llvm::MSP430Options, llvm::SparcOptions,
+  // llvm::MCLibraryOptions, and llvm::IROptions have migrated off clv2 onto
+  // the new per-library OptTable struct design (see
+  // llvm/include/llvm/Option/LibraryOptions.h) and are no longer among the
+  // clv2::OptionParser registries configured below. Parse their options out
+  // of argv first, forwarding whatever none of them recognizes to the
+  // legacy clv2 parser unchanged.
+  SmallVector<const char *, 32> ObjectOptsRest;
+  {
+    std::string ObjectOptsErrs;
+    raw_string_ostream ObjectOptsErrsOS(ObjectOptsErrs);
+    if (Error Err = opt::parseLibraryOptionsChain<
+            SupportOptions, ObjectOptions, RemarksOptions, AsmParserOptions,
+            XCoreOptions, MSP430Options, SparcOptions, WebAssemblyOptions,
+            SPIRVOptions, BPFOptions, LoongArchOptions, MipsOptions,
+            NVPTXOptions, AArch64Options, ARMOptions, RISCVOptions, X86Options,
+            PowerPCOptions, HexagonOptions, MCLibraryOptions, IROptions,
+            AMDGPUOptions
+#if LLVM_HAS_ARC_TARGET
+            ,
+            ARCOptions
+#endif
+#if LLVM_HAS_CSKY_TARGET
+            ,
+            CSKYOptions
+#endif
+#if LLVM_HAS_LANAI_TARGET
+            ,
+            LanaiOptions
+#endif
+#if LLVM_HAS_M68K_TARGET
+            ,
+            M68kOptions
+#endif
+#if LLVM_HAS_SYSTEMZ_TARGET
+            ,
+            SystemZOptions
+#endif
+            >(ArrayRef<const char *>(argv + 1, argv + argc), ObjectOptsRest,
+              ObjectOptsErrsOS)) {
+      errs() << "llvm-mc: " << toString(std::move(Err)) << "\n";
+      return 1;
+    }
+    errs() << ObjectOptsErrs;
+  }
+  SmallVector<const char *, 32> ArgvAfterObjectOpts;
+  ArgvAfterObjectOpts.push_back(argv[0]);
+  ArgvAfterObjectOpts.append(ObjectOptsRest.begin(), ObjectOptsRest.end());
+
   clv2::OptionParser P;
   configureMCRegistries(P);
   P.enableGlobalDynamicEntries();
   P.hideUnrelatedOptions({&MCCategory, &clv2::ColorOptionsCategory});
-  auto OptsCtxOwner = P.parse(argc, argv, "llvm machine code playground\n",
-                              /*Errs=*/nullptr);
+  auto OptsCtxOwner =
+      P.parse(static_cast<int>(ArgvAfterObjectOpts.size()),
+              ArgvAfterObjectOpts.data(), "llvm machine code playground\n",
+              /*Errs=*/nullptr);
   const auto &OptsCtx = *OptsCtxOwner;
   const auto *O = OptsCtx.getViewPtr<&MCToolReg>();
 
@@ -539,10 +550,7 @@ int main(int argc, char **argv) {
   Args.LexMotorolaIntegers = O->get<&LexMotorolaIntegersOpt>();
   Args.NoExecStack = O->get<&NoExecStackOpt>();
   Args.ValidateCFI = O->get<&ValidateCFIOpt>();
-  if (auto *X86O = OptsCtx.getViewPtr<&X86OptsReg>()) {
-    Args.X86Syntax = X86O->get<&X86_AsmSyntax>();
-    Args.X86SyntaxSpecified = X86O->specified<&X86_AsmSyntax>();
-  }
+  Args.X86Syntax = X86Options::Current.X86_AsmSyntax;
   {
     // Each flag below writes into the same logical Action choice; when more
     // than one is given, the one that appears latest on the command line
@@ -597,10 +605,10 @@ int main(int argc, char **argv) {
   MCOptions.MCNoExecStack = Args.NoExecStack;
   MCOptions.MCUseDwarfDirectory = MCTargetOptions::EnableDwarfDirectory;
   MCOptions.InstPrinterOptions = Args.InstPrinterOptions;
-  if (Args.X86SyntaxSpecified) {
-    llvm::setX86AsmSyntax(static_cast<unsigned>(Args.X86Syntax));
+  if (Args.X86Syntax) {
+    llvm::setX86AsmSyntax(static_cast<unsigned>(*Args.X86Syntax));
     if (!Args.OutputAsmVariantSpecified)
-      MCOptions.OutputAsmVariant = static_cast<int>(Args.X86Syntax);
+      MCOptions.OutputAsmVariant = static_cast<int>(*Args.X86Syntax);
   }
   if (Args.OutputAsmVariantSpecified)
     MCOptions.OutputAsmVariant = Args.OutputAsmVariant;

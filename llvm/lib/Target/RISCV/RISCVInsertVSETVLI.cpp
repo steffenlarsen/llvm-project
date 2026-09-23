@@ -34,8 +34,7 @@
 #include "llvm/CodeGen/LiveStacks.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/RegisterClassInfo.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/RISCV/RISCVOptionsOptInfos.h"
+#include "llvm/Target/RISCV/RISCVOptions.h"
 #include <queue>
 using namespace llvm;
 using namespace RISCV;
@@ -47,9 +46,9 @@ STATISTIC(NumInsertedVSETVL, "Number of VSETVL inst inserted");
 STATISTIC(NumCoalescedVSETVL, "Number of VSETVL inst coalesced");
 
 static bool getEnsureWholeVectorRegisterMoveValidVTYPE(const Function &F) {
-  return clv2::getOptValOrDefault<
-      &clv2::RV_EnsureWholeVectorRegisterMoveValidVTYPE>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<RISCVOptions>()
+      .RV_EnsureWholeVectorRegisterMoveValidVTYPE;
 }
 
 namespace {
@@ -750,8 +749,8 @@ void RISCVInsertVSETVLI::doPRE(MachineBasicBlock &MBB) {
   // or modify VL or VTYPE.  Also, fallthrough will return end().
   auto InsertPt = UnavailablePred->getFirstInstrTerminator();
   insertVSETVLI(*UnavailablePred, InsertPt,
-                UnavailablePred->findDebugLoc(InsertPt),
-                AvailableInfo, OldExit);
+                UnavailablePred->findDebugLoc(InsertPt), AvailableInfo,
+                OldExit);
 }
 
 // Return true if we can mutate PrevMI to match MI without changing any the
@@ -826,7 +825,7 @@ void RISCVInsertVSETVLI::coalesceVSETVLIs(MachineBasicBlock &MBB) const {
   DemandedFields Used;
   Used.demandVL();
   Used.demandVTYPE();
-  SmallVector<MachineInstr*> ToDelete;
+  SmallVector<MachineInstr *> ToDelete;
 
   auto dropAVLUse = [&](MachineOperand &MO) {
     if (!MO.isReg() || !MO.getReg().isVirtual())
@@ -1164,7 +1163,6 @@ bool RISCVInsertVSETVLI::runOnMachineFunction(MachineFunction &MF) {
     BBInfo.Exit = TmpStatus;
     LLVM_DEBUG(dbgs() << "Initial exit state of " << printMBBReference(MBB)
                       << " is " << BBInfo.Exit << "\n");
-
   }
 
   // If we didn't find any instructions that need VSETVLI, we're done.

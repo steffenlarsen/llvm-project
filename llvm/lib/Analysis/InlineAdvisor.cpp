@@ -14,7 +14,7 @@
 #include "llvm/Analysis/InlineAdvisor.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/StringExtras.h"
-#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
+#include "llvm/Analysis/AnalysisOptions.h"
 #include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/Analysis/EphemeralValuesCache.h"
 #include "llvm/Analysis/IR2Vec.h"
@@ -28,8 +28,6 @@
 #include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/PassManager.h"
-#include "llvm/Support/CommandLineCompat.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 
 using namespace llvm;
@@ -59,44 +57,47 @@ std::string IR2VecVocabFile;
 
 static InlinerFunctionImportStatsOpts
 getInlinerFunctionImportStats(const Module &M) {
-  return clv2::getOptValIfSpecified<&clv2::AnalysisOptsReg,
-                                    &clv2::AN_InlinerFunctionImportStats>(
-      M.getContext().getOptionsContext(), InlinerFunctionImportStatsOpts::No);
+  return M.getContext()
+      .getOptions<AnalysisOptions>()
+      .AN_InlinerFunctionImportStats;
 }
 
 static bool getInlineRemarkAttribute(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AN_InlineRemarkAttribute>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<AnalysisOptions>().AN_InlineRemarkAttribute;
 }
 
 static bool getEnableInlineDeferral(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AN_EnableInlineDeferral>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<AnalysisOptions>().AN_EnableInlineDeferral;
 }
 
 static int getInlineDeferralScale(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AN_InlineDeferralScale>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<AnalysisOptions>().AN_InlineDeferralScale;
 }
 
 static bool getAnnotateInlinePhase(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AN_AnnotateInlinePhase>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<AnalysisOptions>().AN_AnnotateInlinePhase;
 }
 static bool getAnnotateInlinePhase(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::AN_AnnotateInlinePhase>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<AnalysisOptions>().AN_AnnotateInlinePhase;
 }
 
+// AN_IR2VecVocabFile is a plain ValueField (not OptionalField), so unlike the
+// old clv2 code (which used getOptValIfSpecified to fall back to the mutable
+// IR2VecVocabFile global only when the CLI option was NOT explicitly
+// specified), the migrated field can't distinguish "explicitly set to empty"
+// from "never specified". Both the field's own baked default and the
+// (never-written-to) global are "", so this empty-string check is
+// behaviorally equivalent in every case except a user explicitly passing
+// `-ml-inliner-ir2vec-vocab-file=""`.
 static std::string getIR2VecVocabFile(const Function &F) {
-  return clv2::getOptValIfSpecified<&clv2::AnalysisOptsReg,
-                                    &clv2::AN_IR2VecVocabFile>(
-      F.getContext().getOptionsContext(), IR2VecVocabFile);
+  const std::string &Opt =
+      F.getContext().getOptions<AnalysisOptions>().AN_IR2VecVocabFile;
+  return Opt.empty() ? IR2VecVocabFile : Opt;
 }
 static std::string getIR2VecVocabFile(const Module &M) {
-  return clv2::getOptValIfSpecified<&clv2::AnalysisOptsReg,
-                                    &clv2::AN_IR2VecVocabFile>(
-      M.getContext().getOptionsContext(), IR2VecVocabFile);
+  const std::string &Opt =
+      M.getContext().getOptions<AnalysisOptions>().AN_IR2VecVocabFile;
+  return Opt.empty() ? IR2VecVocabFile : Opt;
 }
 
 namespace {

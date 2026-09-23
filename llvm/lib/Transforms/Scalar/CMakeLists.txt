@@ -1,6 +1,4 @@
 add_llvm_component_library(LLVMScalarOpts
-  ScalarOptionsRegistration.cpp
-  ScalarOptionsGetters.cpp
   ADCE.cpp
   AlignmentFromAssumptions.cpp
   AnnotationRemarks.cpp
@@ -92,6 +90,7 @@ add_llvm_component_library(LLVMScalarOpts
 
   DEPENDS
   intrinsics_gen
+  ScalarOptParserTableGen
 
   COMPONENT_NAME
   Scalar

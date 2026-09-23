@@ -11,6 +11,7 @@ add_llvm_tool(llvm-profdata
 
   DEPENDS
   intrinsics_gen
+  ProfileDataOptParserTableGen
   )
 
 target_link_libraries(llvm-profdata PRIVATE LLVMDebuginfod LLVMHTTP)

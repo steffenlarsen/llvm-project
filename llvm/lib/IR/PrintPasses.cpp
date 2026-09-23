@@ -15,10 +15,9 @@
 #include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/IR/DebugLoc.h"
 #include "llvm/IR/Function.h"
-#include "llvm/IR/IROptionsOptInfos.h"
+#include "llvm/IR/IROptions.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/LLVMContext.h"
-#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Errc.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FileSystem.h"
@@ -32,90 +31,61 @@
 
 using namespace llvm;
 
-static const ir_opts::ParsedOpts *getOpts(const LLVMContext &Ctx) {
-  return clv2::getView<&clv2::IROptsReg>(Ctx.getOptionsContext());
+static const IROptions &getOpts(const LLVMContext &Ctx) {
+  return Ctx.getOptions<IROptions>();
 }
 
-static const ir_opts::ParsedOpts *getOpts(const clv2::OptionsContext &Ctx) {
-  return clv2::getView<&clv2::IROptsReg>(Ctx);
+// No LLVMContext reachable (bare-OptionsContext / no-context legacy pass
+// manager call sites): read the process-wide IROptions::Current directly,
+// ignoring the context parameter -- there's nowhere to attach a per-context
+// override without an LLVMContext. Mirrors the established pattern for
+// CGDataOptions / WebAssemblyOptions / LTOOptions (see
+// llvm/lib/LTO/LTO.cpp).
+static const IROptions &getOpts(const clv2::OptionsContext &) {
+  return IROptions::Current;
 }
 
-static std::vector<std::string> getPrintBefore(const ir_opts::ParsedOpts *O) {
-  if (O)
-    return O->get<&clv2::IR_PrintBefore>();
-  return {};
+static std::vector<std::string> getPrintBefore(const IROptions &O) {
+  return O.IR_PrintBefore;
 }
 
-static std::vector<std::string> getPrintAfter(const ir_opts::ParsedOpts *O) {
-  if (O)
-    return O->get<&clv2::IR_PrintAfter>();
-  return {};
+static std::vector<std::string> getPrintAfter(const IROptions &O) {
+  return O.IR_PrintAfter;
 }
 
-static bool getPrintBeforeAll(const ir_opts::ParsedOpts *O) {
-  if (O)
-    return O->get<&clv2::IR_PrintBeforeAll>();
-  return false;
+static bool getPrintBeforeAll(const IROptions &O) {
+  return O.IR_PrintBeforeAll;
 }
 
-static bool getPrintAfterAll(const ir_opts::ParsedOpts *O) {
-  if (O)
-    return O->get<&clv2::IR_PrintAfterAll>();
-  return false;
-}
+static bool getPrintAfterAll(const IROptions &O) { return O.IR_PrintAfterAll; }
 
 ChangePrinter llvm::getPrintChanged(const LLVMContext &Ctx) {
-  if (auto *O = getOpts(Ctx))
-    return O->get<&clv2::IR_PrintChanged>();
-  return ChangePrinter::None;
+  return getOpts(Ctx).IR_PrintChanged;
 }
 
-static std::string getDiffBinary(const ir_opts::ParsedOpts *O) {
-  if (O)
-    return O->get<&clv2::IR_DiffBinary>();
-  return "diff";
+static std::string getDiffBinary(const IROptions &O) { return O.IR_DiffBinary; }
+
+static bool getPrintModuleScope(const IROptions &O) {
+  return O.IR_PrintModuleScope;
 }
 
-static bool getPrintModuleScope(const ir_opts::ParsedOpts *O) {
-  if (O)
-    return O->get<&clv2::IR_PrintModuleScope>();
-  return false;
+static bool getLoopPrintFuncScope(const IROptions &O) {
+  return O.IR_LoopPrintFuncScope;
 }
 
-static ChangePrinter getPrintChangedVal(const ir_opts::ParsedOpts *O) {
-  if (O)
-    return O->get<&clv2::IR_PrintChanged>();
-  return ChangePrinter::None;
+static std::vector<std::string> getFilterPasses(const IROptions &O) {
+  return O.IR_FilterPasses;
 }
 
-static bool getLoopPrintFuncScope(const ir_opts::ParsedOpts *O) {
-  if (O)
-    return O->get<&clv2::IR_LoopPrintFuncScope>();
-  return false;
+static std::vector<std::string> getPrintFuncsList(const IROptions &O) {
+  return O.IR_PrintFuncsList;
 }
 
-static std::vector<std::string> getFilterPasses(const ir_opts::ParsedOpts *O) {
-  if (O)
-    return O->get<&clv2::IR_FilterPasses>();
-  return {};
+static std::vector<std::string> getPrintSourceLocs(const IROptions &O) {
+  return O.IR_PrintSourceLocs;
 }
 
-static std::vector<std::string>
-getPrintFuncsList(const ir_opts::ParsedOpts *O) {
-  if (O)
-    return O->get<&clv2::IR_PrintFuncsList>();
-  return {};
-}
-
-static std::vector<std::string>
-getPrintSourceLocs(const ir_opts::ParsedOpts *O) {
-  if (O)
-    return O->get<&clv2::IR_PrintSourceLocs>();
-  return {};
-}
-
-static bool isFunctionInPrintList(const ir_opts::ParsedOpts *O,
-                                  StringRef FunctionName) {
+static bool isFunctionInPrintList(const IROptions &O, StringRef FunctionName) {
   auto PFL = getPrintFuncsList(O);
   return PFL.empty() || llvm::is_contained(PFL, FunctionName) ||
          llvm::is_contained(PFL, "*");
@@ -127,12 +97,12 @@ static bool shouldPrintBeforeOrAfterPass(StringRef PassID,
 }
 
 bool llvm::shouldPrintBeforeSomePass(const LLVMContext &Ctx) {
-  auto *O = getOpts(Ctx);
+  auto &O = getOpts(Ctx);
   return getPrintBeforeAll(O) || !getPrintBefore(O).empty();
 }
 
 bool llvm::shouldPrintAfterSomePass(const LLVMContext &Ctx) {
-  auto *O = getOpts(Ctx);
+  auto &O = getOpts(Ctx);
   return getPrintAfterAll(O) || !getPrintAfter(O).empty();
 }
 
@@ -145,13 +115,13 @@ bool llvm::shouldPrintAfterAll(const LLVMContext &Ctx) {
 }
 
 bool llvm::shouldPrintBeforePass(const LLVMContext &Ctx, StringRef PassID) {
-  auto *O = getOpts(Ctx);
+  auto &O = getOpts(Ctx);
   return getPrintBeforeAll(O) ||
          shouldPrintBeforeOrAfterPass(PassID, getPrintBefore(O));
 }
 
 bool llvm::shouldPrintAfterPass(const LLVMContext &Ctx, StringRef PassID) {
-  auto *O = getOpts(Ctx);
+  auto &O = getOpts(Ctx);
   return getPrintAfterAll(O) ||
          shouldPrintBeforeOrAfterPass(PassID, getPrintAfter(O));
 }
@@ -169,14 +139,14 @@ bool llvm::shouldPrintAfterPass(StringRef PassID) {
 
 bool llvm::shouldPrintBeforePass(StringRef PassID,
                                  const clv2::OptionsContext &Ctx) {
-  auto *O = clv2::getView<&clv2::IROptsReg>(Ctx);
+  auto &O = getOpts(Ctx);
   return getPrintBeforeAll(O) ||
          shouldPrintBeforeOrAfterPass(PassID, getPrintBefore(O));
 }
 
 bool llvm::shouldPrintAfterPass(StringRef PassID,
                                 const clv2::OptionsContext &Ctx) {
-  auto *O = clv2::getView<&clv2::IROptsReg>(Ctx);
+  auto &O = getOpts(Ctx);
   return getPrintAfterAll(O) ||
          shouldPrintBeforeOrAfterPass(PassID, getPrintAfter(O));
 }
@@ -336,7 +306,7 @@ bool locMatchesFilters(ArrayRef<PrintSourceLocFilter> Filters,
 } // namespace
 
 static std::vector<PrintSourceLocFilter>
-getSourceLocFilters(const ir_opts::ParsedOpts *O) {
+getSourceLocFilters(const IROptions &O) {
   return parseSourceLocFilters(getPrintSourceLocs(O));
 }
 
@@ -381,7 +351,7 @@ bool llvm::shouldPrintAllFunctions(const clv2::OptionsContext &Ctx) {
 }
 
 bool llvm::shouldPrintFunction(const Function &F) {
-  auto *O = getOpts(F.getContext());
+  auto &O = getOpts(F.getContext());
   if (!::isFunctionInPrintList(O, F.getName()))
     return false;
 
@@ -453,7 +423,7 @@ std::string llvm::doSystemDiff(const clv2::OptionsContext &Ctx,
   if (prepareTempFiles(FD, SR, FileName))
     return "Unable to create temporary file.";
 
-  std::string DiffBin = getDiffBinary(clv2::getView<&clv2::IROptsReg>(Ctx));
+  std::string DiffBin = getDiffBinary(getOpts(Ctx));
   ErrorOr<std::string> DiffExe = sys::findProgramByName(DiffBin);
   if (!DiffExe)
     return "Unable to find diff executable.";
@@ -490,8 +460,7 @@ void llvm::reportChangedIR(const LLVMContext &Ctx, StringRef Before,
   if (!ShouldReport && IsInteresting)
     return;
 
-  auto *O = clv2::getView<&clv2::IROptsReg>(Ctx.getOptionsContext());
-  ChangePrinter PC = getPrintChangedVal(O);
+  ChangePrinter PC = getOpts(Ctx).IR_PrintChanged;
 
   if (IsInteresting && Before != After) {
     if (After.empty() &&

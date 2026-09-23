@@ -12,8 +12,7 @@
 
 #include "AArch64SelectionDAGInfo.h"
 #include "AArch64MachineFunctionInfo.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/AArch64/AArch64OptionsOptInfos.h"
+#include "llvm/Target/AArch64/AArch64Options.h"
 
 #define GET_SDNODE_DESC
 #include "AArch64GenSDNodeInfo.inc"
@@ -24,13 +23,11 @@ using namespace llvm;
 #define DEBUG_TYPE "aarch64-selectiondag-info"
 
 static bool getLowerToSMERoutines(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::A64_LowerToSMERoutines>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<AArch64Options>().A64_LowerToSMERoutines;
 }
 
 static bool getUseMOPS(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::A64_UseMOPS>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<AArch64Options>().A64_UseMOPS;
 }
 
 AArch64SelectionDAGInfo::AArch64SelectionDAGInfo()
@@ -310,8 +307,7 @@ static SDValue EmitUnrolledSetTag(SelectionDAG &DAG, const SDLoc &dl,
       SDValue AddrNode = DAG.getMemBasePlusOffset(
           Ptr, TypeSize::getFixed(OffsetScaled * 16), dl);
       SDValue St = DAG.getMemIntrinsicNode(
-          OpCode2, dl, DAG.getVTList(MVT::Other),
-          {Chain, TagSrc, AddrNode},
+          OpCode2, dl, DAG.getVTList(MVT::Other), {Chain, TagSrc, AddrNode},
           MVT::v4i64,
           MF.getMachineMemOperand(BaseMemOperand, OffsetScaled * 16, 16 * 2));
       OffsetScaled += 2;
@@ -323,8 +319,7 @@ static SDValue EmitUnrolledSetTag(SelectionDAG &DAG, const SDLoc &dl,
       SDValue AddrNode = DAG.getMemBasePlusOffset(
           Ptr, TypeSize::getFixed(OffsetScaled * 16), dl);
       SDValue St = DAG.getMemIntrinsicNode(
-          OpCode1, dl, DAG.getVTList(MVT::Other),
-          {Chain, TagSrc, AddrNode},
+          OpCode1, dl, DAG.getVTList(MVT::Other), {Chain, TagSrc, AddrNode},
           MVT::v2i64,
           MF.getMachineMemOperand(BaseMemOperand, OffsetScaled * 16, 16));
       OffsetScaled += 1;

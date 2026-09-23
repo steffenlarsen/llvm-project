@@ -37,6 +37,7 @@
 #include "llvm/CodeGen/TailDuplication.h"
 #include "llvm/CodeGen/TwoAddressInstructionPass.h"
 #include "llvm/CodeGen/UnreachableBlockElim.h"
+#include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/PassInstrumentation.h"
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/Passes/CodeGenPassBuilder.h"
@@ -53,11 +54,10 @@
 #include "llvm/Transforms/Scalar/StraightLineStrengthReduce.h"
 #include "llvm/Transforms/Vectorize/LoadStoreVectorizer.h"
 
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
-#include "llvm/Target/NVPTX/NVPTXOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsSched1.h"
+#include "llvm/Target/NVPTX/NVPTXOptions.h"
 
 using namespace llvm;
-
 
 // byval arguments in NVPTX are special. We're only allowed to read from them
 // using a special instruction, and if we ever need to write to them or take an
@@ -77,19 +77,32 @@ using namespace llvm;
 // This early injection of the copies has potential to create undesireable
 // side-effects, so it's disabled by default, for now, until it sees more
 // testing.
-static bool getDisableLoadStoreVectorizer(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::NVPTXOptsReg,
-                           &clv2::NVPTX_DisableLoadStoreVectorizer>(Ctx, false);
+// No Function/Module is reachable at these call sites (pipeline-build time
+// or registerPassBuilderCallbacks); fall back to the process-wide default
+// when Ctx is null (see getNoKernelInfoEndLto below for the same pattern).
+static bool getDisableLoadStoreVectorizer(const LLVMContext *Ctx) {
+  return (Ctx ? Ctx->getOptions<NVPTXOptions>() : NVPTXOptions::Current)
+      .NVPTX_DisableLoadStoreVectorizer;
 }
 
-static bool getDisableNVPTXIRPeephole(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::NVPTXOptsReg, &clv2::NVPTX_DisableIRPeephole>(
-      Ctx, false);
+static bool getDisableNVPTXIRPeephole(const LLVMContext *Ctx) {
+  return (Ctx ? Ctx->getOptions<NVPTXOptions>() : NVPTXOptions::Current)
+      .NVPTX_DisableIRPeephole;
 }
 
-static bool getEarlyByValArgsCopy(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::NVPTXOptsReg,
-                           &clv2::NVPTX_EarlyByValArgsCopy>(Ctx, false);
+static bool getEarlyByValArgsCopy(const LLVMContext *Ctx) {
+  return (Ctx ? Ctx->getOptions<NVPTXOptions>() : NVPTXOptions::Current)
+      .NVPTX_EarlyByValArgsCopy;
+}
+
+// No Function/Module is reachable from registerPassBuilderCallbacks; fall
+// back to the process-wide default when Ctx is null (see
+// TargetLoweringBase.cpp's getSched1Options for the same pattern and its
+// rationale).
+static bool getNoKernelInfoEndLto(const LLVMContext *Ctx) {
+  return (Ctx ? Ctx->getOptions<CodeGenSched1Options>()
+              : CodeGenSched1Options::Current)
+      .CGPASS_NoKernelInfoEndLto;
 }
 
 namespace {
@@ -238,13 +251,13 @@ void NVPTXCodeGenPassBuilder::addIRPasses(PassManagerWrapper &PMW) {
   // but EarlyCSE can do neither of them.
   if (getOptLevel() != CodeGenOptLevel::None) {
     addEarlyCSEOrGVNPass(PMW);
-    if (!getDisableLoadStoreVectorizer(TM.getOptionsContext()))
+    if (!getDisableLoadStoreVectorizer(/*Ctx=*/nullptr))
       addFunctionPass(LoadStoreVectorizerPass(), PMW);
     addFunctionPass(SROAPass(SROAOptions(SROAOptions::PreserveCFG,
                                          /*AggregateToVector=*/true)),
                     PMW);
     addFunctionPass(NVPTXTagInvariantLoadsPass(), PMW);
-    if (!getDisableNVPTXIRPeephole(TM.getOptionsContext()))
+    if (!getDisableNVPTXIRPeephole(/*Ctx=*/nullptr))
       addFunctionPass(NVPTXIRPeepholePass(), PMW);
   }
 
@@ -344,13 +357,12 @@ void NVPTXTargetMachine::registerPassBuilderCallbacks(PassBuilder &PB) {
         // Note: NVVMIntrRangePass was causing numerical discrepancies at one
         // point, if issues crop up, consider disabling.
         FPM.addPass(NVVMIntrRangePass());
-        if (getEarlyByValArgsCopy(getOptionsContext()))
+        if (getEarlyByValArgsCopy(/*Ctx=*/nullptr))
           FPM.addPass(NVPTXCopyByValArgsPass());
         PM.addPass(createModuleToFunctionPassAdaptor(std::move(FPM)));
       });
 
-  if (!clv2::getOptValOrDefault<&clv2::CGPASS_NoKernelInfoEndLto>(
-          getOptionsContext())) {
+  if (!getNoKernelInfoEndLto(/*Ctx=*/nullptr)) {
     PB.registerFullLinkTimeOptimizationLastEPCallback(
         [this](ModulePassManager &PM, OptimizationLevel Level) {
           FunctionPassManager FPM;

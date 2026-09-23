@@ -41,8 +41,7 @@
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/TargetOpcodes.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/AArch64/AArch64OptionsOptInfos.h"
+#include "llvm/Target/AArch64/AArch64Options.h"
 
 #define GET_GICOMBINER_DEPS
 #include "AArch64GenPostLegalizeGICombiner.inc"
@@ -720,8 +719,9 @@ static bool tryOptimizeConsecStores(SmallVectorImpl<StoreInfo> &Stores,
 }
 
 static bool getEnableConsecutiveMemOpOpt(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::A64_EnableConsecutiveMemOpOpt>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<AArch64Options>()
+      .A64_EnableConsecutiveMemOpOpt;
 }
 
 static bool optimizeConsecutiveMemOpAddressing(MachineFunction &MF,

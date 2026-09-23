@@ -14,38 +14,33 @@
 #include "llvm/Analysis/ProfileSummaryInfo.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Support/CommandLineCompat.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
-#include "llvm/Transforms/Utils/UtilsOptionsOptInfos.h"
-
-using namespace llvm::clv2;
+#include "llvm/Transforms/Utils/UtilsOptions.h"
 
 namespace llvm {
 
-bool getNoWarnSampleUnused(const clv2::OptionsContext &Ctx) {
-  return getOptValIfSpecified<&TransformUtilsOptsReg, &TU_NoWarnSampleUnused>(
-      Ctx, false);
+bool getNoWarnSampleUnused(const LLVMContext &Ctx) {
+  return Ctx.getOptions<UtilsOptions>().TU_NoWarnSampleUnused;
 }
 
-bool getSampleProfileUseProfi(const clv2::OptionsContext &Ctx) {
-  return getOptValOrDefault<&TU_SampleProfileUseProfi>(Ctx);
+bool getSampleProfileUseProfi(const LLVMContext &Ctx) {
+  return Ctx.getOptions<UtilsOptions>().TU_SampleProfileUseProfi.value_or(
+      false);
 }
 
-unsigned
-getSampleProfileMaxPropagateIterations(const clv2::OptionsContext &Ctx) {
-  return getOptValOrDefault<&TU_SampleProfileMaxPropagateIterations>(Ctx);
+unsigned getSampleProfileMaxPropagateIterations(const LLVMContext &Ctx) {
+  return Ctx.getOptions<UtilsOptions>().TU_SampleProfileMaxPropagateIterations;
 }
 
-unsigned getSampleProfileRecordCoverage(const clv2::OptionsContext &Ctx) {
-  return getOptValIfSpecified<&TransformUtilsOptsReg,
-                              &TU_SampleProfileRecordCoverage>(Ctx, 0u);
+unsigned getSampleProfileRecordCoverage(const LLVMContext &Ctx) {
+  return Ctx.getOptions<UtilsOptions>().TU_SampleProfileRecordCoverage;
 }
 
-unsigned getSampleProfileSampleCoverage(const clv2::OptionsContext &Ctx) {
-  return getOptValIfSpecified<&TransformUtilsOptsReg,
-                              &TU_SampleProfileSampleCoverage>(Ctx, 0u);
+unsigned getSampleProfileSampleCoverage(const LLVMContext &Ctx) {
+  return Ctx.getOptions<UtilsOptions>().TU_SampleProfileSampleCoverage;
 }
 
 namespace sampleprofutil {

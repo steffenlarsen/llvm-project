@@ -18,17 +18,7 @@ using namespace llvm;
 #define GET_SUBTARGETINFO_TARGET_DESC
 #define GET_SUBTARGETINFO_CTOR
 #include "SystemZGenSubtargetInfo.inc"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/SystemZ/SystemZOptionsOptInfos.h"
-
-static bool getUseSubRegLiveness(const sz_opts::ParsedOpts *O,
-                                 const clv2::OptionsContext &Ctx) {
-  if (!O)
-    O = clv2::getView<&clv2::SystemZOptsReg>(Ctx);
-  if (O)
-    return O->get<&clv2::SZ_UseSubRegLiveness>();
-  return false;
-}
+#include "llvm/Target/SystemZ/SystemZOptions.h"
 
 // Pin the vtable to this file.
 void SystemZSubtarget::anchor() {}
@@ -83,7 +73,7 @@ SystemZSubtarget::SystemZSubtarget(const Triple &TT, const std::string &CPU,
 }
 
 bool SystemZSubtarget::enableSubRegLiveness() const {
-  return getUseSubRegLiveness(nullptr, getOptionsContext());
+  return SystemZOptions::Current.SZ_UseSubRegLiveness;
 }
 
 bool SystemZSubtarget::isAddressedViaADA(const GlobalValue *GV) const {

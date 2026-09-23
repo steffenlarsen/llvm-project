@@ -42,8 +42,7 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/DebugCounter.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/AArch64/AArch64OptionsOptInfos.h"
+#include "llvm/Target/AArch64/AArch64Options.h"
 #include <cassert>
 #include <cstdint>
 #include <functional>
@@ -72,24 +71,24 @@ STATISTIC(NumUMOVFoldedToFPRStore,
 DEBUG_COUNTER(RegRenamingCounter, DEBUG_TYPE "-reg-renaming",
               "Controls which pairs are considered for renaming");
 
-static unsigned getLdStLimit(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::A64_LdStLimit>(Ctx);
+static unsigned getLdStLimit(const Function &F) {
+  return F.getContext().getOptions<AArch64Options>().A64_LdStLimit;
 }
 
-static unsigned getUMOVFoldLimit(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::A64_UMOVFoldLimit>(Ctx);
+static unsigned getUMOVFoldLimit(const Function &F) {
+  return F.getContext().getOptions<AArch64Options>().A64_UMOVFoldLimit;
 }
 
-static unsigned getUpdateLimit(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::A64_UpdateLimit>(Ctx);
+static unsigned getUpdateLimit(const Function &F) {
+  return F.getContext().getOptions<AArch64Options>().A64_UpdateLimit;
 }
 
-static unsigned getLdStConstLimit(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::A64_LdStConstLimit>(Ctx);
+static unsigned getLdStConstLimit(const Function &F) {
+  return F.getContext().getOptions<AArch64Options>().A64_LdStConstLimit;
 }
 
-static bool getEnableRenaming(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::A64_EnableRenaming>(Ctx);
+static bool getEnableRenaming(const Function &F) {
+  return F.getContext().getOptions<AArch64Options>().A64_EnableRenaming;
 }
 
 #define AARCH64_LOAD_STORE_OPT_NAME "AArch64 load / store optimization pass"
@@ -1097,7 +1096,7 @@ AArch64LoadStoreOpt::mergePairedInsns(MachineBasicBlock::iterator I,
                   TRI->regsOverlap(MOP.getReg(), RegToRename)) {
                 assert((MOP.isImplicit() ||
                         (MOP.isRenamable() && !MOP.isEarlyClobber())) &&
-                           "Need renamable operands");
+                       "Need renamable operands");
                 Register MatchingReg;
                 if (const TargetRegisterClass *RC =
                         MI.getRegClassConstraint(OpIdx, TII, TRI))
@@ -1467,8 +1466,8 @@ AArch64LoadStoreOpt::promoteLoadFromStore(MachineBasicBlock::iterator LoadI,
     // Remove the load, if the destination register of the loads is the same
     // register for stored value.
     if (StRt == LdRt && LoadSize == 8) {
-      for (MachineInstr &MI : make_range(StoreI->getIterator(),
-                                         LoadI->getIterator())) {
+      for (MachineInstr &MI :
+           make_range(StoreI->getIterator(), LoadI->getIterator())) {
         if (MI.killsRegister(StRt, TRI)) {
           MI.clearRegisterKills(StRt, TRI);
           break;
@@ -1554,8 +1553,8 @@ AArch64LoadStoreOpt::promoteLoadFromStore(MachineBasicBlock::iterator LoadI,
   }
 
   // Clear kill flags between store and load.
-  for (MachineInstr &MI : make_range(StoreI->getIterator(),
-                                     BitExtMI->getIterator()))
+  for (MachineInstr &MI :
+       make_range(StoreI->getIterator(), BitExtMI->getIterator()))
     if (MI.killsRegister(StRt, TRI)) {
       MI.clearRegisterKills(StRt, TRI);
       break;
@@ -1869,11 +1868,9 @@ canRenameUpToDef(MachineInstr &FirstMI, LiveRegUnits &UsedInBetween,
     return true;
   };
 
-  if (!forAllMIsUntilDef(
-          FirstMI, RegToRename, TRI,
-          getLdStLimit(
-              FirstMI.getMF()->getFunction().getContext().getOptionsContext()),
-          CheckMIs))
+  if (!forAllMIsUntilDef(FirstMI, RegToRename, TRI,
+                         getLdStLimit(FirstMI.getMF()->getFunction()),
+                         CheckMIs))
     return false;
 
   if (!FoundDef) {
@@ -1903,8 +1900,7 @@ static bool canRenameUntilSecondLoad(
   UsedInBetween.accumulate(FirstLoad);
   auto RegToRename = getLdStRegOp(FirstLoad).getReg();
   bool Success = std::all_of(
-      FirstLoad.getIterator(), SecondLoad.getIterator(),
-      [&](MachineInstr &MI) {
+      FirstLoad.getIterator(), SecondLoad.getIterator(), [&](MachineInstr &MI) {
         LLVM_DEBUG(dbgs() << "Checking " << MI);
         // Currently we do not try to rename across frame-setup instructions.
         if (MI.getFlag(MachineInstr::FrameSetup)) {
@@ -2032,8 +2028,7 @@ AArch64LoadStoreOpt::findMatchingInsn(MachineBasicBlock::iterator I,
   bool IsPromotableZeroStore = isPromotableZeroStoreInst(FirstMI);
 
   std::optional<bool> MaybeCanRename;
-  if (!getEnableRenaming(
-          FirstMI.getMF()->getFunction().getContext().getOptionsContext()))
+  if (!getEnableRenaming(FirstMI.getMF()->getFunction()))
     MaybeCanRename = {false};
 
   SmallPtrSet<const TargetRegisterClass *, 5> RequiredClasses;
@@ -2810,11 +2805,8 @@ bool AArch64LoadStoreOpt::tryToPromoteLoadFromStore(
 
   // Look backward up to LdStLimit instructions.
   MachineBasicBlock::iterator StoreI;
-  if (findMatchingStore(
-          MBBI,
-          getLdStLimit(
-              MI.getMF()->getFunction().getContext().getOptionsContext()),
-          StoreI)) {
+  if (findMatchingStore(MBBI, getLdStLimit(MI.getMF()->getFunction()),
+                        StoreI)) {
     ++NumLoadsFromStoresPromoted;
     // Promote the load. Keeping the iterator straight is a
     // pain, so we let the merge routine tell us what the next instruction
@@ -2837,10 +2829,9 @@ bool AArch64LoadStoreOpt::tryToMergeZeroStInst(
 
   // Look ahead up to LdStLimit instructions for a mergeable instruction.
   LdStPairFlags Flags;
-  MachineBasicBlock::iterator MergeMI = findMatchingInsn(
-      MBBI, Flags,
-      getLdStLimit(MI.getMF()->getFunction().getContext().getOptionsContext()),
-      /* FindNarrowMerge = */ true);
+  MachineBasicBlock::iterator MergeMI =
+      findMatchingInsn(MBBI, Flags, getLdStLimit(MI.getMF()->getFunction()),
+                       /* FindNarrowMerge = */ true);
   if (MergeMI != E) {
     ++NumZeroStoresPromoted;
 
@@ -2883,10 +2874,9 @@ bool AArch64LoadStoreOpt::tryToPairLdStInst(MachineBasicBlock::iterator &MBBI) {
 
   // Look ahead up to LdStLimit instructions for a pairable instruction.
   LdStPairFlags Flags;
-  MachineBasicBlock::iterator Paired = findMatchingInsn(
-      MBBI, Flags,
-      getLdStLimit(MI.getMF()->getFunction().getContext().getOptionsContext()),
-      /* FindNarrowMerge = */ false);
+  MachineBasicBlock::iterator Paired =
+      findMatchingInsn(MBBI, Flags, getLdStLimit(MI.getMF()->getFunction()),
+                       /* FindNarrowMerge = */ false);
 
   if (Paired == E)
     return false;
@@ -2935,8 +2925,8 @@ bool AArch64LoadStoreOpt::tryToPairLdStInst(MachineBasicBlock::iterator &MBBI) {
   return true;
 }
 
-bool AArch64LoadStoreOpt::tryToMergeLdStUpdate
-    (MachineBasicBlock::iterator &MBBI) {
+bool AArch64LoadStoreOpt::tryToMergeLdStUpdate(
+    MachineBasicBlock::iterator &MBBI) {
   MachineInstr &MI = *MBBI;
   MachineBasicBlock::iterator E = MI.getParent()->end();
   MachineBasicBlock::iterator Update;
@@ -2957,9 +2947,7 @@ bool AArch64LoadStoreOpt::tryToMergeLdStUpdate
   //   merged into:
   // ldr x0, [x20], #32
   Update = findMatchingUpdateInsnForward(
-      MBBI, 0,
-      getUpdateLimit(
-          MI.getMF()->getFunction().getContext().getOptionsContext()));
+      MBBI, 0, getUpdateLimit(MI.getMF()->getFunction()));
   if (Update != E) {
     // Merge the update into the ld/st.
     if (auto NextI = mergeUpdateInsn(MBBI, Update, /*IsForward=*/false,
@@ -2981,10 +2969,7 @@ bool AArch64LoadStoreOpt::tryToMergeLdStUpdate
   // ldr x1, [x0, #8]!
   bool MergeEither;
   Update = findMatchingUpdateInsnBackward(
-      MBBI,
-      getUpdateLimit(
-          MI.getMF()->getFunction().getContext().getOptionsContext()),
-      MergeEither);
+      MBBI, getUpdateLimit(MI.getMF()->getFunction()), MergeEither);
   if (Update != E) {
     // Merge the update into the ld/st.
     if (auto NextI = mergeUpdateInsn(MBBI, Update, /*IsForward=*/true,
@@ -3006,9 +2991,7 @@ bool AArch64LoadStoreOpt::tryToMergeLdStUpdate
   //   merged into:
   // ldr x1, [x0, #64]!
   Update = findMatchingUpdateInsnForward(
-      MBBI, UnscaledOffset,
-      getUpdateLimit(
-          MI.getMF()->getFunction().getContext().getOptionsContext()));
+      MBBI, UnscaledOffset, getUpdateLimit(MI.getMF()->getFunction()));
   if (Update != E) {
     // Merge the update into the ld/st.
     if (auto NextI = mergeUpdateInsn(MBBI, Update, /*IsForward=*/false,
@@ -3041,10 +3024,7 @@ bool AArch64LoadStoreOpt::tryToMergeIndexLdSt(MachineBasicBlock::iterator &MBBI,
   // ldr x1, [x8, imm12]
   unsigned Offset;
   Update = findMatchingConstOffsetBackward(
-      MBBI,
-      getLdStConstLimit(
-          MI.getMF()->getFunction().getContext().getOptionsContext()),
-      Offset);
+      MBBI, getLdStConstLimit(MI.getMF()->getFunction()), Offset);
   if (Update != E && (Offset & (Scale - 1)) == 0) {
     // Merge the imm12 into the ld/st.
     MBBI = mergeConstOffsetInsn(MBBI, Update, Offset, Scale);
@@ -3148,9 +3128,7 @@ bool AArch64LoadStoreOpt::tryToReplaceUMOVStore(
     MachineInstr &MI = *--It;
     if (MI.isDebugInstr())
       continue;
-    if (++Count >
-        getUMOVFoldLimit(
-            MI.getMF()->getFunction().getContext().getOptionsContext()))
+    if (++Count > getUMOVFoldLimit(MI.getMF()->getFunction()))
       return false;
     if (MI.readsRegister(StoreValReg, TRI))
       return false;

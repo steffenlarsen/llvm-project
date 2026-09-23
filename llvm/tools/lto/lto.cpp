@@ -21,14 +21,18 @@
 #include "llvm/IR/DiagnosticPrinter.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/LTO/LTO.h"
+#include "llvm/LTO/LTOOptions.h"
 #include "llvm/LTO/legacy/LTOCodeGenerator.h"
 #include "llvm/LTO/legacy/LTOModule.h"
 #include "llvm/LTO/legacy/ThinLTOCodeGenerator.h"
+#include "llvm/MC/MCOptions.h"
+#include "llvm/Option/LibraryOptions.h"
 #include "llvm/Support/Allocator.h"
 #include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/OptionsContext.h"
+#include "llvm/Support/PluginLoaderOptions.h"
 #include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/Signals.h"
 #include "llvm/Support/StringSaver.h"
@@ -531,7 +535,36 @@ void lto_set_debug_options(const char *const *options, int number) {
   Argv.push_back(Saver.save("libLLVMLTO").data());
   for (int i = 0; i < number; ++i)
     Argv.push_back(Saver.save(options[i]).data());
-  LTOOptsCtx = P.parse(Argv.size(), Argv.data(), "LLVM LTO Library");
+  std::vector<const char *> ArgsAfterPlugins =
+      loadPluginsAndStripArgs(static_cast<int>(Argv.size()), Argv.data());
+
+  // llvm::LTOOptions and llvm::MCLibraryOptions have migrated off clv2 onto
+  // the new per-library OptTable struct design (see
+  // llvm/include/llvm/Option/LibraryOptions.h) and are no longer among the
+  // clv2::OptionParser registries RegisterAllLLVMOptions() populates above.
+  // Parse them out of the (plugin-stripped) args first, forwarding whatever
+  // they don't recognize to the legacy clv2 parser unchanged -- mirroring
+  // the pattern established in llvm/tools/opt/optdriver.cpp.
+  SmallVector<const char *, 32> LibraryOptsRest;
+  {
+    std::string LibraryOptsErrs;
+    raw_string_ostream LibraryOptsErrsOS(LibraryOptsErrs);
+    if (Error Err = opt::parseLibraryOptionsChain<LTOOptions, MCLibraryOptions>(
+            ArrayRef<const char *>(ArgsAfterPlugins.data() + 1,
+                                   ArgsAfterPlugins.data() +
+                                       ArgsAfterPlugins.size()),
+            LibraryOptsRest, LibraryOptsErrsOS)) {
+      errs() << "libLTO: " << toString(std::move(Err)) << "\n";
+      return;
+    }
+    errs() << LibraryOptsErrs;
+  }
+  SmallVector<const char *, 32> ArgvAfterLibraryOpts;
+  ArgvAfterLibraryOpts.push_back(ArgsAfterPlugins[0]);
+  ArgvAfterLibraryOpts.append(LibraryOptsRest.begin(), LibraryOptsRest.end());
+
+  LTOOptsCtx = P.parse(static_cast<int>(ArgvAfterLibraryOpts.size()),
+                       ArgvAfterLibraryOpts.data(), "LLVM LTO Library");
   if (LTOContext)
     LTOContext->setOptionsContext(ltoOptsCtx());
   optionParsingState = OptParsingState::Early;
@@ -673,7 +706,35 @@ void thinlto_debug_options(const char *const *options, int number) {
     Argv.push_back(Saver.save("libLTO").data());
     for (int i = 0; i < number; ++i)
       Argv.push_back(Saver.save(options[i]).data());
-    LTOOptsCtx = P.parse(Argv.size(), Argv.data(), "LLVM ThinLTO Library");
+    std::vector<const char *> ArgsAfterPlugins =
+        loadPluginsAndStripArgs(static_cast<int>(Argv.size()), Argv.data());
+
+    // See the matching comment in lto_set_debug_options() above: LTOOptions
+    // and MCLibraryOptions are no longer among the clv2::OptionParser
+    // registries RegisterAllLLVMOptions() populates above, so parse them
+    // separately here and forward whatever they don't recognize to the
+    // legacy clv2 parser.
+    SmallVector<const char *, 32> LibraryOptsRest;
+    {
+      std::string LibraryOptsErrs;
+      raw_string_ostream LibraryOptsErrsOS(LibraryOptsErrs);
+      if (Error Err =
+              opt::parseLibraryOptionsChain<LTOOptions, MCLibraryOptions>(
+                  ArrayRef<const char *>(ArgsAfterPlugins.data() + 1,
+                                         ArgsAfterPlugins.data() +
+                                             ArgsAfterPlugins.size()),
+                  LibraryOptsRest, LibraryOptsErrsOS)) {
+        errs() << "libLTO: " << toString(std::move(Err)) << "\n";
+        return;
+      }
+      errs() << LibraryOptsErrs;
+    }
+    SmallVector<const char *, 32> ArgvAfterLibraryOpts;
+    ArgvAfterLibraryOpts.push_back(ArgsAfterPlugins[0]);
+    ArgvAfterLibraryOpts.append(LibraryOptsRest.begin(), LibraryOptsRest.end());
+
+    LTOOptsCtx = P.parse(static_cast<int>(ArgvAfterLibraryOpts.size()),
+                         ArgvAfterLibraryOpts.data(), "LLVM ThinLTO Library");
     if (LTOContext)
       LTOContext->setOptionsContext(ltoOptsCtx());
   }

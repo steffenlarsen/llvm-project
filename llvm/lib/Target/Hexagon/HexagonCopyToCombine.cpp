@@ -25,9 +25,8 @@
 #include "llvm/Pass.h"
 #include "llvm/Support/CodeGen.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
+#include "llvm/Target/Hexagon/HexagonOptions.h"
 #include "llvm/Target/TargetMachine.h"
 
 using namespace llvm;
@@ -37,13 +36,13 @@ using namespace llvm;
 static unsigned MaxNumOfInstsBetweenNewValueStoreAndTFR = 4;
 
 static bool getIsCombinesDisabled(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_DisableMergeIntoCombines>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<HexagonOptions>()
+      .HEX_DisableMergeIntoCombines;
 }
 
 static bool getIsConst64Disabled(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_DisableConst64>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_DisableConst64;
 }
 
 static bool getIsConst64Disabled(const MachineFunction &MF) {
@@ -57,9 +56,9 @@ static bool getIsConst64Disabled(const MachineFunction &MF) {
 }
 
 static unsigned getMaxNumOfInstsBetweenNewValueStoreAndTFR(const Function &F) {
-  return clv2::getOptValOrDefault<
-      &clv2::HEX_MaxNumInstBetweenNewValueStoreAndTFR>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<HexagonOptions>()
+      .HEX_MaxNumInstBetweenNewValueStoreAndTFR;
 }
 
 namespace {

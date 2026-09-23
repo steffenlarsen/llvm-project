@@ -15,9 +15,10 @@
 #include "llvm/CodeGen/MachineFunctionAnalysisManager.h"
 #include "llvm/CodeGen/MachineModuleInfo.h"
 #include "llvm/IR/LegacyPassManager.h"
+#include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/Passes/PassBuilder.h"
-#include "llvm/Passes/PassesOptionsOptInfos.h"
+#include "llvm/Passes/PassesOptions.h"
 #include "llvm/Support/CodeGen.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/ToolOutputFile.h"
@@ -26,8 +27,8 @@
 
 using namespace llvm;
 
-static cl::boolOrDefault getForceNewPMCodeGen(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::PAS_ForceNewPMCodeGen>(Ctx);
+static cl::boolOrDefault getForceNewPMCodeGen(const LLVMContext &Ctx) {
+  return Ctx.getOptions<PassesOptions>().PAS_ForceNewPMCodeGen;
 }
 
 static Error
@@ -69,7 +70,7 @@ static Error runCodeGenPipelineNewPM(TargetMachine &TM, Module &M,
   CGSCCAnalysisManager CGAM;
   ModuleAnalysisManager MAM;
   const clv2::OptionsContext &OptsCtx = M.getContext().getOptionsContext();
-  CGPassBuilderOption Opt = getCGPassBuilderOption(OptsCtx);
+  CGPassBuilderOption Opt = getCGPassBuilderOption(OptsCtx, &M.getContext());
   Opt.DisableVerify = DisableVerify;
   MachineModuleInfo MMI(&TM);
   PassInstrumentationCallbacks PIC;
@@ -101,8 +102,7 @@ Error llvm::runCodeGenPipeline(TargetMachine &TM, Module &M,
                                CodeGenFileType CGFT, bool PrintPipelinePasses,
                                bool DisableVerify, bool DisableSimplifyLibCalls,
                                IntrusiveRefCntPtr<vfs::FileSystem> VFS) {
-  cl::boolOrDefault ForceNewPM =
-      getForceNewPMCodeGen(M.getContext().getOptionsContext());
+  cl::boolOrDefault ForceNewPM = getForceNewPMCodeGen(M.getContext());
   if (ForceNewPM == cl::boolOrDefault::BOU_TRUE ||
       (TM.shouldDefaultToNewPM() &&
        ForceNewPM != cl::boolOrDefault::BOU_FALSE)) {

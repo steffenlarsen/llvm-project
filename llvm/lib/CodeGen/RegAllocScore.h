@@ -16,19 +16,16 @@
 #define LLVM_CODEGEN_REGALLOCSCORE_H_
 
 #include "llvm/ADT/STLFunctionalExtras.h"
+#include "llvm/CodeGen/CodeGenPassOptionsRegAlloc.h"
 #include "llvm/Support/Compiler.h"
-#include "llvm/Support/OptionsContext.h"
 
 namespace llvm {
 
+class LLVMContext;
 class MachineBasicBlock;
 class MachineBlockFrequencyInfo;
 class MachineFunction;
 class MachineInstr;
-
-namespace clv2 {
-class OptionsContext;
-} // namespace clv2
 
 /// Regalloc score.
 class RegAllocScore final {
@@ -38,11 +35,11 @@ class RegAllocScore final {
   double CheapRematCounts = 0.0;
   double LoadStoreCounts = 0.0;
   double ExpensiveRematCounts = 0.0;
-  const clv2::OptionsContext *Ctx = &clv2::defaultOptionsContext();
+  const CodeGenRegAllocOptions *Opts = &CodeGenRegAllocOptions::Current;
 
 public:
   RegAllocScore() = default;
-  explicit RegAllocScore(const clv2::OptionsContext &Ctx) : Ctx(&Ctx) {}
+  LLVM_ABI_FOR_TEST explicit RegAllocScore(const LLVMContext &Ctx);
   RegAllocScore(const RegAllocScore &) = default;
 
   double copyCounts() const { return CopyCounts; }

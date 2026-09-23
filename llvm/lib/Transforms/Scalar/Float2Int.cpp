@@ -1,5 +1,3 @@
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
 //===- Float2Int.cpp - Demote floating point ops to work on integers ------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -25,6 +23,7 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Scalar/Float2Int.h"
+#include "llvm/Transforms/Scalar/ScalarOptions.h"
 #include <deque>
 
 #define DEBUG_TYPE "float2int"
@@ -44,8 +43,7 @@ using namespace llvm;
 
 /// The largest integer type worth dealing with.
 static unsigned getMaxIntegerBW(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_Float2IntMaxIntegerBw>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<ScalarOptions>().SC_Float2IntMaxIntegerBw;
 }
 
 // Given a FCmp predicate, return a matching ICmp predicate if one

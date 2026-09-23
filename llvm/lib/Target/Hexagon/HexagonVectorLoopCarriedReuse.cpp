@@ -37,9 +37,8 @@
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
+#include "llvm/Target/Hexagon/HexagonOptions.h"
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Utils.h"
 #include <cassert>
@@ -57,8 +56,7 @@ STATISTIC(HexagonNumVectorLoopCarriedReuse,
 static int HexagonVLCRIterationLim = 2;
 
 static int getHexagonVLCRIterationLim(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_VLCRIterationLim>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_VLCRIterationLim;
 }
 
 namespace {

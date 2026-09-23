@@ -16,25 +16,35 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/ADT/ScopeExit.h"
-#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
-#include "llvm/AsmParser/AsmParserOptionsOptInfos.h"
-#include "llvm/Bitcode/BitcodeOptionsOptInfos.h"
+#include "llvm/AsmParser/AsmParserOptions.h"
+#include "llvm/Bitcode/BitcodeMemProfOptions.h"
+#include "llvm/Bitcode/BitcodeOptions.h"
 #include "llvm/Bitcode/BitcodeReader.h"
-#include "llvm/CGData/CGDataOptionsOptInfos.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CGData/CGDataOptions.h"
+#include "llvm/CodeGen/CodeGenPassOptionsAsmPrint.h"
+#include "llvm/CodeGen/CodeGenPassOptionsCore1.h"
+#include "llvm/CodeGen/CodeGenPassOptionsCore2.h"
+#include "llvm/CodeGen/CodeGenPassOptionsGISel.h"
+#include "llvm/CodeGen/CodeGenPassOptionsMachine1.h"
+#include "llvm/CodeGen/CodeGenPassOptionsMachine2.h"
+#include "llvm/CodeGen/CodeGenPassOptionsRegAlloc.h"
+#include "llvm/CodeGen/CodeGenPassOptionsSched1.h"
+#include "llvm/CodeGen/CodeGenPassOptionsSched2.h"
+#include "llvm/CodeGen/CodeGenPassOptionsSelDAG.h"
 #include "llvm/CodeGen/CommandFlags.h"
 #include "llvm/CodeGen/CommandFlagsOptInfos.h"
 #include "llvm/DTLTO/DTLTO.h"
 #include "llvm/IR/DiagnosticPrinter.h"
-#include "llvm/IR/IROptionsOptInfos.h"
+#include "llvm/IR/IROptions.h"
 #include "llvm/LTO/LTO.h"
-#include "llvm/LTO/LTOOptionsOptInfos.h"
-#include "llvm/MC/MCOptionsOptInfos.h"
+#include "llvm/LTO/LTOOptions.h"
+#include "llvm/MC/MCOptions.h"
 #include "llvm/MC/MCTargetOptionsCommandFlags.h"
-#include "llvm/Object/ObjectOptionsOptInfos.h"
-#include "llvm/Passes/PassesOptionsOptInfos.h"
+#include "llvm/Object/ObjectOptions.h"
+#include "llvm/Option/LibraryOptions.h"
+#include "llvm/Passes/PassesOptions.h"
 #include "llvm/Plugins/PassPlugin.h"
-#include "llvm/Remarks/RemarksOptionsOptInfos.h"
+#include "llvm/Remarks/RemarksOptions.h"
 #include "llvm/Support/Caching.h"
 #include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/CommandLineV2.h"
@@ -42,20 +52,20 @@
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/OptionsContext.h"
-#include "llvm/Support/PluginLoader.h"
 #include "llvm/Support/SupportOptions.h"
+#include "llvm/Support/SupportOptionsOptInfos.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/Threading.h"
 #include "llvm/Support/TimeProfiler.h"
-#include "llvm/Transforms/AggressiveInstCombine/AggressiveInstCombineOptionsOptInfos.h"
-#include "llvm/Transforms/Coroutines/CoroutinesOptionsOptInfos.h"
-#include "llvm/Transforms/IPO/IPOOptionsOptInfos.h"
-#include "llvm/Transforms/InstCombine/InstCombineOptionsOptInfos.h"
-#include "llvm/Transforms/Instrumentation/InstrumentationOptionsOptInfos.h"
-#include "llvm/Transforms/ObjCARC/ObjCARCOptionsOptInfos.h"
-#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
-#include "llvm/Transforms/Utils/UtilsOptionsOptInfos.h"
-#include "llvm/Transforms/Vectorize/VectorizeOptionsOptInfos.h"
+#include "llvm/Transforms/AggressiveInstCombine/AggressiveInstCombineOptions.h"
+#include "llvm/Transforms/Coroutines/CoroutinesOptions.h"
+#include "llvm/Transforms/IPO/IPOOptions.h"
+#include "llvm/Transforms/InstCombine/InstCombineOptions.h"
+#include "llvm/Transforms/Instrumentation/InstrumentationOptions.h"
+#include "llvm/Transforms/ObjCARC/ObjCARCOptions.h"
+#include "llvm/Transforms/Scalar/ScalarOptions.h"
+#include "llvm/Transforms/Utils/UtilsOptions.h"
+#include "llvm/Transforms/Vectorize/VectorizeOptions.h"
 #include <atomic>
 #include <optional>
 
@@ -297,36 +307,6 @@ static constexpr clv2::OptionsRegistry<
 static void configureLTO2Registries(clv2::OptionParser &P) {
   P.add<&LTO2ToolReg>();
   P.add<&clv2::CGOptsReg>();
-  P.add<&clv2::MCOptsReg>();
-  P.add<&clv2::SupportOptsReg, support::applySupportOptions>();
-  P.add<&clv2::RemarksOptsReg>();
-  P.add<&clv2::ObjectOptsReg>();
-  P.add<&clv2::AsmParserOptsReg>();
-  P.add<&clv2::IROptsReg, ir_opts::applyIROptions>();
-  P.add<&clv2::PassesOptsReg>();
-  P.add<&clv2::LTOOptsReg>();
-  P.add<&clv2::ScalarOptsReg>();
-  P.add<&clv2::AnalysisOptsReg>();
-  P.add<&clv2::IPOOptsReg>();
-  P.add<&clv2::VectorizeOptsReg>();
-  P.add<&clv2::TransformUtilsOptsReg>();
-  P.add<&clv2::InstrumentationOptsReg>();
-  P.add<&clv2::BitcodeOptsReg>();
-  P.add<&clv2::InstCombineOptsReg>();
-  P.add<&clv2::AggressiveInstCombineOptsReg>();
-  P.add<&clv2::CoroutinesOptsReg>();
-  P.add<&clv2::ObjCARCOptsReg>();
-  P.add<&clv2::CGDataOptsReg>();
-  P.add<&clv2::CGPassAsmPrintReg>();
-  P.add<&clv2::CGPassCore1Reg>();
-  P.add<&clv2::CGPassCore2Reg>();
-  P.add<&clv2::CGPassGISelReg>();
-  P.add<&clv2::CGPassMachine1Reg>();
-  P.add<&clv2::CGPassMachine2Reg>();
-  P.add<&clv2::CGPassRegAllocReg>();
-  P.add<&clv2::CGPassSched1Reg>();
-  P.add<&clv2::CGPassSched2Reg>();
-  P.add<&clv2::CGPassSelDAGReg>();
 }
 
 static void check(Error E, std::string Msg) {
@@ -362,8 +342,15 @@ static int usage() {
 }
 
 static int run(int argc, char **argv) {
-  // Pre-load plugins so that options defined by plugins are visible
-  // to the parser.
+  // Pre-load plugins so that options defined by plugins are visible to the
+  // parser. -load-pass-plugin is left in place for forwarding below: it's
+  // also a real LTO2ToolReg option (see PassPluginsOpt), read again later so
+  // Conf.PassPluginFilenames gets populated and the plugin's new-PM pipeline
+  // callbacks get hooked into the PassBuilder actually used by LTO. Plain
+  // -load, in contrast, is dropped here: it has no other registered consumer
+  // now that clv2's OI_Load is gone (see llvm::loadRequestedPlugins()), so
+  // forwarding it would make the legacy clv2 parser reject it as unknown.
+  SmallVector<const char *, 32> ArgsAfterPreload;
   for (int I = 1; I < argc; ++I) {
     StringRef Arg(argv[I]);
     StringRef PluginPath;
@@ -390,6 +377,9 @@ static int run(int argc, char **argv) {
         if (!Plugin)
           reportFatalUsageError(Plugin.takeError());
         (void)*Plugin;
+        ArgsAfterPreload.push_back(argv[I]);
+        if (Arg == "--load-pass-plugin" || Arg == "-load-pass-plugin")
+          ArgsAfterPreload.push_back(PluginPath.data());
       } else {
         std::string Error;
         if (sys::DynamicLibrary::LoadLibraryPermanently(
@@ -398,15 +388,55 @@ static int run(int argc, char **argv) {
                  << "\n  -load request ignored.\n";
         }
       }
+      continue;
     }
+    ArgsAfterPreload.push_back(argv[I]);
   }
+
+  // llvm::PassesOptions, llvm::CodeGenAsmPrintOptions,
+  // llvm::CodeGenGISelOptions, and llvm::MCLibraryOptions have migrated off
+  // clv2 onto the new per-library OptTable struct design (see
+  // llvm/include/llvm/Option/LibraryOptions.h) and are no longer among the
+  // clv2::OptionParser registries configured below. Parse their options out
+  // of argv first, forwarding whatever none of them recognizes to the
+  // legacy clv2 parser unchanged.
+  SmallVector<const char *, 32> PassesRest;
+  {
+    std::string PassesErrs;
+    raw_string_ostream PassesErrsOS(PassesErrs);
+    if (Error Err = opt::parseLibraryOptionsChain<
+            SupportOptions, PassesOptions, BitcodeOptions,
+            BitcodeMemProfOptions, CodeGenAsmPrintOptions, CodeGenGISelOptions,
+            CodeGenMachine1Options, CodeGenMachine2Options,
+            CodeGenRegAllocOptions, CodeGenSched1Options, CodeGenSched2Options,
+            CodeGenSelDAGOptions, CodeGenCore2Options, CodeGenCore1Options,
+            ObjectOptions, RemarksOptions, AsmParserOptions, ObjCARCOptions,
+            CoroutinesOptions, AggressiveInstCombineOptions,
+            InstCombineCLOptions, CGDataOptions, LTOOptions, MCLibraryOptions,
+            IROptions, UtilsOptions, VectorizeOptions, InstrumentationOptions,
+            IPOOptions, ScalarOptions>(ArgsAfterPreload, PassesRest,
+                                       PassesErrsOS)) {
+      errs() << "llvm-lto2: " << toString(std::move(Err)) << "\n";
+      return 1;
+    }
+    errs() << PassesErrs;
+  }
+  // IROptions has no automatic apply step (unlike the other libraries in the
+  // chain above, which are read on demand via Ctx.getOptions<T>()); it must
+  // sync a couple of legacy globals (TimePassesIsEnabled/TimePassesPerRun and
+  // the OptBisect singleton) explicitly. See llvm/lib/IR/IROptions.cpp.
+  llvm::ir_opts::applyIROptions();
+  SmallVector<const char *, 32> ArgvAfterPasses;
+  ArgvAfterPasses.push_back(argv[0]);
+  ArgvAfterPasses.append(PassesRest.begin(), PassesRest.end());
 
   auto OptsCtxOwner = [&] {
     clv2::OptionParser P;
     configureLTO2Registries(P);
     P.enableGlobalDynamicEntries();
     P.hideUnrelatedOptions({&clv2::ColorOptionsCategory});
-    return P.parse(argc, argv, "Resolution-based LTO test harness",
+    return P.parse(static_cast<int>(ArgvAfterPasses.size()),
+                   ArgvAfterPasses.data(), "Resolution-based LTO test harness",
                    /*Errs=*/nullptr);
   }();
   const auto &OptsCtx = *OptsCtxOwner;
@@ -676,7 +706,7 @@ static int run(int argc, char **argv) {
   for (std::string F : InputFilenames) {
     std::unique_ptr<MemoryBuffer> MB = check(MemoryBuffer::getFile(F), F);
     std::unique_ptr<InputFile> Input =
-        check(InputFile::create(MB->getMemBufferRef(), OptsCtx), F);
+        check(InputFile::create(MB->getMemBufferRef()), F);
 
     std::vector<SymbolResolution> Res;
     for (const InputFile::Symbol &Sym : Input->symbols()) {
@@ -735,7 +765,6 @@ static int run(int argc, char **argv) {
 
 // The dump-symtab subcommand runs before any options are parsed.
 static int dumpSymtab(int argc, char **argv) {
-  const clv2::OptionsContext &OptsCtx = clv2::defaultOptionsContext();
   for (StringRef F : make_range(argv + 1, argv + argc)) {
     std::unique_ptr<MemoryBuffer> MB =
         check(MemoryBuffer::getFile(F), std::string(F));
@@ -751,8 +780,8 @@ static int dumpSymtab(int argc, char **argv) {
                << '\n';
     }
 
-    std::unique_ptr<InputFile> Input = check(
-        InputFile::create(MB->getMemBufferRef(), OptsCtx), std::string(F));
+    std::unique_ptr<InputFile> Input =
+        check(InputFile::create(MB->getMemBufferRef()), std::string(F));
 
     outs() << "target triple: " << Input->getTargetTriple() << '\n';
     Triple TT(Input->getTargetTriple());
@@ -837,7 +866,6 @@ static int dumpSymtab(int argc, char **argv) {
 
 int main(int argc, char **argv) {
   InitLLVM X(argc, argv);
-  registerPluginLoaderOption();
   InitializeAllTargets();
   InitializeAllTargetMCs();
   InitializeAllAsmPrinters();

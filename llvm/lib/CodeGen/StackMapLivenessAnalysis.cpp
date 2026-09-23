@@ -13,7 +13,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/ADT/Statistic.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsCore2.h"
 #include "llvm/CodeGen/LivePhysRegs.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
@@ -31,8 +31,8 @@ using namespace llvm;
 
 #define DEBUG_TYPE "stackmaps"
 
-static bool getEnablePatchpointLiveness(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_EnablePatchpointLiveness>(Ctx);
+static bool getEnablePatchpointLiveness(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore2Options>().CGPASS_EnablePatchpointLiveness;
 }
 
 STATISTIC(NumStackMapFuncVisited, "Number of functions visited");
@@ -103,8 +103,7 @@ void StackMapLiveness::getAnalysisUsage(AnalysisUsage &AU) const {
 
 /// Calculate the liveness information for the given machine function.
 bool StackMapLiveness::runOnMachineFunction(MachineFunction &MF) {
-  if (!getEnablePatchpointLiveness(
-          MF.getFunction().getContext().getOptionsContext()))
+  if (!getEnablePatchpointLiveness(MF.getFunction().getContext()))
     return false;
 
   TRI = MF.getSubtarget().getRegisterInfo();

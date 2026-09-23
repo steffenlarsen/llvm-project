@@ -12,8 +12,7 @@
 
 #include "BPFSelectionDAGInfo.h"
 #include "llvm/CodeGen/SelectionDAG.h"
-#include "llvm/Support/CommandLineV2.h"
-#include "llvm/Target/BPF/BPFOptionsOptInfos.h"
+#include "llvm/Target/BPF/BPFOptions.h"
 
 #define GET_SDNODE_DESC
 #include "BPFGenSDNodeInfo.inc"
@@ -26,8 +25,8 @@ BPFSelectionDAGInfo::BPFSelectionDAGInfo()
     : SelectionDAGGenTargetInfo(BPFGenSDNodeInfo) {}
 
 unsigned BPFSelectionDAGInfo::getCommonMaxStoresPerMemFunc(
-    const clv2::OptionsContext &OptsCtx) const {
-  return clv2::getOptValOrDefault<&clv2::BPF_MaxStoresPerMemFunc>(OptsCtx);
+    const LLVMContext &Ctx) const {
+  return Ctx.getOptions<BPFOptions>().BPF_MaxStoresPerMemFunc;
 }
 
 SDValue BPFSelectionDAGInfo::EmitTargetCodeForMemcpy(
@@ -49,8 +48,7 @@ SDValue BPFSelectionDAGInfo::EmitTargetCodeForMemcpy(
   unsigned CopyLen = ConstantSize->getZExtValue();
   unsigned StoresNumEstimate = alignTo(CopyLen, Alignment) >> Log2(Alignment);
   // Impose the same copy length limit as MaxStoresPerMemcpy.
-  if (StoresNumEstimate >
-      getCommonMaxStoresPerMemFunc(DAG.getContext()->getOptionsContext()))
+  if (StoresNumEstimate > getCommonMaxStoresPerMemFunc(*DAG.getContext()))
     return SDValue();
 
   return DAG.getNode(BPFISD::MEMCPY, dl, MVT::Other, Chain, Dst, Src,

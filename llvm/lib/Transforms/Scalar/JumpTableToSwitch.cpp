@@ -21,22 +21,22 @@
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Error.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
+#include "llvm/Transforms/Scalar/ScalarOptions.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include <limits>
 
 using namespace llvm;
 
 static unsigned getJumpTableSizeThreshold(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_JumpTableToSwitchSizeThreshold>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_JumpTableToSwitchSizeThreshold;
 }
 
 static unsigned getFunctionSizeThreshold(const Function &F) {
-  return clv2::getOptValOrDefault<
-      &clv2::SC_JumpTableToSwitchFunctionSizeThreshold>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_JumpTableToSwitchFunctionSizeThreshold;
 }
 
 #define DEBUG_TYPE "jump-table-to-switch"

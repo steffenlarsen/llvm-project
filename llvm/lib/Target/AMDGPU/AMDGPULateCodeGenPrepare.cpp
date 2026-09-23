@@ -26,8 +26,7 @@
 #include "llvm/InitializePasses.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/KnownBits.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/AMDGPU/AMDGPUOptionsOptInfos.h"
+#include "llvm/Target/AMDGPU/AMDGPUOptions.h"
 #include "llvm/Transforms/Utils/Local.h"
 
 #define DEBUG_TYPE "amdgpu-late-codegenprepare"
@@ -39,8 +38,9 @@ using namespace llvm;
 // widening to handle cases where scalar sub-dword loads are naturally aligned
 // only but not dword aligned.
 static bool getWidenLoads(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AMDGPU_LateWidenConstantLoads>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<AMDGPUOptions>()
+      .AMDGPU_LateWidenConstantLoads;
 }
 
 namespace {

@@ -22,8 +22,7 @@
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/IntrinsicsHexagon.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
+#include "llvm/Target/Hexagon/HexagonOptions.h"
 using namespace llvm;
 
 #define DEBUG_TYPE "hexagon-isel"
@@ -37,23 +36,25 @@ static bool EnableAddressRebalancing = true;
 static bool CheckSingleUse = true;
 
 static bool getEnableAddressRebalancing(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_EnableAddressRebalancing>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<HexagonOptions>()
+      .HEX_EnableAddressRebalancing;
 }
 
 static bool getRebalanceOnlyForOptimizations(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_RebalanceOnlyForOptimizations>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<HexagonOptions>()
+      .HEX_RebalanceOnlyForOptimizations;
 }
 
 static bool getRebalanceOnlyImbalancedTrees(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_RebalanceOnlyImbalanced>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<HexagonOptions>()
+      .HEX_RebalanceOnlyImbalanced;
 }
 
 static bool getCheckSingleUse(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_CheckSingleUse>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_CheckSingleUse;
 }
 
 //===----------------------------------------------------------------------===//

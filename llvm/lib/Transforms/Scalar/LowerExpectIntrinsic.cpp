@@ -1,5 +1,3 @@
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
 //===- LowerExpectIntrinsic.cpp - Lower expect intrinsic ------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -23,6 +21,7 @@
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/MDBuilder.h"
 #include "llvm/IR/ProfDataUtils.h"
+#include "llvm/Transforms/Scalar/ScalarOptions.h"
 #include "llvm/Transforms/Utils/MisExpect.h"
 
 #include <cmath>
@@ -47,13 +46,11 @@ STATISTIC(ExpectIntrinsicsHandled,
 // should emit @llvm.expect intrinsics instead of using these weights directly.
 // Transforms should use TargetTransformInfo's getPredictableBranchThreshold().
 static uint32_t getLikelyBranchWeight(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_LikelyBranchWeight>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<ScalarOptions>().SC_LikelyBranchWeight;
 }
 
 static uint32_t getUnlikelyBranchWeight(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_UnlikelyBranchWeight>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<ScalarOptions>().SC_UnlikelyBranchWeight;
 }
 
 static std::tuple<uint32_t, uint32_t> getBranchWeight(Intrinsic::ID IntrinsicID,

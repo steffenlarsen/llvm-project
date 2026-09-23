@@ -17,12 +17,11 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
-#include "llvm/IR/IROptionsOptInfos.h"
+#include "llvm/IR/IROptions.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/MDBuilder.h"
 #include "llvm/IR/Metadata.h"
-#include "llvm/Support/OptionsContext.h"
 
 using namespace llvm;
 
@@ -103,14 +102,7 @@ SmallVector<uint32_t> llvm::fitWeights(ArrayRef<uint64_t> Weights) {
 }
 
 static bool getElideAllZeroBranchWeights(const Function &F) {
-  if (auto *O =
-          clv2::getView<&clv2::IROptsReg>(F.getContext().getOptionsContext()))
-    return O->get<&clv2::IR_ElideAllZeroBranchWeights>();
-#if defined(LLVM_ENABLE_PROFCHECK)
-  return false;
-#else
-  return true;
-#endif
+  return F.getContext().getOptions<IROptions>().IR_ElideAllZeroBranchWeights;
 }
 const char *MDProfLabels::BranchWeights = "branch_weights";
 const char *MDProfLabels::ExpectedBranchWeights = "expected";

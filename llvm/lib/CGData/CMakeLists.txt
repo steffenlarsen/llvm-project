@@ -1,6 +1,4 @@
 add_llvm_component_library(LLVMCGData
-  CGDataOptionsGetters.cpp
-  CGDataOptionsRegistration.cpp
   CGDataOptions.cpp
   CodeGenData.cpp
   CodeGenDataReader.cpp
@@ -15,11 +13,13 @@ add_llvm_component_library(LLVMCGData
 
   DEPENDS
   intrinsics_gen
+  CGDataOptParserTableGen
 
   LINK_COMPONENTS
   BitReader
   BitWriter
   Core
+  Option
   Support
   Object
   )

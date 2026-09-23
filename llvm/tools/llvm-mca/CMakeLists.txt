@@ -27,6 +27,14 @@ add_llvm_tool(llvm-mca
   Views/SchedulerStatistics.cpp
   Views/SummaryView.cpp
   Views/TimelineView.cpp
+
+  DEPENDS
+  AArch64OptParserTableGen
+  AMDGPUOptParserTableGen
+  BPFOptParserTableGen
+  HexagonOptParserTableGen
+  LoongArchOptParserTableGen
+  NVPTXOptParserTableGen
   )
 
 set(LLVM_MCA_SOURCE_DIR ${CURRENT_SOURCE_DIR})

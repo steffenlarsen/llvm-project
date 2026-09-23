@@ -50,21 +50,18 @@
 #include <utility>
 #include <vector>
 
+#include "llvm/Analysis/AnalysisOptions.h"
 #include "llvm/Analysis/GVDAGType.h"
-#include "llvm/Support/OptionsContext.h"
 
 #define DEBUG_TYPE "block-freq"
 
 namespace llvm {
 
-namespace clv2 {
-class OptionsContext;
-}
-LLVM_ABI bool getCheckBFIUnknownBlockQueries(const clv2::OptionsContext &Ctx);
+LLVM_ABI bool getCheckBFIUnknownBlockQueries(const AnalysisOptions &Opts);
 
 LLVM_ABI unsigned
-getIterativeBFIMaxIterationsPerBlock(const clv2::OptionsContext &Ctx);
-LLVM_ABI double getIterativeBFIPrecision(const clv2::OptionsContext &Ctx);
+getIterativeBFIMaxIterationsPerBlock(const AnalysisOptions &Opts);
+LLVM_ABI double getIterativeBFIPrecision(const AnalysisOptions &Opts);
 
 LLVM_ABI bool getUseIterativeBFIInference(const Function &F);
 LLVM_ABI void setUseIterativeBFIInference(bool V);
@@ -185,10 +182,10 @@ inline raw_ostream &operator<<(raw_ostream &OS, BlockMass X) {
 /// BlockFrequencyInfoImpl.  See there for details.
 class BlockFrequencyInfoImplBase {
 protected:
-  const clv2::OptionsContext *OptsCtx = &clv2::defaultOptionsContext();
+  const AnalysisOptions *Opts = &AnalysisOptions::Current;
 
 public:
-  void setOptionsContext(const clv2::OptionsContext &Ctx) { OptsCtx = &Ctx; }
+  void setOptionsContext(const AnalysisOptions &O) { Opts = &O; }
   using Scaled64 = ScaledNumber<uint64_t>;
   using BlockMass = bfi_detail::BlockMass;
 
@@ -217,7 +214,7 @@ public:
     bool isValid() const { return Index <= getMaxIndex(); }
 
     static size_t getMaxIndex() {
-       return std::numeric_limits<uint32_t>::max() - 1;
+      return std::numeric_limits<uint32_t>::max() - 1;
     }
   };
 
@@ -591,7 +588,8 @@ struct IrreducibleGraph {
   /// user of this.
   template <class BlockEdgesAdder>
   IrreducibleGraph(BFIBase &BFI, const BFIBase::LoopData *OuterLoop,
-                   BlockEdgesAdder addBlockEdges) : BFI(BFI) {
+                   BlockEdgesAdder addBlockEdges)
+      : BFI(BFI) {
     initialize(OuterLoop, addBlockEdges);
   }
 
@@ -992,7 +990,7 @@ void BlockFrequencyInfoImpl<BT>::calculate(const FunctionT &F,
   if (needIterativeInference())
     applyIterativeInference();
   finalizeMetrics();
-  if (getCheckBFIUnknownBlockQueries(*this->OptsCtx)) {
+  if (getCheckBFIUnknownBlockQueries(*this->Opts)) {
     // To detect BFI queries for unknown blocks, add entries for unreachable
     // blocks, if any. This is to distinguish between known/existing unreachable
     // blocks and unknown blocks.
@@ -1356,14 +1354,14 @@ template <class BT>
 void BlockFrequencyInfoImpl<BT>::iterativeInference(
     const ProbMatrixType &ProbMatrix, const BitVector &Blocks,
     std::vector<Scaled64> &Freq) const {
-  const double BFIPrecision = getIterativeBFIPrecision(*this->OptsCtx);
+  const double BFIPrecision = getIterativeBFIPrecision(*this->Opts);
   assert(0.0 < BFIPrecision && BFIPrecision < 1.0 &&
          "incorrectly specified precision");
   // Convert double precision to Scaled64
   const auto Precision =
       Scaled64::getInverse(static_cast<uint64_t>(1.0 / BFIPrecision));
   const size_t MaxIterations =
-      getIterativeBFIMaxIterationsPerBlock(*this->OptsCtx) * Blocks.count();
+      getIterativeBFIMaxIterationsPerBlock(*this->Opts) * Blocks.count();
 
 #ifndef NDEBUG
   LLVM_DEBUG(dbgs() << "  Initial discrepancy = "
@@ -1650,8 +1648,8 @@ raw_ostream &BlockFrequencyInfoImpl<BT>::print(raw_ostream &OS) const {
     getFloatingBlockFreq(&BB).print(OS, 5)
         << ", int = " << getBlockFreq(&BB).getFrequency();
     if (std::optional<uint64_t> ProfileCount =
-        BlockFrequencyInfoImplBase::getBlockProfileCount(
-            F->getFunction(), getNode(&BB)))
+            BlockFrequencyInfoImplBase::getBlockProfileCount(F->getFunction(),
+                                                             getNode(&BB)))
       OS << ", count = " << *ProfileCount;
     if (std::optional<uint64_t> IrrLoopHeaderWeight =
             BB.getIrrLoopHeaderWeight())

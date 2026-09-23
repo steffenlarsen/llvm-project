@@ -37,20 +37,16 @@
 #include "llvm/MC/MCInst.h"
 #include "llvm/MC/MCSymbolWasm.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/WebAssembly/WebAssemblyOptionsOptInfos.h"
+#include "llvm/Target/WebAssembly/WebAssemblyOptions.h"
 #include <optional>
 
 using namespace llvm;
 
 // This disables the removal of registers when lowering into MC, as required
 // by some current tests.
-static bool WasmKeepRegisters = false;
-
 static bool getKeepRegisters(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::WASM_KeepRegisters>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<WebAssemblyOptions>().WASM_KeepRegisters;
 }
 
 static std::optional<bool> getWasmGlobalMutable(const GlobalValue *Global,

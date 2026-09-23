@@ -30,8 +30,7 @@
 #include "llvm/IR/Function.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/ARM/ARMOptionsOptInfos.h"
+#include "llvm/Target/ARM/ARMOptions.h"
 #include <cassert>
 
 using namespace llvm;
@@ -39,13 +38,11 @@ using namespace llvm;
 #define DEBUG_TYPE "arm-mve-vpt-opts"
 
 static bool getMergeEndDec(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::ARM_MergeEndDec>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<ARMOptions>().ARM_MergeEndDec;
 }
 
 static bool getSetLRPredicate(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::ARM_SetLRPredicate>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<ARMOptions>().ARM_SetLRPredicate;
 }
 
 namespace {
@@ -440,7 +437,7 @@ bool MVETPAndVPTOptimisations::MergeLoopEnd(MachineLoop *ML) {
 // instruction, making the backend ARMLowOverheadLoops passes job of finding the
 // VCTP operand much simpler.
 bool MVETPAndVPTOptimisations::ConvertTailPredLoop(MachineLoop *ML,
-                                              MachineDominatorTree *DT) {
+                                                   MachineDominatorTree *DT) {
   LLVM_DEBUG(dbgs() << "ConvertTailPredLoop on loop "
                     << ML->getHeader()->getName() << "\n");
 

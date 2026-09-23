@@ -56,126 +56,113 @@ using namespace llvm;
 
 #define GET_REGINFO_MC_DESC
 #include "HexagonGenRegisterInfo.inc"
-#include "llvm/Support/CommandLineV2.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
+#include "llvm/Target/Hexagon/HexagonOptions.h"
 
-bool llvm::HexagonDisableDuplex = false;
+static bool getMV5() { return HexagonOptions::Current.HEX_MV5; }
+static bool getMV55() { return HexagonOptions::Current.HEX_MV55; }
+static bool getMV60() { return HexagonOptions::Current.HEX_MV60; }
+static bool getMV62() { return HexagonOptions::Current.HEX_MV62; }
+static bool getMV65() { return HexagonOptions::Current.HEX_MV65; }
+static bool getMV66() { return HexagonOptions::Current.HEX_MV66; }
+static bool getMV67() { return HexagonOptions::Current.HEX_MV67; }
+static bool getMV67T() { return HexagonOptions::Current.HEX_MV67T; }
+static bool getMV68() { return HexagonOptions::Current.HEX_MV68; }
+static bool getMV69() { return HexagonOptions::Current.HEX_MV69; }
+static bool getMV71() { return HexagonOptions::Current.HEX_MV71; }
+static bool getMV71T() { return HexagonOptions::Current.HEX_MV71T; }
+static bool getMV73() { return HexagonOptions::Current.HEX_MV73; }
+static bool getMV75() { return HexagonOptions::Current.HEX_MV75; }
+static bool getMV79() { return HexagonOptions::Current.HEX_MV79; }
+static bool getMV81() { return HexagonOptions::Current.HEX_MV81; }
 
-static bool getMV5(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_MV5>(Ctx, false);
+static bool getEnableHvxIeeeFp() {
+  return HexagonOptions::Current.HEX_EnableHVXIEEEFP;
 }
-static bool getMV55(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_MV55>(Ctx, false);
+static bool getEnableHexagonCabac() {
+  return HexagonOptions::Current.HEX_EnableCabac;
 }
-static bool getMV60(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_MV60>(Ctx, false);
-}
-static bool getMV62(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_MV62>(Ctx, false);
-}
-static bool getMV65(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_MV65>(Ctx, false);
-}
-static bool getMV66(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_MV66>(Ctx, false);
-}
-static bool getMV67(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_MV67>(Ctx, false);
-}
-static bool getMV67T(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_MV67T>(Ctx, false);
-}
-static bool getMV68(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_MV68>(Ctx, false);
-}
-static bool getMV69(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_MV69>(Ctx, false);
-}
-static bool getMV71(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_MV71>(Ctx, false);
-}
-static bool getMV71T(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_MV71T>(Ctx, false);
-}
-static bool getMV73(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_MV73>(Ctx, false);
-}
-static bool getMV75(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_MV75>(Ctx, false);
-}
-static bool getMV79(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_MV79>(Ctx, false);
-}
-static bool getMV81(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_MV81>(Ctx, false);
+static bool getHexagonDisableDuplex() {
+  return HexagonOptions::Current.HEX_DisableDuplex;
 }
 
-static bool getDisableHVX(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_DisableHVX>(Ctx,
-                                                                         false);
-}
-static bool getEnableHvxIeeeFp(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_EnableHVXIEEEFP>(
-      Ctx, false);
-}
-static bool getEnableHexagonCabac(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_EnableCabac>(
-      Ctx, false);
-}
-static bool getHexagonDisableDuplex(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_DisableDuplex>(
-      Ctx, llvm::HexagonDisableDuplex);
-}
-
-static Hexagon::ArchEnum getEnableHVX(const clv2::OptionsContext &Ctx) {
-  return static_cast<Hexagon::ArchEnum>(
-      clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_MHVX>(
-          Ctx, clv2::HexArchEnum::NoArch));
+// -mhvx without a value selects the HVX version matching the CPU; an absent
+// -mhvx selects none.
+static Hexagon::ArchEnum getEnableHVX() {
+  const std::optional<HexHVXArch> &MHVX = HexagonOptions::Current.HEX_MHVX;
+  if (!MHVX)
+    return Hexagon::ArchEnum::NoArch;
+  switch (*MHVX) {
+  case HexHVXArch::Generic:
+    return Hexagon::ArchEnum::Generic;
+  case HexHVXArch::V60:
+    return Hexagon::ArchEnum::V60;
+  case HexHVXArch::V62:
+    return Hexagon::ArchEnum::V62;
+  case HexHVXArch::V65:
+    return Hexagon::ArchEnum::V65;
+  case HexHVXArch::V66:
+    return Hexagon::ArchEnum::V66;
+  case HexHVXArch::V67:
+    return Hexagon::ArchEnum::V67;
+  case HexHVXArch::V68:
+    return Hexagon::ArchEnum::V68;
+  case HexHVXArch::V69:
+    return Hexagon::ArchEnum::V69;
+  case HexHVXArch::V71:
+    return Hexagon::ArchEnum::V71;
+  case HexHVXArch::V73:
+    return Hexagon::ArchEnum::V73;
+  case HexHVXArch::V75:
+    return Hexagon::ArchEnum::V75;
+  case HexHVXArch::V79:
+    return Hexagon::ArchEnum::V79;
+  case HexHVXArch::V81:
+    return Hexagon::ArchEnum::V81;
+  }
+  llvm_unreachable("Unknown HexHVXArch");
 }
 
 static constexpr StringRef DefaultArch = "hexagonv68";
 
-static StringRef HexagonGetArchVariant(const clv2::OptionsContext &Ctx) {
-  if (getMV5(Ctx))
+static StringRef HexagonGetArchVariant() {
+  if (getMV5())
     return "hexagonv5";
-  if (getMV55(Ctx))
+  if (getMV55())
     return "hexagonv55";
-  if (getMV60(Ctx))
+  if (getMV60())
     return "hexagonv60";
-  if (getMV62(Ctx))
+  if (getMV62())
     return "hexagonv62";
-  if (getMV65(Ctx))
+  if (getMV65())
     return "hexagonv65";
-  if (getMV66(Ctx))
+  if (getMV66())
     return "hexagonv66";
-  if (getMV67(Ctx))
+  if (getMV67())
     return "hexagonv67";
-  if (getMV67T(Ctx))
+  if (getMV67T())
     return "hexagonv67t";
-  if (getMV68(Ctx))
+  if (getMV68())
     return "hexagonv68";
-  if (getMV69(Ctx))
+  if (getMV69())
     return "hexagonv69";
-  if (getMV71(Ctx))
+  if (getMV71())
     return "hexagonv71";
-  if (getMV71T(Ctx))
+  if (getMV71T())
     return "hexagonv71t";
-  if (getMV73(Ctx))
+  if (getMV73())
     return "hexagonv73";
-  if (getMV75(Ctx))
+  if (getMV75())
     return "hexagonv75";
-  if (getMV79(Ctx))
+  if (getMV79())
     return "hexagonv79";
-  if (getMV81(Ctx))
+  if (getMV81())
     return "hexagonv81";
 
   return "";
 }
 
-StringRef Hexagon_MC::selectHexagonCPU(StringRef CPU,
-                                       const clv2::OptionsContext &Ctx) {
-  StringRef ArchV = HexagonGetArchVariant(Ctx);
+StringRef Hexagon_MC::selectHexagonCPU(StringRef CPU) {
+  StringRef ArchV = HexagonGetArchVariant();
   if (!ArchV.empty() && !CPU.empty()) {
     // Tiny cores have a "t" suffix that is discarded when creating a secondary
     // non-tiny subtarget.  See: addArchSubtarget
@@ -443,13 +430,12 @@ static MCTargetStreamer *createHexagonNullTargetStreamer(MCStreamer &S) {
 }
 
 namespace {
-std::string selectHexagonFS(StringRef CPU, StringRef FS,
-                            const clv2::OptionsContext &Ctx) {
+std::string selectHexagonFS(StringRef CPU, StringRef FS) {
   SmallVector<StringRef, 3> Result;
   if (!FS.empty())
     Result.push_back(FS);
 
-  switch (getEnableHVX(Ctx)) {
+  switch (getEnableHVX()) {
   case Hexagon::ArchEnum::V5:
   case Hexagon::ArchEnum::V55:
     break;
@@ -512,9 +498,9 @@ std::string selectHexagonFS(StringRef CPU, StringRef FS,
     // Sentinel if -mhvx isn't specified
     break;
   }
-  if (getEnableHvxIeeeFp(Ctx))
+  if (getEnableHvxIeeeFp())
     Result.push_back("+hvx-ieee-fp");
-  if (getEnableHexagonCabac(Ctx))
+  if (getEnableHexagonCabac())
     Result.push_back("+cabac");
 
   return join(Result.begin(), Result.end(), ",");
@@ -526,11 +512,11 @@ static bool isCPUValid(StringRef CPU) {
 }
 
 namespace {
-std::pair<std::string, std::string>
-selectCPUAndFS(StringRef CPU, StringRef FS, const clv2::OptionsContext &Ctx) {
+std::pair<std::string, std::string> selectCPUAndFS(StringRef CPU,
+                                                   StringRef FS) {
   std::pair<std::string, std::string> Result;
-  Result.first = std::string(Hexagon_MC::selectHexagonCPU(CPU, Ctx));
-  Result.second = selectHexagonFS(Result.first, FS, Ctx);
+  Result.first = std::string(Hexagon_MC::selectHexagonCPU(CPU));
+  Result.second = selectHexagonFS(Result.first, FS);
   return Result;
 }
 std::mutex ArchSubtargetMutex;
@@ -628,7 +614,7 @@ MCSubtargetInfo *
 Hexagon_MC::createHexagonMCSubtargetInfo(const Triple &TT, StringRef CPU,
                                          StringRef FS,
                                          const clv2::OptionsContext &Ctx) {
-  std::pair<std::string, std::string> Features = selectCPUAndFS(CPU, FS, Ctx);
+  std::pair<std::string, std::string> Features = selectCPUAndFS(CPU, FS);
   StringRef CPUName = Features.first;
   StringRef ArchFS = Features.second;
 
@@ -654,7 +640,7 @@ Hexagon_MC::createHexagonMCSubtargetInfo(const Triple &TT, StringRef CPU,
     X->setFeatureBits(Features.set(Hexagon::ExtensionHVXQFloat));
   }
 
-  if (getHexagonDisableDuplex(Ctx)) {
+  if (getHexagonDisableDuplex()) {
     llvm::FeatureBitset Features = X->getFeatureBits();
     X->setFeatureBits(Features.reset(Hexagon::FeatureDuplex));
   }

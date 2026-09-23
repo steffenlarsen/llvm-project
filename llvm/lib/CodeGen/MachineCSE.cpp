@@ -20,7 +20,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/CFG.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsMachine1.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineBlockFrequencyInfo.h"
 #include "llvm/CodeGen/MachineDominators.h"
@@ -36,14 +36,13 @@
 #include "llvm/CodeGen/TargetRegisterInfo.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/LLVMContext.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/MC/MCRegister.h"
 #include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Allocator.h"
-#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/RecyclingAllocator.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cassert>
@@ -65,12 +64,12 @@ STATISTIC(NumCrossBBCSEs,
 STATISTIC(NumCommutes,  "Number of copies coalesced after commuting");
 
 // Threshold to avoid excessive cost to compute isProfitableToCSE.
-static int getCsusesThreshold(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_CsusesThreshold>(Ctx);
+static int getCsusesThreshold(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenMachine1Options>().CGPASS_CsusesThreshold;
 }
 
-static bool getAggressiveMachineCse(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_AggressiveMachineCse>(Ctx);
+static bool getAggressiveMachineCse(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenMachine1Options>().CGPASS_AggressiveMachineCse;
 }
 
 namespace {
@@ -439,8 +438,7 @@ bool MachineCSEImpl::isCSECandidate(MachineInstr *MI) {
 bool MachineCSEImpl::isProfitableToCSE(Register CSReg, Register Reg,
                                        MachineBasicBlock *CSBB,
                                        MachineInstr *MI) {
-  if (getAggressiveMachineCse(
-          MI->getMF()->getFunction().getContext().getOptionsContext()))
+  if (getAggressiveMachineCse(MI->getMF()->getFunction().getContext()))
     return true;
 
   // FIXME: Heuristics that works around the lack the live range splitting.
@@ -457,8 +455,7 @@ bool MachineCSEImpl::isProfitableToCSE(Register CSReg, Register Reg,
       // Too costly to compute if NumOfUses is very large. Conservatively assume
       // MayIncreasePressure to avoid spending too much time here.
       if (++NumOfUses >
-          getCsusesThreshold(
-              MI.getMF()->getFunction().getContext().getOptionsContext())) {
+          getCsusesThreshold(MI.getMF()->getFunction().getContext())) {
         MayIncreasePressure = true;
         break;
       }

@@ -39,6 +39,7 @@ namespace llvm {
 
 class Module;
 class Function;
+class LLVMContext;
 class MachineFunction;
 class PassInstrumentationCallbacks;
 
@@ -197,11 +198,13 @@ public:
 #endif
 
   void setOptionsContext(const clv2::OptionsContext &Ctx) { OptsCtx = &Ctx; }
+  void setContext(LLVMContext &C) { Ctx = &C; }
   LLVM_ABI void registerCallbacks(PassInstrumentationCallbacks &PIC,
                                   ModuleAnalysisManager &MAM);
 
 private:
   const clv2::OptionsContext *OptsCtx = &clv2::defaultOptionsContext();
+  LLVMContext *Ctx = nullptr;
 };
 
 // Base class for classes that report changes to the IR.
@@ -304,6 +307,7 @@ public:
   ~IRChangedPrinter() override;
   void registerCallbacks(PassInstrumentationCallbacks &PIC);
   void setOptionsContext(const clv2::OptionsContext &Ctx) { OptsCtx = &Ctx; }
+  void setContext(LLVMContext &C) { Ctx = &C; }
 
 protected:
   // Called before and after a pass to get the representation of the IR.
@@ -315,6 +319,7 @@ protected:
                    IRUnitRef) override;
 
   const clv2::OptionsContext *OptsCtx = &clv2::defaultOptionsContext();
+  LLVMContext *Ctx = nullptr;
 };
 
 class LLVM_ABI IRChangedTester : public IRChangedPrinter {
@@ -322,7 +327,7 @@ public:
   IRChangedTester() : IRChangedPrinter(true) {}
   ~IRChangedTester() override;
   void registerCallbacks(PassInstrumentationCallbacks &PIC);
-  // OptsCtx is inherited from IRChangedPrinter
+  // OptsCtx and Ctx are inherited from IRChangedPrinter
 
 protected:
   void handleIR(const std::string &IR, StringRef PassID);
@@ -490,9 +495,11 @@ protected:
 
   bool UseColour;
   const clv2::OptionsContext *OptsCtx = &clv2::defaultOptionsContext();
+  LLVMContext *Ctx = nullptr;
 
 public:
   void setOptionsContext(const clv2::OptionsContext &Ctx) { OptsCtx = &Ctx; }
+  void setContext(LLVMContext &C) { Ctx = &C; }
 };
 
 class VerifyInstrumentation {
@@ -562,6 +569,7 @@ public:
   ~DotCfgChangeReporter() override;
   void registerCallbacks(PassInstrumentationCallbacks &PIC);
   void setOptionsContext(const clv2::OptionsContext &Ctx) { OptsCtx = &Ctx; }
+  void setContext(LLVMContext &C) { Ctx = &C; }
 
 protected:
   // Initialize the HTML file and output the header.
@@ -597,6 +605,7 @@ protected:
   unsigned N = 0;
   std::unique_ptr<raw_fd_ostream> HTML;
   const clv2::OptionsContext *OptsCtx = &clv2::defaultOptionsContext();
+  LLVMContext *Ctx = nullptr;
 };
 
 // Print IR on crash.
@@ -608,12 +617,14 @@ public:
   LLVM_ABI void registerCallbacks(PassInstrumentationCallbacks &PIC);
   LLVM_ABI void reportCrashIR();
   void setOptionsContext(const clv2::OptionsContext &Ctx) { OptsCtx = &Ctx; }
+  void setContext(LLVMContext &C) { Ctx = &C; }
 
 protected:
   std::string SavedIR;
 
 private:
   const clv2::OptionsContext *OptsCtx = &clv2::defaultOptionsContext();
+  LLVMContext *Ctx = nullptr;
   // The crash reporter that will report on a crash.
   static PrintCrashIRInstrumentation *CrashReporter;
   // Crash handler registered when print-on-crash is specified.

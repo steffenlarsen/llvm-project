@@ -1,4 +1,4 @@
-//===- NVPTXOptions.td - CLV2 option defs for NVPTX ------*- tablegen -*-===//
+//===- NVPTXOptions.td - NVPTX target options -*- tablegen -*-===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -6,236 +6,174 @@
 //
 //===----------------------------------------------------------------------===//
 
-include "llvm/Support/CLV2Options.td"
+include "llvm/Option/OptParser.td"
 
-def NVPTXOptsReg : Registry<"llvm::nvptx_opts"> {
-  // Getter bodies are compiled once, in NVPTXOptionsGetters.cpp.
-  let OutOfLineGetters = 1;
-}
+def NVPTXOptions : OptionsStruct<"llvm"> {}
 
 // --- NVPTXTargetMachine.cpp ---
 
-def NVPTX_DisableLoadStoreVectorizer : Option<
-    "disable-nvptx-load-store-vectorizer",
+defm NVPTX_DisableLoadStoreVectorizer : BoolField<
+    "disable-nvptx-load-store-vectorizer", "false",
     "Disable load/store vectorizer",
-    "bool"> {
-  let Registry = NVPTXOptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def NVPTX_DisableIRPeephole : Option<
-    "disable-nvptx-ir-peephole",
+defm NVPTX_DisableIRPeephole : BoolField<
+    "disable-nvptx-ir-peephole", "false",
     "Disable NVPTX IR Peephole",
-    "bool"> {
-  let Registry = NVPTXOptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def NVPTX_DisableRequireStructuredCFG : Option<
-    "disable-nvptx-require-structured-cfg",
+defm NVPTX_DisableRequireStructuredCFG : BoolField<
+    "disable-nvptx-require-structured-cfg", "false",
     "Transitional flag to turn off NVPTX's requirement on preserving "
     "structured CFG. The requirement should be disabled only when "
     "unexpected regressions happen.",
-    "bool"> {
-  let Registry = NVPTXOptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def NVPTX_EarlyByValArgsCopy : Option<
-    "nvptx-early-byval-copy",
+defm NVPTX_EarlyByValArgsCopy : BoolField<
+    "nvptx-early-byval-copy", "false",
     "Create a copy of byval function arguments early.",
-    "bool"> {
-  let Registry = NVPTXOptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // --- NVPTXCtorDtorLowering.cpp ---
 
-def NVPTX_LowerGlobalCtorDtorId : Option<
-    "nvptx-lower-global-ctor-dtor-id",
+defm NVPTX_LowerGlobalCtorDtorId : ValueField<
+    "nvptx-lower-global-ctor-dtor-id", "std::string", "",
     "Override unique ID of ctor/dtor globals.",
-    "std::string"> {
-  let Registry = NVPTXOptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def NVPTX_EmitInitFiniKernel : Option<
-    "nvptx-emit-init-fini-kernel",
+defm NVPTX_EmitInitFiniKernel : BoolField<
+    "nvptx-emit-init-fini-kernel", "1",
     "Emit kernels to call ctor/dtor globals.",
-    "bool"> {
-  let Registry = NVPTXOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // --- NVPTXSubtarget.cpp ---
 
-def NVPTX_NoF16Math : Option<
-    "nvptx-no-f16-math",
+defm NVPTX_NoF16Math : BoolField<
+    "nvptx-no-f16-math", "false",
     "NVPTX Specific: Disable generation of f16 math ops.",
-    "bool"> {
-  let Registry = NVPTXOptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def NVPTX_NoF32x2 : Option<
-    "nvptx-no-f32x2",
+defm NVPTX_NoF32x2 : BoolField<
+    "nvptx-no-f32x2", "false",
     "NVPTX Specific: Disable generation of "
     "f32x2 instructions and registers.",
-    "bool"> {
-  let Registry = NVPTXOptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // --- NVPTXISelLowering.cpp ---
 
-def NVPTX_Sched4Reg : Option<
-    "nvptx-sched4reg",
-    "NVPTX Specific: schedule for register pressue",
-    "bool"> {
-  let Registry = NVPTXOptsReg;
-}
+defm NVPTX_Sched4Reg : BoolField<
+    "nvptx-sched4reg", "false",
+    "NVPTX Specific: schedule for register pressue">;
 
-def NVPTX_FMAContractLevel : Option<
-    "nvptx-fma-level",
-    "NVPTX Specific: FMA contraction (0: don't do it"
-    " 1: do it  2: do it aggressively",
-    "unsigned"> {
-  let Registry = NVPTXOptsReg;
-  let Default = "2";
-  let Hidden = 1;
-}
+// std::optional<unsigned>: the old clv2 option used wasOptSpecified() to
+// distinguish "not given" (fall back to SDNodeFlags-based heuristics in
+// NVPTXISelLowering.cpp) from an explicit value equal to the .td default
+// (always honor it). Hand-written (rather than OptionalValueField<>) to
+// keep the original Joined ("-nvptx-fma-level=N") + hidden Separate
+// ("-nvptx-fma-level N") trio, mirroring ValueField's shape, with no bare
+// flag (the original never had one).
+def NVPTX_FMAContractLevel : Joined<["-", "--"], "nvptx-fma-level=">,
+    HelpText<"NVPTX Specific: FMA contraction (0: don't do it"
+             " 1: do it  2: do it aggressively">,
+    Flags<[HelpHidden]>,
+    Field<"std::optional<unsigned>", "NVPTX_FMAContractLevel",
+          "std::nullopt">;
+def NVPTX_FMAContractLevel_sep : Separate<["-", "--"], "nvptx-fma-level">,
+    Flags<[HelpHidden]>, Alias<NVPTX_FMAContractLevel>;
 
-def NVPTXDivPrecisionApprox : EnumValue<"0",
-    "Use div.approx"> {
-  let CppName = "Approx";
-  let Value = 0;
-}
+// NVPTXDivPrecision is this library's own enum (distinct from the real
+// NVPTX::DivPrecisionLevel defined in NVPTX.h, which has no "unspecified"
+// state); the consumer static_casts the parsed value across, matching the
+// old clv2 option's own EnumType and the consumer's existing static_cast.
+// TargetDefault is a sentinel (never matched by real command-line input --
+// its "" spelling only appears as the field's own default expression) that
+// lets the consumer detect "the user didn't specify this option at all",
+// mirroring the old clv2::wasOptSpecified() check that used to gate
+// NVPTXTargetLowering::getDivF32Level()'s fallback to SDNodeFlags-based
+// heuristics. TargetDefault is listed LAST (not first) so that the other
+// four members keep ordinal values 0-3, matching NVPTX::DivPrecisionLevel
+// exactly -- the consumer's static_cast relies on this ordinal alignment.
+def NVPTXDivPrecisionApprox : EnumMember<"Approx", "0">;
+def NVPTXDivPrecisionFull : EnumMember<"Full", "1">;
+def NVPTXDivPrecisionIEEE754 : EnumMember<"IEEE754", "2">;
+def NVPTXDivPrecisionIEEE754NoFTZ : EnumMember<"IEEE754_NoFTZ", "3">;
+def NVPTXDivPrecisionTargetDefault : EnumMember<"TargetDefault", "">;
 
-def NVPTXDivPrecisionFull : EnumValue<"1",
-    "Use div.full"> {
-  let CppName = "Full";
-  let Value = 1;
-}
+def NVPTXDivPrecisionEnum : OptionEnum<"NVPTXDivPrecision", [
+    NVPTXDivPrecisionApprox, NVPTXDivPrecisionFull, NVPTXDivPrecisionIEEE754,
+    NVPTXDivPrecisionIEEE754NoFTZ, NVPTXDivPrecisionTargetDefault]>;
 
-def NVPTXDivPrecisionIEEE754 : EnumValue<"2",
-    "Use IEEE Compliant F32 div.rnd if available (default)"> {
-  let CppName = "IEEE754";
-  let Value = 2;
-}
-
-def NVPTXDivPrecisionIEEE754NoFTZ : EnumValue<"3",
-    "Use IEEE Compliant F32 div.rnd if available, no FTZ"> {
-  let CppName = "IEEE754_NoFTZ";
-  let Value = 3;
-}
-
-def NVPTXDivPrecisionEnum : EnumType<"NVPTXDivPrecision",
-    [NVPTXDivPrecisionApprox, NVPTXDivPrecisionFull,
-     NVPTXDivPrecisionIEEE754, NVPTXDivPrecisionIEEE754NoFTZ]>;
-
-def NVPTX_PrecDivF32 : Option<
-    "nvptx-prec-divf32",
+defm NVPTX_PrecDivF32 : EnumField<
+    "nvptx-prec-divf32", NVPTXDivPrecisionEnum,
+    "NVPTXDivPrecision::TargetDefault",
     "NVPTX Specific: Override the precision of the lowering for f32 fdiv",
-    "NVPTXDivPrecision"> {
-  let Registry = NVPTXOptsReg;
-  let Default = "2";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def NVPTX_PrecSqrtF32 : Option<
-    "nvptx-prec-sqrtf32",
-    "NVPTX Specific: 0 use sqrt.approx, 1 use sqrt.rn.",
-    "bool"> {
-  let Registry = NVPTXOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+// std::optional<bool>: same wasOptSpecified() rationale as
+// NVPTX_FMAContractLevel above. Hand-written to keep the original Joined
+// ("-nvptx-prec-sqrtf32=bool") + hidden Separate trio (mirroring
+// ValueField's shape); the original never had a bare "-nvptx-prec-sqrtf32"
+// flag, so this deliberately doesn't add one via BoolField<>/
+// OptionalValueField<>.
+def NVPTX_PrecSqrtF32 : Joined<["-", "--"], "nvptx-prec-sqrtf32=">,
+    HelpText<"NVPTX Specific: 0 use sqrt.approx, 1 use sqrt.rn.">,
+    Flags<[HelpHidden]>,
+    Field<"std::optional<bool>", "NVPTX_PrecSqrtF32", "std::nullopt">;
+def NVPTX_PrecSqrtF32_sep : Separate<["-", "--"], "nvptx-prec-sqrtf32">,
+    Flags<[HelpHidden]>, Alias<NVPTX_PrecSqrtF32>;
 
-def NVPTX_ApproxLog2F32 : Option<
-    "nvptx-approx-log2f32",
-    "NVPTX Specific: whether to use lg2.approx for log2",
-    "bool"> {
-  let Registry = NVPTXOptsReg;
-}
+defm NVPTX_ApproxLog2F32 : BoolField<
+    "nvptx-approx-log2f32", "false",
+    "NVPTX Specific: whether to use lg2.approx for log2">;
 
-def NVPTX_AllowFTZAtomics : Option<
-    "nvptx-allow-ftz-atomics",
+defm NVPTX_AllowFTZAtomics : BoolField<
+    "nvptx-allow-ftz-atomics", "1",
     "Allow using native atomics even when FTZ behavior doesn't match",
-    "bool"> {
-  let Registry = NVPTXOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // --- NVPTXUtilities.cpp ---
 
-def NVPTX_ForceMinByValParamAlign : Option<
-    "nvptx-force-min-byval-param-align",
+defm NVPTX_ForceMinByValParamAlign : BoolField<
+    "nvptx-force-min-byval-param-align", "false",
     "NVPTX Specific: force 4-byte minimal alignment for byval"
     " params of device functions.",
-    "bool"> {
-  let Registry = NVPTXOptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // --- NVPTXAliasAnalysis.cpp ---
 
-def NVPTX_TraverseAddressSpacesLimit : Option<
-    "nvptx-traverse-address-aliasing-limit",
+defm NVPTX_TraverseAddressSpacesLimit : ValueField<
+    "nvptx-traverse-address-aliasing-limit", "unsigned", "6",
     "Depth limit for finding address space through traversal",
-    "unsigned"> {
-  let Registry = NVPTXOptsReg;
-  let Default = "6";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // --- NVPTXDwarfDebug.cpp ---
 
-def NVPTX_LineInfoWithInlinedAt : Option<
-    "line-info-inlined-at",
+defm NVPTX_LineInfoWithInlinedAt : BoolField<
+    "line-info-inlined-at", "1",
     "Emit line with inlined_at enhancement for NVPTX",
-    "bool"> {
-  let Registry = NVPTXOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // --- NVPTXISelDAGToDAG.cpp ---
 
-def NVPTX_EnableRsqrtOpt : Option<
-    "nvptx-rsqrt-approx-opt",
+defm NVPTX_EnableRsqrtOpt : BoolField<
+    "nvptx-rsqrt-approx-opt", "1",
     "Enable reciprocal sqrt optimization",
-    "bool"> {
-  let Registry = NVPTXOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def NVPTX_EnableMADWide : Option<
-    "nvptx-mad-wide-opt",
+defm NVPTX_EnableMADWide : BoolField<
+    "nvptx-mad-wide-opt", "false",
     "Enable MAD wide optimization",
-    "bool"> {
-  let Registry = NVPTXOptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // --- NVVMReflect.cpp ---
 
-def NVPTX_NVVMReflectEnabled : Option<
-    "nvvm-reflect-enable",
+defm NVPTX_NVVMReflectEnabled : BoolField<
+    "nvvm-reflect-enable", "1",
     "NVVM reflection, enabled by default",
-    "bool"> {
-  let Registry = NVPTXOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def NVPTX_NVVMReflectList : ListOption<
-    "nvvm-reflect-add",
+defm NVPTX_NVVMReflectList : ListField<
+    "nvvm-reflect-add", "std::string",
     "A key=value pair. Replace __nvvm_reflect(name) with value.",
-    "std::string"> {
-  let Registry = NVPTXOptsReg;
-  let ValueDesc = "name=<int>";
-  let Hidden = 1;
-}
+    /*commaJoined=*/1, /*appendEquals=*/1, /*hidden=*/1,
+    /*metaVar=*/"name=<int>">;

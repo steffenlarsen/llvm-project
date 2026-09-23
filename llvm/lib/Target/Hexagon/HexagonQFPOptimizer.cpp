@@ -74,9 +74,8 @@
 #include "llvm/IR/Function.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
+#include "llvm/Target/Hexagon/HexagonOptions.h"
 #include <map>
 
 #define DEBUG_TYPE "hexagon-qfp-optimizer"
@@ -86,13 +85,11 @@ using namespace llvm;
 bool DisableQFOptForMul = true;
 
 static bool getDisableQFOptimizer(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_DisableQFPOptimizer>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_DisableQFPOptimizer;
 }
 
 static bool getDisableQFOptForMul(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_DisableQFOptForMul>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_DisableQFOptForMul;
 }
 
 namespace {

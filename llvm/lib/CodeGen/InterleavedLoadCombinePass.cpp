@@ -27,7 +27,7 @@
 #include "llvm/Analysis/MemorySSAUpdater.h"
 #include "llvm/Analysis/OptimizationRemarkEmitter.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsCore2.h"
 #include "llvm/CodeGen/InterleavedLoadCombine.h"
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/CodeGen/TargetLowering.h"
@@ -61,9 +61,9 @@ namespace {
 /// Statistic counter
 STATISTIC(NumInterleavedLoadCombine, "Number of combined loads");
 
-static bool getDisableInterleavedLoadCombine(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_DisableInterleavedLoadCombine>(
-      Ctx);
+static bool getDisableInterleavedLoadCombine(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore2Options>()
+      .CGPASS_DisableInterleavedLoadCombine;
 }
 
 struct VectorInfo;
@@ -1349,7 +1349,7 @@ struct InterleavedLoadCombine : public FunctionPass {
   }
 
   bool runOnFunction(Function &F) override {
-    if (getDisableInterleavedLoadCombine(F.getContext().getOptionsContext()))
+    if (getDisableInterleavedLoadCombine(F.getContext()))
       return false;
 
     auto *TPC = getAnalysisIfAvailable<TargetPassConfig>();

@@ -26,8 +26,7 @@
 #include "llvm/IR/PassManager.h"
 #include "llvm/Support/BranchProbability.h"
 #include "llvm/Support/FileSystem.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Transforms/Coroutines/CoroutinesOptionsOptInfos.h"
+#include "llvm/Transforms/Coroutines/CoroutinesOptions.h"
 #include "llvm/Transforms/Utils/CallGraphUpdater.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 
@@ -38,8 +37,7 @@ using namespace llvm;
 #define DEBUG_TYPE "coro-annotation-elide"
 
 static float getCoroElideBranchRatio(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::CORO_ElideBranchRatio>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<CoroutinesOptions>().CORO_ElideBranchRatio;
 }
 
 static Instruction *getFirstNonAllocaInTheEntryBlock(Function *F) {

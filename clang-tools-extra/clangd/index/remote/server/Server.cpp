@@ -29,6 +29,7 @@
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/Path.h"
+#include "llvm/Support/PluginLoaderOptions.h"
 #include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/Signals.h"
 #include "llvm/Support/VirtualFileSystem.h"
@@ -602,7 +603,10 @@ int main(int argc, char *argv[]) {
   llvm::clv2::OptionParser P;
   P.add<&ServerReg>();
   llvm::RegisterAllLLVMOptions(P);
-  auto OptsCtx = P.parse(argc, argv, Overview);
+  std::vector<const char *> ArgsAfterPlugins =
+      llvm::loadPluginsAndStripArgs(argc, argv);
+  auto OptsCtx = P.parse(static_cast<int>(ArgsAfterPlugins.size()),
+                         ArgsAfterPlugins.data(), Overview);
   if (!OptsCtx)
     return 1;
   if (const auto *O = OptsCtx->getViewPtr<&ServerReg>()) {

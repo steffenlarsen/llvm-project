@@ -42,8 +42,7 @@
 #include "llvm/MC/MCDwarf.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/X86/X86OptionsOptInfos.h"
+#include "llvm/Target/X86/X86Options.h"
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
@@ -54,8 +53,7 @@ using namespace llvm;
 #define DEBUG_TYPE "x86-cf-opt"
 
 static bool getNoX86CFOpt(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::X86_NoCallFrameOpt>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<X86Options>().X86_NoCallFrameOpt;
 }
 
 namespace {
@@ -297,23 +295,23 @@ X86CallFrameOptimizationImpl::classifyInstruction(
   // The instructions we actually care about are movs onto the stack or special
   // cases of constant-stores to stack
   switch (MI->getOpcode()) {
-    case X86::AND16mi:
-    case X86::AND32mi:
-    case X86::AND64mi32: {
-      const MachineOperand &ImmOp = MI->getOperand(X86::AddrNumOperands);
-      return ImmOp.getImm() == 0 ? Convert : Exit;
-    }
-    case X86::OR16mi:
-    case X86::OR32mi:
-    case X86::OR64mi32: {
-      const MachineOperand &ImmOp = MI->getOperand(X86::AddrNumOperands);
-      return ImmOp.getImm() == -1 ? Convert : Exit;
-    }
-    case X86::MOV32mi:
-    case X86::MOV32mr:
-    case X86::MOV64mi32:
-    case X86::MOV64mr:
-      return Convert;
+  case X86::AND16mi:
+  case X86::AND32mi:
+  case X86::AND64mi32: {
+    const MachineOperand &ImmOp = MI->getOperand(X86::AddrNumOperands);
+    return ImmOp.getImm() == 0 ? Convert : Exit;
+  }
+  case X86::OR16mi:
+  case X86::OR32mi:
+  case X86::OR64mi32: {
+    const MachineOperand &ImmOp = MI->getOperand(X86::AddrNumOperands);
+    return ImmOp.getImm() == -1 ? Convert : Exit;
+  }
+  case X86::MOV32mi:
+  case X86::MOV32mr:
+  case X86::MOV64mi32:
+  case X86::MOV64mr:
+    return Convert;
   }
 
   // Not all calling conventions have only stack MOVs between the stack
@@ -583,9 +581,8 @@ void X86CallFrameOptimizationImpl::adjustCallSequence(
     // offset after each push.
     // TODO: This is needed only if we require precise CFA.
     if (!TFL->hasFP(MF))
-      TFL->BuildCFI(
-          MBB, std::next(Push), DL,
-          MCCFIInstruction::createAdjustCfaOffset(nullptr, SlotSize));
+      TFL->BuildCFI(MBB, std::next(Push), DL,
+                    MCCFIInstruction::createAdjustCfaOffset(nullptr, SlotSize));
 
     MBB.erase(Store);
   }

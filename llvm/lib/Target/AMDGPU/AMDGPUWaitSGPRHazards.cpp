@@ -16,8 +16,7 @@
 #include "GCNSubtarget.h"
 #include "SIInstrInfo.h"
 #include "llvm/ADT/SmallBitVector.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/AMDGPU/AMDGPUOptionsOptInfos.h"
+#include "llvm/Target/AMDGPU/AMDGPUOptions.h"
 #include "llvm/TargetParser/TargetParser.h"
 
 using namespace llvm;
@@ -25,35 +24,36 @@ using namespace llvm;
 #define DEBUG_TYPE "amdgpu-wait-sgpr-hazards"
 
 static bool getGlobalCullSGPRHazardsOnFunctionBoundary(const Function &F) {
-  return clv2::getOptValOrDefault<
-      &clv2::AMDGPU_CullSGPRHazardsOnFunctionBoundary>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<AMDGPUOptions>()
+      .AMDGPU_CullSGPRHazardsOnFunctionBoundary.value_or(false);
 }
 static bool
 getGlobalCullSGPRHazardsOnFunctionBoundaryWasSpecified(const Function &F) {
-  return clv2::wasOptSpecified<&clv2::AMDGPUOptsReg,
-                               &clv2::AMDGPU_CullSGPRHazardsOnFunctionBoundary>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<AMDGPUOptions>()
+      .AMDGPU_CullSGPRHazardsOnFunctionBoundary.has_value();
 }
 static bool getGlobalCullSGPRHazardsAtMemWait(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AMDGPU_CullSGPRHazardsAtMemWait>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<AMDGPUOptions>()
+      .AMDGPU_CullSGPRHazardsAtMemWait.value_or(false);
 }
 static bool getGlobalCullSGPRHazardsAtMemWaitWasSpecified(const Function &F) {
-  return clv2::wasOptSpecified<&clv2::AMDGPUOptsReg,
-                               &clv2::AMDGPU_CullSGPRHazardsAtMemWait>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<AMDGPUOptions>()
+      .AMDGPU_CullSGPRHazardsAtMemWait.has_value();
 }
 static unsigned getGlobalCullSGPRHazardsMemWaitThreshold(const Function &F) {
-  return clv2::getOptValOrDefault<
-      &clv2::AMDGPU_CullSGPRHazardsMemWaitThreshold>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<AMDGPUOptions>()
+      .AMDGPU_CullSGPRHazardsMemWaitThreshold.value_or(8);
 }
 static bool
 getGlobalCullSGPRHazardsMemWaitThresholdWasSpecified(const Function &F) {
-  return clv2::wasOptSpecified<&clv2::AMDGPUOptsReg,
-                               &clv2::AMDGPU_CullSGPRHazardsMemWaitThreshold>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<AMDGPUOptions>()
+      .AMDGPU_CullSGPRHazardsMemWaitThreshold.has_value();
 }
 
 namespace {

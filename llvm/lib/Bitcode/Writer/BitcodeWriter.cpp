@@ -26,7 +26,7 @@
 #include "llvm/Analysis/MemoryProfileInfo.h"
 #include "llvm/BinaryFormat/Dwarf.h"
 #include "llvm/Bitcode/BitcodeCommon.h"
-#include "llvm/Bitcode/BitcodeOptionsOptInfos.h"
+#include "llvm/Bitcode/BitcodeOptions.h"
 #include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/Bitcode/LLVMBitCodes.h"
 #include "llvm/Bitstream/BitCodes.h"
@@ -92,33 +92,35 @@ using namespace llvm;
 using namespace llvm::memprof;
 
 static unsigned getIndexThreshold(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::BC_MDIndexThreshold>(
-      M.getContext().getOptionsContext());
+  return M.getContext()
+      .getOptions<BitcodeOptions>()
+      .BC_MDIndexThreshold.value_or(25);
 }
 
 static bool isIndexThresholdSpecified(const Module &M) {
-  auto *V =
-      clv2::getView<&clv2::BitcodeOptsReg>(M.getContext().getOptionsContext());
-  return V && V->specified<&clv2::BC_MDIndexThreshold>();
+  return M.getContext()
+      .getOptions<BitcodeOptions>()
+      .BC_MDIndexThreshold.has_value();
 }
 
 static uint32_t getFlushThreshold(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::BC_FlushThreshold>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<BitcodeOptions>().BC_FlushThreshold;
 }
 
-// getCombinedIndexMemProfContextEnabled() is defined in BitcodeOptions.cpp
-// (LLVMBitcodeReader) and declared in BitcodeWriter.h.
+// getCombinedIndexMemProfContextEnabled() is defined in
+// BitcodeMemProfOptions.cpp (LLVMBitcodeReader) and declared in
+// BitcodeWriter.h.
 
 static bool getPreserveBitcodeUseListOrder(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::BC_PreserveBCUseListOrder>(
-      M.getContext().getOptionsContext());
+  return M.getContext()
+      .getOptions<BitcodeOptions>()
+      .BC_PreserveBCUseListOrder.value_or(true);
 }
 
 static bool isPreserveBCUseListOrderSpecified(const Module &M) {
-  auto *V =
-      clv2::getView<&clv2::BitcodeOptsReg>(M.getContext().getOptionsContext());
-  return V && V->specified<&clv2::BC_PreserveBCUseListOrder>();
+  return M.getContext()
+      .getOptions<BitcodeOptions>()
+      .BC_PreserveBCUseListOrder.has_value();
 }
 
 namespace llvm {
@@ -4856,8 +4858,8 @@ void ModuleBitcodeWriterBase::writePerModuleGlobalValueSummary() {
   }
 
   unsigned ContextIdAbbvId = 0;
-  const auto &OptsCtx = M.getContext().getOptionsContext();
-  if (metadataMayIncludeContextSizeInfo(OptsCtx)) {
+  const auto &AnOpts = M.getContext().getOptions<AnalysisOptions>();
+  if (metadataMayIncludeContextSizeInfo(AnOpts)) {
     // n x context id
     auto ContextIdAbbv = std::make_shared<BitCodeAbbrev>();
     ContextIdAbbv->Add(BitCodeAbbrevOp(bitc::FS_ALLOC_CONTEXT_IDS));
@@ -4867,7 +4869,7 @@ void ModuleBitcodeWriterBase::writePerModuleGlobalValueSummary() {
     // are emitting them for all MIBs. Otherwise we use VBR to better compress 0
     // values that are expected to more frequently occur in an alloc's memprof
     // summary.
-    if (metadataIncludesAllContextSizeInfo(OptsCtx))
+    if (metadataIncludesAllContextSizeInfo(AnOpts))
       ContextIdAbbv->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Fixed, 32));
     else
       ContextIdAbbv->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::VBR, 8));

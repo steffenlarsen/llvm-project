@@ -12,7 +12,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/CodeGen/TargetSchedule.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsSched2.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGen/MachineOperand.h"
@@ -22,18 +22,17 @@
 #include "llvm/MC/MCInstrDesc.h"
 #include "llvm/MC/MCInstrItineraries.h"
 #include "llvm/MC/MCSchedule.h"
-#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <cassert>
 
 using namespace llvm;
 
-static bool getSchedModelForceEnableIntervals(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_SchedModelForceEnableIntervals>(
-      Ctx);
+static bool getSchedModelForceEnableIntervals(const LLVMContext *Ctx) {
+  return (Ctx ? Ctx->getOptions<CodeGenSched2Options>()
+              : CodeGenSched2Options::Current)
+      .CGPASS_SchedModelForceEnableIntervals;
 }
 
 bool TargetSchedModel::hasInstrSchedModel() const {
@@ -344,7 +343,9 @@ TargetSchedModel::computeReciprocalThroughput(const MCInst &MI) const {
 }
 
 bool TargetSchedModel::enableIntervals() const {
-  if (STI && getSchedModelForceEnableIntervals(STI->getOptionsContext()))
+  // TargetSubtargetInfo does not carry a real LLVMContext; fall back to the
+  // process-wide default (see getSchedModelForceEnableIntervals).
+  if (STI && getSchedModelForceEnableIntervals(/*Ctx=*/nullptr))
     return true;
 
   return SchedModel.EnableIntervals;

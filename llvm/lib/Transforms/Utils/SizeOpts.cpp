@@ -13,51 +13,40 @@
 #include "llvm/Transforms/Utils/SizeOpts.h"
 #include "llvm/Analysis/BlockFrequencyInfo.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/LLVMContext.h"
 #include "llvm/Support/CommandLineCompat.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Transforms/Utils/UtilsOptionsOptInfos.h"
+#include "llvm/Transforms/Utils/UtilsOptions.h"
 
 using namespace llvm;
-using namespace llvm::clv2;
 
-bool llvm::getEnablePGSO(const clv2::OptionsContext &Ctx) {
-  return getOptValOrDefault<&TU_EnablePGSO>(Ctx);
+static const UtilsOptions &getUtilsOptions(const LLVMContext *Ctx) {
+  return Ctx ? Ctx->getOptions<UtilsOptions>() : UtilsOptions::Current;
 }
 
-bool llvm::getForcePGSO(const clv2::OptionsContext &Ctx) {
-  return getOptValIfSpecified<&TransformUtilsOptsReg, &TU_ForcePGSO>(Ctx,
-                                                                     false);
+bool llvm::getEnablePGSO(const LLVMContext *Ctx) {
+  return getUtilsOptions(Ctx).TU_EnablePGSO;
 }
 
-int llvm::getPgsoCutoffInstrProf(const clv2::OptionsContext &Ctx) {
-  return getOptValOrDefault<&TU_PgsoCutoffInstrProf>(Ctx);
+bool llvm::getForcePGSO(const LLVMContext *Ctx) {
+  return getUtilsOptions(Ctx).TU_ForcePGSO;
 }
 
-int llvm::getPgsoCutoffSampleProf(const clv2::OptionsContext &Ctx) {
-  return getOptValOrDefault<&TU_PgsoCutoffSampleProf>(Ctx);
+int llvm::getPgsoCutoffInstrProf(const LLVMContext *Ctx) {
+  return getUtilsOptions(Ctx).TU_PgsoCutoffInstrProf;
 }
 
-bool llvm::isPGSOColdCodeOnly(ProfileSummaryInfo *PSI,
-                              const clv2::OptionsContext &Ctx) {
-  bool ColdCodeOnly = false;
-  bool ColdCodeOnlyForInstrPGO = false;
-  bool ColdCodeOnlyForSamplePGO = false;
-  bool ColdCodeOnlyForPartialSamplePGO = false;
-  bool LargeWorkingSetSizeOnly = true;
+int llvm::getPgsoCutoffSampleProf(const LLVMContext *Ctx) {
+  return getUtilsOptions(Ctx).TU_PgsoCutoffSampleProf;
+}
 
-  if (auto *O = clv2::getView<&clv2::TransformUtilsOptsReg>(Ctx)) {
-    if (O->specified<&TU_PGSOColdCodeOnly>())
-      ColdCodeOnly = O->get<&TU_PGSOColdCodeOnly>();
-    if (O->specified<&TU_PGSOColdCodeOnlyForInstrPGO>())
-      ColdCodeOnlyForInstrPGO = O->get<&TU_PGSOColdCodeOnlyForInstrPGO>();
-    if (O->specified<&TU_PGSOColdCodeOnlyForSamplePGO>())
-      ColdCodeOnlyForSamplePGO = O->get<&TU_PGSOColdCodeOnlyForSamplePGO>();
-    if (O->specified<&TU_PGSOColdCodeOnlyForPartialSamplePGO>())
-      ColdCodeOnlyForPartialSamplePGO =
-          O->get<&TU_PGSOColdCodeOnlyForPartialSamplePGO>();
-    if (O->specified<&TU_PGSOLargeWorkingSetSizeOnly>())
-      LargeWorkingSetSizeOnly = O->get<&TU_PGSOLargeWorkingSetSizeOnly>();
-  }
+bool llvm::isPGSOColdCodeOnly(ProfileSummaryInfo *PSI, const LLVMContext *Ctx) {
+  const UtilsOptions &Opts = getUtilsOptions(Ctx);
+  bool ColdCodeOnly = Opts.TU_PGSOColdCodeOnly;
+  bool ColdCodeOnlyForInstrPGO = Opts.TU_PGSOColdCodeOnlyForInstrPGO;
+  bool ColdCodeOnlyForSamplePGO = Opts.TU_PGSOColdCodeOnlyForSamplePGO;
+  bool ColdCodeOnlyForPartialSamplePGO =
+      Opts.TU_PGSOColdCodeOnlyForPartialSamplePGO;
+  bool LargeWorkingSetSizeOnly = Opts.TU_PGSOLargeWorkingSetSizeOnly;
 
   return ColdCodeOnly ||
          (PSI->hasInstrumentationProfile() && ColdCodeOnlyForInstrPGO) ||

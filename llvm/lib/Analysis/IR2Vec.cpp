@@ -16,7 +16,7 @@
 #include "llvm/ADT/DepthFirstIterator.h"
 #include "llvm/ADT/Sequence.h"
 #include "llvm/ADT/Statistic.h"
-#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
+#include "llvm/Analysis/AnalysisOptions.h"
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Module.h"
@@ -27,7 +27,6 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/Format.h"
 #include "llvm/Support/MemoryBuffer.h"
-#include "llvm/Support/OptionsContext.h"
 
 using namespace llvm;
 using namespace ir2vec;
@@ -43,40 +42,30 @@ cl::OptionCategory IR2VecCategory("IR2Vec Options");
 
 // FIXME: Use a default vocab when not specified
 
-float getOpcWeight(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::AN_OpcWeight>(Ctx);
+float getOpcWeight(const AnalysisOptions &Opts) { return Opts.AN_OpcWeight; }
+float getTypeWeight(const AnalysisOptions &Opts) { return Opts.AN_TypeWeight; }
+float getArgWeight(const AnalysisOptions &Opts) { return Opts.AN_ArgWeight; }
+IR2VecKind getIR2VecEmbeddingKind(const AnalysisOptions &Opts) {
+  return Opts.AN_IR2VecEmbeddingKind;
 }
-float getTypeWeight(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::AN_TypeWeight>(Ctx);
-}
-float getArgWeight(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::AN_ArgWeight>(Ctx);
-}
-IR2VecKind getIR2VecEmbeddingKind(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::AN_IR2VecEmbeddingKind>(Ctx);
-}
-std::string getVocabFile(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::AN_VocabFile>(Ctx);
+std::string getVocabFile(const AnalysisOptions &Opts) {
+  return Opts.AN_VocabFile;
 }
 
 } // namespace ir2vec
 } // namespace llvm
 
 static std::string getVocabFile(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::AN_VocabFile>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<AnalysisOptions>().AN_VocabFile;
 }
 static float getOpcWeight(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::AN_OpcWeight>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<AnalysisOptions>().AN_OpcWeight;
 }
 static float getTypeWeight(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::AN_TypeWeight>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<AnalysisOptions>().AN_TypeWeight;
 }
 static float getArgWeight(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::AN_ArgWeight>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<AnalysisOptions>().AN_ArgWeight;
 }
 
 AnalysisKey IR2VecVocabAnalysis::Key;
@@ -688,7 +677,7 @@ PreservedAnalyses IR2VecPrinterPass::run(Module &M,
 
   for (Function &F : M) {
     auto Emb = Embedder::create(
-        getIR2VecEmbeddingKind(F.getContext().getOptionsContext()), F,
+        getIR2VecEmbeddingKind(F.getContext().getOptions<AnalysisOptions>()), F,
         Vocabulary);
     if (!Emb) {
       OS << "Error creating IR2Vec embeddings \n";

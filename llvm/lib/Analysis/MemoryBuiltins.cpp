@@ -16,7 +16,7 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/AliasAnalysis.h"
-#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
+#include "llvm/Analysis/AnalysisOptions.h"
 #include "llvm/Analysis/TargetFolder.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Analysis/Utils/Local.h"
@@ -36,10 +36,8 @@
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Value.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/MathExtras.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cassert>
 #include <cstdint>
@@ -56,9 +54,8 @@ static unsigned ObjectSizeOffsetVisitorMaxVisitInstructions = 100;
 
 static unsigned
 getObjectSizeOffsetVisitorMaxVisitInstructions(const LLVMContext &Ctx) {
-  return clv2::getOptValOrDefault<
-      &clv2::AN_ObjectSizeOffsetVisitorMaxVisitInstructions>(
-      Ctx.getOptionsContext());
+  return Ctx.getOptions<AnalysisOptions>()
+      .AN_ObjectSizeOffsetVisitorMaxVisitInstructions;
 }
 
 // clang-format off

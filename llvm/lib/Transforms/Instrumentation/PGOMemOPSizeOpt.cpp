@@ -35,7 +35,7 @@
 #include "llvm/IR/Type.h"
 #include "llvm/ProfileData/InstrProf.h"
 #include "llvm/Support/OptionsContext.h"
-#include "llvm/Transforms/Instrumentation/InstrumentationOptionsOptInfos.h"
+#include "llvm/Transforms/Instrumentation/InstrumentationOptions.h"
 #define INSTR_PROF_VALUE_PROF_MEMOP_API
 #include "llvm/ProfileData/InstrProfData.inc"
 #include "llvm/Support/Casting.h"
@@ -61,32 +61,25 @@ bool MemOPOptMemcmpBcmp = true;
 } // end namespace llvm
 
 static unsigned getMemOPCountThreshold(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::INST_PGOMemopCountThreshold>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<InstrumentationOptions>().INST_PGOMemopCountThreshold;
 }
 static bool getDisableMemOPOPT(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::INST_DisableMemopOpt>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<InstrumentationOptions>().INST_DisableMemopOpt;
 }
 static unsigned getMemOPPercentThreshold(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::INST_PGOMemopPercentThreshold>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<InstrumentationOptions>().INST_PGOMemopPercentThreshold;
 }
 static unsigned getMemOPMaxVersion(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::INST_PGOMemopMaxVersion>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<InstrumentationOptions>().INST_PGOMemopMaxVersion;
 }
 static bool getMemOPScaleCount(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::INST_PGOMemopScaleCount>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<InstrumentationOptions>().INST_PGOMemopScaleCount;
 }
 static bool getMemOPOptMemcmpBcmp(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::INST_PGOMemopOptMemcmpBcmp>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<InstrumentationOptions>().INST_PGOMemopOptMemcmpBcmp;
 }
 static unsigned getMemOpMaxOptSize(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::INST_MemopValueProfMaxOptSize>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<InstrumentationOptions>().INST_MemopValueProfMaxOptSize;
 }
 
 namespace {

@@ -17,7 +17,7 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/iterator_range.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsSched1.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
@@ -30,11 +30,10 @@
 #include "llvm/CodeGen/TargetRegisterInfo.h"
 #include "llvm/CodeGenTypes/MachineValueType.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/LLVMContext.h"
 #include "llvm/MC/MCInstrDesc.h"
 #include "llvm/MC/MCRegisterInfo.h"
-#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cassert>
 
@@ -47,12 +46,12 @@ using namespace llvm;
 // findSuitableFreeRegister, so guard them the same way: being static, they
 // would otherwise trip -Wunused-function in a release build.
 #ifndef NDEBUG
-static int getAggAntidepDebugdiv(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_AggAntidepDebugdiv>(Ctx);
+static int getAggAntidepDebugdiv(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenSched1Options>().CGPASS_AggAntidepDebugdiv;
 }
 
-static int getAggAntidepDebugmod(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_AggAntidepDebugmod>(Ctx);
+static int getAggAntidepDebugmod(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenSched1Options>().CGPASS_AggAntidepDebugmod;
 }
 #endif
 
@@ -594,7 +593,7 @@ bool AggressiveAntiDepBreaker::FindSuitableFreeRegisters(
 
 #ifndef NDEBUG
   // If DebugDiv > 0 then only rename (renamecnt % DebugDiv) == DebugMod
-  const auto &Ctx = MF.getFunction().getContext().getOptionsContext();
+  const auto &Ctx = MF.getFunction().getContext();
   if (getAggAntidepDebugdiv(Ctx) > 0) {
     static int renamecnt = 0;
     if (renamecnt++ % getAggAntidepDebugdiv(Ctx) != getAggAntidepDebugmod(Ctx))

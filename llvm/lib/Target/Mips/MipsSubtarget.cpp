@@ -22,13 +22,10 @@
 #include "llvm/IR/Function.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/Mips/MipsOptionsOptInfos.h"
+#include "llvm/Target/Mips/MipsOptions.h"
 
 using namespace llvm;
-
-CompactBranchPolicy MipsCompactBranchPolicy = CB_Optimal;
 
 #define DEBUG_TYPE "mips-subtarget"
 
@@ -38,62 +35,35 @@ CompactBranchPolicy MipsCompactBranchPolicy = CB_Optimal;
 
 // FIXME: Maybe this should be on by default when Mips16 is specified
 //
-static bool getMixed16_32(const Function &F) {
-  return clv2::getOptValOr<&clv2::MipsOptsReg, &clv2::MIPS_Mixed16_32>(
-      F.getContext().getOptionsContext(), false);
+static bool getMixed16_32(const Function *F) {
+  return F ? F->getContext().getOptions<MipsOptions>().MIPS_Mixed16_32
+           : MipsOptions::Current.MIPS_Mixed16_32;
 }
 
-static bool getMixed16_32(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::MipsOptsReg, &clv2::MIPS_Mixed16_32>(Ctx,
-                                                                       false);
+static bool getMips_Os16(const Function *F) {
+  return F ? F->getContext().getOptions<MipsOptions>().MIPS_Os16
+           : MipsOptions::Current.MIPS_Os16;
 }
 
-static bool getMips_Os16(const Function &F) {
-  return clv2::getOptValOr<&clv2::MipsOptsReg, &clv2::MIPS_Os16>(
-      F.getContext().getOptionsContext(), false);
-}
-
-static bool getMips_Os16(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::MipsOptsReg, &clv2::MIPS_Os16>(Ctx, false);
-}
-
-static bool getMips16HardFloat(const Function &F) {
-  return clv2::getOptValOr<&clv2::MipsOptsReg, &clv2::MIPS_Mips16HardFloat>(
-      F.getContext().getOptionsContext(), false);
-}
-
-static bool getMips16HardFloat(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::MipsOptsReg, &clv2::MIPS_Mips16HardFloat>(
-      Ctx, false);
+static bool getMips16HardFloat(const Function *F) {
+  return F ? F->getContext().getOptions<MipsOptions>().MIPS_Mips16HardFloat
+           : MipsOptions::Current.MIPS_Mips16HardFloat;
 }
 
 static bool getMips16ConstantIslands(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::MIPS_Mips16ConstantIslands>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<MipsOptions>().MIPS_Mips16ConstantIslands;
 }
 
-static bool getGPOpt(const Function &F) {
-  return clv2::getOptValOr<&clv2::MipsOptsReg, &clv2::MIPS_GPOpt>(
-      F.getContext().getOptionsContext(), false);
+static bool getGPOpt(const Function *F) {
+  return F ? F->getContext().getOptions<MipsOptions>().MIPS_GPOpt
+           : MipsOptions::Current.MIPS_GPOpt;
 }
 
-static bool getGPOpt(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::MipsOptsReg, &clv2::MIPS_GPOpt>(Ctx, false);
-}
-
-static CompactBranchPolicy getMipsCompactBranchPolicy(const Function &F) {
-  if (auto *O =
-          clv2::getView<&clv2::MipsOptsReg>(F.getContext().getOptionsContext()))
-    return static_cast<CompactBranchPolicy>(
-        O->get<&clv2::MIPS_CompactBranchPolicy>());
-  return MipsCompactBranchPolicy;
-}
-
-static CompactBranchPolicy
-getMipsCompactBranchPolicy(const clv2::OptionsContext &Ctx) {
-  return static_cast<CompactBranchPolicy>(
-      clv2::getOptValOr<&clv2::MipsOptsReg, &clv2::MIPS_CompactBranchPolicy>(
-          Ctx, MipsCompactBranchPolicy));
+static CompactBranchPolicy getMipsCompactBranchPolicy(const Function *F) {
+  MipsCompactBranch Policy =
+      F ? F->getContext().getOptions<MipsOptions>().MIPS_CompactBranchPolicy
+        : MipsOptions::Current.MIPS_CompactBranchPolicy;
+  return static_cast<CompactBranchPolicy>(Policy);
 }
 
 bool MipsSubtarget::DspWarningPrinted = false;
@@ -116,20 +86,14 @@ MipsSubtarget::MipsSubtarget(const Triple &TT, StringRef CPU, StringRef FS,
       IsGP64bit(false), HasVFPU(false), HasCnMips(false), HasCnMipsP(false),
       IsR5900(false), FixR5900(false), HasMips3_32(false), HasMips3_32r2(false),
       HasMips4_32(false), HasMips4_32r2(false), HasMips5_32r2(false),
-      InMips16Mode(false),
-      InMips16HardFloat(F ? getMips16HardFloat(*F)
-                          : getMips16HardFloat(TM.getOptionsContext())),
+      InMips16Mode(false), InMips16HardFloat(getMips16HardFloat(F)),
       InMicroMipsMode(false), HasDSP(false), HasDSPR2(false), HasDSPR3(false),
-      AllowMixed16_32(F ? (getMixed16_32(*F) || getMips_Os16(*F))
-                        : (getMixed16_32(TM.getOptionsContext()) ||
-                           getMips_Os16(TM.getOptionsContext()))),
-      Os16(F ? getMips_Os16(*F) : getMips_Os16(TM.getOptionsContext())),
-      HasMSA(false), UseTCCInDIV(false), HasSym32(false), HasEVA(false),
-      DisableMadd4(false), HasMT(false), HasCRC(false), HasVirt(false),
-      HasGINV(false), UseIndirectJumpsHazard(false), StrictAlign(false),
-      UseCompactBranches(
-          F ? getMipsCompactBranchPolicy(*F) != CB_Never
-            : getMipsCompactBranchPolicy(TM.getOptionsContext()) != CB_Never),
+      AllowMixed16_32(getMixed16_32(F) || getMips_Os16(F)),
+      Os16(getMips_Os16(F)), HasMSA(false), UseTCCInDIV(false), HasSym32(false),
+      HasEVA(false), DisableMadd4(false), HasMT(false), HasCRC(false),
+      HasVirt(false), HasGINV(false), UseIndirectJumpsHazard(false),
+      StrictAlign(false),
+      UseCompactBranches(getMipsCompactBranchPolicy(F) != CB_Never),
       StackAlignOverride(StackAlignOverride), TM(TM), TargetTriple(TT),
       InstrInfo(
           MipsInstrInfo::create(initializeSubtargetDependencies(CPU, FS, TM))),
@@ -163,7 +127,8 @@ MipsSubtarget::MipsSubtarget(const Triple &TT, StringRef CPU, StringRef FS,
   if (isFP64bit() && !hasMips64() && hasMips32() && !hasMips32r2())
     report_fatal_error(
         "FPU with 64-bit registers is not available on MIPS32 pre revision 2. "
-        "Use -mcpu=mips32r2 or greater.", false);
+        "Use -mcpu=mips32r2 or greater.",
+        false);
 
   if (!isABI_O32() && !useOddSPReg())
     report_fatal_error("-mattr=+nooddspreg requires the O32 ABI.", false);
@@ -208,7 +173,7 @@ MipsSubtarget::MipsSubtarget(const Triple &TT, StringRef CPU, StringRef FS,
     NoABICalls = true;
 
   // Set UseSmallSection.
-  UseSmallSection = F ? getGPOpt(*F) : getGPOpt(TM.getOptionsContext());
+  UseSmallSection = getGPOpt(F);
   if (!NoABICalls && UseSmallSection) {
     errs() << "warning: cannot use small-data accesses for '-mabicalls'"
            << "\n";

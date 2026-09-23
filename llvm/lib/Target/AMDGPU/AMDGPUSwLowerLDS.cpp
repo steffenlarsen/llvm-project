@@ -99,9 +99,8 @@
 #include "llvm/IR/MDBuilder.h"
 #include "llvm/IR/ReplaceConstant.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/AMDGPU/AMDGPUOptionsOptInfos.h"
+#include "llvm/Target/AMDGPU/AMDGPUOptions.h"
 #include "llvm/Transforms/Instrumentation/AddressSanitizerCommon.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 
@@ -114,8 +113,7 @@ using namespace llvm;
 using namespace AMDGPU;
 
 static bool getAsanInstrumentLDS(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::AMDGPU_AsanInstrumentLDS>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<AMDGPUOptions>().AMDGPU_AsanInstrumentLDS;
 }
 
 namespace {

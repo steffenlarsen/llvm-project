@@ -33,8 +33,7 @@
 #include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/KnownBits.h"
 #include "llvm/Support/KnownFPClass.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/AMDGPU/AMDGPUOptionsOptInfos.h"
+#include "llvm/Target/AMDGPU/AMDGPUOptions.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/IntegerDivision.h"
 #include "llvm/Transforms/Utils/Local.h"
@@ -45,43 +44,37 @@ using namespace llvm;
 using namespace llvm::PatternMatch;
 
 static bool getWidenLoads(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AMDGPU_WidenConstantLoads>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<AMDGPUOptions>().AMDGPU_WidenConstantLoads;
 }
 
 static bool getBreakLargePHIs(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AMDGPU_BreakLargePHIs>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<AMDGPUOptions>().AMDGPU_BreakLargePHIs;
 }
 
 static bool getForceBreakLargePHIs(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AMDGPU_ForceBreakLargePHIs>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<AMDGPUOptions>().AMDGPU_ForceBreakLargePHIs;
 }
 
 static unsigned getBreakLargePHIsThreshold(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AMDGPU_BreakLargePHIsThreshold>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<AMDGPUOptions>()
+      .AMDGPU_BreakLargePHIsThreshold;
 }
 
 static bool getUseMul24Intrin(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AMDGPU_UseMul24Intrin>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<AMDGPUOptions>().AMDGPU_UseMul24Intrin;
 }
 
 static bool getExpandDiv64InIR(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AMDGPU_ExpandDiv64InIR>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<AMDGPUOptions>().AMDGPU_ExpandDiv64InIR;
 }
 
 static bool getDisableIDivExpand(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AMDGPU_DisableIDivExpand>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<AMDGPUOptions>().AMDGPU_DisableIDivExpand;
 }
 
 static bool getDisableFDivExpand(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AMDGPU_DisableFDivExpand>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<AMDGPUOptions>().AMDGPU_DisableFDivExpand;
 }
 
 namespace {
@@ -170,8 +163,8 @@ public:
   /// we expand some divisions here, we need to perform this before obscuring.
   bool foldBinOpIntoSelect(BinaryOperator &I) const;
 
-  bool divHasSpecialOptimization(BinaryOperator &I,
-                                 Value *Num, Value *Den) const;
+  bool divHasSpecialOptimization(BinaryOperator &I, Value *Num,
+                                 Value *Den) const;
   unsigned getDivNumBits(BinaryOperator &I, Value *Num, Value *Den,
                          unsigned MaxDivBits, bool Signed) const;
 
@@ -186,11 +179,11 @@ public:
                                  bool IsDiv, bool IsSigned) const;
 
   /// Expands 32 bit div or rem.
-  Value* expandDivRem32(IRBuilder<> &Builder, BinaryOperator &I,
-                        Value *Num, Value *Den) const;
+  Value *expandDivRem32(IRBuilder<> &Builder, BinaryOperator &I, Value *Num,
+                        Value *Den) const;
 
-  Value *shrinkDivRem64(IRBuilder<> &Builder, BinaryOperator &I,
-                        Value *Num, Value *Den) const;
+  Value *shrinkDivRem64(IRBuilder<> &Builder, BinaryOperator &I, Value *Num,
+                        Value *Den) const;
   void expandDivRem64(BinaryOperator &I) const;
 
   /// Widen a scalar load.
@@ -346,8 +339,7 @@ static void extractValues(IRBuilder<> &Builder,
     Values.push_back(Builder.CreateExtractElement(V, I));
 }
 
-static Value *insertValues(IRBuilder<> &Builder,
-                           Type *Ty,
+static Value *insertValues(IRBuilder<> &Builder, Type *Ty,
                            SmallVectorImpl<Value *> &Values) {
   if (!Ty->isVectorTy()) {
     assert(Values.size() == 1);
@@ -489,8 +481,8 @@ bool AMDGPUCodeGenPrepareImpl::foldBinOpIntoSelect(BinaryOperator &BO) const {
   if (const FPMathOperator *FPOp = dyn_cast<const FPMathOperator>(&BO))
     Builder.setFastMathFlags(FPOp->getFastMathFlags());
 
-  Value *NewSelect = Builder.CreateSelect(Sel->getCondition(),
-                                          FoldedT, FoldedF);
+  Value *NewSelect =
+      Builder.CreateSelect(Sel->getCondition(), FoldedT, FoldedF);
   NewSelect->takeName(&BO);
   BO.replaceAllUsesWith(NewSelect);
   DeadVals.push_back(&BO);
@@ -1000,8 +992,8 @@ bool AMDGPUCodeGenPrepareImpl::visitFDiv(BinaryOperator &FDiv) {
   return true;
 }
 
-static std::pair<Value*, Value*> getMul64(IRBuilder<> &Builder,
-                                          Value *LHS, Value *RHS) {
+static std::pair<Value *, Value *> getMul64(IRBuilder<> &Builder, Value *LHS,
+                                            Value *RHS) {
   Type *I32Ty = Builder.getInt32Ty();
   Type *I64Ty = Builder.getInt64Ty();
 
@@ -1014,7 +1006,7 @@ static std::pair<Value*, Value*> getMul64(IRBuilder<> &Builder,
   return std::pair(Lo, Hi);
 }
 
-static Value* getMulHu(IRBuilder<> &Builder, Value *LHS, Value *RHS) {
+static Value *getMulHu(IRBuilder<> &Builder, Value *LHS, Value *RHS) {
   return getMul64(Builder, LHS, RHS).second;
 }
 
@@ -1208,7 +1200,7 @@ Value *AMDGPUCodeGenPrepareImpl::expandDivRem32(IRBuilder<> &Builder,
   Builder.setFastMathFlags(FMF);
 
   if (divHasSpecialOptimization(I, X, Y))
-    return nullptr;  // Keep it for later optimization.
+    return nullptr; // Keep it for later optimization.
 
   bool IsDiv = Opc == Instruction::UDiv || Opc == Instruction::SDiv;
   bool IsSigned = Opc == Instruction::SRem || Opc == Instruction::SDiv;
@@ -1228,8 +1220,8 @@ Value *AMDGPUCodeGenPrepareImpl::expandDivRem32(IRBuilder<> &Builder,
   }
 
   if (Value *Res = expandDivRemToFloat(Builder, I, X, Y, IsDiv, IsSigned)) {
-    return IsSigned ? Builder.CreateSExtOrTrunc(Res, Ty) :
-                      Builder.CreateZExtOrTrunc(Res, Ty);
+    return IsSigned ? Builder.CreateSExtOrTrunc(Res, Ty)
+                    : Builder.CreateZExtOrTrunc(Res, Ty);
   }
 
   ConstantInt *Zero = Builder.getInt32(0);
@@ -1324,7 +1316,7 @@ Value *AMDGPUCodeGenPrepareImpl::shrinkDivRem64(IRBuilder<> &Builder,
                                                 BinaryOperator &I, Value *Num,
                                                 Value *Den) const {
   if (!getExpandDiv64InIR(F) && divHasSpecialOptimization(I, Num, Den))
-    return nullptr;  // Keep it for later optimization.
+    return nullptr; // Keep it for later optimization.
 
   Instruction::BinaryOps Opc = I.getOpcode();
 
@@ -1348,8 +1340,8 @@ Value *AMDGPUCodeGenPrepareImpl::shrinkDivRem64(IRBuilder<> &Builder,
   }
 
   if (Narrowed) {
-    return IsSigned ? Builder.CreateSExt(Narrowed, Num->getType()) :
-                      Builder.CreateZExt(Narrowed, Num->getType());
+    return IsSigned ? Builder.CreateSExt(Narrowed, Num->getType())
+                    : Builder.CreateZExt(Narrowed, Num->getType());
   }
 
   return nullptr;
@@ -1551,10 +1543,10 @@ bool AMDGPUCodeGenPrepareImpl::visitLoadInst(LoadInst &I) {
 
       if (!Lower->isNullValue()) {
         Metadata *LowAndHigh[] = {
-          ConstantAsMetadata::get(ConstantInt::get(I32Ty, Lower->getValue().zext(32))),
-          // Don't make assumptions about the high bits.
-          ConstantAsMetadata::get(ConstantInt::get(I32Ty, 0))
-        };
+            ConstantAsMetadata::get(
+                ConstantInt::get(I32Ty, Lower->getValue().zext(32))),
+            // Don't make assumptions about the high bits.
+            ConstantAsMetadata::get(ConstantInt::get(I32Ty, 0))};
 
         WidenLoad->setMetadata(LLVMContext::MD_range,
                                MDNode::get(F.getContext(), LowAndHigh));
@@ -1877,7 +1869,8 @@ bool AMDGPUCodeGenPrepareImpl::visitPHINode(PHINode &I) {
   // optimization opportunities and can result in unreasonably high register
   // pressure and the inevitable stack spilling.
   if (!getBreakLargePHIs(F) ||
-      getCGPassBuilderOption(TM.getOptionsContext()).EnableGlobalISelOption)
+      getCGPassBuilderOption(TM.getOptionsContext(), &F.getContext())
+          .EnableGlobalISelOption)
     return false;
 
   FixedVectorType *FVT = dyn_cast<FixedVectorType>(I.getType());

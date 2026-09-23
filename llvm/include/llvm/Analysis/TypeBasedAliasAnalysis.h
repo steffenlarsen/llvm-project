@@ -27,10 +27,7 @@ class CallBase;
 class Function;
 class MDNode;
 class MemoryLocation;
-
-namespace clv2 {
-class OptionsContext;
-} // namespace clv2
+struct AnalysisOptions;
 
 /// A simple AA result that uses TBAA metadata to answer queries.
 class TypeBasedAAResult : public AAResultBase {
@@ -45,7 +42,7 @@ class TypeBasedAAResult : public AAResultBase {
 
 public:
   LLVM_ABI TypeBasedAAResult(bool UsingTypeSanitizer,
-                             const clv2::OptionsContext &Ctx);
+                             const AnalysisOptions &Opts);
 
   /// Handle invalidation events from the new pass manager.
   ///

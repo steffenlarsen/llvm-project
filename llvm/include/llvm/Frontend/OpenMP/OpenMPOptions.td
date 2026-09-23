@@ -6,36 +6,21 @@
 //
 //===----------------------------------------------------------------------===//
 
-include "llvm/Support/CLV2Options.td"
+include "llvm/Option/OptParser.td"
 
-def OMPOptsReg : Registry<"llvm::omp_opts"> {
-  // Getter bodies are compiled once, in OpenMPOptionsGetters.cpp.
-  let OutOfLineGetters = 1;
-}
+def OpenMPOptions : OptionsStruct<"llvm"> {}
 
-def OMP_OptimisticAttributes : Option<
-    "openmp-ir-builder-optimistic-attributes",
+defm OMP_OptimisticAttributes : BoolField<
+    "openmp-ir-builder-optimistic-attributes", "false",
     "Use optimistic attributes describing 'as-if' properties of runtime calls.",
-    "bool"> {
-  let Registry = OMPOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def OMP_UnrollThresholdFactor : Option<
-    "openmp-ir-builder-unroll-threshold-factor",
+defm OMP_UnrollThresholdFactor : ValueField<
+    "openmp-ir-builder-unroll-threshold-factor", "double", "1.5",
     "Factor for the unroll threshold to account for code simplifications",
-    "double"> {
-  let Registry = OMPOptsReg;
-  let Default = "1.5";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def OMP_UseDefaultMaxThreads : Option<
-    "openmp-ir-builder-use-default-max-threads",
+defm OMP_UseDefaultMaxThreads : BoolField<
+    "openmp-ir-builder-use-default-max-threads", "true",
     "Use a default max threads if none is provided.",
-    "bool"> {
-  let Registry = OMPOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;

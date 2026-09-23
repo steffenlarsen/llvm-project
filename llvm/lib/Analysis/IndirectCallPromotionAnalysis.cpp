@@ -13,13 +13,12 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Analysis/IndirectCallPromotionAnalysis.h"
-#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
+#include "llvm/Analysis/AnalysisOptions.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/ProfileData/InstrProf.h"
 #include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/OptionsContext.h"
 
 using namespace llvm;
 
@@ -39,53 +38,34 @@ namespace llvm {
 // Set the maximum number of targets to promote for a single indirect-call
 // callsite.
 
-
 } // end namespace llvm
 
-static unsigned getICPRemainingPercentThreshold(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AN_ICPRemainingPercentThreshold>(
-      F.getContext().getOptionsContext());
+static unsigned getICPRemainingPercentThreshold(const AnalysisOptions &Opts) {
+  return Opts.AN_ICPRemainingPercentThreshold;
 }
 
-static uint64_t getICPTotalPercentThreshold(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AN_ICPTotalPercentThreshold>(
-      F.getContext().getOptionsContext());
+static uint64_t getICPTotalPercentThreshold(const AnalysisOptions &Opts) {
+  return Opts.AN_ICPTotalPercentThreshold;
 }
 
-static unsigned getICPMinimumCountThreshold(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AN_ICPMinimumCountThreshold>(
-      F.getContext().getOptionsContext());
+static unsigned getICPMinimumCountThreshold(const AnalysisOptions &Opts) {
+  return Opts.AN_ICPMinimumCountThreshold;
 }
 
-static unsigned getMaxNumPromotions(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AN_MaxNumPromotions>(
-      F.getContext().getOptionsContext());
-}
-
-// Overloads with optional OptionsContext, using single-path.
-static unsigned
-getICPRemainingPercentThreshold(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::AN_ICPRemainingPercentThreshold>(Ctx);
-}
-
-static uint64_t getICPTotalPercentThreshold(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::AN_ICPTotalPercentThreshold>(Ctx);
-}
-
-static unsigned getICPMinimumCountThreshold(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::AN_ICPMinimumCountThreshold>(Ctx);
+static unsigned getMaxNumPromotions(const AnalysisOptions &Opts) {
+  return Opts.AN_MaxNumPromotions;
 }
 
 bool ICallPromotionAnalysis::isPromotionProfitable(uint64_t Count,
                                                    uint64_t TotalCount,
                                                    uint64_t RemainingCount,
                                                    const Function *F) {
-  unsigned MinCount = getICPMinimumCountThreshold(
-      F ? F->getContext().getOptionsContext() : clv2::defaultOptionsContext());
-  unsigned RemPct = getICPRemainingPercentThreshold(
-      F ? F->getContext().getOptionsContext() : clv2::defaultOptionsContext());
-  uint64_t TotPct = getICPTotalPercentThreshold(
-      F ? F->getContext().getOptionsContext() : clv2::defaultOptionsContext());
+  const AnalysisOptions &Opts =
+      F ? F->getContext().getOptions<AnalysisOptions>()
+        : AnalysisOptions::Current;
+  unsigned MinCount = getICPMinimumCountThreshold(Opts);
+  unsigned RemPct = getICPRemainingPercentThreshold(Opts);
+  uint64_t TotPct = getICPTotalPercentThreshold(Opts);
   return Count >= MinCount && Count * 100 >= RemPct * RemainingCount &&
          Count * 100 >= TotPct * TotalCount;
 }
@@ -99,12 +79,13 @@ uint32_t ICallPromotionAnalysis::getProfitablePromotionCandidates(
                     << " Num_targets: " << ValueDataArray.size() << "\n");
 
   const Function &F = *Inst->getFunction();
-  unsigned MinCount = getICPMinimumCountThreshold(F);
-  unsigned RemPct = getICPRemainingPercentThreshold(F);
-  uint64_t TotPct = getICPTotalPercentThreshold(F);
+  const AnalysisOptions &Opts = F.getContext().getOptions<AnalysisOptions>();
+  unsigned MinCount = getICPMinimumCountThreshold(Opts);
+  unsigned RemPct = getICPRemainingPercentThreshold(Opts);
+  uint64_t TotPct = getICPTotalPercentThreshold(Opts);
   uint32_t I = 0;
   uint64_t RemainingCount = TotalCount;
-  for (; I < getMaxNumPromotions(F) && I < ValueDataArray.size(); I++) {
+  for (; I < getMaxNumPromotions(Opts) && I < ValueDataArray.size(); I++) {
     uint64_t Count = ValueDataArray[I].Count;
     assert(Count <= RemainingCount);
     LLVM_DEBUG(dbgs() << " Candidate " << I << " Count=" << Count
@@ -129,8 +110,9 @@ ICallPromotionAnalysis::getPromotionCandidatesForInstruction(
   // Use the max of the values specified by -icp-max-prom and the provided
   // MaxNumValueData parameter.
   const Function &F = *I->getFunction();
-  if (getMaxNumPromotions(F) > MaxNumValueData)
-    MaxNumValueData = getMaxNumPromotions(F);
+  const AnalysisOptions &Opts = F.getContext().getOptions<AnalysisOptions>();
+  if (getMaxNumPromotions(Opts) > MaxNumValueData)
+    MaxNumValueData = getMaxNumPromotions(Opts);
   ValueDataArray = getValueProfDataFromInst(*I, IPVK_IndirectCallTarget,
                                             MaxNumValueData, TotalCount);
   if (ValueDataArray.empty()) {

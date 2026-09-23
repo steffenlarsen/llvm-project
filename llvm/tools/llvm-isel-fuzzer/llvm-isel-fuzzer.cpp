@@ -10,10 +10,13 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/Bitcode/BitcodeWriter.h"
+#include "llvm/CodeGen/CodeGenPassOptionsSched1.h"
 #include "llvm/CodeGen/CommandFlags.h"
 #include "llvm/FuzzMutate/FuzzerCLI.h"
 #include "llvm/FuzzMutate/IRMutator.h"
@@ -25,9 +28,11 @@
 #include "llvm/IR/Verifier.h"
 #include "llvm/IRReader/IRReader.h"
 #include "llvm/MC/TargetRegistry.h"
+#include "llvm/Option/LibraryOptions.h"
 #include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/DataTypes.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/Error.h"
 #include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/TargetSelect.h"
@@ -141,9 +146,34 @@ extern "C" LLVM_ATTRIBUTE_USED int LLVMFuzzerInitialize(int *argc,
 
   handleExecNameEncodedBEOpts(ExecName);
 
+  std::vector<const char *> CLArgs = getFuzzerCLArgs(*argc, *argv);
+
+  // llvm::CodeGenSched1Options (e.g. -global-isel) has migrated off clv2
+  // onto the new per-library OptTable struct design (see
+  // llvm/include/llvm/Option/LibraryOptions.h) and is no longer among the
+  // clv2::OptionParser registries configured below. Parse it out of the
+  // fuzzer's merged argv first, forwarding whatever it doesn't recognize to
+  // the legacy clv2 parser unchanged.
+  SmallVector<const char *, 32> CodeGenOptsRest;
+  {
+    std::string CodeGenOptsErrs;
+    raw_string_ostream CodeGenOptsErrsOS(CodeGenOptsErrs);
+    if (Error Err = opt::parseLibraryOptionsChain<CodeGenSched1Options>(
+            ArrayRef<const char *>(CLArgs).drop_front(), CodeGenOptsRest,
+            CodeGenOptsErrsOS)) {
+      errs() << ExecName << ": " << toString(std::move(Err)) << "\n";
+      return 1;
+    }
+    errs() << CodeGenOptsErrs;
+  }
+  SmallVector<const char *, 32> ArgvAfterCodeGenOpts;
+  ArgvAfterCodeGenOpts.push_back(CLArgs[0]);
+  ArgvAfterCodeGenOpts.append(CodeGenOptsRest.begin(), CodeGenOptsRest.end());
+
   clv2::OptionParser P;
   P.add<&ISelFuzzerOptsReg, applyISelFuzzerOptions>();
-  FuzzerOptsCtx = parseFuzzerCLOpts(*argc, *argv, P);
+  FuzzerOptsCtx = parseFuzzerCLOpts(
+      ArrayRef<const char *>(ArgvAfterCodeGenOpts), P);
 
   if (TargetTriple.empty()) {
     errs() << ExecName << ": -mtriple must be specified\n";

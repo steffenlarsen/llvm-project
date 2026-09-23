@@ -13,7 +13,7 @@
 #include "llvm/ADT/PostOrderIterator.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsGISel.h"
 #include "llvm/CodeGen/GlobalISel/LegalizerInfo.h"
 #include "llvm/CodeGen/GlobalISel/MachineIRBuilder.h"
 #include "llvm/CodeGen/GlobalISel/Utils.h"
@@ -36,6 +36,7 @@
 #include "llvm/Config/llvm-config.h"
 #include "llvm/IR/Analysis.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/LLVMContext.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/BlockFrequency.h"
@@ -80,12 +81,11 @@ INITIALIZE_PASS_END(RegBankSelectLegacy, DEBUG_TYPE,
 /// use time rather than in the constructor, which has no context in scope.
 static RegBankSelectMode getModeFromOpts(RegBankSelectMode Default,
                                          const clv2::OptionsContext &Ctx) {
-  if (auto *O = clv2::getView<&clv2::CGPassGISelReg>(Ctx)) {
-    if (O->specified<&clv2::CGPASS_RegbankselectFast>())
-      return RegBankSelectMode::Fast;
-    if (O->specified<&clv2::CGPASS_RegbankselectGreedy>())
-      return RegBankSelectMode::Greedy;
-  }
+  const CodeGenGISelOptions &Opts = CodeGenGISelOptions::Current;
+  if (Opts.CGPASS_RegbankselectFast.has_value())
+    return RegBankSelectMode::Fast;
+  if (Opts.CGPASS_RegbankselectGreedy.has_value())
+    return RegBankSelectMode::Greedy;
   return Default;
 }
 
@@ -1365,15 +1365,11 @@ bool RegBankSelectImpl::assignRegisterBanks(
 bool RegBankSelectImpl::checkFunctionIsLegal(MachineFunction &MF) const {
 #ifndef NDEBUG
   {
-    bool DisableLegalityCheck = false;
-    const cgpass_opts::CGPassGISelRegOpts *O =
-        clv2::getView<&clv2::CGPassGISelReg>(
-            MF.getFunction().getContext().getOptionsContext());
-    if (!O)
-      O = clv2::getView<&clv2::CGPassGISelReg>(
-          MF.getFunction().getContext().getOptionsContext());
-    if (O)
-      DisableLegalityCheck = O->get<&clv2::CGPASS_DisableGiselLegalityCheck>();
+    bool DisableLegalityCheck =
+        MF.getFunction()
+            .getContext()
+            .getOptions<CodeGenGISelOptions>()
+            .CGPASS_DisableGiselLegalityCheck;
     if (!DisableLegalityCheck) {
       if (const MachineInstr *MI = machineFunctionIsIllegal(MF)) {
         reportGISelFailure(MF, *MORE, "gisel-regbankselect",

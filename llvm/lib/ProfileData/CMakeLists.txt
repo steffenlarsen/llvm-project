@@ -1,6 +1,4 @@
 add_llvm_component_library(LLVMProfileData
-  ProfileDataOptionsGetters.cpp
-  ProfileDataOptionsRegistration.cpp
   DataAccessProf.cpp
   ETMTraceDecoder.cpp
   GCOV.cpp
@@ -30,11 +28,13 @@ add_llvm_component_library(LLVMProfileData
 
   DEPENDS
   intrinsics_gen
+  ProfileDataOptParserTableGen
 
   LINK_COMPONENTS
   BitstreamReader
   Core
   Object
+  Option
   Support
   Demangle
   Symbolize

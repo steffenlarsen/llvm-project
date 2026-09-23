@@ -6,27 +6,16 @@
 //
 //===----------------------------------------------------------------------===//
 
-include "llvm/Support/CLV2Options.td"
+include "llvm/Option/OptParser.td"
 
-def CoroutinesOptsReg : Registry<"llvm::coro_opts"> {
-  // Getter bodies are compiled once, in CoroutinesOptionsGetters.cpp.
-  let OutOfLineGetters = 1;
-}
+def CoroutinesOptions : OptionsStruct<"llvm"> {}
 
-def CORO_ElideBranchRatio : Option<
-    "coro-elide-branch-ratio",
+defm CORO_ElideBranchRatio : ValueField<
+    "coro-elide-branch-ratio", "float", "0.55f",
     "Minimum BranchProbability to consider a elide a coroutine.",
-    "float"> {
-  let Registry = CoroutinesOptsReg;
-  let Default = "0.55f";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def CORO_ElideInfoOutputFile : Option<
-    "coro-elide-info-output-file",
+defm CORO_ElideInfoOutputFile : ValueField<
+    "coro-elide-info-output-file", "std::string", "",
     "File to record the coroutines got elided",
-    "std::string"> {
-  let Registry = CoroutinesOptsReg;
-  let Hidden = 1;
-  let ValueDesc = "filename";
-}
+    /*hidden=*/1, /*metaVar=*/"filename">;

@@ -19,7 +19,7 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsCore2.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineBranchProbabilityInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
@@ -57,28 +57,28 @@ STATISTIC(NumTailDupRemoved,
 STATISTIC(NumDeadBlocks, "Number of dead blocks removed");
 STATISTIC(NumAddedPHIs, "Number of phis added");
 
-static unsigned getTailDupSize(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_TailDupSize>(Ctx);
+static unsigned getTailDupSize(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore2Options>().CGPASS_TailDupSize;
 }
 
-static unsigned getTailDupIndirectSize(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_TailDupIndirectSize>(Ctx);
+static unsigned getTailDupIndirectSize(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore2Options>().CGPASS_TailDupIndirectSize;
 }
 
-static unsigned getTailDupPredSize(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_TailDupPredSize>(Ctx);
+static unsigned getTailDupPredSize(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore2Options>().CGPASS_TailDupPredSize;
 }
 
-static unsigned getTailDupSuccSize(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_TailDupSuccSize>(Ctx);
+static unsigned getTailDupSuccSize(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore2Options>().CGPASS_TailDupSuccSize;
 }
 
-static bool getTailDupVerify(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_TailDupVerify>(Ctx);
+static bool getTailDupVerify(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore2Options>().CGPASS_TailDupVerify;
 }
 
-static unsigned getTailDupLimit(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_TailDupLimit>(Ctx);
+static unsigned getTailDupLimit(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore2Options>().CGPASS_TailDupLimit;
 }
 
 void TailDuplicator::initMF(MachineFunction &MFin, bool PreRegAlloc,
@@ -268,16 +268,14 @@ bool TailDuplicator::tailDuplicateAndUpdate(
 bool TailDuplicator::tailDuplicateBlocks() {
   bool MadeChange = false;
 
-  if (PreRegAlloc &&
-      getTailDupVerify(MF->getFunction().getContext().getOptionsContext())) {
+  if (PreRegAlloc && getTailDupVerify(MF->getFunction().getContext())) {
     LLVM_DEBUG(dbgs() << "\n*** Before tail-duplicating\n");
     VerifyPHIs(*MF, true);
   }
 
   for (MachineBasicBlock &MBB :
        llvm::make_early_inc_range(llvm::drop_begin(*MF))) {
-    if (NumTails ==
-        getTailDupLimit(MF->getFunction().getContext().getOptionsContext()))
+    if (NumTails == getTailDupLimit(MF->getFunction().getContext()))
       break;
 
     bool IsSimple = isSimpleBB(&MBB);
@@ -288,8 +286,7 @@ bool TailDuplicator::tailDuplicateBlocks() {
     MadeChange |= tailDuplicateAndUpdate(IsSimple, &MBB, nullptr);
   }
 
-  if (PreRegAlloc &&
-      getTailDupVerify(MF->getFunction().getContext().getOptionsContext()))
+  if (PreRegAlloc && getTailDupVerify(MF->getFunction().getContext()))
     VerifyPHIs(*MF, false);
 
   return MadeChange;
@@ -573,8 +570,7 @@ bool TailDuplicator::shouldTailDuplicate(bool IsSimple,
   // compensate for the duplication.
   unsigned MaxDuplicateCount;
   if (TailDupSize == 0)
-    MaxDuplicateCount =
-        getTailDupSize(MF->getFunction().getContext().getOptionsContext());
+    MaxDuplicateCount = getTailDupSize(MF->getFunction().getContext());
   else
     MaxDuplicateCount = TailDupSize;
   if (llvm::shouldOptimizeForSize(&TailBB, PSI, MBFI))
@@ -604,8 +600,7 @@ bool TailDuplicator::shouldTailDuplicate(bool IsSimple,
   }
 
   if (HasIndirectbr && PreRegAlloc)
-    MaxDuplicateCount = getTailDupIndirectSize(
-        MF->getFunction().getContext().getOptionsContext());
+    MaxDuplicateCount = getTailDupIndirectSize(MF->getFunction().getContext());
 
   // Allow higher limits when the block has computed-gotos and running after
   // register allocation. NB. This basically unfactors computed gotos that were
@@ -670,12 +665,8 @@ bool TailDuplicator::shouldTailDuplicate(bool IsSimple,
   // may cause huge amount of PHI nodes. If we want to remove this limitation,
   // we have to address https://github.com/llvm/llvm-project/issues/78578.
   if (PreRegAlloc &&
-      TailBB.pred_size() >
-          getTailDupPredSize(
-              MF->getFunction().getContext().getOptionsContext()) &&
-      TailBB.succ_size() >
-          getTailDupSuccSize(
-              MF->getFunction().getContext().getOptionsContext())) {
+      TailBB.pred_size() > getTailDupPredSize(MF->getFunction().getContext()) &&
+      TailBB.succ_size() > getTailDupSuccSize(MF->getFunction().getContext())) {
     // If TailBB or any of its successors contains a phi, we may have to add a
     // large number of additional phis with additional incoming values.
     if (NumPhis != 0 || any_of(TailBB.successors(), [](MachineBasicBlock *MBB) {

@@ -1,6 +1,4 @@
 add_llvm_component_library(LLVMPasses
-  PassesOptionsGetters.cpp
-  PassesOptionsRegistration.cpp
   CodeGenPassBuilder.cpp
   PassBuilder.cpp
   PassBuilderBindings.cpp
@@ -16,6 +14,8 @@ add_llvm_component_library(LLVMPasses
 
   DEPENDS
   intrinsics_gen
+  InstrumentationOptParserTableGen
+  IPOOptParserTableGen
 
   LINK_COMPONENTS
   AggressiveInstCombine
@@ -37,4 +37,5 @@ add_llvm_component_library(LLVMPasses
   TransformUtils
   Vectorize
   Instrumentation
+  Option
   )

@@ -11,6 +11,7 @@
 #include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/OptionsContext.h"
+#include "llvm/Support/PluginLoaderOptions.h"
 #include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/TargetParser/Triple.h"
@@ -23,15 +24,7 @@ static std::vector<std::string> &getExecNameArgs() {
   return Args;
 }
 
-std::unique_ptr<OptionsContext> llvm::parseFuzzerCLOpts(int ArgC,
-                                                        char *ArgV[]) {
-  OptionParser P;
-  RegisterAllLLVMOptions(P);
-  return parseFuzzerCLOpts(ArgC, ArgV, P);
-}
-
-std::unique_ptr<OptionsContext> llvm::parseFuzzerCLOpts(int ArgC, char *ArgV[],
-                                                        OptionParser &P) {
+std::vector<const char *> llvm::getFuzzerCLArgs(int ArgC, char *ArgV[]) {
   std::vector<const char *> CLArgs;
   CLArgs.push_back(ArgV[0]);
 
@@ -46,8 +39,29 @@ std::unique_ptr<OptionsContext> llvm::parseFuzzerCLOpts(int ArgC, char *ArgV[],
   while (I < ArgC)
     CLArgs.push_back(ArgV[I++]);
 
+  return CLArgs;
+}
+
+std::unique_ptr<OptionsContext> llvm::parseFuzzerCLOpts(int ArgC,
+                                                        char *ArgV[]) {
+  OptionParser P;
   RegisterAllLLVMOptions(P);
-  return P.parse(CLArgs.size(), CLArgs.data(), "LLVM fuzzer\n");
+  return parseFuzzerCLOpts(ArgC, ArgV, P);
+}
+
+std::unique_ptr<OptionsContext> llvm::parseFuzzerCLOpts(int ArgC, char *ArgV[],
+                                                        OptionParser &P) {
+  return parseFuzzerCLOpts(ArrayRef<const char *>(getFuzzerCLArgs(ArgC, ArgV)),
+                           P);
+}
+
+std::unique_ptr<OptionsContext>
+llvm::parseFuzzerCLOpts(ArrayRef<const char *> Args, OptionParser &P) {
+  RegisterAllLLVMOptions(P);
+  std::vector<const char *> ArgsAfterPlugins = loadPluginsAndStripArgs(
+      static_cast<int>(Args.size()), Args.data());
+  return P.parse(static_cast<int>(ArgsAfterPlugins.size()),
+                 ArgsAfterPlugins.data(), "LLVM fuzzer\n");
 }
 
 void llvm::handleExecNameEncodedBEOpts(StringRef ExecName) {

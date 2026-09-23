@@ -32,7 +32,7 @@
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/MemoryLocation.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsCore2.h"
 #include "llvm/CodeGen/FaultMaps.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineFunction.h"
@@ -63,12 +63,12 @@
 
 using namespace llvm;
 
-static int getImpNullCheckPageSize(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_ImpNullCheckPageSize>(Ctx);
+static int getImpNullCheckPageSize(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore2Options>().CGPASS_ImpNullCheckPageSize;
 }
 
-static unsigned getImpNullMaxInstsToConsider(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_ImpNullMaxInstsToConsider>(Ctx);
+static unsigned getImpNullMaxInstsToConsider(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore2Options>().CGPASS_ImpNullMaxInstsToConsider;
 }
 
 #define DEBUG_TYPE "implicit-null-checks"
@@ -472,12 +472,10 @@ ImplicitNullChecksImpl::isSuitableMemoryOp(const MachineInstr &MI,
 
   // We want the mem access to be issued at a sane offset from PointerReg,
   // so that if PointerReg is null then the access reliably page faults.
-  if (!(-getImpNullCheckPageSize(
-            MI.getMF()->getFunction().getContext().getOptionsContext()) <
+  if (!(-getImpNullCheckPageSize(MI.getMF()->getFunction().getContext()) <
             Displacement &&
         Displacement <
-            getImpNullCheckPageSize(
-                MI.getMF()->getFunction().getContext().getOptionsContext())))
+            getImpNullCheckPageSize(MI.getMF()->getFunction().getContext())))
     return SR_Unsuitable;
 
   // Finally, check whether the current memory access aliases with previous one.
@@ -690,12 +688,9 @@ bool ImplicitNullChecksImpl::analyzeBlockForNullChecks(
   SmallVector<MachineInstr *, 8> InstsSeenSoFar;
 
   for (auto &MI : *NotNullSucc) {
-    if (!canHandle(&MI) ||
-        InstsSeenSoFar.size() >=
-            getImpNullMaxInstsToConsider(MBB.getParent()
-                                             ->getFunction()
-                                             .getContext()
-                                             .getOptionsContext()))
+    if (!canHandle(&MI) || InstsSeenSoFar.size() >=
+                               getImpNullMaxInstsToConsider(
+                                   MBB.getParent()->getFunction().getContext()))
       return false;
 
     MachineInstr *Dependence;

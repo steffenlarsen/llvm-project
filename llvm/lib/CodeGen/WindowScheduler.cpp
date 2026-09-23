@@ -37,16 +37,14 @@
 //===----------------------------------------------------------------------===//
 #include "llvm/CodeGen/WindowScheduler.h"
 #include "llvm/ADT/Statistic.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsSched2.h"
 #include "llvm/CodeGen/LiveIntervals.h"
 #include "llvm/CodeGen/MachineLoopInfo.h"
 #include "llvm/CodeGen/MachinePipeliner.h"
 #include "llvm/CodeGen/ModuloSchedule.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
 #include "llvm/IR/Function.h"
-#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/TimeProfiler.h"
 #include "llvm/Target/TargetMachine.h"
 
@@ -64,42 +62,33 @@ STATISTIC(NumWindowSchedule,
 STATISTIC(NumFailAnalyseII,
           "Window scheduling abort due to the failure of the II analysis");
 
-unsigned WindowSearchNum = 6;
-
-unsigned WindowSearchRatio = 40;
-
-unsigned WindowIICoeff = 5;
-
-unsigned WindowRegionLimit = 3;
-
-unsigned WindowDiffLimit = 2;
 } // namespace
 
 // WindowIILimit serves as an indicator of abnormal scheduling results and could
 // potentially be referenced by the derived target window scheduler.
 
-static unsigned getWindowSearchNum(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_WindowSearchNum>(Ctx);
+static unsigned getWindowSearchNum(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenSched2Options>().CGPASS_WindowSearchNum;
 }
 
-static unsigned getWindowSearchRatio(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_WindowSearchRatio>(Ctx);
+static unsigned getWindowSearchRatio(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenSched2Options>().CGPASS_WindowSearchRatio;
 }
 
-static unsigned getWindowIiCoeff(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_WindowIiCoeff>(Ctx);
+static unsigned getWindowIiCoeff(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenSched2Options>().CGPASS_WindowIiCoeff;
 }
 
-static unsigned getWindowRegionLimit(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_WindowRegionLimit>(Ctx);
+static unsigned getWindowRegionLimit(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenSched2Options>().CGPASS_WindowRegionLimit;
 }
 
-static unsigned getWindowDiffLimit(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_WindowDiffLimit>(Ctx);
+static unsigned getWindowDiffLimit(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenSched2Options>().CGPASS_WindowDiffLimit;
 }
 
-static unsigned getWindowIiLimit(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_WindowIiLimit>(Ctx);
+static unsigned getWindowIiLimit(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenSched2Options>().CGPASS_WindowIiLimit;
 }
 
 WindowScheduler::WindowScheduler(MachineSchedContext *C, MachineLoop &ML)
@@ -124,8 +113,8 @@ bool WindowScheduler::run() {
   // The main window scheduling begins.
   std::unique_ptr<ScheduleDAGInstrs> SchedDAG(createMachineScheduler());
   auto SearchIndexes = getSearchIndexes(
-      getWindowSearchNum(MF->getFunction().getContext().getOptionsContext()),
-      getWindowSearchRatio(MF->getFunction().getContext().getOptionsContext()));
+      getWindowSearchNum(MF->getFunction().getContext()),
+      getWindowSearchRatio(MF->getFunction().getContext()));
   for (unsigned Idx : SearchIndexes) {
     OriToCycle.clear();
     ++NumTryWindowSearch;
@@ -138,8 +127,7 @@ bool WindowScheduler::run() {
     SchedDAG->schedule();
     LLVM_DEBUG(SchedDAG->dump());
     unsigned II = analyseII(*SchedDAG, Offset);
-    if (II ==
-        getWindowIiLimit(MF->getFunction().getContext().getOptionsContext())) {
+    if (II == getWindowIiLimit(MF->getFunction().getContext())) {
       restoreTripleMBB();
       LLVM_DEBUG(dbgs() << "Can't find a valid II. Keep searching...\n");
       ++NumFailAnalyseII;
@@ -243,9 +231,7 @@ bool WindowScheduler::initialize() {
         return false;
       }
   }
-  if (SchedInstrNum <=
-      getWindowRegionLimit(
-          MF->getFunction().getContext().getOptionsContext())) {
+  if (SchedInstrNum <= getWindowRegionLimit(MF->getFunction().getContext())) {
     LLVM_DEBUG(dbgs() << "There are too few MIs in the window region!\n");
     return false;
   }
@@ -423,7 +409,7 @@ int WindowScheduler::getEstimatedII(ScheduleDAGInstrs &DAG) {
   for (auto &SU : DAG.SUnits)
     MaxDepth = std::max(SU.getDepth() + SU.Latency, MaxDepth);
   return MaxDepth *
-         getWindowIiCoeff(MF->getFunction().getContext().getOptionsContext());
+         getWindowIiCoeff(MF->getFunction().getContext());
 }
 
 int WindowScheduler::calculateMaxCycle(ScheduleDAGInstrs &DAG,
@@ -453,8 +439,8 @@ int WindowScheduler::calculateMaxCycle(ScheduleDAGInstrs &DAG,
       // current MI and the previously inserted MIs.
       while (!RM.canReserveResources(*SU, CurCycle) || CurCycle < ExpectCycle) {
         ++CurCycle;
-        if (CurCycle == (int)getWindowIiLimit(
-                            MF->getFunction().getContext().getOptionsContext()))
+        if (CurCycle ==
+            (int)getWindowIiLimit(MF->getFunction().getContext()))
           return CurCycle;
       }
       RM.reserveResources(*SU, CurCycle);
@@ -530,11 +516,11 @@ unsigned WindowScheduler::analyseII(ScheduleDAGInstrs &DAG, unsigned Offset) {
   LLVM_DEBUG(dbgs() << "Start analyzing II:\n");
   int MaxCycle = calculateMaxCycle(DAG, Offset);
   if (MaxCycle ==
-      (int)getWindowIiLimit(MF->getFunction().getContext().getOptionsContext()))
+      (int)getWindowIiLimit(MF->getFunction().getContext()))
     return MaxCycle;
   int StallCycle = calculateStallCycle(Offset, MaxCycle);
   if (StallCycle ==
-      (int)getWindowIiLimit(MF->getFunction().getContext().getOptionsContext()))
+      (int)getWindowIiLimit(MF->getFunction().getContext()))
     return StallCycle;
   // The value of II is equal to the maximum execution cycle plus 1.
   return MaxCycle + StallCycle + 1;
@@ -612,9 +598,7 @@ void WindowScheduler::updateScheduleResult(unsigned Offset, unsigned II) {
   // The update will only continue if the II is smaller than BestII and the II
   // is sufficiently small.
   if ((II >= BestII) ||
-      (II + getWindowDiffLimit(
-                MF->getFunction().getContext().getOptionsContext()) >
-       BaseII))
+      (II + getWindowDiffLimit(MF->getFunction().getContext()) > BaseII))
     return;
   BestII = II;
   BestOffset = Offset;

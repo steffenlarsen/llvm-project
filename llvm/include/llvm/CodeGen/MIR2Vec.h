@@ -72,6 +72,10 @@ class TargetInstrInfo;
 
 enum class MIR2VecKind { Symbolic };
 
+namespace clv2 {
+LLVM_ABI extern const OptionCategory MIR2VecCategory;
+} // namespace clv2
+
 namespace mir2vec {
 
 // Forward declarations

@@ -16,8 +16,6 @@ tablegen(LLVM MSP430GenSubtargetInfo.inc -gen-subtarget)
 add_public_tablegen_target(MSP430CommonTableGen)
 
 add_llvm_target(MSP430CodeGen
-  MSP430OptionsGetters.cpp
-  MSP430OptionsRegistration.cpp
   MSP430BranchSelector.cpp
   MSP430CodeGenPassBuilder.cpp
   MSP430ISelDAGToDAG.cpp
@@ -48,6 +46,9 @@ add_llvm_target(MSP430CodeGen
 
   ADD_TO_COMPONENT
   MSP430
+
+  DEPENDS
+  MSP430OptParserTableGen
   )
 
 add_subdirectory(MCTargetDesc)

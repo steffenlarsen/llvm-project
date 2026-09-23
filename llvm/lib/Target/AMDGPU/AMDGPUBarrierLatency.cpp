@@ -25,15 +25,15 @@
 #include "SIInstrInfo.h"
 #include "llvm/CodeGen/ScheduleDAGInstrs.h"
 #include "llvm/Support/CommandLine.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/AMDGPU/AMDGPUOptionsOptInfos.h"
+#include "llvm/Target/AMDGPU/AMDGPUOptions.h"
 #include "llvm/TargetParser/AtomicScope.h"
 
 using namespace llvm;
 
 static unsigned getBarrierSignalWaitLatencyOpt(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AMDGPU_BarrierSignalWaitLatency>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<AMDGPUOptions>()
+      .AMDGPU_BarrierSignalWaitLatency;
 }
 
 namespace {

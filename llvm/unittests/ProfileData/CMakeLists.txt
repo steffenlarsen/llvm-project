@@ -18,6 +18,7 @@ add_llvm_unittest(ProfileDataTests
   PGOCtxProfReaderWriterTest.cpp
   SampleProfTest.cpp
   SymbolRemappingReaderTest.cpp
-  )
+
+  DEPENDS ProfileDataOptParserTableGen)
 
 target_link_libraries(ProfileDataTests PRIVATE LLVMTestingSupport)

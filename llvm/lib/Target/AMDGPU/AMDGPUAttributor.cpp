@@ -16,8 +16,7 @@
 #include "Utils/AMDGPUBaseInfo.h"
 #include "llvm/IR/IntrinsicsAMDGPU.h"
 #include "llvm/IR/IntrinsicsR600.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/AMDGPU/AMDGPUOptionsOptInfos.h"
+#include "llvm/Target/AMDGPU/AMDGPUOptions.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Transforms/IPO/Attributor.h"
 #include <cstdint>
@@ -27,9 +26,9 @@
 using namespace llvm;
 
 static unsigned getIndirectCallSpecializationThreshold(const Function &F) {
-  return clv2::getOptValOrDefault<
-      &clv2::AMDGPU_IndirectCallSpecializationThreshold>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<AMDGPUOptions>()
+      .AMDGPU_IndirectCallSpecializationThreshold;
 }
 
 #define AMDGPU_ATTRIBUTE(Name, Str) Name##_POS,

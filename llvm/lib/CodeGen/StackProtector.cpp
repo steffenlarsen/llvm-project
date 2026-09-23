@@ -20,7 +20,7 @@
 #include "llvm/Analysis/MemoryLocation.h"
 #include "llvm/Analysis/OptimizationRemarkEmitter.h"
 #include "llvm/CodeGen/Analysis.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsCore2.h"
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/CodeGen/TargetLowering.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
@@ -60,12 +60,12 @@ STATISTIC(NumFunProtected, "Number of functions protected");
 STATISTIC(NumAddrTaken, "Number of local variables that have their address"
                         " taken.");
 
-static bool getEnableSelectiondagSp(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_EnableSelectiondagSp>(Ctx);
+static bool getEnableSelectiondagSp(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore2Options>().CGPASS_EnableSelectiondagSp;
 }
 
-static bool getDisableCheckNoreturnCall(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_DisableCheckNoreturnCall>(Ctx);
+static bool getDisableCheckNoreturnCall(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore2Options>().CGPASS_DisableCheckNoreturnCall;
 }
 
 /// InsertStackProtectors - Insert code into the prologue and epilogue of the
@@ -616,7 +616,7 @@ bool InsertStackProtectors(const TargetLowering &TLI,
   // protection in SDAG.
   bool SupportsSelectionDAGSP =
       TLI.useStackGuardMixFP() ||
-      (getEnableSelectiondagSp(F->getContext().getOptionsContext()) &&
+      (getEnableSelectiondagSp(F->getContext()) &&
        !TLI.getTargetMachine().Options.EnableFastISel);
   AllocaInst *AI = nullptr; // Place on stack that stores the stack guard.
   BasicBlock *FailBB = nullptr;
@@ -626,8 +626,7 @@ bool InsertStackProtectors(const TargetLowering &TLI,
     if (&BB == FailBB)
       continue;
     Instruction *CheckLoc = dyn_cast<ReturnInst>(BB.getTerminator());
-    if (!CheckLoc &&
-        !getDisableCheckNoreturnCall(F->getContext().getOptionsContext()))
+    if (!CheckLoc && !getDisableCheckNoreturnCall(F->getContext()))
       for (auto &Inst : BB) {
         if (IntrinsicInst *IB = dyn_cast<IntrinsicInst>(&Inst);
             IB && (IB->getIntrinsicID() == Intrinsic::eh_sjlj_callsite)) {

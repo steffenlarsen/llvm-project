@@ -18,6 +18,7 @@
 #include "GISel/BPFRegisterBankInfo.h"
 #include "llvm/IR/Function.h"
 #include "llvm/MC/TargetRegistry.h"
+#include "llvm/Target/BPF/BPFOptions.h"
 #include "llvm/TargetParser/Host.h"
 
 using namespace llvm;
@@ -27,8 +28,6 @@ using namespace llvm;
 #define GET_SUBTARGETINFO_TARGET_DESC
 #define GET_SUBTARGETINFO_CTOR
 #include "BPFGenSubtargetInfo.inc"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/BPF/BPFOptionsOptInfos.h"
 
 void BPFSubtarget::anchor() {}
 
@@ -79,17 +78,14 @@ void BPFSubtarget::initSubtargetFeatures(StringRef CPU, StringRef FS,
     HasJmpExt = true;
     HasJmp32 = true;
     HasAlu32 = true;
-    const bpf_opts::ParsedOpts *O =
-        clv2::getView<&clv2::BPFOptsReg>(TM.getOptionsContext());
-    HasLdsx = !(O ? O->get<&clv2::BPF_DisableLdsx>() : false);
-    HasMovsx = !(O ? O->get<&clv2::BPF_DisableMovsx>() : false);
-    HasBswap = !(O ? O->get<&clv2::BPF_DisableBswap>() : false);
-    HasSdivSmod = !(O ? O->get<&clv2::BPF_DisableSdivSmod>() : false);
-    HasGotol = !(O ? O->get<&clv2::BPF_DisableGotol>() : false);
-    HasStoreImm = !(O ? O->get<&clv2::BPF_DisableStoreImm>() : false);
-    HasLoadAcqStoreRel =
-        !(O ? O->get<&clv2::BPF_DisableLoadAcqStoreRel>() : false);
-    HasGotox = !(O ? O->get<&clv2::BPF_DisableGotox>() : false);
+    HasLdsx = !BPFOptions::Current.BPF_DisableLdsx;
+    HasMovsx = !BPFOptions::Current.BPF_DisableMovsx;
+    HasBswap = !BPFOptions::Current.BPF_DisableBswap;
+    HasSdivSmod = !BPFOptions::Current.BPF_DisableSdivSmod;
+    HasGotol = !BPFOptions::Current.BPF_DisableGotol;
+    HasStoreImm = !BPFOptions::Current.BPF_DisableStoreImm;
+    HasLoadAcqStoreRel = !BPFOptions::Current.BPF_DisableLoadAcqStoreRel;
+    HasGotox = !BPFOptions::Current.BPF_DisableGotox;
     return;
   }
 }

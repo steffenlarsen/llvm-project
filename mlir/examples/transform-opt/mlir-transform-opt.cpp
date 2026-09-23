@@ -23,6 +23,7 @@
 #include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/ManagedStatic.h"
+#include "llvm/Support/PluginLoaderOptions.h"
 #include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/ToolOutputFile.h"
@@ -375,7 +376,11 @@ static llvm::LogicalResult runMain(int argc, char **argv) {
   llvm::clv2::OptionParser P;
   P.add<&TransformOptReg>();
   RegisterAllLLVMOptions(P);
-  auto OptsCtx = P.parse(argc, argv, "Minimal Transform dialect driver\n");
+  std::vector<const char *> ArgsAfterPlugins =
+      loadPluginsAndStripArgs(argc, argv);
+  auto OptsCtx =
+      P.parse(static_cast<int>(ArgsAfterPlugins.size()),
+             ArgsAfterPlugins.data(), "Minimal Transform dialect driver\n");
   auto *Opts = OptsCtx->getViewPtr<&TransformOptReg>();
 
   // Populate the CLOptions struct from parsed options.

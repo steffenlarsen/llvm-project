@@ -423,6 +423,44 @@ public:
   /// repeated reads and hoist them out of loops.
   const clv2::OptionsContext &getOptionsContext() const { return *OptsCtx; }
 
+  //===--------------------------------------------------------------------===//
+  // Library options structs — one plain struct per library (see
+  // llvm/include/llvm/Option/LibraryOptions.h and the OPTIONS_STRUCT_DECL /
+  // OPTIONS_STRUCT_DEFS sections of llvm/utils/TableGen/OptionParserEmitter.cpp).
+  // Unlike the single ParsedOptions slot above, any number of these structs
+  // may be attached to the same context at once, keyed by each struct type's
+  // process-wide T::Slot, so this is additive alongside clv2 rather than a
+  // replacement for it.
+  //
+  //   // In per-job setup, e.g. an LTO/ThinLTO backend or a per-TU compile:
+  //   PassesOptions Local;
+  //   if (llvm::Error E = Local.parse(Args, Rest, errs()))
+  //     ...
+  //   Ctx.setOptions<PassesOptions>(std::move(Local));
+  //
+  //   // In a subsystem that reads options:
+  //   const PassesOptions &Opts = Ctx.getOptions<PassesOptions>();
+  //===--------------------------------------------------------------------===//
+
+  /// Return the options struct of type \p T attached to this context via
+  /// setOptions<T>(), or T::Current (the process-wide default populated by
+  /// whatever parsed argv into it) if none was attached.
+  template <class T> const T &getOptions() const {
+    if (const void *P = getLibraryOptionsImpl(T::Slot))
+      return *static_cast<const T *>(P);
+    return T::Current;
+  }
+
+  /// Attach a copy of \p O as this context's instance of options struct \p T,
+  /// replacing any previous one attached for \p T. Returns a reference to the
+  /// stored copy.
+  template <class T> T &setOptions(T O) {
+    auto Owned = std::make_shared<T>(std::move(O));
+    T *Ptr = Owned.get();
+    setLibraryOptionsImpl(T::Slot, std::move(Owned));
+    return *Ptr;
+  }
+
 private:
   // Module needs access to the add/removeModule methods.
   friend class Module;
@@ -431,6 +469,12 @@ private:
   /// typeKey() equals \p Key, nullptr otherwise.  Implemented in
   /// LLVMContext.cpp where ParsedOptionsBase is complete.
   LLVM_ABI clv2::ParsedOptionsBase *getOptionsImpl(const void *Key) const;
+
+  /// Slot-keyed lookup backing getOptions<T>()/setOptions<T>() above.
+  /// Implemented in LLVMContext.cpp where LLVMContextImpl is complete.
+  LLVM_ABI const void *getLibraryOptionsImpl(unsigned Slot) const;
+  LLVM_ABI void setLibraryOptionsImpl(unsigned Slot,
+                                       std::shared_ptr<void> Opts);
 
   /// addModule - Register a module as being instantiated in this context.  If
   /// the context is deleted, the module will be deleted as well.

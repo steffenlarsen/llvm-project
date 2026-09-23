@@ -24,6 +24,7 @@
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/Path.h"
+#include "llvm/Support/PluginLoaderOptions.h"
 #include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/Signals.h"
 #include "llvm/Support/StringSaver.h"
@@ -126,9 +127,11 @@ int main(int argc, char **argv) {
   P.add<&OffloadWrapperReg>();
   RegisterAllLLVMOptions(P);
   P.hideUnrelatedOptions({&OffloadWrapperCategory});
-  auto OptsCtx =
-      P.parse(argc, argv,
-              "Generate runtime registration code for a device binary image\n");
+  std::vector<const char *> ArgsAfterPlugins =
+      loadPluginsAndStripArgs(argc, argv);
+  auto OptsCtx = P.parse(
+      static_cast<int>(ArgsAfterPlugins.size()), ArgsAfterPlugins.data(),
+      "Generate runtime registration code for a device binary image\n");
   auto *Opts = OptsCtx->getViewPtr<&OffloadWrapperReg>();
 
   auto ReportError = [argv](Error E) {

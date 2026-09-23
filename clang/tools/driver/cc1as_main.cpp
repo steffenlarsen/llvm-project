@@ -51,6 +51,7 @@
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/Path.h"
+#include "llvm/Support/PluginLoaderOptions.h"
 #include "llvm/Support/Process.h"
 #include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/Signals.h"
@@ -740,7 +741,10 @@ int cc1as_main(ArrayRef<const char *> Argv, const char *Argv0, void *MainAddr) {
     Argv.push_back(Saver.save("clang (LLVM option parsing)").data());
     for (const auto &A : Asm.LLVMArgs)
       Argv.push_back(Saver.save(A).data());
-    MllvmCtx = P.parse(Argv.size(), Argv.data());
+    std::vector<const char *> ArgsAfterPlugins = loadPluginsAndStripArgs(
+        static_cast<int>(Argv.size()), Argv.data());
+    MllvmCtx = P.parse(static_cast<int>(ArgsAfterPlugins.size()),
+                        ArgsAfterPlugins.data());
   }
 
   // Execute the invocation, unless there were parsing errors.

@@ -18,6 +18,7 @@
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Path.h"
+#include "llvm/Support/PluginLoaderOptions.h"
 #include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Transforms/Utils/SanitizerStats.h"
 #include <stdint.h>
@@ -134,7 +135,11 @@ int main(int argc, char **argv) {
   P.add<&SanStatsToolReg>();
   RegisterAllLLVMOptions(P);
   P.hideUnrelatedOptions({&SanStatsCat});
-  auto OptsCtx = P.parse(argc, argv, "Sanitizer Statistics Processing Tool");
+  std::vector<const char *> ArgsAfterPlugins =
+      loadPluginsAndStripArgs(argc, argv);
+  auto OptsCtx = P.parse(static_cast<int>(ArgsAfterPlugins.size()),
+                          ArgsAfterPlugins.data(),
+                          "Sanitizer Statistics Processing Tool");
   auto *Opts = OptsCtx->getViewPtr<&SanStatsToolReg>();
 
   const std::string &InputFilePath = Opts->get<&ClInputFile>();

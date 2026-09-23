@@ -33,6 +33,7 @@ class CallLowering;
 class GlobalValue;
 class InstructionSelector;
 class LegalizerInfo;
+class MachineFunction;
 class RegisterBankInfo;
 class StringRef;
 class TargetMachine;
@@ -437,8 +438,10 @@ public:
 
   bool enableEarlyIfConversion() const override;
 
-  void getPostRAMutations(std::vector<std::unique_ptr<ScheduleDAGMutation>>
-                              &Mutations) const override;
+  void getPostRAMutations(
+      const MachineFunction &MF,
+      std::vector<std::unique_ptr<ScheduleDAGMutation>> &Mutations)
+      const override;
 
   AntiDepBreakMode getAntiDepBreakMode() const override {
     return TargetSubtargetInfo::ANTIDEP_CRITICAL;

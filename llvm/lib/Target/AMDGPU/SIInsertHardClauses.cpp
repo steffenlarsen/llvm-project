@@ -36,23 +36,22 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachinePassManager.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/AMDGPU/AMDGPUOptionsOptInfos.h"
+#include "llvm/Target/AMDGPU/AMDGPUOptions.h"
 
 using namespace llvm;
 
 #define DEBUG_TYPE "si-insert-hard-clauses"
 
 static unsigned getHardClauseLengthLimit(const Function &F) {
-  return clv2::getOptValOr<&clv2::AMDGPUOptsReg,
-                           &clv2::AMDGPU_HardClauseLengthLimit>(
-      F.getContext().getOptionsContext(), 0);
+  return F.getContext()
+      .getOptions<AMDGPUOptions>()
+      .AMDGPU_HardClauseLengthLimit.value_or(0);
 }
 
 static bool getHardClauseLengthLimitWasSpecified(const Function &F) {
-  return clv2::wasOptSpecified<&clv2::AMDGPUOptsReg,
-                               &clv2::AMDGPU_HardClauseLengthLimit>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<AMDGPUOptions>()
+      .AMDGPU_HardClauseLengthLimit.has_value();
 }
 
 namespace {

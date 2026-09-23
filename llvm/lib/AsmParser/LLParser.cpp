@@ -16,6 +16,7 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/AsmParser/AsmParserOptions.h"
 #include "llvm/AsmParser/LLToken.h"
 #include "llvm/AsmParser/SlotMapping.h"
 #include "llvm/BinaryFormat/Dwarf.h"
@@ -45,12 +46,10 @@
 #include "llvm/IR/Value.h"
 #include "llvm/IR/ValueSymbolTable.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/ModRef.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/SaveAndRestore.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
@@ -61,8 +60,9 @@
 
 using namespace llvm;
 
-// Bare global — kept for tools (e.g. llvm-as) that use the setter rather
-// than registering AsmParserOptsReg.  LLParser reads prefer OptionsContext.
+// Bare global — kept for tools (e.g. llvm-as) that use the setter. LLParser's
+// own reads go through AsmParserOptions/LLVMContext instead; this global has
+// no readers in-tree.
 static bool AllowIncompleteIRParsing = false;
 
 bool llvm::getAllowIncompleteIRParsing() { return AllowIncompleteIRParsing; }
@@ -70,13 +70,8 @@ void llvm::setAllowIncompleteIRParsing(bool Value) {
   AllowIncompleteIRParsing = Value;
 }
 
-#include "llvm/AsmParser/AsmParserOptionsOptInfos.h"
-
-/// Return whether incomplete IR parsing is enabled, preferring the
-/// OptionsContext value and falling back to the legacy global.
 static bool allowIncompleteIR(LLVMContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::ASM_AllowIncompleteIR>(
-      Ctx.getOptionsContext());
+  return Ctx.getOptions<AsmParserOptions>().ASM_AllowIncompleteIR;
 }
 
 static std::string getTypeString(Type *T) {

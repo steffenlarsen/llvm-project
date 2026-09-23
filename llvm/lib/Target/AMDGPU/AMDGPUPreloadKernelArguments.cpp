@@ -28,21 +28,18 @@
 #include "llvm/IR/PassManager.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/AMDGPU/AMDGPUOptionsOptInfos.h"
+#include "llvm/Target/AMDGPU/AMDGPUOptions.h"
 
 #define DEBUG_TYPE "amdgpu-preload-kernel-arguments"
 
 using namespace llvm;
 
 static unsigned getKernargPreloadCount(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AMDGPU_KernargPreloadCount>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<AMDGPUOptions>().AMDGPU_KernargPreloadCount;
 }
 
 static bool getEnableKernargPreload(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::AMDGPU_EnableKernargPreload>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<AMDGPUOptions>().AMDGPU_EnableKernargPreload;
 }
 
 namespace {

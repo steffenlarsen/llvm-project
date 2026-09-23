@@ -1,5 +1,3 @@
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
 //===- EarlyCSE.cpp - Simple and fast CSE pass ----------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -49,9 +47,11 @@
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/DebugCounter.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/RecyclingAllocator.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Scalar.h"
+#include "llvm/Transforms/Scalar/ScalarOptions.h"
 #include "llvm/Transforms/Utils/AssumeBundleBuilder.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include <cassert>
@@ -76,13 +76,13 @@ DEBUG_COUNTER(CSECounter, "early-cse",
               "Controls which instructions are removed");
 
 static unsigned getEarlyCSEMssaOptCap(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_EarlyCseMssaOptimizationCap>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_EarlyCseMssaOptimizationCap;
 }
 
 static bool getEarlyCSEDebugHash(const Function &F) {
-  return clv2::getOptValOr<&clv2::ScalarOptsReg, &clv2::SC_EarlyCseDebugHash>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext().getOptions<ScalarOptions>().SC_EarlyCseDebugHash;
 }
 
 //===----------------------------------------------------------------------===//

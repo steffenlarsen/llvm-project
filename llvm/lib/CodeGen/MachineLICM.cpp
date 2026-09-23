@@ -22,7 +22,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/AliasAnalysis.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsMachine1.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineBlockFrequencyInfo.h"
 #include "llvm/CodeGen/MachineDomTreeUpdater.h"
@@ -44,14 +44,13 @@
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/IR/DebugLoc.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/LLVMContext.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/MC/MCInstrDesc.h"
 #include "llvm/MC/MCRegister.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
 #include <cassert>
@@ -62,32 +61,30 @@ using namespace llvm;
 
 #define DEBUG_TYPE "machinelicm"
 
-using clv2::UseBFI;
-
-static UseBFI
-getDisableHoistingToHotterBlocks(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_DisableHoistingToHotterBlocks>(
-      Ctx);
+static UseBFI getDisableHoistingToHotterBlocks(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenMachine1Options>()
+      .CGPASS_DisableHoistingToHotterBlocks;
 }
 
-static bool getAvoidSpeculation(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_AvoidSpeculation>(Ctx);
+static bool getAvoidSpeculation(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenMachine1Options>().CGPASS_AvoidSpeculation;
 }
 
-static bool getHoistCheapInsts(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_HoistCheapInsts>(Ctx);
+static bool getHoistCheapInsts(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenMachine1Options>().CGPASS_HoistCheapInsts;
 }
 
-static bool getHoistConstStores(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_HoistConstStores>(Ctx);
+static bool getHoistConstStores(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenMachine1Options>().CGPASS_HoistConstStores;
 }
 
-static bool getHoistConstLoads(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_HoistConstLoads>(Ctx);
+static bool getHoistConstLoads(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenMachine1Options>().CGPASS_HoistConstLoads;
 }
 
-static unsigned getBlockFreqRatioThreshold(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_BlockFreqRatioThreshold>(Ctx);
+static unsigned getBlockFreqRatioThreshold(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenMachine1Options>()
+      .CGPASS_BlockFreqRatioThreshold;
 }
 
 STATISTIC(NumHoisted,
@@ -376,7 +373,7 @@ bool MachineLICMImpl::run(MachineFunction &MF) {
   MDTU = &DTU;
   MLI = GET_RESULT(MachineLoop, getLI, Info);
   MBFI = getDisableHoistingToHotterBlocks(
-             MF.getFunction().getContext().getOptionsContext()) != UseBFI::None
+             MF.getFunction().getContext()) != UseBFI::None
              ? GET_RESULT(MachineBlockFrequency, getMBFI, Info)
              : nullptr;
 
@@ -407,7 +404,7 @@ bool MachineLICMImpl::run(MachineFunction &MF) {
       RegLimit[i] = RegClassInfo->getRegPressureSetLimit(i);
   }
 
-  if (getHoistConstLoads(MF.getFunction().getContext().getOptionsContext()))
+  if (getHoistConstLoads(MF.getFunction().getContext()))
     InitializeLoadsHoistableLoops();
 
   SmallVector<MachineLoop *, 8> Worklist(MLI->begin(), MLI->end());
@@ -1088,11 +1085,11 @@ static bool isCopyFeedingInvariantStore(const MachineInstr &MI,
 bool MachineLICMImpl::IsLICMCandidate(MachineInstr &I, MachineLoop *CurLoop) {
   // Check if it's safe to move the instruction.
   bool DontMoveAcrossStore =
-      !getHoistConstLoads(MF->getFunction().getContext().getOptionsContext()) ||
+      !getHoistConstLoads(MF->getFunction().getContext()) ||
       !AllowedToHoistLoads[CurLoop];
   if ((!I.isSafeToMove(DontMoveAcrossStore)) &&
       !(getHoistConstStores(
-            MF->getFunction().getContext().getOptionsContext()) &&
+            MF->getFunction().getContext()) &&
         isInvariantStore(I, TRI, MRI))) {
     LLVM_DEBUG(dbgs() << "LICM: Instruction not safe to move.\n");
     return false;
@@ -1237,7 +1234,7 @@ bool MachineLICMImpl::CanCauseHighRegPressure(
     // Don't hoist cheap instructions if they would increase register pressure,
     // even if we're under the limit.
     if (CheapInstr &&
-        !getHoistCheapInsts(MF->getFunction().getContext().getOptionsContext()))
+        !getHoistCheapInsts(MF->getFunction().getContext()))
       return true;
 
     for (const auto &RP : BackTrace)
@@ -1282,7 +1279,7 @@ bool MachineLICMImpl::IsProfitableToHoist(MachineInstr &MI,
   // - When hoisting the last use of a value in the loop, that value no longer
   //   needs to be live in the loop. This lowers register pressure in the loop.
 
-  if (getHoistConstStores(MF->getFunction().getContext().getOptionsContext()) &&
+  if (getHoistConstStores(MF->getFunction().getContext()) &&
       isCopyFeedingInvariantStore(MI, MRI, TRI))
     return true;
 
@@ -1342,7 +1339,7 @@ bool MachineLICMImpl::IsProfitableToHoist(MachineInstr &MI,
   // Do not "speculate" in high register pressure situation. If an
   // instruction is not guaranteed to be executed in the loop, it's best to be
   // conservative.
-  if (getAvoidSpeculation(MF->getFunction().getContext().getOptionsContext()) &&
+  if (getAvoidSpeculation(MF->getFunction().getContext()) &&
       (!IsGuaranteedToExecute(MI.getParent(), CurLoop) && !MayCSE(&MI))) {
     LLVM_DEBUG(dbgs() << "Won't speculate: " << MI);
     return false;
@@ -1614,9 +1611,9 @@ unsigned MachineLICMImpl::Hoist(MachineInstr *MI, MachineBasicBlock *Preheader,
 
   // Disable the instruction hoisting due to block hotness
   if ((getDisableHoistingToHotterBlocks(
-           MF->getFunction().getContext().getOptionsContext()) == UseBFI::All ||
+           MF->getFunction().getContext()) == UseBFI::All ||
        (getDisableHoistingToHotterBlocks(
-            MF->getFunction().getContext().getOptionsContext()) ==
+            MF->getFunction().getContext()) ==
             UseBFI::PGO &&
         HasProfileData)) &&
       isTgtHotterThanSrc(SrcBlock, Preheader)) {
@@ -1741,7 +1738,7 @@ bool MachineLICMImpl::isTgtHotterThanSrc(MachineBasicBlock *SrcBlock,
 
   // Compare the block frequency ratio with the threshold
   return Ratio > getBlockFreqRatioThreshold(
-                     MF->getFunction().getContext().getOptionsContext());
+                     MF->getFunction().getContext());
 }
 
 template <typename DerivedT, bool PreRegAlloc>

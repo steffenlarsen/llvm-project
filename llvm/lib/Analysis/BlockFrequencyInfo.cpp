@@ -13,7 +13,7 @@
 #include "llvm/Analysis/BlockFrequencyInfo.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/iterator.h"
-#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
+#include "llvm/Analysis/AnalysisOptions.h"
 #include "llvm/Analysis/BlockFrequencyInfoImpl.h"
 #include "llvm/Analysis/BranchProbabilityInfo.h"
 #include "llvm/Analysis/CycleAnalysis.h"
@@ -24,7 +24,6 @@
 #include "llvm/Pass.h"
 #include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/GraphWriter.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cassert>
 #include <optional>
@@ -34,50 +33,39 @@ using namespace llvm;
 
 #define DEBUG_TYPE "block-freq"
 
-namespace an_opts = llvm::an_opts;
-
-static GVDAGType
-getViewBlockFreqPropagationDAG(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValIfSpecified<&clv2::AnalysisOptsReg,
-                                    &clv2::AN_ViewBlockFreqPropagationDAG>(
-      Ctx, GVDT_None);
+static GVDAGType getViewBlockFreqPropagationDAG(const AnalysisOptions &Opts) {
+  return Opts.AN_ViewBlockFreqPropagationDAG;
 }
 
-static std::string getViewBlockFreqFuncName(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValIfSpecified<&clv2::AnalysisOptsReg,
-                                    &clv2::AN_ViewBlockFreqFuncName>(
-      Ctx, std::string{});
+static std::string getViewBlockFreqFuncName(const AnalysisOptions &Opts) {
+  return Opts.AN_ViewBlockFreqFuncName;
 }
 
-static unsigned getViewHotFreqPercent(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::AN_ViewHotFreqPercent>(Ctx);
+static unsigned getViewHotFreqPercent(const AnalysisOptions &Opts) {
+  return Opts.AN_ViewHotFreqPercent;
 }
 
-static PGOViewCountsType getPGOViewCounts(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValIfSpecified<&clv2::AnalysisOptsReg,
-                                    &clv2::AN_PGOViewCounts>(Ctx, PGOVCT_None);
+static PGOViewCountsType getPGOViewCounts(const AnalysisOptions &Opts) {
+  return Opts.AN_PGOViewCounts;
 }
 
-static bool getPrintBFI(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::AN_PrintBFI>(Ctx);
+static bool getPrintBFI(const AnalysisOptions &Opts) {
+  return Opts.AN_PrintBFI;
 }
 
-static std::string getPrintBFIFuncName(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValIfSpecified<&clv2::AnalysisOptsReg,
-                                    &clv2::AN_PrintBFIFuncName>(Ctx,
-                                                                std::string{});
+static std::string getPrintBFIFuncName(const AnalysisOptions &Opts) {
+  return Opts.AN_PrintBFIFuncName;
 }
 
 namespace llvm {
 
-static GVDAGType getGVDT(const clv2::OptionsContext &Ctx) {
-  if (getPGOViewCounts(Ctx) == PGOVCT_Graph)
+static GVDAGType getGVDT(const AnalysisOptions &Opts) {
+  if (getPGOViewCounts(Opts) == PGOVCT_Graph)
     return GVDT_Count;
-  return getViewBlockFreqPropagationDAG(Ctx);
+  return getViewBlockFreqPropagationDAG(Opts);
 }
 
-template <>
-struct GraphTraits<BlockFrequencyInfo *> {
+template <> struct GraphTraits<BlockFrequencyInfo *> {
   using NodeRef = const BasicBlock *;
   using ChildIteratorType = const_succ_iterator;
   using nodes_iterator = pointer_iterator<Function::const_iterator>;
@@ -114,7 +102,8 @@ struct DOTGraphTraits<BlockFrequencyInfo *> : public BFIDOTGTraitsBase {
 
     return BFIDOTGTraitsBase::getNodeLabel(
         Node, Graph,
-        getGVDT(Graph->getFunction()->getContext().getOptionsContext()));
+        getGVDT(
+            Graph->getFunction()->getContext().getOptions<AnalysisOptions>()));
   }
 
   std::string getNodeAttributes(const BasicBlock *Node,
@@ -122,7 +111,7 @@ struct DOTGraphTraits<BlockFrequencyInfo *> : public BFIDOTGTraitsBase {
     return BFIDOTGTraitsBase::getNodeAttributes(
         Node, Graph,
         getViewHotFreqPercent(
-            Graph->getFunction()->getContext().getOptionsContext()));
+            Graph->getFunction()->getContext().getOptions<AnalysisOptions>()));
   }
 
   std::string getEdgeAttributes(const BasicBlock *Node, EdgeIter EI,
@@ -130,7 +119,7 @@ struct DOTGraphTraits<BlockFrequencyInfo *> : public BFIDOTGTraitsBase {
     return BFIDOTGTraitsBase::getEdgeAttributes(
         Node, EI, BFI, BFI->getBPI(),
         getViewHotFreqPercent(
-            BFI->getFunction()->getContext().getOptionsContext()));
+            BFI->getFunction()->getContext().getOptions<AnalysisOptions>()));
   }
 };
 
@@ -173,18 +162,16 @@ void BlockFrequencyInfo::calculate(const Function &F,
                                    const CycleInfo &CI) {
   if (!BFI)
     BFI.reset(new ImplType);
-  const clv2::OptionsContext &Ctx = F.getContext().getOptionsContext();
-  BFI->setOptionsContext(Ctx);
+  const AnalysisOptions &Opts = F.getContext().getOptions<AnalysisOptions>();
+  BFI->setOptionsContext(Opts);
   BFI->calculate(F, BPI, CI);
-  if (getViewBlockFreqPropagationDAG(Ctx) != GVDT_None &&
-      (getViewBlockFreqFuncName(Ctx).empty() ||
-       F.getName() == getViewBlockFreqFuncName(Ctx))) {
+  if (getViewBlockFreqPropagationDAG(Opts) != GVDT_None &&
+      (getViewBlockFreqFuncName(Opts).empty() ||
+       F.getName() == getViewBlockFreqFuncName(Opts))) {
     view();
   }
-  if (getPrintBFI(F.getContext().getOptionsContext()) &&
-      (getPrintBFIFuncName(F.getContext().getOptionsContext()).empty() ||
-       F.getName() ==
-           getPrintBFIFuncName(F.getContext().getOptionsContext()))) {
+  if (getPrintBFI(Opts) && (getPrintBFIFuncName(Opts).empty() ||
+                            F.getName() == getPrintBFIFuncName(Opts))) {
     print(dbgs());
   }
 }
@@ -248,9 +235,9 @@ void BlockFrequencyInfo::view(StringRef title) const {
   ViewGraph(const_cast<BlockFrequencyInfo *>(this), title);
 }
 
-void BlockFrequencyInfo::setOptionsContext(const clv2::OptionsContext &Ctx) {
+void BlockFrequencyInfo::setOptionsContext(const AnalysisOptions &Opts) {
   if (BFI)
-    BFI->setOptionsContext(Ctx);
+    BFI->setOptionsContext(Opts);
 }
 
 const Function *BlockFrequencyInfo::getFunction() const {
@@ -334,11 +321,10 @@ BlockFrequencyInfo BlockFrequencyAnalysis::run(Function &F,
   return BFI;
 }
 
-PreservedAnalyses
-BlockFrequencyPrinterPass::run(Function &F, FunctionAnalysisManager &AM) {
-  OS << "Printing analysis results of BFI for function "
-     << "'" << F.getName() << "':"
-     << "\n";
+PreservedAnalyses BlockFrequencyPrinterPass::run(Function &F,
+                                                 FunctionAnalysisManager &AM) {
+  OS << "Printing analysis results of BFI for function " << "'" << F.getName()
+     << "':" << "\n";
   AM.getResult<BlockFrequencyAnalysis>(F).print(OS);
   return PreservedAnalyses::all();
 }

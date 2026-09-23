@@ -33,8 +33,7 @@
 #include "llvm/Passes/CodeGenPassBuilder.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/CodeGen.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/X86/X86OptionsOptInfos.h"
+#include "llvm/Target/X86/X86Options.h"
 #include "llvm/Transforms/CFGuard.h"
 
 using namespace llvm;
@@ -171,8 +170,7 @@ Error X86CodeGenPassBuilder::addGlobalInstructionSelect(
 
 void X86CodeGenPassBuilder::addILPOpts(PassManagerWrapper &PMW) {
   addMachineFunctionPass(EarlyIfConverterPass(), PMW);
-  if (clv2::getOptValOrDefault<&clv2::X86_MachineCombiner>(
-          TM.getOptionsContext()))
+  if (X86Options::Current.X86_MachineCombiner)
     addMachineFunctionPass(MachineCombinerPass(), PMW);
   addMachineFunctionPass(X86CmovConversionPass(), PMW);
 }
@@ -312,7 +310,7 @@ void X86CodeGenPassBuilder::addAsmPrinterEnd(PassManagerWrapper &PMW) {
 
 } // namespace
 
-void X86TargetMachine::registerPassBuilderCallbacks(PassBuilder &PB){
+void X86TargetMachine::registerPassBuilderCallbacks(PassBuilder &PB) {
 #define GET_PASS_REGISTRY "X86PassRegistry.def"
 #include "llvm/Passes/TargetPassRegistry.inc"
 }

@@ -15,103 +15,73 @@
 
 #include "llvm/CGData/StableFunctionMap.h"
 #include "llvm/ADT/SmallSet.h"
-#include "llvm/CGData/CGDataOptionsOptInfos.h"
+#include "llvm/CGData/CGDataOptions.h"
 #include "llvm/CGData/StableFunctionMapRecord.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/OptionsContext.h"
 
 #define DEBUG_TYPE "stable-function-map"
 
 using namespace llvm;
 
-static unsigned GlobalMergingMinMerges = 2;
-static unsigned GlobalMergingMinInstrs = 1;
-static unsigned GlobalMergingMaxParams = std::numeric_limits<unsigned>::max();
-static bool GlobalMergingSkipNoParams = true;
-static double GlobalMergingInstOverhead = 1.2;
-static double GlobalMergingParamOverhead = 2.0;
-static double GlobalMergingCallOverhead = 1.0;
-static double GlobalMergingExtraThreshold = 0.0;
-
-static unsigned getGlobalMergingMinMerges(const Module *M,
-                                          const clv2::OptionsContext &Ctx) {
-  const cgd_opts::ParsedOpts *O = M ? clv2::getView<&clv2::CGDataOptsReg>(
-                                          M->getContext().getOptionsContext())
-                                    : clv2::getView<&clv2::CGDataOptsReg>(Ctx);
-  if (O)
-    return O->get<&clv2::CGD_GlobalMergingMinMerges>();
-  return GlobalMergingMinMerges;
+// Prefer the Module's own LLVMContext view (set via -mllvm/per-invocation
+// parsing) when one is reachable; otherwise fall back to the process-wide
+// default (same idiom as PassBuilderPipelines.cpp's Ctx->getOptions<T>() :
+// T::Current pattern, adapted since only a bare Module* is available here).
+static unsigned getGlobalMergingMinMerges(const Module *M) {
+  return M ? M->getContext()
+                 .getOptions<CGDataOptions>()
+                 .CGD_GlobalMergingMinMerges
+           : CGDataOptions::Current.CGD_GlobalMergingMinMerges;
 }
 
-static unsigned getGlobalMergingMinInstrs(const Module *M,
-                                          const clv2::OptionsContext &Ctx) {
-  const cgd_opts::ParsedOpts *O = M ? clv2::getView<&clv2::CGDataOptsReg>(
-                                          M->getContext().getOptionsContext())
-                                    : clv2::getView<&clv2::CGDataOptsReg>(Ctx);
-  if (O)
-    return O->get<&clv2::CGD_GlobalMergingMinInstrs>();
-  return GlobalMergingMinInstrs;
+static unsigned getGlobalMergingMinInstrs(const Module *M) {
+  return M ? M->getContext()
+                 .getOptions<CGDataOptions>()
+                 .CGD_GlobalMergingMinInstrs
+           : CGDataOptions::Current.CGD_GlobalMergingMinInstrs;
 }
 
-static unsigned getGlobalMergingMaxParams(const Module *M,
-                                          const clv2::OptionsContext &Ctx) {
-  const cgd_opts::ParsedOpts *O = M ? clv2::getView<&clv2::CGDataOptsReg>(
-                                          M->getContext().getOptionsContext())
-                                    : clv2::getView<&clv2::CGDataOptsReg>(Ctx);
-  if (O)
-    return O->get<&clv2::CGD_GlobalMergingMaxParams>();
-  return GlobalMergingMaxParams;
+static unsigned getGlobalMergingMaxParams(const Module *M) {
+  return M ? M->getContext()
+                 .getOptions<CGDataOptions>()
+                 .CGD_GlobalMergingMaxParams
+           : CGDataOptions::Current.CGD_GlobalMergingMaxParams;
 }
 
-static bool getGlobalMergingSkipNoParams(const Module *M,
-                                         const clv2::OptionsContext &Ctx) {
-  const cgd_opts::ParsedOpts *O = M ? clv2::getView<&clv2::CGDataOptsReg>(
-                                          M->getContext().getOptionsContext())
-                                    : clv2::getView<&clv2::CGDataOptsReg>(Ctx);
-  if (O)
-    return O->get<&clv2::CGD_GlobalMergingSkipNoParams>();
-  return GlobalMergingSkipNoParams;
+static bool getGlobalMergingSkipNoParams(const Module *M) {
+  return M ? M->getContext()
+                 .getOptions<CGDataOptions>()
+                 .CGD_GlobalMergingSkipNoParams
+           : CGDataOptions::Current.CGD_GlobalMergingSkipNoParams;
 }
 
-static double getGlobalMergingInstOverhead(const Module *M,
-                                           const clv2::OptionsContext &Ctx) {
-  const cgd_opts::ParsedOpts *O = M ? clv2::getView<&clv2::CGDataOptsReg>(
-                                          M->getContext().getOptionsContext())
-                                    : clv2::getView<&clv2::CGDataOptsReg>(Ctx);
-  if (O)
-    return O->get<&clv2::CGD_GlobalMergingInstOverhead>();
-  return GlobalMergingInstOverhead;
+static double getGlobalMergingInstOverhead(const Module *M) {
+  return M ? M->getContext()
+                 .getOptions<CGDataOptions>()
+                 .CGD_GlobalMergingInstOverhead
+           : CGDataOptions::Current.CGD_GlobalMergingInstOverhead;
 }
 
-static double getGlobalMergingParamOverhead(const Module *M,
-                                            const clv2::OptionsContext &Ctx) {
-  const cgd_opts::ParsedOpts *O = M ? clv2::getView<&clv2::CGDataOptsReg>(
-                                          M->getContext().getOptionsContext())
-                                    : clv2::getView<&clv2::CGDataOptsReg>(Ctx);
-  if (O)
-    return O->get<&clv2::CGD_GlobalMergingParamOverhead>();
-  return GlobalMergingParamOverhead;
+static double getGlobalMergingParamOverhead(const Module *M) {
+  return M ? M->getContext()
+                 .getOptions<CGDataOptions>()
+                 .CGD_GlobalMergingParamOverhead
+           : CGDataOptions::Current.CGD_GlobalMergingParamOverhead;
 }
 
-static double getGlobalMergingCallOverhead(const Module *M,
-                                           const clv2::OptionsContext &Ctx) {
-  const cgd_opts::ParsedOpts *O = M ? clv2::getView<&clv2::CGDataOptsReg>(
-                                          M->getContext().getOptionsContext())
-                                    : clv2::getView<&clv2::CGDataOptsReg>(Ctx);
-  if (O)
-    return O->get<&clv2::CGD_GlobalMergingCallOverhead>();
-  return GlobalMergingCallOverhead;
+static double getGlobalMergingCallOverhead(const Module *M) {
+  return M ? M->getContext()
+                 .getOptions<CGDataOptions>()
+                 .CGD_GlobalMergingCallOverhead
+           : CGDataOptions::Current.CGD_GlobalMergingCallOverhead;
 }
 
-static double getGlobalMergingExtraThreshold(const Module *M,
-                                             const clv2::OptionsContext &Ctx) {
-  const cgd_opts::ParsedOpts *O = M ? clv2::getView<&clv2::CGDataOptsReg>(
-                                          M->getContext().getOptionsContext())
-                                    : clv2::getView<&clv2::CGDataOptsReg>(Ctx);
-  if (O)
-    return O->get<&clv2::CGD_GlobalMergingExtraThreshold>();
-  return GlobalMergingExtraThreshold;
+static double getGlobalMergingExtraThreshold(const Module *M) {
+  return M ? M->getContext()
+                 .getOptions<CGDataOptions>()
+                 .CGD_GlobalMergingExtraThreshold
+           : CGDataOptions::Current.CGD_GlobalMergingExtraThreshold;
 }
 
 unsigned StableFunctionMap::getIdOrCreateForName(StringRef Name) {
@@ -254,14 +224,12 @@ removeIdenticalIndexPair(StableFunctionMap::StableFunctionEntries &SFS) {
 
 static bool isProfitable(const StableFunctionMap::StableFunctionEntries &SFS,
                          const Module *M) {
-  const clv2::OptionsContext &Ctx =
-      M ? M->getContext().getOptionsContext() : clv2::defaultOptionsContext();
   unsigned StableFunctionCount = SFS.size();
-  if (StableFunctionCount < getGlobalMergingMinMerges(M, Ctx))
+  if (StableFunctionCount < getGlobalMergingMinMerges(M))
     return false;
 
   unsigned InstCount = SFS[0]->InstCount;
-  if (InstCount < getGlobalMergingMinInstrs(M, Ctx))
+  if (InstCount < getGlobalMergingMinInstrs(M))
     return false;
 
   double Cost = 0.0;
@@ -271,22 +239,22 @@ static bool isProfitable(const StableFunctionMap::StableFunctionEntries &SFS,
     for (auto &[IndexPair, Hash] : *SF->IndexOperandHashMap)
       UniqueHashVals.insert(Hash);
     unsigned ParamCount = UniqueHashVals.size();
-    if (ParamCount > getGlobalMergingMaxParams(M, Ctx))
+    if (ParamCount > getGlobalMergingMaxParams(M))
       return false;
     // Theoretically, if ParamCount is 0, it results in identical code folding
     // (ICF), which we can skip merging here since the linker already handles
     // ICF. This pass would otherwise introduce unnecessary thunks that are
     // merely direct jumps. However, enabling this could be beneficial depending
     // on downstream passes, so we provide an option for it.
-    if (getGlobalMergingSkipNoParams(M, Ctx) && ParamCount == 0)
+    if (getGlobalMergingSkipNoParams(M) && ParamCount == 0)
       return false;
-    Cost += ParamCount * getGlobalMergingParamOverhead(M, Ctx) +
-            getGlobalMergingCallOverhead(M, Ctx);
+    Cost += ParamCount * getGlobalMergingParamOverhead(M) +
+            getGlobalMergingCallOverhead(M);
   }
-  Cost += getGlobalMergingExtraThreshold(M, Ctx);
+  Cost += getGlobalMergingExtraThreshold(M);
 
-  double Benefit = InstCount * (StableFunctionCount - 1) *
-                   getGlobalMergingInstOverhead(M, Ctx);
+  double Benefit =
+      InstCount * (StableFunctionCount - 1) * getGlobalMergingInstOverhead(M);
   bool Result = Benefit > Cost;
   LLVM_DEBUG(dbgs() << "isProfitable: Hash = " << SFS[0]->Hash << ", "
                     << "StableFunctionCount = " << StableFunctionCount

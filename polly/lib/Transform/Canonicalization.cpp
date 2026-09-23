@@ -38,7 +38,7 @@ using namespace polly;
 static ModuleInlinerWrapperPass
 buildInlinePasses(llvm::OptimizationLevel Level) {
   InlineParams IP =
-      getInlineParams(200, /*Ctx=*/llvm::clv2::defaultOptionsContext());
+      getInlineParams(200, /*Opts=*/llvm::AnalysisOptions::Current);
   ModuleInlinerWrapperPass MIWP(
       /*OptsCtx=*/llvm::clv2::defaultOptionsContext(), IP);
 

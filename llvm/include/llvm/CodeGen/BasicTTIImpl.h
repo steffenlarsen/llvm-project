@@ -27,7 +27,7 @@
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/Analysis/TargetTransformInfoImpl.h"
 #include "llvm/Analysis/ValueTracking.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsCore1.h"
 #include "llvm/CodeGen/ISDOpcodes.h"
 #include "llvm/CodeGen/TargetLowering.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
@@ -47,7 +47,6 @@
 #include "llvm/IR/Value.h"
 #include "llvm/Support/Alignment.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Target/TargetMachine.h"
@@ -69,9 +68,8 @@ class ScalarEvolution;
 class SCEV;
 class TargetMachine;
 
-LLVM_ABI unsigned getPartialUnrollingThreshold(const clv2::OptionsContext &Ctx);
-LLVM_ABI bool
-getPartialUnrollingThresholdWasSpecified(const clv2::OptionsContext &Ctx);
+LLVM_ABI std::optional<unsigned>
+getPartialUnrollingThreshold(const LLVMContext &Ctx);
 
 /// Base class which can be used to help build a TTI implementation.
 ///
@@ -766,8 +764,8 @@ public:
 
     unsigned MaxOps;
     const TargetSubtargetInfo *ST = getST();
-    if (getPartialUnrollingThresholdWasSpecified(ST->getOptionsContext()))
-      MaxOps = getPartialUnrollingThreshold(ST->getOptionsContext());
+    if (auto V = getPartialUnrollingThreshold(L->getHeader()->getContext()))
+      MaxOps = *V;
     else if (ST->getSchedModel().LoopMicroOpBufferSize > 0)
       MaxOps = ST->getSchedModel().LoopMicroOpBufferSize;
     else

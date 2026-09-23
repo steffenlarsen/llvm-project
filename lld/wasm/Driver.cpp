@@ -30,6 +30,7 @@
 #include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/Parallel.h"
 #include "llvm/Support/Path.h"
+#include "llvm/Support/PluginLoaderOptions.h"
 #include "llvm/Support/Process.h"
 #include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/TarWriter.h"
@@ -1360,7 +1361,10 @@ void LinkerDriver::linkerMain(ArrayRef<const char *> argsArr) {
       Argv.push_back("wasm-ld (LLVM option parsing)");
       for (auto &A : LLVMOpts)
         Argv.push_back(A.data());
-      if (auto Parsed = P.parse(Argv.size(), Argv.data()))
+      std::vector<const char *> ArgsAfterPlugins = loadPluginsAndStripArgs(
+          static_cast<int>(Argv.size()), Argv.data());
+      if (auto Parsed = P.parse(static_cast<int>(ArgsAfterPlugins.size()),
+                                 ArgsAfterPlugins.data()))
         commonContext().llvmOptsCtx = std::move(Parsed);
     }
   }

@@ -1,5 +1,3 @@
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
 //===- LoopUnrollAndJam.cpp - Loop unroll and jam pass --------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -38,6 +36,7 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Scalar/LoopPassManager.h"
+#include "llvm/Transforms/Scalar/ScalarOptions.h"
 #include "llvm/Transforms/Utils/LoopPeel.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
 #include "llvm/Transforms/Utils/UnrollLoop.h"
@@ -68,38 +67,42 @@ static const char *const LLVMLoopUnrollAndJamFollowupRemainderOuter =
 /// @}
 
 static bool getAllowUnrollAndJam(const Function &F) {
-  return clv2::getOptValOr<&clv2::ScalarOptsReg, &clv2::SC_AllowUnrollAndJam>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_AllowUnrollAndJam.value_or(false);
 }
 static bool isAllowUnrollAndJamSpecified(const Function &F) {
-  return clv2::wasOptSpecified<&clv2::ScalarOptsReg,
-                               &clv2::SC_AllowUnrollAndJam>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_AllowUnrollAndJam.has_value();
 }
 
 static unsigned getUnrollAndJamCount(const Function &F) {
-  return clv2::getOptValOr<&clv2::ScalarOptsReg, &clv2::SC_UnrollAndJamCount>(
-      F.getContext().getOptionsContext(), 0);
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_UnrollAndJamCount.value_or(0);
 }
 static bool isUnrollAndJamCountSpecified(const Function &F) {
-  return clv2::wasOptSpecified<&clv2::ScalarOptsReg,
-                               &clv2::SC_UnrollAndJamCount>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_UnrollAndJamCount.has_value();
 }
 
 static unsigned getUnrollAndJamThreshold(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_UnrollAndJamThreshold>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_UnrollAndJamThreshold.value_or(60);
 }
 static bool isUnrollAndJamThresholdSpecified(const Function &F) {
-  return clv2::wasOptSpecified<&clv2::ScalarOptsReg,
-                               &clv2::SC_UnrollAndJamThreshold>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_UnrollAndJamThreshold.has_value();
 }
 
 static unsigned getPragmaUnrollAndJamThreshold(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_PragmaUnrollAndJamThreshold>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_PragmaUnrollAndJamThreshold;
 }
 
 // Returns true if the loop has any metadata starting with Prefix. For example a

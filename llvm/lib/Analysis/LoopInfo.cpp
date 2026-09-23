@@ -16,7 +16,7 @@
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/SmallPtrSet.h"
-#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
+#include "llvm/Analysis/AnalysisOptions.h"
 #include "llvm/Analysis/IVDescriptors.h"
 #include "llvm/Analysis/LoopIterator.h"
 #include "llvm/Analysis/LoopNestAnalysis.h"
@@ -41,7 +41,6 @@
 #include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/GenericLoopInfoImpl.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 using namespace llvm;
 
@@ -50,19 +49,24 @@ template class LLVM_EXPORT_TEMPLATE llvm::LoopBase<BasicBlock, Loop>;
 template class LLVM_EXPORT_TEMPLATE llvm::LoopInfoBase<BasicBlock, Loop>;
 
 // Always verify loopinfo if expensive checking is enabled.
-bool llvm::getVerifyLoopInfo(const clv2::OptionsContext &Ctx) {
-  if (auto *O = clv2::getView<&clv2::AnalysisOptsReg>(Ctx))
-    if (O->specified<&clv2::AN_VerifyLoopInfo>())
-      return O->get<&clv2::AN_VerifyLoopInfo>();
-#ifdef EXPENSIVE_CHECKS
-  return true;
-#else
-  return false;
-#endif
+//
+// NOTE (flagged, not guessed): AN_VerifyLoopInfo is a plain (non-Optional)
+// BoolField in the new AnalysisOptions schema, so unlike the old clv2
+// AnalysisOptsReg descriptor (queried here via
+// O->specified<&clv2::AN_VerifyLoopInfo>()), there is no "was this explicitly
+// passed on the command line" bit available anymore -- only the resolved
+// bool with its baked-in "false" default. That means the EXPENSIVE_CHECKS
+// compile-time default of "on unless the user overrides it" can no longer be
+// distinguished from "the user explicitly passed -verify-loop-info=false";
+// this reads the field directly, which keeps -verify-loop-info's explicit
+// on/off behavior intact but silently drops the EXPENSIVE_CHECKS auto-on
+// default. See AnalysisOptions.td: AN_VerifyLoopInfo may need to become an
+// OptionalValueField to fully restore this.
+bool llvm::getVerifyLoopInfo(const AnalysisOptions &Opts) {
+  return Opts.AN_VerifyLoopInfo;
 }
 
-namespace llvm {
-} // end namespace llvm
+namespace llvm {} // end namespace llvm
 
 //===----------------------------------------------------------------------===//
 // Loop implementation
@@ -1303,8 +1307,8 @@ void LoopInfoWrapperPass::verifyAnalysis() const {
   // checking by default, LoopPass has been taught to call verifyLoop manually
   // during loop pass sequences.
   // verifyAnalysis() is const and has no Function in scope, so the option is
-  // read through the default context.
-  if (getVerifyLoopInfo(clv2::defaultOptionsContext()))
+  // read through the process-wide default.
+  if (getVerifyLoopInfo(AnalysisOptions::Current))
     LI.verify();
 }
 

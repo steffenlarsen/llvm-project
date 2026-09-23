@@ -35,7 +35,7 @@
 #include "llvm/IR/Verifier.h"
 #include "llvm/LTO/LTO.h"
 #include "llvm/LTO/LTOBackend.h"
-#include "llvm/LTO/LTOOptionsOptInfos.h"
+#include "llvm/LTO/LTOOptions.h"
 #include "llvm/LTO/legacy/LTOModule.h"
 #include "llvm/LTO/legacy/UpdateCompilerUsed.h"
 #include "llvm/Linker/Linker.h"
@@ -45,6 +45,7 @@
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/OptionsContext.h"
+#include "llvm/Support/PluginLoaderOptions.h"
 #include "llvm/Support/Process.h"
 #include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/Signals.h"
@@ -55,7 +56,7 @@
 #include "llvm/TargetParser/Host.h"
 #include "llvm/TargetParser/SubtargetFeature.h"
 #include "llvm/Transforms/IPO.h"
-#include "llvm/Transforms/IPO/IPOOptionsOptInfos.h"
+#include "llvm/Transforms/IPO/IPOOptions.h"
 #include "llvm/Transforms/IPO/Internalize.h"
 #include "llvm/Transforms/IPO/WholeProgramDevirt.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
@@ -63,44 +64,33 @@
 #include <system_error>
 using namespace llvm;
 
-const char* LTOCodeGenerator::getVersionString() {
+const char *LTOCodeGenerator::getVersionString() {
   return PACKAGE_NAME " version " PACKAGE_VERSION;
 }
 
 static std::string getLTOStatsFile(const Module &M) {
-  return clv2::getOptValIfSpecified<&clv2::LTOOptsReg, &clv2::LTO_StatsFile>(
-      M.getContext().getOptionsContext(), std::string{});
+  return M.getContext().getOptions<LTOOptions>().LTO_StatsFile;
 }
 
 static std::string getAIXSystemAssemblerPath(const Module &M) {
-  return clv2::getOptValIfSpecified<&clv2::LTOOptsReg,
-                                    &clv2::LTO_AIXSystemAssembler>(
-      M.getContext().getOptionsContext(), std::string{});
+  return M.getContext().getOptions<LTOOptions>().LTO_AIXSystemAssembler;
 }
 
 static bool getLTORunCSIRInstr(const Module &M) {
-  return clv2::getOptValIfSpecified<&clv2::LTOOptsReg,
-                                    &clv2::LTO_CSProfileGenerate>(
-      M.getContext().getOptionsContext(), false);
+  return M.getContext().getOptions<LTOOptions>().LTO_CSProfileGenerate;
 }
 
 static std::string getLTOCSIRProfile(const Module &M) {
-  return clv2::getOptValIfSpecified<&clv2::LTOOptsReg,
-                                    &clv2::LTO_CSProfilePath>(
-      M.getContext().getOptionsContext(), std::string{});
+  return M.getContext().getOptions<LTOOptions>().LTO_CSProfilePath;
 }
 
 static std::string getSampleProfileFile(const Module &M) {
-  return clv2::getOptValIfSpecified<&clv2::IPOOptsReg,
-                                    &clv2::IPO_SampleProfileFile>(
-      M.getContext().getOptionsContext(), std::string{});
+  return M.getContext().getOptions<IPOOptions>().IPO_SampleProfileFile;
 }
 
 static bool getLTODiscardValueNames(const Module &M) {
-  if (auto *O =
-          clv2::getView<&clv2::LTOOptsReg>(M.getContext().getOptionsContext()))
-    if (O->specified<&clv2::LTO_DiscardValueNames>())
-      return O->get<&clv2::LTO_DiscardValueNames>();
+  if (auto V = M.getContext().getOptions<LTOOptions>().LTO_DiscardValueNames)
+    return *V;
 #ifdef NDEBUG
   return true;
 #else
@@ -109,44 +99,35 @@ static bool getLTODiscardValueNames(const Module &M) {
 }
 
 static bool getRemarksWithHotness(const Module &M) {
-  return clv2::getOptValIfSpecified<&clv2::LTOOptsReg,
-                                    &clv2::LTO_PassRemarksWithHotness>(
-      M.getContext().getOptionsContext(), false);
+  return M.getContext().getOptions<LTOOptions>().LTO_PassRemarksWithHotness;
 }
 
 static std::optional<uint64_t> getRemarksHotnessThreshold(const Module &M) {
-  auto &Ctx = M.getContext().getOptionsContext();
-  if (auto *V = Ctx.getViewPtr<&clv2::LTOOptsReg>())
-    if (V->template specified<&clv2::LTO_PassRemarksHotnessThreshold>())
-      return static_cast<uint64_t>(
-          V->template get<&clv2::LTO_PassRemarksHotnessThreshold>());
+  if (auto V = M.getContext()
+                   .getOptions<LTOOptions>()
+                   .LTO_PassRemarksHotnessThreshold)
+    return static_cast<uint64_t>(*V);
   return std::optional<uint64_t>(0);
 }
 
 static std::string getRemarksFilename(const Module &M) {
-  return clv2::getOptValIfSpecified<&clv2::LTOOptsReg,
-                                    &clv2::LTO_PassRemarksOutput>(
-      M.getContext().getOptionsContext(), std::string());
+  return M.getContext().getOptions<LTOOptions>().LTO_PassRemarksOutput;
 }
 
 static std::string getRemarksPasses(const Module &M) {
-  return clv2::getOptValIfSpecified<&clv2::LTOOptsReg,
-                                    &clv2::LTO_PassRemarksFilter>(
-      M.getContext().getOptionsContext(), std::string());
+  return M.getContext().getOptions<LTOOptions>().LTO_PassRemarksFilter;
 }
 
 static std::string getRemarksFormat(const Module &M) {
-  return clv2::getOptValIfSpecified<&clv2::LTOOptsReg,
-                                    &clv2::LTO_PassRemarksFormat>(
-      M.getContext().getOptionsContext(), std::string("yaml"));
+  return M.getContext().getOptions<LTOOptions>().LTO_PassRemarksFormat;
 }
 
 LTOCodeGenerator::LTOCodeGenerator(LLVMContext &Context)
     : Context(Context), MergedModule(new Module("ld-temp.o", Context)),
       TheLinker(new Linker(*MergedModule)) {
-  if (auto *O = clv2::getView<&clv2::LTOOptsReg>(
-          MergedModule->getContext().getOptionsContext()))
-    ShouldInternalize = O->get<&clv2::LTO_EnableInternalization>();
+  ShouldInternalize = MergedModule->getContext()
+                          .getOptions<LTOOptions>()
+                          .LTO_EnableInternalization;
   Context.setDiscardValueNames(getLTODiscardValueNames(*MergedModule));
   Context.enableDebugTypeODRUniquing();
 
@@ -286,10 +267,8 @@ bool LTOCodeGenerator::runAIXSystemAssembler(SmallString<128> &AssemblyFile) {
   std::string ObjectFileName(AssemblyFile);
   ObjectFileName[ObjectFileName.size() - 1] = 'o';
   SmallVector<StringRef, 8> Args = {
-      "/bin/env",     LDR_CNTRL_var,
-      AssemblerPath,  Arch,
-      "-many",        "-o",
-      ObjectFileName, AssemblyFile};
+      "/bin/env", LDR_CNTRL_var, AssemblerPath,  Arch,
+      "-many",    "-o",          ObjectFileName, AssemblyFile};
 
   // Invoke the assembler.
   int RC = sys::ExecuteAndWait(Args[0], Args);
@@ -363,8 +342,7 @@ bool LTOCodeGenerator::compileOptimizedToFile(const char **Name) {
   return true;
 }
 
-std::unique_ptr<MemoryBuffer>
-LTOCodeGenerator::compileOptimized() {
+std::unique_ptr<MemoryBuffer> LTOCodeGenerator::compileOptimized() {
   const char *name;
   if (!compileOptimizedToFile(&name))
     return nullptr;
@@ -454,10 +432,12 @@ void LTOCodeGenerator::preserveDiscardableGVs(
     if (GV.hasAvailableExternallyLinkage())
       return emitWarning(
           (Twine("Linker asked to preserve available_externally global: '") +
-           GV.getName() + "'").str());
+           GV.getName() + "'")
+              .str());
     if (GV.hasInternalLinkage())
       return emitWarning((Twine("Linker asked to preserve internal global: '") +
-                   GV.getName() + "'").str());
+                          GV.getName() + "'")
+                             .str());
     Used.push_back(&GV);
   };
   for (auto &GV : TheModule)
@@ -646,9 +626,9 @@ bool LTOCodeGenerator::optimize() {
 
   ModuleSummaryIndex CombinedIndex(false);
   TargetMach = createTargetMachine();
-  if (!opt(Config, TargetMach.get(), 0, *MergedModule, /*IsThinLTO=*/false,
-           /*ExportSummary=*/&CombinedIndex, /*ImportSummary=*/nullptr,
-           /*CmdArgs*/ std::vector<uint8_t>(), /*BitcodeLibFuncs=*/{})) {
+  if (!lto::opt(Config, TargetMach.get(), 0, *MergedModule, /*IsThinLTO=*/false,
+                /*ExportSummary=*/&CombinedIndex, /*ImportSummary=*/nullptr,
+                /*CmdArgs*/ std::vector<uint8_t>(), /*BitcodeLibFuncs=*/{})) {
     emitError("LTO middle-end optimizations failed");
     return false;
   }
@@ -715,7 +695,10 @@ llvm::parseCommandLineOptions(std::vector<std::string> &Options) {
     Argv.push_back(Saver.save("libLLVMLTO").data());
     for (const std::string &Opt : Options)
       Argv.push_back(Saver.save(Opt).data());
-    return P.parse(Argv.size(), Argv.data());
+    std::vector<const char *> ArgsAfterPlugins =
+        loadPluginsAndStripArgs(static_cast<int>(Argv.size()), Argv.data());
+    return P.parse(static_cast<int>(ArgsAfterPlugins.size()),
+                   ArgsAfterPlugins.data());
   }
   return nullptr;
 }
@@ -759,11 +742,10 @@ struct LTODiagnosticHandler : public DiagnosticHandler {
     return true;
   }
 };
-}
+} // namespace
 
-void
-LTOCodeGenerator::setDiagnosticHandler(lto_diagnostic_handler_t DiagHandler,
-                                       void *Ctxt) {
+void LTOCodeGenerator::setDiagnosticHandler(
+    lto_diagnostic_handler_t DiagHandler, void *Ctxt) {
   this->DiagHandler = DiagHandler;
   this->DiagContext = Ctxt;
   if (!DiagHandler)
@@ -777,13 +759,14 @@ LTOCodeGenerator::setDiagnosticHandler(lto_diagnostic_handler_t DiagHandler,
 namespace {
 class LTODiagnosticInfo : public DiagnosticInfo {
   const Twine &Msg;
+
 public:
   LTODiagnosticInfo(const Twine &DiagMsg LLVM_LIFETIME_BOUND,
                     DiagnosticSeverity Severity = DS_Error)
       : DiagnosticInfo(DK_Linker, Severity), Msg(DiagMsg) {}
   void print(DiagnosticPrinter &DP) const override { DP << Msg; }
 };
-}
+} // namespace
 
 void LTOCodeGenerator::emitError(const std::string &ErrMsg) {
   if (DiagHandler)

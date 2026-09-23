@@ -71,7 +71,7 @@
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsCore2.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineDominators.h"
 #include "llvm/CodeGen/MachineFunction.h"
@@ -105,30 +105,29 @@ using RegSubRegPairAndIdx = TargetInstrInfo::RegSubRegPairAndIdx;
 
 #define DEBUG_TYPE "peephole-opt"
 
-static bool getAggressiveExtOpt(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_AggressiveExtOpt>(Ctx);
+static bool getAggressiveExtOpt(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore2Options>().CGPASS_AggressiveExtOpt;
 }
 
-static bool getDisablePeephole(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_DisablePeephole>(Ctx);
+static bool getDisablePeephole(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore2Options>().CGPASS_DisablePeephole;
 }
 
-static bool getDisableAdvCopyOpt(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_DisableAdvCopyOpt>(Ctx);
+static bool getDisableAdvCopyOpt(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore2Options>().CGPASS_DisableAdvCopyOpt;
 }
 
-static bool
-getDisableNonAllocatablePhysCopyOpt(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<
-      &clv2::CGPASS_DisableNonAllocatablePhysCopyOpt>(Ctx);
+static bool getDisableNonAllocatablePhysCopyOpt(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore2Options>()
+      .CGPASS_DisableNonAllocatablePhysCopyOpt;
 }
 
-static unsigned getRewritePhiLimit(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_RewritePhiLimit>(Ctx);
+static unsigned getRewritePhiLimit(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore2Options>().CGPASS_RewritePhiLimit;
 }
 
-static unsigned getRecurrenceChainLimit(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_RecurrenceChainLimit>(Ctx);
+static unsigned getRecurrenceChainLimit(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore2Options>().CGPASS_RecurrenceChainLimit;
 }
 
 STATISTIC(NumReuse, "Number of extension results reused");
@@ -505,8 +504,7 @@ private:
     // SubregToRegs are not interesting, because they are already register
     // coalescer friendly.
     return MI.isCopy() ||
-           (!getDisableAdvCopyOpt(
-                MI.getMF()->getFunction().getContext().getOptionsContext()) &&
+           (!getDisableAdvCopyOpt(MI.getMF()->getFunction().getContext()) &&
             (MI.isRegSequence() || MI.isInsertSubreg() ||
              MI.isExtractSubreg()));
   }
@@ -515,8 +513,7 @@ private:
   /// not recognized by the register coalescer.
   static bool isUncoalescableCopy(const MachineInstr &MI) {
     return MI.isBitcast() ||
-           (!getDisableAdvCopyOpt(
-                MI.getMF()->getFunction().getContext().getOptionsContext()) &&
+           (!getDisableAdvCopyOpt(MI.getMF()->getFunction().getContext()) &&
             (MI.isRegSequenceLike() || MI.isInsertSubregLike() ||
              MI.isExtractSubregLike()));
   }
@@ -575,7 +572,12 @@ public:
     AU.setPreservesCFG();
     MachineFunctionPass::getAnalysisUsage(AU);
     AU.addRequired<MachineLoopInfoWrapperPass>();
-    if (getAggressiveExtOpt(getOptionsContext())) {
+    // No Function/Module is reachable yet at getAnalysisUsage() time (it
+    // runs during pass-manager construction, before any IR exists), so fall
+    // back to the process-wide default per the migration's no-context
+    // routing rule; this is unrelated to Pass::getOptionsContext(), which
+    // only serves the not-yet-migrated legacy clv2 options.
+    if (CodeGenCore2Options::Current.CGPASS_AggressiveExtOpt) {
       AU.addRequired<MachineDominatorTreeWrapperPass>();
     }
   }
@@ -868,10 +870,8 @@ bool PeepholeOptimizer::optimizeExtInstr(
       // Non-local uses where the result of the extension is used. Always
       // replace these unless it's a PHI.
       Uses.push_back(&UseMO);
-    } else if (getAggressiveExtOpt(MBB.getParent()
-                                       ->getFunction()
-                                       .getContext()
-                                       .getOptionsContext()) &&
+    } else if (getAggressiveExtOpt(
+                   MBB.getParent()->getFunction().getContext()) &&
                DT->dominates(&MBB, UseMBB)) {
       // We may want to extend the live range of the extension result in order
       // to replace these uses.
@@ -1080,8 +1080,7 @@ bool PeepholeOptimizer::findNextSource(const TargetRegisterClass *DefRC,
       if (NumSrcs > 1) {
         PHICount++;
         if (PHICount >=
-            getRewritePhiLimit(
-                MRI->getMF().getFunction().getContext().getOptionsContext())) {
+            getRewritePhiLimit(MRI->getMF().getFunction().getContext())) {
           LLVM_DEBUG(dbgs() << "findNextSource: PHI limit reached\n");
           Aborted = true;
           break;
@@ -1604,7 +1603,7 @@ bool PeepholeOptimizer::foldRedundantNAPhysCopy(
   assert(MI.isCopy() && "expected a COPY machine instruction");
 
   if (getDisableNonAllocatablePhysCopyOpt(
-          MRI->getMF().getFunction().getContext().getOptionsContext()))
+          MRI->getMF().getFunction().getContext()))
     return false;
 
   Register DstReg = MI.getOperand(0).getReg();
@@ -1670,8 +1669,7 @@ bool PeepholeOptimizer::findTargetRecurrence(
 
   // Give up if the reccurrence chain length is longer than the limit.
   if (RC.size() >=
-      getRecurrenceChainLimit(
-          MRI->getMF().getFunction().getContext().getOptionsContext()))
+      getRecurrenceChainLimit(MRI->getMF().getFunction().getContext()))
     return false;
 
   MachineInstr &MI = *(MRI->use_instr_nodbg_begin(Reg));
@@ -1759,10 +1757,9 @@ PreservedAnalyses
 PeepholeOptimizerPass::run(MachineFunction &MF,
                            MachineFunctionAnalysisManager &MFAM) {
   MFPropsModifier _(*this, MF);
-  auto *DT =
-      getAggressiveExtOpt(MF.getFunction().getContext().getOptionsContext())
-          ? &MFAM.getResult<MachineDominatorTreeAnalysis>(MF)
-          : nullptr;
+  auto *DT = getAggressiveExtOpt(MF.getFunction().getContext())
+                 ? &MFAM.getResult<MachineDominatorTreeAnalysis>(MF)
+                 : nullptr;
   auto *MLI = &MFAM.getResult<MachineLoopAnalysis>(MF);
   PeepholeOptimizer Impl(DT, MLI);
   bool Changed = Impl.run(MF);
@@ -1777,10 +1774,9 @@ PeepholeOptimizerPass::run(MachineFunction &MF,
 bool PeepholeOptimizerLegacy::runOnMachineFunction(MachineFunction &MF) {
   if (skipFunction(MF.getFunction()))
     return false;
-  auto *DT =
-      getAggressiveExtOpt(MF.getFunction().getContext().getOptionsContext())
-          ? &getAnalysis<MachineDominatorTreeWrapperPass>().getDomTree()
-          : nullptr;
+  auto *DT = getAggressiveExtOpt(MF.getFunction().getContext())
+                 ? &getAnalysis<MachineDominatorTreeWrapperPass>().getDomTree()
+                 : nullptr;
   auto *MLI = &getAnalysis<MachineLoopInfoWrapperPass>().getLI();
   PeepholeOptimizer Impl(DT, MLI);
   return Impl.run(MF);
@@ -1791,7 +1787,7 @@ bool PeepholeOptimizer::run(MachineFunction &MF) {
   LLVM_DEBUG(dbgs() << "********** PEEPHOLE OPTIMIZER **********\n");
   LLVM_DEBUG(dbgs() << "********** Function: " << MF.getName() << '\n');
 
-  if (getDisablePeephole(MF.getFunction().getContext().getOptionsContext()))
+  if (getDisablePeephole(MF.getFunction().getContext()))
     return false;
 
   TII = MF.getSubtarget().getInstrInfo();
@@ -2253,8 +2249,7 @@ ValueTrackerResult ValueTracker::getNextSourceImpl() {
     return getNextSourceFromBitcast();
   // All the remaining cases involve "complex" instructions.
   // Bail if we did not ask for the advanced tracking.
-  if (getDisableAdvCopyOpt(
-          Def->getMF()->getFunction().getContext().getOptionsContext()))
+  if (getDisableAdvCopyOpt(Def->getMF()->getFunction().getContext()))
     return ValueTrackerResult();
   if (Def->isRegSequence() || Def->isRegSequenceLike())
     return getNextSourceFromRegSequence();

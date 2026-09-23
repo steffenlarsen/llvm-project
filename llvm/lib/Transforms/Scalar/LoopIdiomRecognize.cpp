@@ -1,5 +1,3 @@
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
 //===- LoopIdiomRecognize.cpp - Loop idiom recognition --------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -84,8 +82,10 @@
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/InstructionCost.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Scalar/LoopIdiomRecognize.h"
+#include "llvm/Transforms/Scalar/ScalarOptions.h"
 #include "llvm/Transforms/Utils/BuildLibCalls.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
@@ -119,54 +119,43 @@ bool DisableLIRP::Wcslen;
 bool DisableLIRP::HashRecognize;
 
 static bool getDisableLIRPAll(const Function &F) {
-  return clv2::getOptValOr<&clv2::ScalarOptsReg, &clv2::SC_DisableLoopIdiomAll>(
-      F.getContext().getOptionsContext(), DisableLIRP::All);
+  return F.getContext().getOptions<ScalarOptions>().SC_DisableLoopIdiomAll;
 }
 
 static bool getDisableLIRPMemset(const Function &F) {
-  return clv2::getOptValOr<&clv2::ScalarOptsReg,
-                           &clv2::SC_DisableLoopIdiomMemset>(
-      F.getContext().getOptionsContext(), DisableLIRP::Memset);
+  return F.getContext().getOptions<ScalarOptions>().SC_DisableLoopIdiomMemset;
 }
 
 static bool getDisableLIRPMemcpy(const Function &F) {
-  return clv2::getOptValOr<&clv2::ScalarOptsReg,
-                           &clv2::SC_DisableLoopIdiomMemcpy>(
-      F.getContext().getOptionsContext(), DisableLIRP::Memcpy);
+  return F.getContext().getOptions<ScalarOptions>().SC_DisableLoopIdiomMemcpy;
 }
 
-static clv2::CRCStrategyKind getCRCStrategy(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_CRCStrategy>(
-      F.getContext().getOptionsContext());
+static CRCStrategyKind getCRCStrategy(const Function &F) {
+  return F.getContext().getOptions<ScalarOptions>().SC_CRCStrategy;
 }
 
 static bool getDisableLIRPStrlen(const Function &F) {
-  return clv2::getOptValOr<&clv2::ScalarOptsReg,
-                           &clv2::SC_DisableLoopIdiomStrlen>(
-      F.getContext().getOptionsContext(), DisableLIRP::Strlen);
+  return F.getContext().getOptions<ScalarOptions>().SC_DisableLoopIdiomStrlen;
 }
 
 static bool getDisableLIRPWcslen(const Function &F) {
-  return clv2::getOptValOr<&clv2::ScalarOptsReg,
-                           &clv2::SC_DisableLoopIdiomWcslen>(
-      F.getContext().getOptionsContext(), DisableLIRP::Wcslen);
+  return F.getContext().getOptions<ScalarOptions>().SC_DisableLoopIdiomWcslen;
 }
 
 static bool getDisableLIRPHashRecognize(const Function &F) {
-  return clv2::getOptValOr<&clv2::ScalarOptsReg,
-                           &clv2::SC_DisableLoopIdiomHashrecognize>(
-      F.getContext().getOptionsContext(), DisableLIRP::HashRecognize);
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_DisableLoopIdiomHashrecognize;
 }
 
 static bool getUseLIRCodeSizeHeurs(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_UseLirCodeSizeHeurs>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<ScalarOptions>().SC_UseLirCodeSizeHeurs;
 }
 
 static bool getForceMemsetPatternIntrinsic(const Function &F) {
-  return clv2::getOptValOr<&clv2::ScalarOptsReg,
-                           &clv2::SC_LoopIdiomForceMemsetPatternIntrinsic>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_LoopIdiomForceMemsetPatternIntrinsic;
 }
 
 } // namespace llvm
@@ -405,7 +394,7 @@ bool LoopIdiomRecognize::runOnCountableLoop() {
   // Attempt to optimize a CRC loop if one is detected by HashRecognize.
   const Function &LoopF = *CurLoop->getHeader()->getParent();
   if (!getDisableLIRPHashRecognize(LoopF) &&
-      getCRCStrategy(LoopF) != clv2::CRCStrategyKind::Disable)
+      getCRCStrategy(LoopF) != CRCStrategyKind::Disable)
     if (auto Res = HashRecognize(*CurLoop, *SE).getResult())
       MadeChange |= optimizeCRCLoop(*Res);
 
@@ -1674,7 +1663,7 @@ bool LoopIdiomRecognize::optimizeCRCLoop(const PolynomialInfo &Info) {
   default:
     ReportMissed("disabled by user");
     return false;
-  case clv2::CRCStrategyKind::Table:
+  case CRCStrategyKind::Table:
     // The table strategy is not possible in its current form without a byte-
     // multiple trip count.
     if (Info.TripCount % 8 == 0) {
@@ -1684,11 +1673,11 @@ bool LoopIdiomRecognize::optimizeCRCLoop(const PolynomialInfo &Info) {
     }
     ReportMissed("table strategy forced, but not possible");
     return false;
-  case clv2::CRCStrategyKind::Clmul:
+  case CRCStrategyKind::Clmul:
     optimizeCRCLoopUsingClmul(Info);
     ReportOptimized("clmul", "forced by user");
     return true;
-  case clv2::CRCStrategyKind::Auto:
+  case CRCStrategyKind::Auto:
     // When using the auto strategy, bail if we are optimizing for size since
     // there's usually not a clear size benefit.
     // TODO: The clmul optimization is around the same size in many cases, so it

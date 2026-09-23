@@ -34,9 +34,8 @@
 #include "llvm/IR/Function.h"
 #include "llvm/Support/Allocator.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/RecyclingAllocator.h"
-#include "llvm/Target/Mips/MipsOptionsOptInfos.h"
+#include "llvm/Target/Mips/MipsOptions.h"
 #include <cassert>
 #include <utility>
 
@@ -49,13 +48,11 @@ static bool LoadTargetFromGOT = true;
 static bool EraseGPOpnd = true;
 
 static bool getLoadTargetFromGOT(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::MIPS_LoadTargetFromGOT>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<MipsOptions>().MIPS_LoadTargetFromGOT;
 }
 
 static bool getEraseGPOpnd(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::MIPS_EraseGPOpnd>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<MipsOptions>().MIPS_EraseGPOpnd;
 }
 
 namespace {
@@ -64,8 +61,8 @@ using ValueType = PointerUnion<const Value *, const PseudoSourceValue *>;
 using CntRegP = std::pair<unsigned, unsigned>;
 using AllocatorTy = RecyclingAllocator<BumpPtrAllocator,
                                        ScopedHashTableVal<ValueType, CntRegP>>;
-using ScopedHTType = ScopedHashTable<ValueType, CntRegP,
-                                     DenseMapInfo<ValueType>, AllocatorTy>;
+using ScopedHTType =
+    ScopedHashTable<ValueType, CntRegP, DenseMapInfo<ValueType>, AllocatorTy>;
 
 class MBBInfo {
 public:
@@ -103,8 +100,7 @@ private:
   /// Also, return the virtual register containing the target function's address
   /// and the underlying object in Reg and Val respectively, if the function's
   /// address can be resolved lazily.
-  bool isCallViaRegister(MachineInstr &MI, unsigned &Reg,
-                         ValueType &Val) const;
+  bool isCallViaRegister(MachineInstr &MI, unsigned &Reg, ValueType &Val) const;
 
   /// Return the number of instructions that dominate the current
   /// instruction and load the function address from object Entry.
@@ -194,9 +190,7 @@ void MBBInfo::preVisit(ScopedHTType &ScopedHT) {
   HTScope = new ScopedHTType::ScopeTy(ScopedHT);
 }
 
-void MBBInfo::postVisit() {
-  delete HTScope;
-}
+void MBBInfo::postVisit() { delete HTScope; }
 
 // OptimizePICCall methods.
 bool OptimizePICCall::runOnMachineFunction(MachineFunction &F) {

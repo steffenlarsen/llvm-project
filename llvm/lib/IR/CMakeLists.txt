@@ -1,6 +1,4 @@
 add_llvm_component_library(LLVMCore
-  IROptionsGetters.cpp
-  IROptionsRegistration.cpp
   AbstractCallSite.cpp
   AsmWriter.cpp
   Assumptions.cpp
@@ -98,10 +96,12 @@ add_llvm_component_library(LLVMCore
   DEPENDS
   analysis_gen
   intrinsics_gen
+  IROptParserTableGen
 
   LINK_COMPONENTS
   BinaryFormat
   Demangle
+  Option
   Remarks
   Support
   TargetParser

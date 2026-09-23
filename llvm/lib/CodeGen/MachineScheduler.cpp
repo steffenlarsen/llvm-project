@@ -22,7 +22,7 @@
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/iterator_range.h"
 #include "llvm/Analysis/AliasAnalysis.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsMachine2.h"
 #include "llvm/CodeGen/CommandFlags.h"
 #include "llvm/CodeGen/LiveInterval.h"
 #include "llvm/CodeGen/LiveIntervals.h"
@@ -407,104 +407,100 @@ resolveMachineSched(const clv2::OptionsContext &Ctx) {
   return useDefaultMachineSched;
 }
 
-static bool getEnableMisched(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_EnableMisched>(Ctx);
+static std::optional<bool> getEnableMisched(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenMachine2Options>().CGPASS_EnableMisched;
 }
 
-static bool getEnablePostMisched(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_EnablePostMisched>(Ctx);
+static std::optional<bool> getEnablePostMisched(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenMachine2Options>().CGPASS_EnablePostMisched;
 }
 
-static std::string getMischedOnlyFunc(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::CGPassMachine2Reg,
-                           &clv2::CGPASS_MischedOnlyFunc>(Ctx, "");
+static std::optional<std::string> getMischedOnlyFunc(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenMachine2Options>().CGPASS_MischedOnlyFunc;
 }
 
-static unsigned getMischedOnlyBlock(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_MischedOnlyBlock>(Ctx);
+static std::optional<unsigned> getMischedOnlyBlock(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenMachine2Options>().CGPASS_MischedOnlyBlock;
 }
 
-static unsigned getViewMischedCutoff(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_ViewMischedCutoff>(Ctx);
+static unsigned getViewMischedCutoff(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenMachine2Options>().CGPASS_ViewMischedCutoff;
 }
 
-static unsigned getMischedCutoff(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_MischedCutoff>(Ctx);
+static unsigned getMischedCutoff(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenMachine2Options>().CGPASS_MischedCutoff;
 }
 
-static bool getMischedDumpReservedCycles(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_MischedDumpReservedCycles>(Ctx);
+static bool getMischedDumpReservedCycles(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenMachine2Options>()
+      .CGPASS_MischedDumpReservedCycles;
 }
 
-static bool getMischedDetailResourceBooking(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_MischedDetailResourceBooking>(
-      Ctx);
+static bool getMischedDetailResourceBooking(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenMachine2Options>()
+      .CGPASS_MischedDetailResourceBooking;
 }
 
-static bool getMischedDcpl(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_MischedDcpl>(Ctx);
+static bool getMischedDcpl(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenMachine2Options>().CGPASS_MischedDcpl;
 }
 
-static unsigned getMischedLimit(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_MischedLimit>(Ctx);
+static unsigned getMischedLimit(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenMachine2Options>().CGPASS_MischedLimit;
 }
 
-static bool getMischedRegpressure(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_MischedRegpressure>(Ctx);
+static bool getMischedRegpressure(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenMachine2Options>().CGPASS_MischedRegpressure;
 }
 
-static bool getMischedCyclicpath(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_MischedCyclicpath>(Ctx);
+static bool getMischedCyclicpath(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenMachine2Options>().CGPASS_MischedCyclicpath;
 }
 
-static bool getMischedCluster(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_MischedCluster>(Ctx);
+static bool getMischedCluster(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenMachine2Options>().CGPASS_MischedCluster;
 }
 
-static bool getForceFastCluster(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_ForceFastCluster>(Ctx);
+static bool getForceFastCluster(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenMachine2Options>().CGPASS_ForceFastCluster;
 }
 
-static unsigned getFastClusterThreshold(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_FastClusterThreshold>(Ctx);
+static unsigned getFastClusterThreshold(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenMachine2Options>().CGPASS_FastClusterThreshold;
 }
 
-static bool getMischedDumpScheduleTrace(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_MischedDumpScheduleTrace>(Ctx);
-}
-
-static unsigned
-getMischedDumpScheduleTraceColHeaderWidth(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<
-      &clv2::CGPASS_MischedDumpScheduleTraceColHeaderWidth>(Ctx);
+static bool getMischedDumpScheduleTrace(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenMachine2Options>()
+      .CGPASS_MischedDumpScheduleTrace;
 }
 
 static unsigned
-getMischedDumpScheduleTraceColWidth(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<
-      &clv2::CGPASS_MischedDumpScheduleTraceColWidth>(Ctx);
+getMischedDumpScheduleTraceColHeaderWidth(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenMachine2Options>()
+      .CGPASS_MischedDumpScheduleTraceColHeaderWidth;
 }
 
-static bool getMischedSortResourcesInTrace(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_MischedSortResourcesInTrace>(
-      Ctx);
+static unsigned
+getMischedDumpScheduleTraceColWidth(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenMachine2Options>()
+      .CGPASS_MischedDumpScheduleTraceColWidth;
 }
 
-static unsigned getMischedResourceCutoff(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_MischedResourceCutoff>(Ctx);
+static bool getMischedSortResourcesInTrace(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenMachine2Options>()
+      .CGPASS_MischedSortResourcesInTrace;
 }
 
-static MISched::Direction getPreRADirection(const clv2::OptionsContext &Ctx) {
-  return static_cast<MISched::Direction>(
-      clv2::getOptValOr<&clv2::CGPassMachine2Reg,
-                        &clv2::CGPASS_MischedPreraDirection>(
-          Ctx, MISched::Unspecified));
+static unsigned getMischedResourceCutoff(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenMachine2Options>().CGPASS_MischedResourceCutoff;
 }
-static MISched::Direction getPostRADirection(const clv2::OptionsContext &Ctx) {
-  return static_cast<MISched::Direction>(
-      clv2::getOptValOr<&clv2::CGPassMachine2Reg,
-                        &clv2::CGPASS_MischedPostraDirection>(
-          Ctx, MISched::Unspecified));
+
+static MISched::Direction getPreRADirection(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenMachine2Options>().CGPASS_MischedPreraDirection;
+}
+static MISched::Direction getPostRADirection(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenMachine2Options>()
+      .CGPASS_MischedPostraDirection;
 }
 
 /// Decrement this iterator until reaching the top or a non-debug instr.
@@ -668,10 +664,8 @@ bool MachineSchedulerLegacy::runOnMachineFunction(MachineFunction &MF) {
     return false;
 
   const Function &F = MF.getFunction();
-  if (false || clv2::wasOptSpecified<&clv2::CGPassMachine2Reg,
-                                     &clv2::CGPASS_EnableMisched>(
-                   F.getContext().getOptionsContext())) {
-    if (!getEnableMisched(F.getContext().getOptionsContext()))
+  if (std::optional<bool> Opt = getEnableMisched(F.getContext())) {
+    if (!*Opt)
       return false;
   } else if (!MF.getSubtarget().enableMachineScheduler()) {
     return false;
@@ -706,10 +700,8 @@ PreservedAnalyses
 MachineSchedulerPass::run(MachineFunction &MF,
                           MachineFunctionAnalysisManager &MFAM) {
   const Function &F = MF.getFunction();
-  if (false || clv2::wasOptSpecified<&clv2::CGPassMachine2Reg,
-                                     &clv2::CGPASS_EnableMisched>(
-                   F.getContext().getOptionsContext())) {
-    if (!getEnableMisched(F.getContext().getOptionsContext()))
+  if (std::optional<bool> Opt = getEnableMisched(F.getContext())) {
+    if (!*Opt)
       return PreservedAnalyses::all();
   } else if (!MF.getSubtarget().enableMachineScheduler()) {
     return PreservedAnalyses::all();
@@ -740,10 +732,8 @@ bool PostMachineSchedulerLegacy::runOnMachineFunction(MachineFunction &MF) {
     return false;
 
   const Function &F = MF.getFunction();
-  if (false || clv2::wasOptSpecified<&clv2::CGPassMachine2Reg,
-                                     &clv2::CGPASS_EnablePostMisched>(
-                   F.getContext().getOptionsContext())) {
-    if (!getEnablePostMisched(F.getContext().getOptionsContext()))
+  if (std::optional<bool> Opt = getEnablePostMisched(F.getContext())) {
+    if (!*Opt)
       return false;
   } else if (!MF.getSubtarget().enablePostRAMachineScheduler()) {
     LLVM_DEBUG(dbgs() << "Subtarget disables post-MI-sched.\n");
@@ -761,10 +751,8 @@ PreservedAnalyses
 PostMachineSchedulerPass::run(MachineFunction &MF,
                               MachineFunctionAnalysisManager &MFAM) {
   const Function &F = MF.getFunction();
-  if (false || clv2::wasOptSpecified<&clv2::CGPassMachine2Reg,
-                                     &clv2::CGPASS_EnablePostMisched>(
-                   F.getContext().getOptionsContext())) {
-    if (!getEnablePostMisched(F.getContext().getOptionsContext()))
+  if (std::optional<bool> Opt = getEnablePostMisched(F.getContext())) {
+    if (!*Opt)
       return PreservedAnalyses::all();
   } else if (!MF.getSubtarget().enablePostRAMachineScheduler()) {
     LLVM_DEBUG(dbgs() << "Subtarget disables post-MI-sched.\n");
@@ -858,19 +846,13 @@ void MachineSchedulerBase::scheduleRegions(ScheduleDAGInstrs &Scheduler,
   for (MachineFunction::iterator MBB = MF->begin(), MBBEnd = MF->end();
        MBB != MBBEnd; ++MBB) {
 #ifndef NDEBUG
-    if ((false || clv2::wasOptSpecified<&clv2::CGPassMachine2Reg,
-                                        &clv2::CGPASS_MischedOnlyFunc>(
-                      MF->getFunction().getContext().getOptionsContext())) &&
-        getMischedOnlyFunc(
-            MF->getFunction().getContext().getOptionsContext()) !=
-            MF->getName())
+    if (std::optional<std::string> OnlyFunc =
+            getMischedOnlyFunc(MF->getFunction().getContext());
+        OnlyFunc && *OnlyFunc != MF->getName())
       continue;
-    if ((false || clv2::wasOptSpecified<&clv2::CGPassMachine2Reg,
-                                        &clv2::CGPASS_MischedOnlyBlock>(
-                      MF->getFunction().getContext().getOptionsContext())) &&
-        (int)getMischedOnlyBlock(
-            MF->getFunction().getContext().getOptionsContext()) !=
-            MBB->getNumber())
+    if (std::optional<unsigned> OnlyBlock =
+            getMischedOnlyBlock(MF->getFunction().getContext());
+        OnlyBlock && (int)*OnlyBlock != MBB->getNumber())
       continue;
 #endif
 
@@ -924,7 +906,7 @@ void MachineSchedulerBase::scheduleRegions(ScheduleDAGInstrs &Scheduler,
         DumpRegionHeader();
       else
         LLVM_DEBUG(DumpRegionHeader());
-      if (getMischedDcpl(MF->getFunction().getContext().getOptionsContext())) {
+      if (getMischedDcpl(MF->getFunction().getContext())) {
         errs() << MF->getName();
         errs() << ":%bb. " << MBB->getNumber();
         errs() << " " << MBB->getName() << " \n";
@@ -1092,9 +1074,8 @@ void ScheduleDAGMI::moveInstruction(
 bool ScheduleDAGMI::checkSchedLimit() {
 #if LLVM_ENABLE_ABI_BREAKING_CHECKS && !defined(NDEBUG)
   if (NumInstrsScheduled ==
-          getMischedCutoff(MF.getFunction().getContext().getOptionsContext()) &&
-      getMischedCutoff(MF.getFunction().getContext().getOptionsContext()) !=
-          ~0U) {
+          getMischedCutoff(MF.getFunction().getContext()) &&
+      getMischedCutoff(MF.getFunction().getContext()) != ~0U) {
     CurrentTop = CurrentBottom;
     return false;
   }
@@ -1297,12 +1278,12 @@ LLVM_DUMP_METHOD void ScheduleDAGMI::dumpScheduleTraceTopDown() const {
   // Print the header with the cycles
   dbgs() << llvm::left_justify(
       "Cycle", getMischedDumpScheduleTraceColHeaderWidth(
-                   MF.getFunction().getContext().getOptionsContext()));
+                   MF.getFunction().getContext()));
   for (unsigned C = FirstCycle; C <= LastCycle; ++C)
     dbgs() << llvm::left_justify(
         "| " + std::to_string(C),
         getMischedDumpScheduleTraceColWidth(
-            MF.getFunction().getContext().getOptionsContext()));
+            MF.getFunction().getContext()));
   dbgs() << "|\n";
 
   for (MachineInstr &MI : *this) {
@@ -1315,17 +1296,17 @@ LLVM_DUMP_METHOD void ScheduleDAGMI::dumpScheduleTraceTopDown() const {
     NodeName += std::to_string(SU->NodeNum) + ")";
     dbgs() << llvm::left_justify(
         NodeName, getMischedDumpScheduleTraceColHeaderWidth(
-                      MF.getFunction().getContext().getOptionsContext()));
+                      MF.getFunction().getContext()));
     unsigned C = FirstCycle;
     for (; C <= LastCycle; ++C) {
       if (C == SU->TopReadyCycle)
         dbgs() << llvm::left_justify(
             "| i", getMischedDumpScheduleTraceColWidth(
-                       MF.getFunction().getContext().getOptionsContext()));
+                       MF.getFunction().getContext()));
       else
         dbgs() << llvm::left_justify(
             "|", getMischedDumpScheduleTraceColWidth(
-                     MF.getFunction().getContext().getOptionsContext()));
+                     MF.getFunction().getContext()));
     }
     dbgs() << "|\n";
     const MCSchedClassDesc *SC = getSchedClass(SU);
@@ -1335,7 +1316,7 @@ LLVM_DUMP_METHOD void ScheduleDAGMI::dumpScheduleTraceTopDown() const {
                    SchedModel.getWriteProcResEnd(SC)));
 
     if (getMischedSortResourcesInTrace(
-            MF.getFunction().getContext().getOptionsContext()))
+            MF.getFunction().getContext()))
       llvm::stable_sort(
           ResourcesIt,
           [](const MCWriteProcResEntry &LHS,
@@ -1350,21 +1331,21 @@ LLVM_DUMP_METHOD void ScheduleDAGMI::dumpScheduleTraceTopDown() const {
       dbgs() << llvm::right_justify(
           ResName + " ",
           getMischedDumpScheduleTraceColHeaderWidth(
-              MF.getFunction().getContext().getOptionsContext()));
+              MF.getFunction().getContext()));
       for (; C < SU->TopReadyCycle + PI.AcquireAtCycle; ++C) {
         dbgs() << llvm::left_justify(
             "|", getMischedDumpScheduleTraceColWidth(
-                     MF.getFunction().getContext().getOptionsContext()));
+                     MF.getFunction().getContext()));
       }
       for (unsigned I = 0, E = PI.ReleaseAtCycle - PI.AcquireAtCycle; I != E;
            ++I, ++C)
         dbgs() << llvm::left_justify(
             "| x", getMischedDumpScheduleTraceColWidth(
-                       MF.getFunction().getContext().getOptionsContext()));
+                       MF.getFunction().getContext()));
       while (C++ <= LastCycle)
         dbgs() << llvm::left_justify(
             "|", getMischedDumpScheduleTraceColWidth(
-                     MF.getFunction().getContext().getOptionsContext()));
+                     MF.getFunction().getContext()));
       // Place end char
       dbgs() << "| \n";
     }
@@ -1400,12 +1381,12 @@ LLVM_DUMP_METHOD void ScheduleDAGMI::dumpScheduleTraceBottomUp() const {
   // Print the header with the cycles
   dbgs() << llvm::left_justify(
       "Cycle", getMischedDumpScheduleTraceColHeaderWidth(
-                   MF.getFunction().getContext().getOptionsContext()));
+                   MF.getFunction().getContext()));
   for (int C = FirstCycle; C >= LastCycle; --C)
     dbgs() << llvm::left_justify(
         "| " + std::to_string(C),
         getMischedDumpScheduleTraceColWidth(
-            MF.getFunction().getContext().getOptionsContext()));
+            MF.getFunction().getContext()));
   dbgs() << "|\n";
 
   for (MachineInstr &MI : *this) {
@@ -1418,17 +1399,17 @@ LLVM_DUMP_METHOD void ScheduleDAGMI::dumpScheduleTraceBottomUp() const {
     NodeName += std::to_string(SU->NodeNum) + ")";
     dbgs() << llvm::left_justify(
         NodeName, getMischedDumpScheduleTraceColHeaderWidth(
-                      MF.getFunction().getContext().getOptionsContext()));
+                      MF.getFunction().getContext()));
     int C = FirstCycle;
     for (; C >= LastCycle; --C) {
       if (C == (int)SU->BotReadyCycle)
         dbgs() << llvm::left_justify(
             "| i", getMischedDumpScheduleTraceColWidth(
-                       MF.getFunction().getContext().getOptionsContext()));
+                       MF.getFunction().getContext()));
       else
         dbgs() << llvm::left_justify(
             "|", getMischedDumpScheduleTraceColWidth(
-                     MF.getFunction().getContext().getOptionsContext()));
+                     MF.getFunction().getContext()));
     }
     dbgs() << "|\n";
     const MCSchedClassDesc *SC = getSchedClass(SU);
@@ -1437,7 +1418,7 @@ LLVM_DUMP_METHOD void ScheduleDAGMI::dumpScheduleTraceBottomUp() const {
                    SchedModel.getWriteProcResEnd(SC)));
 
     if (getMischedSortResourcesInTrace(
-            MF.getFunction().getContext().getOptionsContext()))
+            MF.getFunction().getContext()))
       llvm::stable_sort(
           ResourcesIt,
           [](const MCWriteProcResEntry &LHS,
@@ -1452,21 +1433,21 @@ LLVM_DUMP_METHOD void ScheduleDAGMI::dumpScheduleTraceBottomUp() const {
       dbgs() << llvm::right_justify(
           ResName + " ",
           getMischedDumpScheduleTraceColHeaderWidth(
-              MF.getFunction().getContext().getOptionsContext()));
+              MF.getFunction().getContext()));
       for (; C > ((int)SU->BotReadyCycle - (int)PI.AcquireAtCycle); --C) {
         dbgs() << llvm::left_justify(
             "|", getMischedDumpScheduleTraceColWidth(
-                     MF.getFunction().getContext().getOptionsContext()));
+                     MF.getFunction().getContext()));
       }
       for (unsigned I = 0, E = PI.ReleaseAtCycle - PI.AcquireAtCycle; I != E;
            ++I, --C)
         dbgs() << llvm::left_justify(
             "| x", getMischedDumpScheduleTraceColWidth(
-                       MF.getFunction().getContext().getOptionsContext()));
+                       MF.getFunction().getContext()));
       while (C-- >= LastCycle)
         dbgs() << llvm::left_justify(
             "|", getMischedDumpScheduleTraceColWidth(
-                     MF.getFunction().getContext().getOptionsContext()));
+                     MF.getFunction().getContext()));
       // Place end char
       dbgs() << "| \n";
     }
@@ -1477,7 +1458,7 @@ LLVM_DUMP_METHOD void ScheduleDAGMI::dumpScheduleTraceBottomUp() const {
 #if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
 LLVM_DUMP_METHOD void ScheduleDAGMI::dumpSchedule() const {
   if (getMischedDumpScheduleTrace(
-          MF.getFunction().getContext().getOptionsContext())) {
+          MF.getFunction().getContext())) {
     if (DumpDir == DumpDirection::TopDown)
       dumpScheduleTraceTopDown();
     else if (DumpDir == DumpDirection::BottomUp)
@@ -2336,10 +2317,10 @@ bool BaseMemOpClusterMutation::groupMemOps(
     DenseMap<unsigned, SmallVector<MemOpInfo, 32>> &Groups) {
   bool FastCluster =
       getForceFastCluster(
-          DAG->MF.getFunction().getContext().getOptionsContext()) ||
+          DAG->MF.getFunction().getContext()) ||
       MemOps.size() * DAG->SUnits.size() / 1000 >
           getFastClusterThreshold(
-              DAG->MF.getFunction().getContext().getOptionsContext());
+              DAG->MF.getFunction().getContext());
 
   for (const auto &MemOp : MemOps) {
     unsigned ChainPredID = DAG->SUnits.size();
@@ -2369,7 +2350,7 @@ void BaseMemOpClusterMutation::apply(ScheduleDAGInstrs *DAG) {
   // Check at apply-time whether clustering is enabled, now that we have
   // Function context from the DAG.
   if (!getMischedCluster(
-          DAG->MF.getFunction().getContext().getOptionsContext()))
+          DAG->MF.getFunction().getContext()))
     return;
 
   // Collect all the clusterable loads/stores
@@ -2745,7 +2726,7 @@ SchedBoundary::getNextResourceCycle(const MCSchedClassDesc *SC, unsigned PIdx,
                                     unsigned ReleaseAtCycle,
                                     unsigned AcquireAtCycle) {
   if (getMischedDetailResourceBooking(
-          DAG->MF.getFunction().getContext().getOptionsContext())) {
+          DAG->MF.getFunction().getContext())) {
     LLVM_DEBUG(dbgs() << "  Resource booking (@" << CurrCycle << "c): \n");
     LLVM_DEBUG(dumpReservedCycles());
     LLVM_DEBUG(dbgs() << "  getNextResourceCycle (@" << CurrCycle << "c): \n");
@@ -2795,7 +2776,7 @@ SchedBoundary::getNextResourceCycle(const MCSchedClassDesc *SC, unsigned PIdx,
     unsigned NextUnreserved =
         getNextResourceCycleByInstance(I, ReleaseAtCycle, AcquireAtCycle);
     if (getMischedDetailResourceBooking(
-            DAG->MF.getFunction().getContext().getOptionsContext()))
+            DAG->MF.getFunction().getContext()))
       LLVM_DEBUG(dbgs() << "    Instance " << I - StartIndex << " available @"
                         << NextUnreserved << "c\n");
     if (MinNextUnreserved > NextUnreserved) {
@@ -2804,7 +2785,7 @@ SchedBoundary::getNextResourceCycle(const MCSchedClassDesc *SC, unsigned PIdx,
     }
   }
   if (getMischedDetailResourceBooking(
-          DAG->MF.getFunction().getContext().getOptionsContext()))
+          DAG->MF.getFunction().getContext()))
     LLVM_DEBUG(dbgs() << "    selecting " << SchedModel->getResourceName(PIdx)
                       << "[" << InstanceIdx - StartIndex << "]"
                       << " available @" << MinNextUnreserved << "c"
@@ -2957,7 +2938,7 @@ void SchedBoundary::releaseNode(SUnit *SU, unsigned ReadyCycle, bool InPQueue,
   if (!HazardDetected &&
       Available.size() >=
           getMischedLimit(
-              DAG->MF.getFunction().getContext().getOptionsContext())) {
+              DAG->MF.getFunction().getContext())) {
     HazardDetected = true;
     LLVM_DEBUG(dbgs().indent(2) << "hazard: Available Q is full (size: "
                                 << Available.size() << ")\n");
@@ -3152,13 +3133,13 @@ void SchedBoundary::bumpNode(SUnit *SU) {
                   ResourceSegments::getResourceIntervalTop(
                       NextCycle, PI->AcquireAtCycle, PI->ReleaseAtCycle),
                   getMischedResourceCutoff(
-                      DAG->MF.getFunction().getContext().getOptionsContext()));
+                      DAG->MF.getFunction().getContext()));
             } else {
               ReservedResourceSegments[InstanceIdx].add(
                   ResourceSegments::getResourceIntervalBottom(
                       NextCycle, PI->AcquireAtCycle, PI->ReleaseAtCycle),
                   getMischedResourceCutoff(
-                      DAG->MF.getFunction().getContext().getOptionsContext()));
+                      DAG->MF.getFunction().getContext()));
             }
           } else {
 
@@ -3254,7 +3235,7 @@ void SchedBoundary::releasePending() {
       MinReadyCycle = ReadyCycle;
 
     if (Available.size() >=
-        getMischedLimit(DAG->MF.getFunction().getContext().getOptionsContext()))
+        getMischedLimit(DAG->MF.getFunction().getContext()))
       break;
 
     releaseNode(SU, ReadyCycle, true, I);
@@ -3361,7 +3342,7 @@ LLVM_DUMP_METHOD void SchedBoundary::dumpScheduledState() const {
          << (IsResourceLimited ? "  - Resource" : "  - Latency")
          << " limited.\n";
   if (getMischedDumpReservedCycles(
-          DAG->MF.getFunction().getContext().getOptionsContext()))
+          DAG->MF.getFunction().getContext()))
     dumpReservedCycles();
 }
 #endif
@@ -3835,22 +3816,22 @@ void GenericScheduler::initPolicy(MachineBasicBlock::iterator Begin,
 
   // After subtarget overrides, apply command line options.
   if (!getMischedRegpressure(
-          MF.getFunction().getContext().getOptionsContext())) {
+          MF.getFunction().getContext())) {
     RegionPolicy.ShouldTrackPressure = false;
     RegionPolicy.ShouldTrackLaneMasks = false;
   }
 
-  if (getPreRADirection(MF.getFunction().getContext().getOptionsContext()) ==
+  if (getPreRADirection(MF.getFunction().getContext()) ==
       MISched::TopDown) {
     RegionPolicy.OnlyTopDown = true;
     RegionPolicy.OnlyBottomUp = false;
   } else if (getPreRADirection(
-                 MF.getFunction().getContext().getOptionsContext()) ==
+                 MF.getFunction().getContext()) ==
              MISched::BottomUp) {
     RegionPolicy.OnlyTopDown = false;
     RegionPolicy.OnlyBottomUp = true;
   } else if (getPreRADirection(
-                 MF.getFunction().getContext().getOptionsContext()) ==
+                 MF.getFunction().getContext()) ==
              MISched::Bidirectional) {
     RegionPolicy.OnlyBottomUp = false;
     RegionPolicy.OnlyTopDown = false;
@@ -3917,12 +3898,12 @@ void GenericScheduler::registerRoots() {
       Rem.CriticalPath = SU->getDepth();
   }
   LLVM_DEBUG(dbgs() << "Critical Path(GS-RR ): " << Rem.CriticalPath << '\n');
-  if (getMischedDcpl(DAG->MF.getFunction().getContext().getOptionsContext())) {
+  if (getMischedDcpl(DAG->MF.getFunction().getContext())) {
     errs() << "Critical Path(GS-RR ): " << Rem.CriticalPath << " \n";
   }
 
   if (getMischedCyclicpath(
-          DAG->MF.getFunction().getContext().getOptionsContext()) &&
+          DAG->MF.getFunction().getContext()) &&
       SchedModel->getMicroOpBufferSize() > 0) {
     Rem.CyclicCritPath = DAG->computeCyclicCriticalPath();
     checkAcyclicLatency();
@@ -4493,17 +4474,17 @@ void PostGenericScheduler::initPolicy(MachineBasicBlock::iterator Begin,
   MF.getSubtarget().overridePostRASchedPolicy(RegionPolicy, Region);
 
   // After subtarget overrides, apply command line options.
-  if (getPostRADirection(MF.getFunction().getContext().getOptionsContext()) ==
+  if (getPostRADirection(MF.getFunction().getContext()) ==
       MISched::TopDown) {
     RegionPolicy.OnlyTopDown = true;
     RegionPolicy.OnlyBottomUp = false;
   } else if (getPostRADirection(
-                 MF.getFunction().getContext().getOptionsContext()) ==
+                 MF.getFunction().getContext()) ==
              MISched::BottomUp) {
     RegionPolicy.OnlyTopDown = false;
     RegionPolicy.OnlyBottomUp = true;
   } else if (getPostRADirection(
-                 MF.getFunction().getContext().getOptionsContext()) ==
+                 MF.getFunction().getContext()) ==
              MISched::Bidirectional) {
     RegionPolicy.OnlyBottomUp = false;
     RegionPolicy.OnlyTopDown = false;
@@ -4522,7 +4503,7 @@ void PostGenericScheduler::registerRoots() {
       Rem.CriticalPath = SU->getDepth();
   }
   LLVM_DEBUG(dbgs() << "Critical Path: (PGS-RR) " << Rem.CriticalPath << '\n');
-  if (getMischedDcpl(DAG->MF.getFunction().getContext().getOptionsContext())) {
+  if (getMischedDcpl(DAG->MF.getFunction().getContext())) {
     errs() << "Critical Path(PGS-RR ): " << Rem.CriticalPath << " \n";
   }
 }
@@ -4962,13 +4943,13 @@ public:
 
 static ScheduleDAGInstrs *createInstructionShuffler(MachineSchedContext *C) {
   bool Alternate = getPreRADirection(
-                       C->MF->getFunction().getContext().getOptionsContext()) !=
+                       C->MF->getFunction().getContext()) !=
                        MISched::TopDown &&
                    getPreRADirection(
-                       C->MF->getFunction().getContext().getOptionsContext()) !=
+                       C->MF->getFunction().getContext()) !=
                        MISched::BottomUp;
   bool TopDown = getPreRADirection(
-                     C->MF->getFunction().getContext().getOptionsContext()) !=
+                     C->MF->getFunction().getContext()) !=
                  MISched::BottomUp;
   return new ScheduleDAGMILive(
       C, std::make_unique<InstructionShuffler>(Alternate, TopDown));
@@ -5003,14 +4984,14 @@ struct llvm::DOTGraphTraits<ScheduleDAGMI *> : public DefaultDOTGraphTraits {
 
   static bool isNodeHidden(const SUnit *Node, const ScheduleDAG *G) {
     if (getViewMischedCutoff(
-            G->MF.getFunction().getContext().getOptionsContext()) == 0)
+            G->MF.getFunction().getContext()) == 0)
       return false;
     return (Node->Preds.size() >
                 getViewMischedCutoff(
-                    G->MF.getFunction().getContext().getOptionsContext()) ||
+                    G->MF.getFunction().getContext()) ||
             Node->Succs.size() >
                 getViewMischedCutoff(
-                    G->MF.getFunction().getContext().getOptionsContext()));
+                    G->MF.getFunction().getContext()));
   }
 
   /// If you want to override the dot attributes printed for a particular

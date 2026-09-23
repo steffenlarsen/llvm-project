@@ -21,6 +21,7 @@
 #include "llvm/ExecutionEngine/SectionMemoryManager.h"
 #include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/InitLLVM.h"
+#include "llvm/Support/PluginLoaderOptions.h"
 #include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/raw_ostream.h"
@@ -54,7 +55,11 @@ int main(int argc, char *argv[]) {
   clv2::OptionParser P;
   P.add<&GDBListenerReg>();
   RegisterAllLLVMOptions(P);
-  auto OptsCtx = P.parse(argc, argv, "LLJITWithGDBRegistrationListener");
+  std::vector<const char *> ArgsAfterPlugins =
+      loadPluginsAndStripArgs(argc, argv);
+  auto OptsCtx =
+      P.parse(static_cast<int>(ArgsAfterPlugins.size()),
+              ArgsAfterPlugins.data(), "LLJITWithGDBRegistrationListener");
   auto *Opts = OptsCtx->getViewPtr<&GDBListenerReg>();
   ExitOnErr.setBanner(std::string(argv[0]) + ": ");
 

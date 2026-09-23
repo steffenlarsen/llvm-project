@@ -27,8 +27,7 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/AArch64/AArch64OptionsOptInfos.h"
+#include "llvm/Target/AArch64/AArch64Options.h"
 #include <optional>
 #include <sstream>
 
@@ -38,8 +37,9 @@ using namespace llvm;
   "AArch64 homogeneous prolog/epilog lowering pass"
 
 static int getFrameHelperSizeThreshold(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::A64_FrameHelperSizeThreshold>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<AArch64Options>()
+      .A64_FrameHelperSizeThreshold;
 }
 
 namespace {

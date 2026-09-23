@@ -22,12 +22,10 @@
 #include "llvm/Support/Compiler.h"
 
 namespace llvm {
-namespace clv2 {
-class OptionsContext;
-}
 class BasicBlock;
 class Function;
 class Instruction;
+class LLVMContext;
 class Loop;
 class PassInstrumentationCallbacks;
 class TargetMachine;
@@ -50,7 +48,7 @@ using FuncProbeFactorMap = StringMap<ProbeFactorMap>;
 class PseudoProbeVerifier {
 public:
   LLVM_ABI void registerCallbacks(PassInstrumentationCallbacks &PIC,
-                                  const clv2::OptionsContext &Ctx);
+                                  const LLVMContext &Ctx);
 
   // Implementation of pass instrumentation callbacks for new pass manager.
   LLVM_ABI void runAfterPass(StringRef PassID, IRUnitRef IR);

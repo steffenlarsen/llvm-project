@@ -15,30 +15,16 @@
 #include "llvm/CodeGen/ScheduleDAG.h"
 #include "llvm/CodeGen/TargetRegisterInfo.h"
 #include "llvm/IR/Function.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/ARM/ARMOptionsOptInfos.h"
+#include "llvm/Target/ARM/ARMOptions.h"
 
 using namespace llvm;
 
-static int getDataBankMask(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::ARM_DataBankMask>(
-      F.getContext().getOptionsContext());
+static std::optional<int> getDataBankMask(const Function &F) {
+  return F.getContext().getOptions<ARMOptions>().ARM_DataBankMask;
 }
 
-static bool getDataBankMaskWasSpecified(const Function &F) {
-  return clv2::wasOptSpecified<&clv2::ARMOptsReg, &clv2::ARM_DataBankMask>(
-      F.getContext().getOptionsContext());
-}
-
-static bool getAssumeITCMConflict(const Function &F) {
-  return clv2::getOptValOr<&clv2::ARMOptsReg, &clv2::ARM_AssumeITCMConflict>(
-      F.getContext().getOptionsContext(), false);
-}
-
-static bool getAssumeITCMConflictWasSpecified(const Function &F) {
-  return clv2::wasOptSpecified<&clv2::ARMOptsReg,
-                               &clv2::ARM_AssumeITCMConflict>(
-      F.getContext().getOptionsContext());
+static std::optional<bool> getAssumeITCMConflict(const Function &F) {
+  return F.getContext().getOptions<ARMOptions>().ARM_AssumeITCMConflict;
 }
 
 static bool hasRAWHazard(MachineInstr *DefMI, MachineInstr *MI,
@@ -71,7 +57,7 @@ ARMHazardRecognizerFPMLx::getHazardType(SUnit *SU, int Stalls) {
       const MCInstrDesc &LastMCID = LastMI->getDesc();
       const MachineFunction *MF = MI->getParent()->getParent();
       const ARMBaseInstrInfo &TII = *static_cast<const ARMBaseInstrInfo *>(
-                                        MF->getSubtarget().getInstrInfo());
+          MF->getSubtarget().getInstrInfo());
 
       // Skip over one non-VFP / NEON instruction.
       if (!LastMI->isBarrier() &&
@@ -143,12 +129,11 @@ static bool getBaseOffset(const MachineInstr &MI, const MachineOperand *&BaseOp,
     // t2LDRSHT, t2LDRSH_POST, t2LDRSH_PRE, t2LDRSHi8,
     // t2LDRT, t2LDR_POST, t2LDR_PRE, t2LDRi8
     BaseOp = &MI.getOperand(1);
-    Offset = (IndexMode == ARMII::IndexModePost)
-                 ? 0
-                 : (IndexMode == ARMII::IndexModePre ||
-                    IndexMode == ARMII::IndexModeUpd)
-                       ? MI.getOperand(3).getImm()
-                       : MI.getOperand(2).getImm();
+    Offset =
+        (IndexMode == ARMII::IndexModePost) ? 0
+        : (IndexMode == ARMII::IndexModePre || IndexMode == ARMII::IndexModeUpd)
+            ? MI.getOperand(3).getImm()
+            : MI.getOperand(2).getImm();
     return true;
   case ARMII::AddrModeT2_i12:
     // t2LDRBi12, t2LDRHi12
@@ -160,12 +145,11 @@ static bool getBaseOffset(const MachineInstr &MI, const MachineOperand *&BaseOp,
   case ARMII::AddrModeT2_i8s4:
     // t2LDRD_POST, t2LDRD_PRE, t2LDRDi8
     BaseOp = &MI.getOperand(2);
-    Offset = (IndexMode == ARMII::IndexModePost)
-                 ? 0
-                 : (IndexMode == ARMII::IndexModePre ||
-                    IndexMode == ARMII::IndexModeUpd)
-                       ? MI.getOperand(4).getImm()
-                       : MI.getOperand(3).getImm();
+    Offset =
+        (IndexMode == ARMII::IndexModePost) ? 0
+        : (IndexMode == ARMII::IndexModePre || IndexMode == ARMII::IndexModeUpd)
+            ? MI.getOperand(4).getImm()
+            : MI.getOperand(3).getImm();
     return true;
   case ARMII::AddrModeT1_1:
     // tLDRBi, tLDRBr (watch out!), TLDRSB
@@ -183,13 +167,12 @@ static bool getBaseOffset(const MachineInstr &MI, const MachineOperand *&BaseOp,
 ARMBankConflictHazardRecognizer::ARMBankConflictHazardRecognizer(
     const ScheduleDAG *DAG, int64_t CPUBankMask, bool CPUAssumeITCMConflict)
     : MF(DAG->MF), DL(DAG->MF.getDataLayout()),
-      DataMask(getDataBankMaskWasSpecified(DAG->MF.getFunction())
-                   ? int64_t(getDataBankMask(DAG->MF.getFunction()))
+      DataMask(getDataBankMask(DAG->MF.getFunction())
+                   ? int64_t(*getDataBankMask(DAG->MF.getFunction()))
                    : CPUBankMask),
-      AssumeITCMBankConflict(
-          getAssumeITCMConflictWasSpecified(DAG->MF.getFunction())
-              ? getAssumeITCMConflict(DAG->MF.getFunction())
-              : CPUAssumeITCMConflict) {
+      AssumeITCMBankConflict(getAssumeITCMConflict(DAG->MF.getFunction())
+                                 ? *getAssumeITCMConflict(DAG->MF.getFunction())
+                                 : CPUAssumeITCMConflict) {
   MaxLookAhead = 1;
 }
 

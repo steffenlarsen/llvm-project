@@ -66,11 +66,10 @@
 #include "llvm/InitializePasses.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/JSON.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/Timer.h"
 #include "llvm/Support/ToolOutputFile.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/AMDGPU/AMDGPUOptionsOptInfos.h"
+#include "llvm/Target/AMDGPU/AMDGPUOptions.h"
 
 #include <string>
 
@@ -83,84 +82,85 @@ using namespace llvm;
 //==============================================================================
 
 static bool getDistanceCacheEnabled(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AMDGPU_DistanceCacheEnabled>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<AMDGPUOptions>().AMDGPU_DistanceCacheEnabled;
 }
 
 static bool getDumpNextUseDistanceDefToUse(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AMDGPU_DumpNextUseDistanceDefToUse>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<AMDGPUOptions>()
+      .AMDGPU_DumpNextUseDistanceDefToUse;
 }
 
 static bool getDumpNextUseDistanceVerbose(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AMDGPU_DumpNextUseDistanceVerbose>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<AMDGPUOptions>()
+      .AMDGPU_DumpNextUseDistanceVerbose;
 }
 
 static std::string getConfigPresetOpt(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AMDGPU_ConfigPreset>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<AMDGPUOptions>().AMDGPU_ConfigPreset;
 }
 
 namespace {
 
 static std::string getDumpNextUseDistanceAsJson(const Function &F) {
-  return clv2::getOptValOr<&clv2::AMDGPUOptsReg,
-                           &clv2::AMDGPU_DumpNextUseDistanceAsJson>(
-      F.getContext().getOptionsContext(), "");
+  return F.getContext()
+      .getOptions<AMDGPUOptions>()
+      .AMDGPU_DumpNextUseDistanceAsJson.value_or("");
 }
 
 static bool getDumpNextUseDistanceAsJsonWasSpecified(const Function &F) {
-  return clv2::wasOptSpecified<&clv2::AMDGPUOptsReg,
-                               &clv2::AMDGPU_DumpNextUseDistanceAsJson>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<AMDGPUOptions>()
+      .AMDGPU_DumpNextUseDistanceAsJson.has_value();
 }
 
 static bool getConfigCountPhisOpt(const Function &F) {
-  return clv2::getOptValOr<&clv2::AMDGPUOptsReg, &clv2::AMDGPU_ConfigCountPhis>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext()
+      .getOptions<AMDGPUOptions>()
+      .AMDGPU_ConfigCountPhis.value_or(false);
 }
 
 static bool getConfigCountPhisOptWasSpecified(const Function &F) {
-  return clv2::wasOptSpecified<&clv2::AMDGPUOptsReg,
-                               &clv2::AMDGPU_ConfigCountPhis>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<AMDGPUOptions>()
+      .AMDGPU_ConfigCountPhis.has_value();
 }
 
 static bool getConfigForwardOnlyOpt(const Function &F) {
-  return clv2::getOptValOr<&clv2::AMDGPUOptsReg,
-                           &clv2::AMDGPU_ConfigForwardOnly>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext()
+      .getOptions<AMDGPUOptions>()
+      .AMDGPU_ConfigForwardOnly.value_or(false);
 }
 
 static bool getConfigForwardOnlyOptWasSpecified(const Function &F) {
-  return clv2::wasOptSpecified<&clv2::AMDGPUOptsReg,
-                               &clv2::AMDGPU_ConfigForwardOnly>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<AMDGPUOptions>()
+      .AMDGPU_ConfigForwardOnly.has_value();
 }
 
 static bool getConfigPreciseUseModelingOpt(const Function &F) {
-  return clv2::getOptValOr<&clv2::AMDGPUOptsReg,
-                           &clv2::AMDGPU_ConfigPreciseUseModeling>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext()
+      .getOptions<AMDGPUOptions>()
+      .AMDGPU_ConfigPreciseUseModeling.value_or(false);
 }
 
 static bool getConfigPreciseUseModelingOptWasSpecified(const Function &F) {
-  return clv2::wasOptSpecified<&clv2::AMDGPUOptsReg,
-                               &clv2::AMDGPU_ConfigPreciseUseModeling>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<AMDGPUOptions>()
+      .AMDGPU_ConfigPreciseUseModeling.has_value();
 }
 
 static bool getConfigPromoteToPreheaderOpt(const Function &F) {
-  return clv2::getOptValOr<&clv2::AMDGPUOptsReg,
-                           &clv2::AMDGPU_ConfigPromoteToPreheader>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext()
+      .getOptions<AMDGPUOptions>()
+      .AMDGPU_ConfigPromoteToPreheader.value_or(false);
 }
 
 static bool getConfigPromoteToPreheaderOptWasSpecified(const Function &F) {
-  return clv2::wasOptSpecified<&clv2::AMDGPUOptsReg,
-                               &clv2::AMDGPU_ConfigPromoteToPreheader>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<AMDGPUOptions>()
+      .AMDGPU_ConfigPromoteToPreheader.has_value();
 }
 } // namespace
 

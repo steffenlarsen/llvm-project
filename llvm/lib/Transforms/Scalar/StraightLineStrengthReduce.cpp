@@ -1,5 +1,3 @@
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
 //===- StraightLineStrengthReduce.cpp - -----------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -100,6 +98,7 @@
 #include "llvm/Support/DebugCounter.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Transforms/Scalar.h"
+#include "llvm/Transforms/Scalar/ScalarOptions.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include <cassert>
 #include <cstdint>
@@ -121,8 +120,7 @@ DEBUG_COUNTER(StraightLineStrengthReduceCounter, "slsr-counter",
 
 // Only for testing.
 static bool getEnablePoisonReuseGuard(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_EnablePoisonReuseGuard>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<ScalarOptions>().SC_EnablePoisonReuseGuard;
 }
 
 STATISTIC(NumSCEVCandidateBasisDifferences,

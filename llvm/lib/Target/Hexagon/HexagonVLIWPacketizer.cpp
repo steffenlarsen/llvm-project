@@ -44,12 +44,10 @@
 #include "llvm/InitializePasses.h"
 #include "llvm/MC/MCInstrDesc.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
+#include "llvm/Target/Hexagon/HexagonOptions.h"
 #include <cassert>
 #include <cstdint>
 #include <iterator>
@@ -58,40 +56,32 @@ using namespace llvm;
 
 #define DEBUG_TYPE "packets"
 
-bool DisablePacketizer = false;
-
 static bool Slot1Store = true;
 
 static bool PacketizeVolatiles = true;
 
 static bool getEnableGenAllInsnClass(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_EnableGenAllInsnClass>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_EnableGenAllInsnClass;
 }
 
 static bool getDisablePacketizer(const Function &F) {
-  return clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_DisablePacketizer>(
-      F.getContext().getOptionsContext(), DisablePacketizer);
+  return F.getContext().getOptions<HexagonOptions>().HEX_DisablePacketizer;
 }
 
 static bool getSlot1Store(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_Slot1Store>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_Slot1Store;
 }
 
 static bool getPacketizeVolatiles(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_PacketizeVolatiles>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_PacketizeVolatiles;
 }
 
 static bool getDisableVecDblNVStores(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_DisableVecDblNVStores>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_DisableVecDblNVStores;
 }
 
 static bool getScheduleInlineAsm(const Function &F) {
-  return clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_ScheduleInlineAsm>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext().getOptions<HexagonOptions>().HEX_ScheduleInlineAsm;
 }
 
 namespace {

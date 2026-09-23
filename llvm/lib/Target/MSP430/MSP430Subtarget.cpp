@@ -13,25 +13,11 @@
 #include "MSP430Subtarget.h"
 #include "MSP430SelectionDAGInfo.h"
 #include "llvm/MC/TargetRegistry.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/MSP430/MSP430OptionsOptInfos.h"
+#include "llvm/Target/MSP430/MSP430Options.h"
 
 using namespace llvm;
 
 #define DEBUG_TYPE "msp430-subtarget"
-
-static MSP430Subtarget::HWMultEnum HWMultModeOption = MSP430Subtarget::NoHWMult;
-
-static MSP430Subtarget::HWMultEnum
-getHWMultModeOption(const msp430_opts::ParsedOpts *O,
-                    const clv2::OptionsContext &Ctx) {
-  if (!O)
-    O = clv2::getView<&clv2::MSP430OptsReg>(Ctx);
-  if (O)
-    return static_cast<MSP430Subtarget::HWMultEnum>(
-        O->get<&clv2::MSP430_HWMultMode>());
-  return HWMultModeOption;
-}
 
 #define GET_SUBTARGETINFO_TARGET_DESC
 #define GET_SUBTARGETINFO_CTOR
@@ -50,8 +36,10 @@ MSP430Subtarget::initializeSubtargetDependencies(StringRef CPU, StringRef FS) {
 
   ParseSubtargetFeatures(CPUName, /*TuneCPU*/ CPUName, FS);
 
-  if (getHWMultModeOption(nullptr, getOptionsContext()) != NoHWMult)
-    HWMultMode = getHWMultModeOption(nullptr, getOptionsContext());
+  auto HWMultModeOption = static_cast<HWMultEnum>(
+      MSP430Options::Current.MSP430_HWMultMode);
+  if (HWMultModeOption != NoHWMult)
+    HWMultMode = HWMultModeOption;
 
   return *this;
 }

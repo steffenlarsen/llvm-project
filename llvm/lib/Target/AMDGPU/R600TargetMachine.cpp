@@ -20,31 +20,23 @@
 #include "R600MachineScheduler.h"
 #include "R600TargetTransformInfo.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/LLVMContext.h"
 #include "llvm/Passes/CodeGenPassBuilder.h"
 #include "llvm/Support/CommandLineV2.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/AMDGPU/AMDGPUOptionsOptInfos.h"
+#include "llvm/Target/AMDGPU/AMDGPUOptions.h"
 #include "llvm/Transforms/Scalar.h"
 #include <optional>
 
 using namespace llvm;
 
-static bool getEnableR600StructurizeCFG(const Function *F,
-                                        const clv2::OptionsContext &Ctx) {
-  if (F)
-    if (auto *O = clv2::getView<&clv2::AMDGPUOptsReg>(
-            F->getContext().getOptionsContext()))
-      return O->get<&clv2::AMDGPU_EnableR600StructurizeCFG>();
-  return clv2::getOptValOrDefault<&clv2::AMDGPU_EnableR600StructurizeCFG>(Ctx);
+static bool getEnableR600StructurizeCFG(const LLVMContext *Ctx) {
+  return (Ctx ? Ctx->getOptions<AMDGPUOptions>() : AMDGPUOptions::Current)
+      .AMDGPU_EnableR600StructurizeCFG;
 }
 
-static bool getEnableR600IfConvert(const Function *F,
-                                   const clv2::OptionsContext &Ctx) {
-  if (F)
-    if (auto *O = clv2::getView<&clv2::AMDGPUOptsReg>(
-            F->getContext().getOptionsContext()))
-      return O->get<&clv2::AMDGPU_EnableR600IfConvert>();
-  return clv2::getOptValOrDefault<&clv2::AMDGPU_EnableR600IfConvert>(Ctx);
+static bool getEnableR600IfConvert(const LLVMContext *Ctx) {
+  return (Ctx ? Ctx->getOptions<AMDGPUOptions>() : AMDGPUOptions::Current)
+      .AMDGPU_EnableR600IfConvert;
 }
 
 static ScheduleDAGInstrs *createR600MachineScheduler(MachineSchedContext *C) {
@@ -135,7 +127,7 @@ public:
 bool R600PassConfig::addPreISel() {
   AMDGPUPassConfig::addPreISel();
 
-  if (getEnableR600StructurizeCFG(nullptr, TM->getOptionsContext()))
+  if (getEnableR600StructurizeCFG(nullptr))
     addPass(createStructurizeCFGPass());
   return false;
 }
@@ -149,7 +141,7 @@ void R600PassConfig::addPreRegAlloc() { addPass(createR600VectorRegMerger()); }
 
 void R600PassConfig::addPreSched2() {
   addPass(createR600EmitClauseMarkers());
-  if (getEnableR600IfConvert(nullptr, TM->getOptionsContext()))
+  if (getEnableR600IfConvert(nullptr))
     addPass(&IfConverterID);
   addPass(createR600ClauseMergePass());
 }

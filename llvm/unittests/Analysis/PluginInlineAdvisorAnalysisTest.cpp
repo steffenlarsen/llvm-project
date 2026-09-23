@@ -76,8 +76,7 @@ struct CompilerInstance {
   }
 
   CompilerInstance() {
-    IP = getInlineParamsFromOptLevel(
-        3, /*Ctx=*/llvm::clv2::defaultOptionsContext());
+    IP = getInlineParamsFromOptLevel(3, Ctx.getOptions<AnalysisOptions>());
     PB.registerModuleAnalyses(MAM);
     PB.registerCGSCCAnalyses(CGAM);
     PB.registerFunctionAnalyses(FAM);

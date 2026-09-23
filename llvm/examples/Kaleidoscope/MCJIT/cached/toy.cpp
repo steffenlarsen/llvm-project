@@ -16,6 +16,7 @@
 #include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Path.h"
+#include "llvm/Support/PluginLoaderOptions.h"
 #include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/TargetSelect.h"
@@ -1594,7 +1595,11 @@ int main(int argc, char **argv) {
   clv2::OptionParser P;
   P.add<&KaleidoscopeReg>();
   RegisterAllLLVMOptions(P);
-  auto OptsCtx = P.parse(argc, argv, "Kaleidoscope example program\n");
+  std::vector<const char *> ArgsAfterPlugins =
+      loadPluginsAndStripArgs(argc, argv);
+  auto OptsCtx =
+      P.parse(static_cast<int>(ArgsAfterPlugins.size()),
+              ArgsAfterPlugins.data(), "Kaleidoscope example program\n");
   auto *Opts = OptsCtx->getViewPtr<&KaleidoscopeReg>();
   std::string InputIR = std::string(Opts->get<&InputIROpt>());
   bool UseObjectCache = Opts->get<&UseObjectCacheOpt>();

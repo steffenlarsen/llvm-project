@@ -15,8 +15,8 @@
 
 #include "llvm/CodeGen/SelectionDAGTargetInfo.h"
 
-namespace llvm::clv2 {
-class OptionsContext;
+namespace llvm {
+class LLVMContext;
 }
 
 #define GET_SDNODE_ENUM
@@ -35,8 +35,7 @@ public:
                                   MachinePointerInfo DstPtrInfo,
                                   MachinePointerInfo SrcPtrInfo) const override;
 
-  unsigned
-  getCommonMaxStoresPerMemFunc(const clv2::OptionsContext &OptsCtx) const;
+  unsigned getCommonMaxStoresPerMemFunc(const LLVMContext &Ctx) const;
 };
 
 } // namespace llvm

@@ -19,6 +19,7 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/LineEditor/LineEditor.h"
 #include "llvm/Support/CommandLineV2.h"
+#include "llvm/Support/PluginLoaderOptions.h"
 #include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/Signals.h"
 #include <optional>
@@ -449,7 +450,10 @@ int main(int argc, const char *argv[]) {
   llvm::clv2::OptionParser P;
   P.add<&DexpGlobalReg>();
   llvm::RegisterAllLLVMOptions(P);
-  auto OptsCtx = P.parse(argc, argv, Overview);
+  std::vector<const char *> ArgsAfterPlugins =
+      llvm::loadPluginsAndStripArgs(argc, argv);
+  auto OptsCtx = P.parse(static_cast<int>(ArgsAfterPlugins.size()),
+                         ArgsAfterPlugins.data(), Overview);
   auto *GlobalOpts = OptsCtx->getViewPtr<&DexpGlobalReg>();
   IndexLocation = GlobalOpts->get<&dexpIndexLocationOpt>();
   ExecCommand = GlobalOpts->get<&dexpExecCommandOpt>();

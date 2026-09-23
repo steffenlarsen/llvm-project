@@ -27,7 +27,7 @@
 #include "llvm/IR/GlobalVariable.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/PowerPC/PowerPCOptionsOptInfos.h"
+#include "llvm/Target/PowerPC/PowerPCOptions.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/TargetParser/PPCTargetParser.h"
 
@@ -38,11 +38,6 @@ using namespace llvm;
 #define GET_SUBTARGETINFO_TARGET_DESC
 #define GET_SUBTARGETINFO_CTOR
 #include "PPCGenSubtargetInfo.inc"
-
-static bool getEnableMachinePipeliner(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::PowerPCOptsReg,
-                           &clv2::PPC_EnableMachinePipeliner>(Ctx, false);
-}
 
 PPCSubtarget &PPCSubtarget::initializeSubtargetDependencies(StringRef CPU,
                                                             StringRef TuneCPU,
@@ -94,7 +89,8 @@ void PPCSubtarget::initSubtargetFeatures(StringRef CPU, StringRef TuneCPU,
   }
 
   // Determine the CPU to schedule for.
-  if (TuneCPU.empty()) TuneCPU = CPUName;
+  if (TuneCPU.empty())
+    TuneCPU = CPUName;
 
   // Initialize scheduling itinerary for the specified CPU.
   InstrItins = getInstrItineraryForCPU(CPUName);
@@ -111,7 +107,7 @@ void PPCSubtarget::initSubtargetFeatures(StringRef CPU, StringRef TuneCPU,
     IsSecurePlt = true;
 
   if (HasSPE && IsPPC64)
-    report_fatal_error( "SPE is only supported for 32-bit targets.\n", false);
+    report_fatal_error("SPE is only supported for 32-bit targets.\n", false);
   if (HasSPE && (HasAltivec || HasVSX || HasFPU))
     report_fatal_error(
         "SPE and traditional floating point cannot both be enabled.\n", false);
@@ -157,7 +153,7 @@ bool PPCSubtarget::enableMachineScheduler() const { return true; }
 
 bool PPCSubtarget::enableMachinePipeliner() const {
   return getSchedModel().hasInstrSchedModel() &&
-         getEnableMachinePipeliner(getOptionsContext());
+         PowerPCOptions::Current.PPC_EnableMachinePipeliner;
 }
 
 bool PPCSubtarget::useDFAforSMS() const { return false; }
@@ -165,14 +161,15 @@ bool PPCSubtarget::useDFAforSMS() const { return false; }
 // This overrides the PostRAScheduler bit in the SchedModel for each CPU.
 bool PPCSubtarget::enablePostRAScheduler() const { return true; }
 
-PPCGenSubtargetInfo::AntiDepBreakMode PPCSubtarget::getAntiDepBreakMode() const {
+PPCGenSubtargetInfo::AntiDepBreakMode
+PPCSubtarget::getAntiDepBreakMode() const {
   return TargetSubtargetInfo::ANTIDEP_ALL;
 }
 
 void PPCSubtarget::getCriticalPathRCs(RegClassVector &CriticalPathRCs) const {
   CriticalPathRCs.clear();
-  CriticalPathRCs.push_back(isPPC64() ?
-                            &PPC::G8RCRegClass : &PPC::GPRCRegClass);
+  CriticalPathRCs.push_back(isPPC64() ? &PPC::G8RCRegClass
+                                      : &PPC::GPRCRegClass);
 }
 
 void PPCSubtarget::overrideSchedPolicy(MachineSchedPolicy &Policy,
@@ -188,9 +185,7 @@ void PPCSubtarget::overrideSchedPolicy(MachineSchedPolicy &Policy,
   Policy.ShouldTrackPressure = true;
 }
 
-bool PPCSubtarget::useAA() const {
-  return true;
-}
+bool PPCSubtarget::useAA() const { return true; }
 
 bool PPCSubtarget::enableSubRegLiveness() const { return true; }
 

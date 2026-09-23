@@ -35,8 +35,7 @@
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/IntrinsicsSPIRV.h"
 #include "llvm/InitializePasses.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/SPIRV/SPIRVOptionsOptInfos.h"
+#include "llvm/Target/SPIRV/SPIRVOptions.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/LowerMemIntrinsics.h"
@@ -85,16 +84,11 @@ public:
   StringRef getPassName() const override { return "SPIRV prepare functions"; }
 };
 
-static SmallVector<std::string, 4> SPVAllowUnknownIntrinsics;
-
 static SmallVector<std::string, 4>
 getAllowUnknownIntrinsics(const Function &F) {
-  if (auto *O = clv2::getView<&clv2::SPIRVOptsReg>(
-          F.getContext().getOptionsContext())) {
-    const auto &V = O->get<&clv2::SPIRV_AllowUnknownIntrinsics>();
-    return SmallVector<std::string, 4>(V.begin(), V.end());
-  }
-  return SPVAllowUnknownIntrinsics;
+  const auto &V =
+      F.getContext().getOptions<SPIRVOptions>().SPIRV_AllowUnknownIntrinsics;
+  return SmallVector<std::string, 4>(V.begin(), V.end());
 }
 } // namespace
 

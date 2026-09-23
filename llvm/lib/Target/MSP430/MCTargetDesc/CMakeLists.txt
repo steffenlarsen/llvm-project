@@ -11,8 +11,12 @@ add_llvm_component_library(LLVMMSP430Desc
   LINK_COMPONENTS
   MC
   MSP430Info
+  Option
   Support
 
   ADD_TO_COMPONENT
   MSP430
+
+  DEPENDS
+  MSP430OptParserTableGen
   )

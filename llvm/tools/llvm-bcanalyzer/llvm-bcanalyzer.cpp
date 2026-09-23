@@ -32,6 +32,7 @@
 #include "llvm/Support/Error.h"
 #include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/PluginLoaderOptions.h"
 #include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/WithColor.h"
 #include "llvm/Support/raw_ostream.h"
@@ -104,7 +105,11 @@ int main(int argc, char **argv) {
   P.add<&BCAToolReg>();
   RegisterAllLLVMOptions(P);
   P.hideUnrelatedOptions({&BCAnalyzerCategory, &getColorCategory()});
-  auto OptsCtx = P.parse(argc, argv, "llvm-bcanalyzer file analyzer\n");
+  std::vector<const char *> ArgsAfterPlugins =
+      loadPluginsAndStripArgs(argc, argv);
+  auto OptsCtx =
+      P.parse(static_cast<int>(ArgsAfterPlugins.size()),
+              ArgsAfterPlugins.data(), "llvm-bcanalyzer file analyzer\n");
   auto *Opts = OptsCtx->getViewPtr<&BCAToolReg>();
   ExitOnError ExitOnErr("llvm-bcanalyzer: ");
 

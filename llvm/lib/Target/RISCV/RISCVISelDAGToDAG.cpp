@@ -22,9 +22,8 @@
 #include "llvm/Support/Alignment.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/MathExtras.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/RISCV/RISCVOptionsOptInfos.h"
+#include "llvm/Target/RISCV/RISCVOptions.h"
 
 using namespace llvm;
 
@@ -32,22 +31,11 @@ using namespace llvm;
 #define PASS_NAME "RISC-V DAG->DAG Pattern Instruction Selection"
 
 static bool getUsePseudoMovImm(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::RV_UsePseudoMovImm>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<RISCVOptions>().RV_UsePseudoMovImm;
 }
 
-static bool PreferredLandingPadLabelWasSpecified = false;
-
-static uint32_t getPreferredLandingPadLabel(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::RV_PreferredLandingPadLabel>(
-      F.getContext().getOptionsContext());
-}
-
-static bool getPreferredLandingPadLabelWasSpecified(const Function &F) {
-  if (auto *O = clv2::getView<&clv2::RISCVOptsReg>(
-          F.getContext().getOptionsContext()))
-    return O->specified<&clv2::RV_PreferredLandingPadLabel>();
-  return PreferredLandingPadLabelWasSpecified;
+static std::optional<unsigned> getPreferredLandingPadLabel(const Function &F) {
+  return F.getContext().getOptions<RISCVOptions>().RV_PreferredLandingPadLabel;
 }
 
 #define GET_DAGISEL_BODY RISCVDAGToDAGISel
@@ -706,10 +694,17 @@ bool RISCVDAGToDAGISel::tryShrinkShlLogicImm(SDNode *Node) {
   // Ok, we can reorder to get a smaller immediate.
   unsigned BinOpc;
   switch (Opcode) {
-  default: llvm_unreachable("Unexpected opcode");
-  case ISD::AND: BinOpc = RISCV::ANDI; break;
-  case ISD::OR:  BinOpc = RISCV::ORI;  break;
-  case ISD::XOR: BinOpc = RISCV::XORI; break;
+  default:
+    llvm_unreachable("Unexpected opcode");
+  case ISD::AND:
+    BinOpc = RISCV::ANDI;
+    break;
+  case ISD::OR:
+    BinOpc = RISCV::ORI;
+    break;
+  case ISD::XOR:
+    BinOpc = RISCV::XORI;
+    break;
   }
 
   unsigned ShOpc = SignExt ? RISCV::SLLIW : RISCV::SLLI;
@@ -1376,8 +1371,8 @@ void RISCVDAGToDAGISel::Select(SDNode *Node) {
       ReplaceUses(SDValue(Node, 0), SDValue(Lo, 0));
     }
     if (!SDValue(Node, 1).use_empty()) {
-      SDNode *Hi = CurDAG->getMachineNode(RISCV::FMVH_X_D, DL, VT,
-                                          Node->getOperand(0));
+      SDNode *Hi =
+          CurDAG->getMachineNode(RISCV::FMVH_X_D, DL, VT, Node->getOperand(0));
       ReplaceUses(SDValue(Node, 1), SDValue(Hi, 0));
     }
 
@@ -1935,8 +1930,7 @@ void RISCVDAGToDAGISel::Select(SDNode *Node) {
     // make it more costly to materialize. Otherwise, using a SLLI might allow
     // it to be compressed.
     bool IsANDIOrZExt =
-        isInt<12>(C2) ||
-        (C2 == UINT64_C(0xFFFF) && Subtarget->hasStdExtZbb());
+        isInt<12>(C2) || (C2 == UINT64_C(0xFFFF) && Subtarget->hasStdExtZbb());
     // With XTHeadBb, we can use TH.EXTU.
     IsANDIOrZExt |= C2 == UINT64_C(0xFFFF) && Subtarget->hasVendorXTHeadBb();
     if (IsANDIOrZExt && (isInt<12>(N1C->getSExtValue()) || !N0.hasOneUse()))
@@ -2694,7 +2688,7 @@ void RISCVDAGToDAGISel::Select(SDNode *Node) {
         // We eagerly lower to implicit_def (instead of undef), as we
         // otherwise fail to select nodes such as: nxv1i1 = undef
         SDNode *Passthru =
-          CurDAG->getMachineNode(TargetOpcode::IMPLICIT_DEF, DL, VT);
+            CurDAG->getMachineNode(TargetOpcode::IMPLICIT_DEF, DL, VT);
         Operands.push_back(SDValue(Passthru, 0));
       }
       addVectorLoadStoreOperands(Node, Log2SEW, DL, CurOp, IsMasked, IsStrided,
@@ -2728,10 +2722,10 @@ void RISCVDAGToDAGISel::Select(SDNode *Node) {
 
       RISCVVType::VLMUL LMUL = RISCVTargetLowering::getLMUL(VT);
       const RISCV::VLEPseudo *P =
-          RISCV::getVLEPseudo(IsMasked, /*Strided*/ false, /*FF*/ true,
-                              Log2SEW, static_cast<unsigned>(LMUL));
-      MachineSDNode *Load = CurDAG->getMachineNode(
-          P->Pseudo, DL, Node->getVTList(), Operands);
+          RISCV::getVLEPseudo(IsMasked, /*Strided*/ false, /*FF*/ true, Log2SEW,
+                              static_cast<unsigned>(LMUL));
+      MachineSDNode *Load =
+          CurDAG->getMachineNode(P->Pseudo, DL, Node->getVTList(), Operands);
       CurDAG->setNodeMemRefs(Load, {cast<MemSDNode>(Node)->getMemOperand()});
 
       ReplaceNode(Node, Load);
@@ -2890,8 +2884,8 @@ void RISCVDAGToDAGISel::Select(SDNode *Node) {
                               "index values when XLEN=32");
       }
       const RISCV::VLX_VSXPseudo *P = RISCV::getVSXPseudo(
-          IsMasked, IsOrdered, IndexLog2EEW,
-          static_cast<unsigned>(LMUL), static_cast<unsigned>(IndexLMUL));
+          IsMasked, IsOrdered, IndexLog2EEW, static_cast<unsigned>(LMUL),
+          static_cast<unsigned>(IndexLMUL));
       MachineSDNode *Store =
           CurDAG->getMachineNode(P->Pseudo, DL, Node->getVTList(), Operands);
 
@@ -3344,8 +3338,8 @@ void RISCVDAGToDAGISel::Select(SDNode *Node) {
 
     RISCVVType::VLMUL LMUL = RISCVTargetLowering::getLMUL(VT);
     const RISCV::VLEPseudo *P = RISCV::getVLEPseudo(
-        /*IsMasked*/ false, IsStrided, /*FF*/ false,
-        Log2SEW, static_cast<unsigned>(LMUL));
+        /*IsMasked*/ false, IsStrided, /*FF*/ false, Log2SEW,
+        static_cast<unsigned>(LMUL));
     MachineSDNode *Load =
         CurDAG->getMachineNode(P->Pseudo, DL, {VT, MVT::Other}, Operands);
     // Update the chain.
@@ -3364,12 +3358,11 @@ void RISCVDAGToDAGISel::Select(SDNode *Node) {
 
     const Function &F = CurDAG->getMachineFunction().getFunction();
     uint32_t LpadLabel = 0;
-    if (getPreferredLandingPadLabelWasSpecified(F)) {
-      uint32_t Val = getPreferredLandingPadLabel(F);
-      if (!isUInt<20>(Val))
+    if (std::optional<unsigned> Val = getPreferredLandingPadLabel(F)) {
+      if (!isUInt<20>(*Val))
         report_fatal_error("riscv-landing-pad-label=<val>, <val> needs to fit "
                            "in unsigned 20-bits");
-      LpadLabel = Val;
+      LpadLabel = *Val;
     }
 
     // Preserve the argument-register and register-mask operands, between
@@ -4107,8 +4100,8 @@ bool RISCVDAGToDAGISel::selectShiftMask(SDValue N, unsigned ShiftWidth,
       EVT VT = ShAmt.getValueType();
       SDValue Zero = CurDAG->getRegister(RISCV::X0, VT);
       unsigned NegOpc = VT == MVT::i64 ? RISCV::SUBW : RISCV::SUB;
-      MachineSDNode *Neg = CurDAG->getMachineNode(NegOpc, DL, VT, Zero,
-                                                  ShAmt.getOperand(1));
+      MachineSDNode *Neg =
+          CurDAG->getMachineNode(NegOpc, DL, VT, Zero, ShAmt.getOperand(1));
       ShAmt = SDValue(Neg, 0);
       return true;
     }
@@ -4883,7 +4876,8 @@ bool RISCVDAGToDAGISel::selectVSplatSimm5Plus1(SDValue N, SDValue &SplatVal) {
       /*Decrement=*/true);
 }
 
-bool RISCVDAGToDAGISel::selectVSplatSimm5Plus1NoDec(SDValue N, SDValue &SplatVal) {
+bool RISCVDAGToDAGISel::selectVSplatSimm5Plus1NoDec(SDValue N,
+                                                    SDValue &SplatVal) {
   return selectVSplatImmHelper(
       N, SplatVal, *CurDAG, *Subtarget,
       [](int64_t Imm) { return Imm >= -15 && Imm <= 16; },
@@ -5062,11 +5056,21 @@ bool RISCVDAGToDAGISel::doPeepholeSExtW(SDNode *N) {
     switch (N0.getMachineOpcode()) {
     default:
       llvm_unreachable("Unexpected opcode!");
-    case RISCV::ADD:  Opc = RISCV::ADDW;  break;
-    case RISCV::ADDI: Opc = RISCV::ADDIW; break;
-    case RISCV::SUB:  Opc = RISCV::SUBW;  break;
-    case RISCV::MUL:  Opc = RISCV::MULW;  break;
-    case RISCV::SLLI: Opc = RISCV::SLLIW; break;
+    case RISCV::ADD:
+      Opc = RISCV::ADDW;
+      break;
+    case RISCV::ADDI:
+      Opc = RISCV::ADDIW;
+      break;
+    case RISCV::SUB:
+      Opc = RISCV::SUBW;
+      break;
+    case RISCV::MUL:
+      Opc = RISCV::MULW;
+      break;
+    case RISCV::SLLI:
+      Opc = RISCV::SLLIW;
+      break;
     }
 
     SDValue N00 = N0.getOperand(0);
@@ -5078,8 +5082,7 @@ bool RISCVDAGToDAGISel::doPeepholeSExtW(SDNode *N) {
       break;
 
     SDNode *Result =
-        CurDAG->getMachineNode(Opc, SDLoc(N), N->getValueType(0),
-                               N00, N01);
+        CurDAG->getMachineNode(Opc, SDLoc(N), N->getValueType(0), N00, N01);
     ReplaceUses(N, Result);
     return true;
   }
@@ -5218,7 +5221,7 @@ bool RISCVDAGToDAGISel::doPeepholeNoRegPassThru() {
     }
 
     MachineSDNode *Result =
-      CurDAG->getMachineNode(Opc, SDLoc(N), N->getVTList(), Ops);
+        CurDAG->getMachineNode(Opc, SDLoc(N), N->getVTList(), Ops);
     Result->setFlags(N->getFlags());
     CurDAG->setNodeMemRefs(Result, cast<MachineSDNode>(N)->memoperands());
     ReplaceUses(N, Result);
@@ -5226,7 +5229,6 @@ bool RISCVDAGToDAGISel::doPeepholeNoRegPassThru() {
   }
   return MadeChange;
 }
-
 
 // This pass converts a legalized DAG into a RISCV-specific DAG, ready
 // for instruction scheduling.

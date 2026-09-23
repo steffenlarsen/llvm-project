@@ -49,6 +49,7 @@
 #include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/Parallel.h"
 #include "llvm/Support/Path.h"
+#include "llvm/Support/PluginLoaderOptions.h"
 #include "llvm/Support/Process.h"
 #include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/TarWriter.h"
@@ -2452,9 +2453,12 @@ bool link(ArrayRef<const char *> argsArr, llvm::raw_ostream &stdoutOS,
         Argv.push_back("ld64.lld");
         for (auto &A : LLVMOpts)
           Argv.push_back(A.data());
+        std::vector<const char *> ArgsAfterPlugins = loadPluginsAndStripArgs(
+            static_cast<int>(Argv.size()), Argv.data());
         std::string err;
         raw_string_ostream os(err);
-        if (auto Parsed = P.parse(Argv.size(), Argv.data(), {}, &os))
+        if (auto Parsed = P.parse(static_cast<int>(ArgsAfterPlugins.size()),
+                                   ArgsAfterPlugins.data(), {}, &os))
           commonContext().llvmOptsCtx = std::move(Parsed);
         else
           error(StringRef(err).trim());

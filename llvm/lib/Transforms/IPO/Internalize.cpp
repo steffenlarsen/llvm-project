@@ -27,11 +27,10 @@
 #include "llvm/Support/GlobPattern.h"
 #include "llvm/Support/LineIterator.h"
 #include "llvm/Support/MemoryBuffer.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/TargetParser/Triple.h"
 #include "llvm/Transforms/IPO.h"
-#include "llvm/Transforms/IPO/IPOOptionsOptInfos.h"
+#include "llvm/Transforms/IPO/IPOOptions.h"
 using namespace llvm;
 
 #define DEBUG_TYPE "internalize"
@@ -41,21 +40,11 @@ STATISTIC(NumFunctions, "Number of functions internalized");
 STATISTIC(NumGlobals, "Number of global vars internalized");
 
 static const std::string &getAPIFile(const Module &M) {
-  if (auto *O =
-          clv2::getView<&clv2::IPOOptsReg>(M.getContext().getOptionsContext()))
-    if (O->specified<&clv2::IPO_APIFile>())
-      return O->get<&clv2::IPO_APIFile>();
-  static const std::string Default;
-  return Default;
+  return M.getContext().getOptions<IPOOptions>().IPO_APIFile;
 }
 
 static const std::vector<std::string> &getAPIList(const Module &M) {
-  if (auto *O =
-          clv2::getView<&clv2::IPOOptsReg>(M.getContext().getOptionsContext()))
-    if (O->specified<&clv2::IPO_APIList>())
-      return O->get<&clv2::IPO_APIList>();
-  static const std::vector<std::string> Default;
-  return Default;
+  return M.getContext().getOptions<IPOOptions>().IPO_APIList;
 }
 
 namespace {

@@ -17,10 +17,11 @@
 #include "llvm/ADT/SmallString.h"
 #include "llvm/BinaryFormat/Dwarf.h"
 #include "llvm/CodeGen/AsmPrinter.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsAsmPrint.h"
 #include "llvm/CodeGen/DIE.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineInstr.h"
+#include "llvm/CodeGen/MachineModuleInfo.h"
 #include "llvm/CodeGen/TargetFrameLowering.h"
 #include "llvm/CodeGen/TargetRegisterInfo.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
@@ -28,15 +29,14 @@
 #include "llvm/IR/DebugInfo.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/GlobalVariable.h"
+#include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/Module.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCSection.h"
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/MC/MCSymbol.h"
 #include "llvm/MC/MCSymbolWasm.h"
 #include "llvm/MC/MachineLocation.h"
-#include "llvm/Support/CommandLineCompat.h"
-#include "llvm/Support/CommandLineV2.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Target/TargetLoweringObjectFile.h"
 #include "llvm/Target/TargetMachine.h"
 #include <optional>
@@ -45,29 +45,26 @@
 
 using namespace llvm;
 
-static bool getEmitFuncDebugLineTableOffsets(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_EmitFuncDebugLineTableOffsets>(
-      Ctx);
+static bool getEmitFuncDebugLineTableOffsets(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenAsmPrintOptions>()
+      .CGPASS_EmitFuncDebugLineTableOffsets;
 }
 
 /// Query value using AddLinkageNamesToDeclCallOriginsForTuning.
-static cl::boolOrDefault
-getAddLinkageNamesToDeclarationCallOrigins(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<
-      &clv2::CGPassAsmPrintReg,
-      &clv2::CGPASS_AddLinkageNamesToDeclarationCallOrigins>(
-      Ctx, cl::boolOrDefault::BOU_UNSET);
+static std::optional<bool>
+getAddLinkageNamesToDeclarationCallOrigins(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenAsmPrintOptions>()
+      .CGPASS_AddLinkageNamesToDeclarationCallOrigins;
 }
 
 static bool
 AddLinkageNamesToDeclCallOriginsForTuning(const DwarfDebug *DD,
-                                          const clv2::OptionsContext &Ctx) {
+                                          const LLVMContext &Ctx) {
   bool EnabledByDefault = DD->tuneForSCE();
+  std::optional<bool> V = getAddLinkageNamesToDeclarationCallOrigins(Ctx);
   if (EnabledByDefault)
-    return getAddLinkageNamesToDeclarationCallOrigins(Ctx) !=
-           cl::boolOrDefault::BOU_FALSE;
-  return getAddLinkageNamesToDeclarationCallOrigins(Ctx) ==
-         cl::boolOrDefault::BOU_TRUE;
+    return V != false;
+  return V == true;
 }
 
 static dwarf::Tag GetCompileUnitType(UnitKind Kind, DwarfDebug *DW) {
@@ -1888,7 +1885,7 @@ bool DwarfCompileUnit::includeMinimalInlineScopes() const {
 }
 
 bool DwarfCompileUnit::emitFuncLineTableOffsets() const {
-  return getEmitFuncDebugLineTableOffsets(Asm->TM.getOptionsContext());
+  return getEmitFuncDebugLineTableOffsets(Asm->MMI->getModule()->getContext());
 }
 
 void DwarfCompileUnit::addAddrTableBase() {
@@ -1985,8 +1982,8 @@ DIE *DwarfCompileUnit::getOrCreateSubprogramDIE(const DISubprogram *SP,
 
 void DwarfCompileUnit::addLinkageNamesToDeclarations(
     const DwarfDebug &DD, const DISubprogram &CalleeSP, DIE &CalleeDIE) {
-  if (AddLinkageNamesToDeclCallOriginsForTuning(&DD,
-                                                Asm->TM.getOptionsContext()) &&
+  if (AddLinkageNamesToDeclCallOriginsForTuning(
+          &DD, Asm->MMI->getModule()->getContext()) &&
       !CalleeSP.isDefinition() &&
       !CalleeDIE.findAttribute(dwarf::DW_AT_linkage_name)) {
     addLinkageName(CalleeDIE, CalleeSP.getLinkageName());

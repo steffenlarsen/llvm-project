@@ -71,7 +71,7 @@ static bool shouldScheduleAdjacent(const TargetInstrInfo &TII,
 namespace llvm {
 
 std::unique_ptr<ScheduleDAGMutation>
-createX86MacroFusionDAGMutation(const clv2::OptionsContext &Ctx) {
+createX86MacroFusionDAGMutation(const LLVMContext &Ctx) {
   return createMacroFusionDAGMutation(Ctx, shouldScheduleAdjacent,
                                       /*BranchOnly=*/true);
 }

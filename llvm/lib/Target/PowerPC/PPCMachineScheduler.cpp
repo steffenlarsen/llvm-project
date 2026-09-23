@@ -9,20 +9,17 @@
 #include "PPCMachineScheduler.h"
 #include "MCTargetDesc/PPCMCTargetDesc.h"
 #include "llvm/IR/Function.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/PowerPC/PowerPCOptionsOptInfos.h"
+#include "llvm/Target/PowerPC/PowerPCOptions.h"
 
 using namespace llvm;
 
-static bool EnableAddiHeuristic = true;
-
 static bool getDisableAddiLoadHeuristic(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::PPC_DisableAddiLoadHeuristic>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<PowerPCOptions>()
+      .PPC_DisableAddiLoadHeuristic;
 }
 static bool getEnableAddiHeuristic(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::PPC_EnableAddiHeuristic>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<PowerPCOptions>().PPC_EnableAddiHeuristic;
 }
 
 static bool isADDIInstr(const GenericScheduler::SchedCandidate &Cand) {
@@ -262,4 +259,3 @@ SUnit *PPCPostRASchedStrategy::pickNode(bool &IsTopNode) {
   // Custom PPC PostRA specific scheduling here.
   return PostGenericScheduler::pickNode(IsTopNode);
 }
-

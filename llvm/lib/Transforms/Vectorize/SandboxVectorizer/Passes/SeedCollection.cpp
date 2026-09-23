@@ -11,7 +11,6 @@
 #include "llvm/IR/Function.h"
 #include "llvm/SandboxIR/Function.h"
 #include "llvm/SandboxIR/Module.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Transforms/Vectorize/SandboxVectorizer/RegionWithScore.h"
 #include "llvm/Transforms/Vectorize/SandboxVectorizer/SandboxVectorizerPassBuilder.h"
 #include "llvm/Transforms/Vectorize/SandboxVectorizer/SeedCollector.h"
@@ -21,21 +20,17 @@
 namespace llvm {
 
 static unsigned getOverrideVecRegBits(const llvm::Function &F) {
-  return clv2::getOptValOrDefault<&clv2::VEC_OverrideVecRegBits>(
-      F.getContext().getOptionsContext());
+  return VectorizeOptions::Current.VEC_OverrideVecRegBits;
 }
 
 static bool getAllowNonPow2(const llvm::Function &F) {
-  return clv2::getOptValOrDefault<&clv2::VEC_AllowNonPow2>(
-      F.getContext().getOptionsContext());
+  return VectorizeOptions::Current.VEC_AllowNonPow2;
 }
 
 #define LoadSeedsDef "loads"
 #define StoreSeedsDef "stores"
 static std::string getCollectSeeds(const llvm::Function &F) {
-  return clv2::getOptValIfSpecified<&clv2::VectorizeOptsReg,
-                                    &clv2::VEC_CollectSeeds>(
-      F.getContext().getOptionsContext(), StoreSeedsDef);
+  return VectorizeOptions::Current.VEC_CollectSeeds;
 }
 
 namespace sandboxir {

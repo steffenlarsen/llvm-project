@@ -64,7 +64,8 @@
 #include "llvm/Analysis/OptimizationRemarkEmitter.h"
 #include "llvm/Analysis/ProfileSummaryInfo.h"
 #include "llvm/CGData/CodeGenDataReader.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsMachine1.h"
+#include "llvm/CodeGen/CodeGenPassOptionsMachine2.h"
 #include "llvm/CodeGen/LivePhysRegs.h"
 #include "llvm/CodeGen/MachineInstrBundle.h"
 #include "llvm/CodeGen/MachineModuleInfo.h"
@@ -76,10 +77,10 @@
 #include "llvm/IR/DIBuilder.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Mangler.h"
 #include "llvm/IR/Module.h"
 #include "llvm/InitializePasses.h"
-#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/SuffixTree.h"
@@ -129,30 +130,31 @@ STATISTIC(NumPGOOptimisticOutlined,
 // functions. Since the outliner is confined to a single module (modulo LTO),
 // this is off by default. It should, however, be the default behaviour in
 // LTO.
-static bool getEnableLinkonceodrOutlining(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_EnableLinkonceodrOutlining>(
-      Ctx);
+static bool getEnableLinkonceodrOutlining(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenMachine1Options>()
+      .CGPASS_EnableLinkonceodrOutlining;
 }
 
-static unsigned getMachineOutlinerReruns(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_MachineOutlinerReruns>(Ctx);
+static unsigned getMachineOutlinerReruns(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenMachine1Options>().CGPASS_MachineOutlinerReruns;
 }
 
-static unsigned getOutlinerBenefitThreshold(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_OutlinerBenefitThreshold>(Ctx);
+static unsigned getOutlinerBenefitThreshold(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenMachine1Options>()
+      .CGPASS_OutlinerBenefitThreshold;
 }
 
-static bool getOutlinerLeafDescendants(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_OutlinerLeafDescendants>(Ctx);
+static bool getOutlinerLeafDescendants(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenMachine2Options>().CGPASS_OutlinerLeafDescendants;
 }
 
-static bool getDisableGlobalOutlining(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_DisableGlobalOutlining>(Ctx);
+static bool getDisableGlobalOutlining(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenMachine2Options>().CGPASS_DisableGlobalOutlining;
 }
 
-static bool getAppendContentHashOutlinedName(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_AppendContentHashOutlinedName>(
-      Ctx);
+static bool getAppendContentHashOutlinedName(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenMachine2Options>()
+      .CGPASS_AppendContentHashOutlinedName;
 }
 
 namespace {
@@ -713,7 +715,8 @@ void MachineOutliner::findGlobalCandidates(
   auto &MBBFlagsMap = Mapper.MBBFlagsMap;
 
   std::vector<Candidate> CandidatesForRepeatedSeq;
-  for (auto &ME : getMatchedEntries(Mapper, TM->getOptionsContext())) {
+  for (auto &ME : getMatchedEntries(
+           Mapper, MMI->getModule()->getContext().getOptionsContext())) {
     CandidatesForRepeatedSeq.clear();
     MachineBasicBlock::iterator StartIt = InstrList[ME.StartIdx];
     MachineBasicBlock::iterator EndIt = InstrList[ME.EndIdx];
@@ -742,7 +745,7 @@ void MachineOutliner::findCandidates(
     std::vector<std::unique_ptr<OutlinedFunction>> &FunctionList) {
   FunctionList.clear();
   SuffixTree ST(Mapper.UnsignedVec,
-                getOutlinerLeafDescendants(TM->getOptionsContext()));
+                getOutlinerLeafDescendants(MMI->getModule()->getContext()));
 
   // First, find all of the repeated substrings in the tree of minimum length
   // 2.
@@ -839,7 +842,7 @@ void MachineOutliner::findCandidates(
 
     // Is it better to outline this candidate than not?
     if (OF.value()->getBenefit() <
-        getOutlinerBenefitThreshold(TM->getOptionsContext())) {
+        getOutlinerBenefitThreshold(MMI->getModule()->getContext())) {
       emitNotOutliningCheaperRemark(StringLen, CandidatesForRepeatedSeq,
                                     *OF.value());
       continue;
@@ -865,8 +868,7 @@ void MachineOutliner::computeAndPublishHashSequence(MachineFunction &MF,
   }
 
   // Append a unique name based on the non-empty hash sequence.
-  if (getAppendContentHashOutlinedName(
-          MF.getFunction().getContext().getOptionsContext()) &&
+  if (getAppendContentHashOutlinedName(MF.getFunction().getContext()) &&
       !OutlinedHashSequence.empty()) {
     auto CombinedHash = stable_hash_combine(OutlinedHashSequence);
     auto NewName =
@@ -1068,17 +1070,17 @@ bool MachineOutliner::outline(
 
     // If we made it unbeneficial to outline this function, skip it.
     if (OF->getBenefit() <
-        getOutlinerBenefitThreshold(TM->getOptionsContext())) {
+        getOutlinerBenefitThreshold(M.getContext())) {
       LLVM_DEBUG(dbgs() << "SKIP: Expected benefit (" << OF->getBenefit()
                         << " B) < threshold ("
-                        << getOutlinerBenefitThreshold(TM->getOptionsContext())
+                        << getOutlinerBenefitThreshold(M.getContext())
                         << " B)\n");
       continue;
     }
 
     LLVM_DEBUG(dbgs() << "OUTLINE: Expected benefit (" << OF->getBenefit()
                       << " B) > threshold ("
-                      << getOutlinerBenefitThreshold(TM->getOptionsContext())
+                      << getOutlinerBenefitThreshold(M.getContext())
                       << " B)\n");
 
     // Remove all Linker Optimization Hints from the candidates.
@@ -1397,7 +1399,7 @@ void MachineOutliner::emitInstrCountChangedRemark(
 }
 
 void MachineOutliner::initializeOutlinerMode(const Module &M) {
-  if (getDisableGlobalOutlining(M.getContext().getOptionsContext()))
+  if (getDisableGlobalOutlining(M.getContext()))
     return;
 
   if (auto *IndexWrapperPass =
@@ -1468,14 +1470,13 @@ bool MachineOutliner::runOnModule(Module &M) {
   if (!doOutline(M, OutlinedFunctionNum))
     return false;
 
-  for (unsigned I = 0; I < getMachineOutlinerReruns(TM->getOptionsContext());
-       ++I) {
+  for (unsigned I = 0; I < getMachineOutlinerReruns(M.getContext()); ++I) {
     OutlinedFunctionNum = 0;
     OutlineRepeatedNum++;
     if (!doOutline(M, OutlinedFunctionNum)) {
       LLVM_DEBUG({
         dbgs() << "Did not outline on iteration " << I + 2 << " out of "
-               << getMachineOutlinerReruns(TM->getOptionsContext()) + 1 << "\n";
+               << getMachineOutlinerReruns(M.getContext()) + 1 << "\n";
       });
       break;
     }
@@ -1516,8 +1517,7 @@ bool MachineOutliner::doOutline(Module &M, unsigned &OutlinedFunctionNum) {
 
   // If the user specifies that they want to outline from linkonceodrs, set
   // it here.
-  OutlineFromLinkOnceODRs =
-      getEnableLinkonceodrOutlining(M.getContext().getOptionsContext());
+  OutlineFromLinkOnceODRs = getEnableLinkonceodrOutlining(M.getContext());
   InstructionMapper Mapper(*MMI);
 
   // Prepare instruction mappings for the suffix tree.

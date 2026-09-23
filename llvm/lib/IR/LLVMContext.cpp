@@ -388,6 +388,19 @@ void LLVMContext::setOptionsContext(const clv2::OptionsContext &Ctx) {
   OptsCtx = &Ctx;
 }
 
+const void *LLVMContext::getLibraryOptionsImpl(unsigned Slot) const {
+  if (Slot >= pImpl->LibraryOptions.size())
+    return nullptr;
+  return pImpl->LibraryOptions[Slot].get();
+}
+
+void LLVMContext::setLibraryOptionsImpl(unsigned Slot,
+                                         std::shared_ptr<void> Opts) {
+  if (Slot >= pImpl->LibraryOptions.size())
+    pImpl->LibraryOptions.resize(Slot + 1);
+  pImpl->LibraryOptions[Slot] = std::move(Opts);
+}
+
 StringRef LLVMContext::getDefaultTargetCPU() { return pImpl->DefaultTargetCPU; }
 
 void LLVMContext::setDefaultTargetCPU(StringRef CPU) {

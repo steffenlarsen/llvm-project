@@ -65,6 +65,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Transforms/Vectorize/LoopIdiomVectorize.h"
+#include "llvm/Analysis/AnalysisOptions.h"
 #include "llvm/Analysis/DomTreeUpdater.h"
 #include "llvm/Analysis/LoopPass.h"
 #include "llvm/Analysis/OptimizationRemarkEmitter.h"
@@ -75,7 +76,6 @@
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/MDBuilder.h"
 #include "llvm/IR/PatternMatch.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Vectorize/LoopVectorizationLegality.h"
 #include "llvm/Transforms/Vectorize/VectorizeOptions.h"
@@ -86,34 +86,27 @@ using namespace PatternMatch;
 #define DEBUG_TYPE "loop-idiom-vectorize"
 
 static bool getDisableAll(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::VEC_DisableLoopIdiomVectorizeAll>(
-      F.getContext().getOptionsContext());
+  return VectorizeOptions::Current.VEC_DisableLoopIdiomVectorizeAll;
 }
 
 static LoopIdiomVectorizeStyle getLITVecStyle(const Function &F) {
-  return clv2::getOptValIfSpecified<&clv2::VectorizeOptsReg,
-                                    &clv2::VEC_LoopIdiomVectorizeStyleOpt>(
-      F.getContext().getOptionsContext(), LoopIdiomVectorizeStyle::Masked);
+  return VectorizeOptions::Current.VEC_LoopIdiomVectorizeStyleOpt;
 }
 
 static bool getDisableByteCmp(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::VEC_DisableByteCmp>(
-      F.getContext().getOptionsContext());
+  return VectorizeOptions::Current.VEC_DisableByteCmp;
 }
 
 static unsigned getByteCmpVF(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::VEC_ByteCmpVF>(
-      F.getContext().getOptionsContext());
+  return VectorizeOptions::Current.VEC_ByteCmpVF;
 }
 
 static bool getDisableFindFirstByte(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::VEC_DisableFindFirstByte>(
-      F.getContext().getOptionsContext());
+  return VectorizeOptions::Current.VEC_DisableFindFirstByte;
 }
 
 static bool getVerifyLoops(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::VEC_VerifyLoops>(
-      F.getContext().getOptionsContext());
+  return VectorizeOptions::Current.VEC_VerifyLoops;
 }
 
 namespace {
@@ -303,7 +296,8 @@ bool LoopIdiomVectorize::recognizeByteCompare() {
   Function &F = *Header->getParent();
 
   if (!TTI->supportsScalableVectors() ||
-      !TTI->getMinPageSize(F.getContext().getOptionsContext()).has_value() ||
+      !TTI->getMinPageSize(F.getContext().getOptions<AnalysisOptions>())
+           .has_value() ||
       getDisableByteCmp(F))
     return false;
 
@@ -806,7 +800,7 @@ Value *LoopIdiomVectorize::expandFindMismatch(
   Value *RhsEnd = Builder.CreatePtrToInt(RhsEndGEP, I64Type);
 
   const uint64_t MinPageSize =
-      TTI->getMinPageSize(Ctx.getOptionsContext()).value();
+      TTI->getMinPageSize(Ctx.getOptions<AnalysisOptions>()).value();
   const uint64_t AddrShiftAmt = llvm::Log2_64(MinPageSize);
   Value *LhsStartPage = Builder.CreateLShr(LhsStart, AddrShiftAmt);
   Value *LhsEndPage = Builder.CreateLShr(LhsEnd, AddrShiftAmt);
@@ -1009,14 +1003,16 @@ bool LoopIdiomVectorize::recognizeFindFirstByte() {
   Function &F = *Header->getParent();
 
   if (!TTI->supportsScalableVectors() ||
-      !TTI->getMinPageSize(F.getContext().getOptionsContext()).has_value() ||
+      !TTI->getMinPageSize(F.getContext().getOptions<AnalysisOptions>())
+           .has_value() ||
       getDisableFindFirstByte(F))
     return false;
 
   // We exclude loops with trip counts > minimum page size via runtime checks,
   // so make sure that the minimum page size is something sensible such that
   // induction variables cannot overflow.
-  if (uint64_t(*TTI->getMinPageSize(F.getContext().getOptionsContext())) >
+  if (uint64_t(
+          *TTI->getMinPageSize(F.getContext().getOptions<AnalysisOptions>())) >
       (std::numeric_limits<uint64_t>::max() / 2))
     return false;
 
@@ -1305,7 +1301,7 @@ Value *LoopIdiomVectorize::expandFindFirstByte(
                               {ConstantInt::get(I64Ty, 0), ConstVF});
 
   const uint64_t MinPageSize =
-      TTI->getMinPageSize(Ctx.getOptionsContext()).value();
+      TTI->getMinPageSize(Ctx.getOptions<AnalysisOptions>()).value();
   const uint64_t AddrShiftAmt = llvm::Log2_64(MinPageSize);
   Value *SearchStartPage =
       Builder.CreateLShr(ISearchStart, AddrShiftAmt, "search_start_page");

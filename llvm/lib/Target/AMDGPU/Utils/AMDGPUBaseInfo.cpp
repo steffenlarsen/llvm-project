@@ -25,24 +25,13 @@
 #include "llvm/MC/MCInstrInfo.h"
 #include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/MC/MCSubtargetInfo.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/AMDGPU/AMDGPUOptionsOptInfos.h"
+#include "llvm/Target/AMDGPU/AMDGPUOptions.h"
 #include "llvm/TargetParser/AMDGPUTargetParser.h"
 #include <optional>
 
 #define GET_INSTRINFO_NAMED_OPS
 #define GET_INSTRMAP_INFO
 #include "AMDGPUGenInstrInfo.inc"
-
-static unsigned
-getDefaultAMDHSACodeObjectVersionOpt(const llvm::amdgpu_opts::ParsedOpts *O,
-                                     const llvm::clv2::OptionsContext &Ctx) {
-  if (!O)
-    O = llvm::clv2::getView<&llvm::clv2::AMDGPUOptsReg>(Ctx);
-  if (O)
-    return O->get<&llvm::clv2::AMDGPU_DefaultAMDHSACodeObjectVersion>();
-  return llvm::AMDGPU::AMDHSA_COV6;
-}
 
 namespace {
 
@@ -221,15 +210,16 @@ unsigned getAMDHSACodeObjectVersion(const Module &M) {
     return (unsigned)Ver->getZExtValue() / 100;
   }
 
-  return getDefaultAMDHSACodeObjectVersion(M.getContext().getOptionsContext());
+  return getDefaultAMDHSACodeObjectVersion(&M.getContext());
 }
 
-unsigned getDefaultAMDHSACodeObjectVersion(const clv2::OptionsContext &Ctx) {
-  return getDefaultAMDHSACodeObjectVersionOpt(nullptr, Ctx);
+unsigned getDefaultAMDHSACodeObjectVersion(const LLVMContext *Ctx) {
+  return (Ctx ? Ctx->getOptions<AMDGPUOptions>() : AMDGPUOptions::Current)
+      .AMDGPU_DefaultAMDHSACodeObjectVersion;
 }
 
 unsigned getAMDHSACodeObjectVersion(unsigned ABIVersion,
-                                    const clv2::OptionsContext &Ctx) {
+                                    const LLVMContext *Ctx) {
   switch (ABIVersion) {
   case ELF::ELFABIVERSION_AMDGPU_HSA_V4:
     return 4;

@@ -24,8 +24,6 @@ tablegen(LLVM MipsGenExegesis.inc -gen-exegesis)
 add_public_tablegen_target(MipsCommonTableGen)
 
 add_llvm_target(MipsCodeGen
-  MipsOptionsGetters.cpp
-  MipsOptionsRegistration.cpp
   Mips16FrameLowering.cpp
   Mips16HardFloat.cpp
   Mips16HardFloatInfo.cpp
@@ -89,6 +87,9 @@ add_llvm_target(MipsCodeGen
 
   ADD_TO_COMPONENT
   Mips
+
+  DEPENDS
+  MipsOptParserTableGen
   )
 
 add_subdirectory(AsmParser)

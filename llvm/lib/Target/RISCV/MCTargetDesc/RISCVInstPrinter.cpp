@@ -20,10 +20,8 @@
 #include "llvm/MC/MCInstrAnalysis.h"
 #include "llvm/MC/MCSubtargetInfo.h"
 #include "llvm/MC/MCSymbol.h"
-#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/RISCV/RISCVOptionsOptInfos.h"
+#include "llvm/Target/RISCV/RISCVOptions.h"
 using namespace llvm;
 
 #define DEBUG_TYPE "asm-printer"
@@ -34,15 +32,10 @@ using namespace llvm;
 
 static bool EmitX8AsFP = false;
 
-static bool getNoAliases(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::RISCVOptsReg, &clv2::RV_NoAliases>(Ctx,
-                                                                     false);
-}
+static bool getNoAliases() { return RISCVOptions::Current.RV_NoAliases; }
 
-static bool getEmitX8AsFP(const clv2::OptionsContext &Ctx) {
-  if (auto *O = clv2::getView<&clv2::RISCVOptsReg>(Ctx))
-    return O->get<&clv2::RV_EmitX8AsFP>() || EmitX8AsFP;
-  return EmitX8AsFP;
+static bool getEmitX8AsFP() {
+  return RISCVOptions::Current.RV_EmitX8AsFP || EmitX8AsFP;
 }
 
 // Print architectural register names rather than the ABI names (such as x2
@@ -80,11 +73,11 @@ void RISCVInstPrinter::printInst(const MCInst *MI, uint64_t Address,
   bool Res = false;
   const MCInst *NewMI = MI;
   MCInst UncompressedMI;
-  if (PrintAliases && !getNoAliases(getOptionsContext()))
+  if (PrintAliases && !getNoAliases())
     Res = RISCVRVC::uncompress(UncompressedMI, *MI, STI);
   if (Res)
     NewMI = &UncompressedMI;
-  if (!PrintAliases || getNoAliases(getOptionsContext()) ||
+  if (!PrintAliases || getNoAliases() ||
       !printAliasInstr(NewMI, Address, STI, O))
     printInstruction(NewMI, Address, STI, O);
   printAnnotation(O, Annot);
@@ -93,7 +86,7 @@ void RISCVInstPrinter::printInst(const MCInst *MI, uint64_t Address,
 void RISCVInstPrinter::printRegName(raw_ostream &O, MCRegister Reg) {
   // When PrintAliases is enabled, and EmitX8AsFP is enabled, x8 will be printed
   // as fp instead of s0.
-  if (!ArchRegNames && getEmitX8AsFP(getOptionsContext()) && Reg == RISCV::X8) {
+  if (!ArchRegNames && getEmitX8AsFP() && Reg == RISCV::X8) {
     markup(O, Markup::Register) << "fp";
     return;
   }
@@ -167,7 +160,7 @@ void RISCVInstPrinter::printFenceArg(const MCInst *MI, unsigned OpNo,
                                      const MCSubtargetInfo &STI,
                                      raw_ostream &O) {
   unsigned FenceArg = MI->getOperand(OpNo).getImm();
-  assert (((FenceArg >> 4) == 0) && "Invalid immediate in printFenceArg");
+  assert(((FenceArg >> 4) == 0) && "Invalid immediate in printFenceArg");
 
   if ((FenceArg & RISCVFenceField::I) != 0)
     O << 'i';
@@ -195,7 +188,7 @@ void RISCVInstPrinter::printFRMArg(const MCInst *MI, unsigned OpNo,
                                    const MCSubtargetInfo &STI, raw_ostream &O) {
   auto FRMArg =
       static_cast<RISCVFPRndMode::RoundingMode>(MI->getOperand(OpNo).getImm());
-  if (PrintAliases && !getNoAliases(getOptionsContext()) &&
+  if (PrintAliases && !getNoAliases() &&
       FRMArg == RISCVFPRndMode::RoundingMode::DYN)
     return;
   O << ", " << RISCVFPRndMode::roundingModeToString(FRMArg);
@@ -279,7 +272,8 @@ void RISCVInstPrinter::printXSfmmVType(const MCInst *MI, unsigned OpNo,
 // than ABI register names, we need to print "{x1, x8-x9, x18-x27}" for all
 // registers. Otherwise, we print "{ra, s0-s11}".
 void RISCVInstPrinter::printRegList(const MCInst *MI, unsigned OpNo,
-                                    const MCSubtargetInfo &STI, raw_ostream &O) {
+                                    const MCSubtargetInfo &STI,
+                                    raw_ostream &O) {
   unsigned Imm = MI->getOperand(OpNo).getImm();
 
   assert(Imm >= RISCVZC::RLISTENCODE::RA &&

@@ -91,6 +91,7 @@
 #include "llvm/ADT/ilist_node.h"
 #include "llvm/ADT/iterator_range.h"
 #include "llvm/Analysis/AliasAnalysis.h"
+#include "llvm/Analysis/AnalysisOptions.h"
 #include "llvm/Analysis/MemoryLocation.h"
 #include "llvm/Analysis/PHITransAddr.h"
 #include "llvm/IR/DerivedUser.h"
@@ -110,6 +111,7 @@
 namespace llvm {
 
 template <class GraphType> struct GraphTraits;
+class AnalysisOptions;
 class Function;
 class Loop;
 class LLVMContext;
@@ -235,8 +237,7 @@ private:
   BasicBlock *Block;
 };
 
-template <>
-struct ilist_alloc_traits<MemoryAccess> {
+template <> struct ilist_alloc_traits<MemoryAccess> {
   static void deleteNode(MemoryAccess *MA) { MA->deleteValue(); }
 };
 
@@ -343,13 +344,9 @@ public:
     return getDefiningAccess() && OptimizedID == getDefiningAccess()->getID();
   }
 
-  MemoryAccess *getOptimized() const {
-    return getDefiningAccess();
-  }
+  MemoryAccess *getOptimized() const { return getDefiningAccess(); }
 
-  void resetOptimized() {
-    OptimizedID = INVALID_MEMORYACCESS_ID;
-  }
+  void resetOptimized() { OptimizedID = INVALID_MEMORYACCESS_ID; }
 
 protected:
   friend class MemorySSA;
@@ -427,8 +424,7 @@ template <>
 struct OperandTraits<MemoryDef> : public FixedNumOperandTraits<MemoryDef, 2> {};
 DEFINE_TRANSPARENT_OPERAND_ACCESSORS(MemoryDef, MemoryAccess)
 
-template <>
-struct OperandTraits<MemoryUseOrDef> {
+template <> struct OperandTraits<MemoryUseOrDef> {
   static Use *op_begin(MemoryUseOrDef *MUD) {
     if (auto *MU = dyn_cast<MemoryUse>(MUD))
       return OperandTraits<MemoryUse>::op_begin(MU);
@@ -875,7 +871,7 @@ private:
   DominatorTree *DT;
   Function *F = nullptr;
   Loop *L = nullptr;
-  const clv2::OptionsContext *OptsCtx = &clv2::defaultOptionsContext();
+  const AnalysisOptions *OptsCtx = &AnalysisOptions::Current;
 
   // Memory SSA mappings
   DenseMap<const Value *, MemoryAccess *> ValueToMemoryAccess;
@@ -1285,9 +1281,9 @@ private:
       return;
 
     if (Location.Ptr) {
-      PHITransAddr Translator(
-          const_cast<Value *>(Location.Ptr),
-          OriginalAccess->getBlock()->getDataLayout(), nullptr);
+      PHITransAddr Translator(const_cast<Value *>(Location.Ptr),
+                              OriginalAccess->getBlock()->getDataLayout(),
+                              nullptr);
 
       if (Value *Addr =
               Translator.translateValue(OriginalAccess->getBlock(),

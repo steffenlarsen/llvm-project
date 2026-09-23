@@ -1580,6 +1580,12 @@ public:
   /// LLVMContext::setParsedOptions().  Null if no options have been attached.
   std::shared_ptr<clv2::ParsedOptionsBase> ParsedOpts;
 
+  /// Library options structs (see llvm/include/llvm/Option/LibraryOptions.h)
+  /// attached to this context, indexed by each struct type's process-wide
+  /// T::Slot. Populated by LLVMContext::setOptions<T>(); entries default to
+  /// null (falls back to T::Current) until set.
+  SmallVector<std::shared_ptr<void>, 0> LibraryOptions;
+
   /// Per-session option context.  Stores type-erased ParsedOptions views
   /// keyed by registry address.  Set by LLVMContext::setOptionsContext().
   /// Non-owning pointer to a tool-owned context, or to the shared

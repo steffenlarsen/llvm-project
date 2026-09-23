@@ -352,7 +352,7 @@ void AMDGPUAsmPrinter::emitGlobalVariable(const GlobalVariable *GV) {
 
     const Triple::OSType OS = TM.getTargetTriple().getOS();
     if (OS == Triple::AMDHSA || OS == Triple::AMDPAL) {
-      if (!AMDGPUTargetMachine::getEnableObjectLinking(TM.getOptionsContext()))
+      if (!AMDGPUTargetMachine::getEnableObjectLinking(&GV->getContext()))
         return;
       // With object linking, LDS definitions should have been externalized
       // by earlier passes (e.g. LDS lowering, named barrier lowering).
@@ -622,7 +622,8 @@ static std::string computeTypeId(const FunctionType *FTy,
 }
 
 void AMDGPUAsmPrinter::collectCallEdge(const MachineInstr &MI) {
-  if (!AMDGPUTargetMachine::getEnableObjectLinking(TM.getOptionsContext()))
+  if (!AMDGPUTargetMachine::getEnableObjectLinking(
+          &MF->getFunction().getContext()))
     return;
   const SIInstrInfo *TII = MF->getSubtarget<GCNSubtarget>().getInstrInfo();
   const MachineOperand *Callee =
@@ -634,7 +635,7 @@ void AMDGPUAsmPrinter::collectCallEdge(const MachineInstr &MI) {
 }
 
 void AMDGPUAsmPrinter::emitAMDGPUInfo(Module &M) {
-  if (!AMDGPUTargetMachine::getEnableObjectLinking(TM.getOptionsContext()))
+  if (!AMDGPUTargetMachine::getEnableObjectLinking(&M.getContext()))
     return;
 
   const NamedMDNode *LDSMD = M.getNamedMetadata("amdgpu.lds.uses");
@@ -759,7 +760,7 @@ bool AMDGPUAsmPrinter::doFinalization(Module &M) {
   // checks would silently no-op for every non-leaf function. Defer resource
   // sanity checking to the linker, which re-validates against the aggregated
   // call graph in the combined .amdgpu.info metadata.
-  if (!AMDGPUTargetMachine::getEnableObjectLinking(TM.getOptionsContext())) {
+  if (!AMDGPUTargetMachine::getEnableObjectLinking(&M.getContext())) {
     for (Function &F : M.functions())
       validateMCResourceInfo(F);
   }
@@ -922,7 +923,8 @@ bool AMDGPUAsmPrinter::runOnMachineFunction(MachineFunction &MF) {
 
   RI.gatherResourceInfo(MF, *ResourceUsage, OutContext);
 
-  if (AMDGPUTargetMachine::getEnableObjectLinking(TM.getOptionsContext())) {
+  if (AMDGPUTargetMachine::getEnableObjectLinking(
+          &MF.getFunction().getContext())) {
     const AMDGPUResourceUsageAnalysisWrapperPass::FunctionResourceInfo &RU =
         *ResourceUsage;
     FunctionInfos.push_back(

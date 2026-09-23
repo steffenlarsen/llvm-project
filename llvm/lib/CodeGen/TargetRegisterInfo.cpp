@@ -17,7 +17,7 @@
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/BinaryFormat/Dwarf.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsSched2.h"
 #include "llvm/CodeGen/LiveInterval.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
@@ -32,10 +32,8 @@
 #include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/IR/Function.h"
 #include "llvm/MC/MCRegisterInfo.h"
-#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/Printable.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cassert>
@@ -45,8 +43,8 @@
 
 using namespace llvm;
 
-static unsigned getHugeSizeForSplit(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_HugeSizeForSplit>(Ctx);
+static unsigned getHugeSizeForSplit(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenSched2Options>().CGPASS_HugeSizeForSplit;
 }
 
 TargetRegisterInfo::TargetRegisterInfo(
@@ -70,8 +68,7 @@ bool TargetRegisterInfo::shouldRegionSplitForVirtReg(
   const MachineRegisterInfo &MRI = MF.getRegInfo();
   MachineInstr *MI = MRI.getUniqueVRegDef(VirtReg.reg());
   if (MI && TII->isTriviallyReMaterializable(*MI) &&
-      VirtReg.size() > getHugeSizeForSplit(
-                           MF.getFunction().getContext().getOptionsContext()))
+      VirtReg.size() > getHugeSizeForSplit(MF.getFunction().getContext()))
     return false;
   return true;
 }

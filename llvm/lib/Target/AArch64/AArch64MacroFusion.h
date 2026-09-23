@@ -18,15 +18,13 @@
 
 namespace llvm {
 
-namespace clv2 {
-class OptionsContext;
-} // namespace clv2
+class LLVMContext;
 
 /// Note that you have to add:
 ///   DAG.addMutation(createAArch64MacroFusionDAGMutation());
 /// to AArch64TargetMachine::createMachineScheduler() to have an effect.
 std::unique_ptr<ScheduleDAGMutation>
-createAArch64MacroFusionDAGMutation(const clv2::OptionsContext &Ctx);
+createAArch64MacroFusionDAGMutation(const LLVMContext &Ctx);
 
 } // namespace llvm
 

@@ -57,7 +57,7 @@
 #include "llvm/Linker/Linker.h"
 #include "llvm/Object/OffloadBinary.h"
 #include "llvm/Passes/PassBuilder.h"
-#include "llvm/Passes/PassesOptionsOptInfos.h"
+#include "llvm/Passes/PassesOptions.h"
 #include "llvm/Passes/RunCodeGen.h"
 #include "llvm/Passes/StandardInstrumentations.h"
 #include "llvm/Plugins/PassPlugin.h"
@@ -1104,10 +1104,10 @@ void CodeGenAction::runOptimizationPipeline(llvm::raw_pwrite_stream &os) {
   // Print a textual, '-passes=' compatible, representation of pipeline if
   // requested. In this case, don't run the passes. This mimics the behavior of
   // clang.
-  bool doPrintPipeline = false;
-  if (auto *O = llvm::clv2::getView<&llvm::clv2::PassesOptsReg>(
-          llvmModule->getContext().getOptionsContext()))
-    doPrintPipeline = O->specified<&llvm::clv2::PAS_PrintPipelinePasses>();
+  bool doPrintPipeline =
+      llvmModule->getContext()
+          .getOptions<llvm::PassesOptions>()
+          .PAS_PrintPipelinePasses.has_value();
   if (doPrintPipeline) {
     mpm.printPipeline(llvm::outs(), [&pic](llvm::StringRef className) {
       auto passName = pic.getPassNameForClassName(className);

@@ -24,8 +24,7 @@
 #include "llvm/CodeGen/MachineDominators.h"
 #include "llvm/CodeGen/MachinePostDominators.h"
 #include "llvm/InitializePasses.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/LoongArch/LoongArchOptionsOptInfos.h"
+#include "llvm/Target/LoongArch/LoongArchOptions.h"
 
 using namespace llvm;
 
@@ -34,23 +33,31 @@ using namespace llvm;
   "LoongArch Memory Barrier Optimisation pass"
 
 static bool getRequireNoPathBypass(const MachineFunction &MF) {
-  return clv2::getOptValOrDefault<&clv2::LA_RequireNoPathBypass>(
-      MF.getFunction().getContext().getOptionsContext());
+  return MF.getFunction()
+      .getContext()
+      .getOptions<LoongArchOptions>()
+      .LA_RequireNoPathBypass;
 }
 
 static bool getMergeAMOWithMB(const MachineFunction &MF) {
-  return clv2::getOptValOrDefault<&clv2::LA_MergeAMOWithMB>(
-      MF.getFunction().getContext().getOptionsContext());
+  return MF.getFunction()
+      .getContext()
+      .getOptions<LoongArchOptions>()
+      .LA_MergeAMOWithMB;
 }
 
 static bool getDisableInlineAsm(const MachineFunction &MF) {
-  return clv2::getOptValOrDefault<&clv2::LA_DisableInlineAsmBarrierOpt>(
-      MF.getFunction().getContext().getOptionsContext());
+  return MF.getFunction()
+      .getContext()
+      .getOptions<LoongArchOptions>()
+      .LA_DisableInlineAsmBarrierOpt;
 }
 
 static bool getReplaceEliminatedMBToNop(const MachineFunction &MF) {
-  return clv2::getOptValOrDefault<&clv2::LA_ReplaceEliminatedDbarToNop>(
-      MF.getFunction().getContext().getOptionsContext());
+  return MF.getFunction()
+      .getContext()
+      .getOptions<LoongArchOptions>()
+      .LA_ReplaceEliminatedDbarToNop;
 }
 
 namespace {

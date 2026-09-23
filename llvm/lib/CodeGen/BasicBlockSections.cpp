@@ -73,7 +73,7 @@
 #include "llvm/CodeGen/BasicBlockMatchingAndInference.h"
 #include "llvm/CodeGen/BasicBlockSectionUtils.h"
 #include "llvm/CodeGen/BasicBlockSectionsProfileReader.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsCore1.h"
 #include "llvm/CodeGen/CommandFlags.h"
 #include "llvm/CodeGen/MachineDominators.h"
 #include "llvm/CodeGen/MachineFunction.h"
@@ -98,9 +98,8 @@ std::string llvm::getBBSectionsColdTextPrefix(const clv2::OptionsContext &Ctx) {
   return ".text.split.";
 }
 
-static bool getBbsectionsDetectSourceDrift(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_BbsectionsDetectSourceDrift>(
-      Ctx);
+static bool getBbsectionsDetectSourceDrift(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore1Options>().CGPASS_BbsectionsDetectSourceDrift;
 }
 
 namespace {
@@ -356,8 +355,7 @@ void llvm::avoidZeroOffsetLandingPad(MachineFunction &MF) {
 }
 
 bool llvm::hasInstrProfHashMismatch(MachineFunction &MF) {
-  if (!getBbsectionsDetectSourceDrift(
-          MF.getFunction().getContext().getOptionsContext()))
+  if (!getBbsectionsDetectSourceDrift(MF.getFunction().getContext()))
     return false;
 
   const char MetadataName[] = "instr_prof_hash_mismatch";

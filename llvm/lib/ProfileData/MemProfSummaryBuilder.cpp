@@ -12,7 +12,6 @@
 
 #include "llvm/ProfileData/MemProfSummaryBuilder.h"
 #include "llvm/ProfileData/MemProfCommon.h"
-#include "llvm/Support/OptionsContext.h"
 
 using namespace llvm;
 using namespace llvm::memprof;
@@ -29,9 +28,11 @@ void MemProfSummaryBuilder::addRecord(uint64_t CSId,
   if (!I.second)
     return;
   NumContexts++;
+  // MemProfSummaryBuilder has no Module/LLVMContext in scope to bridge to
+  // the new per-type options system, so read the process-wide default.
   auto AllocType = getAllocType(Info.getTotalLifetimeAccessDensity(),
                                 Info.getAllocCount(), Info.getTotalLifetime(),
-                                /*Ctx=*/llvm::clv2::defaultOptionsContext());
+                                /*Opts=*/ProfileDataOptions::Current);
   auto TotalSize = Info.getTotalSize();
   switch (AllocType) {
   case AllocationType::Cold:

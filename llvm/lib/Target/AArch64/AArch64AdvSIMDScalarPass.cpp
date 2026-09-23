@@ -42,16 +42,14 @@
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/AArch64/AArch64OptionsOptInfos.h"
+#include "llvm/Target/AArch64/AArch64Options.h"
 using namespace llvm;
 
 #define DEBUG_TYPE "aarch64-simd-scalar"
 
 static bool getTransformAll(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::A64_SIMDScalarForceAll>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<AArch64Options>().A64_SIMDScalarForceAll;
 }
 
 STATISTIC(NumScalarInsnsUsed, "Number of scalar instructions used");

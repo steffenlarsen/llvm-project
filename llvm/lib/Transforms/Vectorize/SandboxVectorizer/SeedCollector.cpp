@@ -16,7 +16,6 @@
 #include "llvm/SandboxIR/Utils.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Transforms/Vectorize/VectorizeOptions.h"
 
 using namespace llvm;
@@ -24,13 +23,11 @@ using namespace llvm;
 namespace llvm::sandboxir {
 
 static unsigned getSeedBundleSizeLimit(const llvm::Function &F) {
-  return clv2::getOptValOrDefault<&clv2::VEC_SeedBundleSizeLimit>(
-      F.getContext().getOptionsContext());
+  return VectorizeOptions::Current.VEC_SeedBundleSizeLimit;
 }
 
 static unsigned getSeedGroupsLimit(const llvm::Function &F) {
-  return clv2::getOptValOrDefault<&clv2::VEC_SeedGroupsLimit>(
-      F.getContext().getOptionsContext());
+  return VectorizeOptions::Current.VEC_SeedGroupsLimit;
 }
 
 ArrayRef<Instruction *> SeedBundle::getSlice(unsigned StartIdx,

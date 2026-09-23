@@ -16,16 +16,15 @@
 #include "llvm/IR/DiagnosticPrinter.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Module.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/TargetParser/Triple.h"
-#include "llvm/Transforms/Utils/UtilsOptionsOptInfos.h"
+#include "llvm/Transforms/Utils/UtilsOptions.h"
 
 using namespace llvm;
 
 static bool getClIgnoreRedundantInstrumentation(const Module &M) {
-  return clv2::getOptValIfSpecified<&clv2::TransformUtilsOptsReg,
-                                    &clv2::TU_ClIgnoreRedundantInstrumentation>(
-      M.getContext().getOptionsContext(), false);
+  return M.getContext()
+      .getOptions<UtilsOptions>()
+      .TU_ClIgnoreRedundantInstrumentation;
 }
 
 /// Check if module has flag attached, if not add the flag.

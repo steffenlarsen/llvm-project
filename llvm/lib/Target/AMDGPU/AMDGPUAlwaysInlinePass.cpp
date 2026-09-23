@@ -18,14 +18,12 @@
 #include "llvm/CodeGen/CommandFlags.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/AMDGPU/AMDGPUOptionsOptInfos.h"
+#include "llvm/Target/AMDGPU/AMDGPUOptions.h"
 
 using namespace llvm;
 
 static bool getStressCalls(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::AMDGPU_StressCalls>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<AMDGPUOptions>().AMDGPU_StressCalls;
 }
 
 namespace {
@@ -36,8 +34,8 @@ class AMDGPUAlwaysInline : public ModulePass {
 public:
   static char ID;
 
-  AMDGPUAlwaysInline(bool GlobalOpt = false) :
-    ModulePass(ID), GlobalOpt(GlobalOpt) { }
+  AMDGPUAlwaysInline(bool GlobalOpt = false)
+      : ModulePass(ID), GlobalOpt(GlobalOpt) {}
   bool runOnModule(Module &M) override;
 
   void getAnalysisUsage(AnalysisUsage &AU) const override {
@@ -87,7 +85,7 @@ recursivelyVisitUsers(GlobalValue &GV,
 }
 
 static bool alwaysInlineImpl(Module &M, bool GlobalOpt) {
-  std::vector<GlobalAlias*> AliasesToRemove;
+  std::vector<GlobalAlias *> AliasesToRemove;
 
   bool Changed = false;
   SmallPtrSet<Function *, 8> FuncsToAlwaysInline;
@@ -95,7 +93,7 @@ static bool alwaysInlineImpl(Module &M, bool GlobalOpt) {
   Triple TT(M.getTargetTriple());
 
   for (GlobalAlias &A : M.aliases()) {
-    if (Function* F = dyn_cast<Function>(A.getAliasee())) {
+    if (Function *F = dyn_cast<Function>(A.getAliasee())) {
       if (TT.isAMDGCN() && A.getLinkage() != GlobalValue::InternalLinkage)
         continue;
       Changed = true;
@@ -108,7 +106,7 @@ static bool alwaysInlineImpl(Module &M, bool GlobalOpt) {
   }
 
   if (GlobalOpt) {
-    for (GlobalAlias* A : AliasesToRemove) {
+    for (GlobalAlias *A : AliasesToRemove) {
       A->eraseFromParent();
     }
   }
@@ -128,13 +126,11 @@ static bool alwaysInlineImpl(Module &M, bool GlobalOpt) {
     unsigned AS = GV.getAddressSpace();
     if ((AS == AMDGPUAS::REGION_ADDRESS) ||
         (AS == AMDGPUAS::LOCAL_ADDRESS &&
-         (!AMDGPUTargetMachine::getEnableLowerModuleLDS(
-             M.getContext().getOptionsContext()))))
+         (!AMDGPUTargetMachine::getEnableLowerModuleLDS(&M.getContext()))))
       recursivelyVisitUsers(GV, FuncsToAlwaysInline);
   }
 
-  if (!AMDGPUTargetMachine::getEnableFunctionCalls(
-          TT, M.getContext().getOptionsContext()) ||
+  if (!AMDGPUTargetMachine::getEnableFunctionCalls(TT, &M.getContext()) ||
       getStressCalls(M)) {
     auto IncompatAttr =
         getStressCalls(M) ? Attribute::AlwaysInline : Attribute::NoInline;

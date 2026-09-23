@@ -23,6 +23,7 @@
 #include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/FileSystem.h"
+#include "llvm/Support/PluginLoaderOptions.h"
 #include "llvm/Support/PrettyStackTrace.h"
 #include "llvm/Support/Program.h"
 #include "llvm/Support/RegisterLLVMOptions.h"
@@ -369,7 +370,10 @@ int indextest_core_main(int argc, const char **argv) {
   P.add<&options::CoreMainReg>();
   RegisterAllLLVMOptions(P);
   P.hideUnrelatedOptions({&options::IndexTestCoreCategory});
-  auto OptsCtx = P.parse(argc, argv, "index-test-core");
+  std::vector<const char *> ArgsAfterPlugins =
+      loadPluginsAndStripArgs(argc, argv);
+  auto OptsCtx = P.parse(static_cast<int>(ArgsAfterPlugins.size()),
+                         ArgsAfterPlugins.data(), "index-test-core");
   auto *Opts = OptsCtx->getViewPtr<&options::CoreMainReg>();
 
   ActionType Action = ActionType::None;

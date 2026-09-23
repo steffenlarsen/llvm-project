@@ -30,7 +30,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/StringExtras.h"
-#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
+#include "llvm/Analysis/AnalysisOptions.h"
 #include "llvm/Analysis/MemoryProfileInfo.h"
 #include "llvm/Analysis/ModuleSummaryAnalysis.h"
 #include "llvm/Analysis/OptimizationRemarkEmitter.h"
@@ -41,11 +41,10 @@
 #include "llvm/Pass.h"
 #include "llvm/Support/GraphWriter.h"
 #include "llvm/Support/InterleavedRange.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/SHA1.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/IPO.h"
-#include "llvm/Transforms/IPO/IPOOptionsOptInfos.h"
+#include "llvm/Transforms/IPO/IPOOptions.h"
 #include "llvm/Transforms/Utils/CallPromotionUtils.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/Instrumentation.h"
@@ -115,59 +114,40 @@ STATISTIC(NumFixedContexts, "Number of contexts with fixed edges");
 STATISTIC(AliaseesPrevailingInDiffModuleFromAlias,
           "Number of aliasees prevailing in a different module than its alias");
 
-// How much of the graph to export to dot.
-enum DotScope {
-  All,     // The full CCG graph.
-  Alloc,   // Only contexts for the specified allocation.
-  Context, // Only the specified context.
-};
+// How much of the graph to export to dot. DotScope itself is now generated
+// from IPOOptions.td (see DotScopeEnum there) rather than declared here.
 
-static bool getMemProfReportHintedSizes(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::AN_MemProfReportHintedSizes>(Ctx);
+static bool getMemProfReportHintedSizes(const AnalysisOptions &Opts) {
+  return Opts.AN_MemProfReportHintedSizes;
 }
 
-static unsigned getMinClonedColdBytePercent(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::AN_MinClonedColdBytePercent>(Ctx);
+static unsigned getMinClonedColdBytePercent(const AnalysisOptions &Opts) {
+  return Opts.AN_MinClonedColdBytePercent;
 }
 
-static unsigned getMaxSummaryIndirectEdges(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::AN_MaxSummaryIndirectEdges>(Ctx);
+static unsigned getMaxSummaryIndirectEdges(const AnalysisOptions &Opts) {
+  return Opts.AN_MaxSummaryIndirectEdges;
 }
 
 #define MEMPROF_GETTER(Type, Name, Default)                                    \
   static Type get##Name(const Module &M) {                                     \
-    if (auto *O = clv2::getView<&clv2::IPOOptsReg>(                            \
-            M.getContext().getOptionsContext()))                               \
-      if (O->specified<&clv2::IPO_##Name>())                                   \
-        return O->get<&clv2::IPO_##Name>();                                    \
-    return Default;                                                            \
+    return M.getContext().getOptions<IPOOptions>().IPO_##Name;                 \
   }                                                                            \
-  static Type get##Name(const ipo_opts::ParsedOpts *O) {                       \
-    if (O && O->specified<&clv2::IPO_##Name>())                                \
-      return O->get<&clv2::IPO_##Name>();                                      \
-    return Default;                                                            \
+  static Type get##Name(const IPOOptions *O) {                                 \
+    return O ? O->IPO_##Name : Default;                                        \
   }
 #define MEMPROF_REF_GETTER(Type, Name, Default)                                \
   static const Type &get##Name(const Module &M) {                              \
-    if (auto *O = clv2::getView<&clv2::IPOOptsReg>(                            \
-            M.getContext().getOptionsContext()))                               \
-      if (O->specified<&clv2::IPO_##Name>())                                   \
-        return O->get<&clv2::IPO_##Name>();                                    \
-    static const Type D = Default;                                             \
-    return D;                                                                  \
+    return M.getContext().getOptions<IPOOptions>().IPO_##Name;                 \
   }                                                                            \
-  static const Type &get##Name(const ipo_opts::ParsedOpts *O) {                \
-    if (O && O->specified<&clv2::IPO_##Name>())                                \
-      return O->get<&clv2::IPO_##Name>();                                      \
+  static const Type &get##Name(const IPOOptions *O) {                          \
     static const Type D = Default;                                             \
-    return D;                                                                  \
+    return O ? O->IPO_##Name : D;                                              \
   }
 
 MEMPROF_REF_GETTER(std::string, DotFilePathPrefix, std::string{})
 MEMPROF_GETTER(bool, ExportToDot, false)
 MEMPROF_GETTER(bool, DoMergeIteration, true)
-MEMPROF_GETTER(unsigned, AllocIdForDot, 0)
-MEMPROF_GETTER(unsigned, ContextIdForDot, 0)
 MEMPROF_GETTER(bool, DumpCCG, false)
 MEMPROF_GETTER(bool, VerifyCCG, false)
 MEMPROF_GETTER(bool, VerifyNodes, false)
@@ -178,77 +158,69 @@ MEMPROF_GETTER(bool, CloneRecursiveContexts, true)
 MEMPROF_GETTER(bool, MergeClones, true)
 MEMPROF_GETTER(bool, AllowRecursiveContexts, true)
 MEMPROF_GETTER(unsigned, MemProfICPNoInlineThreshold, 0)
+
+// IPO_AllocIdForDot/IPO_ContextIdForDot are OptionalField<unsigned> (they need
+// an explicit "was this specified" query below), so they are hand-written
+// rather than macro-generated like the plain fields above.
+static unsigned getAllocIdForDot(const Module &M) {
+  return M.getContext().getOptions<IPOOptions>().IPO_AllocIdForDot.value_or(0);
+}
+static unsigned getAllocIdForDot(const IPOOptions *O) {
+  return O ? O->IPO_AllocIdForDot.value_or(0) : 0;
+}
+static unsigned getContextIdForDot(const Module &M) {
+  return M.getContext().getOptions<IPOOptions>().IPO_ContextIdForDot.value_or(
+      0);
+}
+static unsigned getContextIdForDot(const IPOOptions *O) {
+  return O ? O->IPO_ContextIdForDot.value_or(0) : 0;
+}
+
 static bool getEnableMemProfContextDisambiguation(const Module &M) {
-  return clv2::getOptValOr<&clv2::IPOOptsReg,
-                           &clv2::IPO_EnableMemProfContextDisambiguation>(
-      M.getContext().getOptionsContext(), false);
+  return M.getContext()
+      .getOptions<IPOOptions>()
+      .IPO_EnableMemProfContextDisambiguation;
 }
 static bool getSupportsHotColdNew(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_SupportsHotColdNew>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_SupportsHotColdNew;
 }
-static bool getSupportsHotColdNew(const ipo_opts::ParsedOpts *O) {
-
-  if (O)
-    return O->get<&clv2::IPO_SupportsHotColdNew>();
-  return false;
+static bool getSupportsHotColdNew(const IPOOptions *O) {
+  return O && O->IPO_SupportsHotColdNew;
 }
 MEMPROF_GETTER(bool, MemProfRequireDefinitionForPromotion, false)
 static unsigned getMemProfTopNImportant(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_MemProfTopNImportant>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_MemProfTopNImportant;
 }
-static unsigned getMemProfTopNImportant(const ipo_opts::ParsedOpts *O) {
-
-  if (O)
-    return O->get<&clv2::IPO_MemProfTopNImportant>();
-  return 10;
+static unsigned getMemProfTopNImportant(const IPOOptions *O) {
+  return O ? O->IPO_MemProfTopNImportant : 10;
 }
 static bool getMemProfFixupImportant(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_MemProfFixupImportant>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_MemProfFixupImportant;
 }
-static bool getMemProfFixupImportant(const ipo_opts::ParsedOpts *O) {
-
-  if (O)
-    return O->get<&clv2::IPO_MemProfFixupImportant>();
-  return true;
+static bool getMemProfFixupImportant(const IPOOptions *O) {
+  return O ? O->IPO_MemProfFixupImportant : true;
 }
 
-static DotScope getDotGraphScope(const ipo_opts::ParsedOpts *O) {
-
-  if (O && O->specified<&clv2::IPO_DotGraphScope>()) {
-    auto V = O->get<&clv2::IPO_DotGraphScope>();
-    switch (V) {
-    case clv2::DotScope_All:
-      return DotScope::All;
-    case clv2::DotScope_Alloc:
-      return DotScope::Alloc;
-    case clv2::DotScope_Context:
-      return DotScope::Context;
-    }
-  }
-  return DotScope::All;
+static DotScope getDotGraphScope(const IPOOptions *O) {
+  return O ? O->IPO_DotGraphScope : DotScope::All;
 }
 
 static bool isAllocIdForDotSpecified(const Module &M) {
-  return clv2::wasOptSpecified<&clv2::IPOOptsReg, &clv2::IPO_AllocIdForDot>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_AllocIdForDot.has_value();
 }
 
-static bool isAllocIdForDotSpecified(const ipo_opts::ParsedOpts *O) {
-
-  return O && O->specified<&clv2::IPO_AllocIdForDot>();
+static bool isAllocIdForDotSpecified(const IPOOptions *O) {
+  return O && O->IPO_AllocIdForDot.has_value();
 }
 
 static bool isContextIdForDotSpecified(const Module &M) {
-  return clv2::wasOptSpecified<&clv2::IPOOptsReg, &clv2::IPO_ContextIdForDot>(
-      M.getContext().getOptionsContext());
+  return M.getContext()
+      .getOptions<IPOOptions>()
+      .IPO_ContextIdForDot.has_value();
 }
 
-static bool isContextIdForDotSpecified(const ipo_opts::ParsedOpts *O) {
-
-  return O && O->specified<&clv2::IPO_ContextIdForDot>();
+static bool isContextIdForDotSpecified(const IPOOptions *O) {
+  return O && O->IPO_ContextIdForDot.has_value();
 }
 
 #undef MEMPROF_GETTER
@@ -401,13 +373,13 @@ public:
 
     // Returns true if we need to look at the callee edges for determining the
     // node context ids and allocation type.
-    bool useCallerEdgesForContextInfo(const ipo_opts::ParsedOpts *O) const {
+    bool useCallerEdgesForContextInfo(const IPOOptions *O) const {
       assert(!CalleeEdges.empty() || CallerEdges.empty() || IsAllocation ||
              (getAllowRecursiveCallsites(O) && getAllowRecursiveContexts(O)));
       return IsAllocation || getCloneRecursiveContexts(O);
     }
 
-    DenseSet<uint32_t> getContextIds(const ipo_opts::ParsedOpts *O) const {
+    DenseSet<uint32_t> getContextIds(const IPOOptions *O) const {
       unsigned Count = 0;
       for (auto &Edge : CalleeEdges.empty() ? CallerEdges : CalleeEdges)
         Count += Edge->getContextIds().size();
@@ -422,7 +394,7 @@ public:
       return ContextIds;
     }
 
-    uint8_t computeAllocType(const ipo_opts::ParsedOpts *O) const {
+    uint8_t computeAllocType(const IPOOptions *O) const {
       uint8_t BothTypes =
           (uint8_t)AllocationType::Cold | (uint8_t)AllocationType::NotCold;
       uint8_t AllocType = (uint8_t)AllocationType::None;
@@ -438,7 +410,7 @@ public:
       return AllocType;
     }
 
-    bool emptyContextIds(const ipo_opts::ParsedOpts *O) const {
+    bool emptyContextIds(const IPOOptions *O) const {
       auto Edges = llvm::concat<const std::shared_ptr<ContextEdge>>(
           CalleeEdges, useCallerEdgesForContextInfo(O)
                            ? CallerEdges
@@ -492,7 +464,7 @@ public:
 
     void printCall(raw_ostream &OS) const { Call.print(OS); }
 
-    bool isRemoved(const ipo_opts::ParsedOpts *O) const {
+    bool isRemoved(const IPOOptions *O) const {
       assert((getAllowRecursiveCallsites(O) && getAllowRecursiveContexts(O)) ||
              (AllocTypes == (uint8_t)AllocationType::None) ==
                  emptyContextIds(O));
@@ -639,8 +611,8 @@ protected:
   // context ids on that allocation.
   DenseSet<uint32_t> DotAllocContextIds;
 
-  const ipo_opts::ParsedOpts *IPOOpts = nullptr;
-  const clv2::OptionsContext *OptsCtx = &clv2::defaultOptionsContext();
+  const IPOOptions *IPOOpts = nullptr;
+  const AnalysisOptions *OptsCtx = &AnalysisOptions::Current;
 
 private:
   using EdgeIter = typename std::vector<std::shared_ptr<ContextEdge>>::iterator;
@@ -1038,7 +1010,7 @@ public:
       ModuleSummaryIndex &Index,
       llvm::function_ref<bool(GlobalValue::GUID, const GlobalValueSummary *)>
           isPrevailing,
-      const clv2::OptionsContext &OptsCtx);
+      const LLVMContext &Ctx, const AnalysisOptions &AnOpts);
 
   ~IndexCallsiteContextGraph() {
     // Now that we are done with the graph it is safe to add the new
@@ -1638,7 +1610,7 @@ static void checkEdge(
 
 template <typename DerivedCCG, typename FuncTy, typename CallTy>
 static void checkNode(const ContextNode<DerivedCCG, FuncTy, CallTy> *Node,
-                      const ipo_opts::ParsedOpts *O, bool CheckEdges = true) {
+                      const IPOOptions *O, bool CheckEdges = true) {
   if (Node->isRemoved(O))
     return;
 #ifndef NDEBUG
@@ -2362,9 +2334,8 @@ ModuleCallsiteContextGraph::ModuleCallsiteContextGraph(
     Module &M,
     llvm::function_ref<OptimizationRemarkEmitter &(Function *)> OREGetter)
     : Mod(M), OREGetter(OREGetter) {
-  IPOOpts =
-      clv2::getView<&clv2::IPOOptsReg>(M.getContext().getOptionsContext());
-  OptsCtx = &M.getContext().getOptionsContext();
+  IPOOpts = &M.getContext().getOptions<IPOOptions>();
+  OptsCtx = &M.getContext().getOptions<AnalysisOptions>();
   // Map for keeping track of the largest cold contexts up to the number given
   // by MemProfTopNImportant. Must be a std::map (not DenseMap) because keys
   // must be sorted.
@@ -2487,10 +2458,10 @@ IndexCallsiteContextGraph::IndexCallsiteContextGraph(
     ModuleSummaryIndex &Index,
     llvm::function_ref<bool(GlobalValue::GUID, const GlobalValueSummary *)>
         isPrevailing,
-    const clv2::OptionsContext &Ctx)
+    const LLVMContext &Ctx, const AnalysisOptions &AnOpts)
     : Index(Index), isPrevailing(isPrevailing) {
-  OptsCtx = &Ctx;
-  IPOOpts = clv2::getView<&clv2::IPOOptsReg>(Ctx);
+  OptsCtx = &AnOpts;
+  IPOOpts = &Ctx.getOptions<IPOOptions>();
   // Since we use the aliasee summary info to create the necessary clones for
   // its aliases, conservatively skip recording the aliasee function's callsites
   // in the CCG for any that are prevailing in a different module than one of
@@ -3426,7 +3397,7 @@ struct DOTGraphTraits<const CallsiteContextGraph<DerivedCCG, FuncTy, CallTy> *>
     : public DefaultDOTGraphTraits {
   DOTGraphTraits(bool IsSimple = false) : DefaultDOTGraphTraits(IsSimple) {}
 
-  static bool shouldHighlight(const ipo_opts::ParsedOpts *O) {
+  static bool shouldHighlight(const IPOOptions *O) {
     return (isAllocIdForDotSpecified(O) &&
             getDotGraphScope(O) == DotScope::All) ||
            (isContextIdForDotSpecified(O) &&
@@ -6113,7 +6084,7 @@ unsigned MemProfContextDisambiguation::recordICPInfo(
       ICallAnalysis->getPromotionCandidatesForInstruction(
           CB, TotalCount, NumCandidates,
           getMaxSummaryIndirectEdges(
-              CB->getFunction()->getContext().getOptionsContext()));
+              CB->getFunction()->getContext().getOptions<AnalysisOptions>()));
   if (CandidateProfileData.empty())
     return 0;
 
@@ -6361,9 +6332,8 @@ MemProfContextDisambiguation::MemProfContextDisambiguation(
     const ModuleSummaryIndex *Summary, bool isSamplePGO)
     : ImportSummary(Summary), isSamplePGO(isSamplePGO) {}
 
-void MemProfContextDisambiguation::initFromOptions(
-    const clv2::OptionsContext &Ctx) {
-  const ipo_opts::ParsedOpts *O = clv2::getView<&clv2::IPOOptsReg>(Ctx);
+void MemProfContextDisambiguation::initFromOptions(const LLVMContext &Ctx) {
+  const IPOOptions *O = &Ctx.getOptions<IPOOptions>();
 
   bool AllocIdSpecified = isAllocIdForDotSpecified(O);
   bool ContextIdSpecified = isContextIdForDotSpecified(O);
@@ -6406,7 +6376,7 @@ void MemProfContextDisambiguation::initFromOptions(
 
 PreservedAnalyses MemProfContextDisambiguation::run(Module &M,
                                                     ModuleAnalysisManager &AM) {
-  initFromOptions(M.getContext().getOptionsContext());
+  initFromOptions(M.getContext());
   auto &FAM = AM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
   auto OREGetter = [&](Function *F) -> OptimizationRemarkEmitter & {
     return FAM.getResult<OptimizationRemarkEmitterAnalysis>(*F);
@@ -6422,12 +6392,12 @@ void MemProfContextDisambiguation::run(
         isPrevailing,
     LLVMContext &Ctx,
     function_ref<void(StringRef, StringRef, const Twine &)> EmitRemark) {
-  initFromOptions(Ctx.getOptionsContext());
+  initFromOptions(Ctx);
   // TODO: If/when other types of memprof cloning are enabled beyond just for
   // hot and cold, we will need to change this to individually control the
   // AllocationType passed to addStackNodesForMIB during CCG construction.
   // The index was set from the option, so these should be in sync.
-  auto *O = clv2::getView<&clv2::IPOOptsReg>(Ctx.getOptionsContext());
+  const IPOOptions *O = &Ctx.getOptions<IPOOptions>();
   assert(Index.withSupportsHotColdNew() == getSupportsHotColdNew(O));
   if (!getSupportsHotColdNew(O))
     return;
@@ -6435,7 +6405,8 @@ void MemProfContextDisambiguation::run(
   bool AllowExtraAnalysis =
       OptimizationRemarkEmitter::allowExtraAnalysis(Ctx, DEBUG_TYPE);
 
-  IndexCallsiteContextGraph CCG(Index, isPrevailing, Ctx.getOptionsContext());
+  IndexCallsiteContextGraph CCG(Index, isPrevailing, Ctx,
+                                Ctx.getOptions<AnalysisOptions>());
   CCG.process(EmitRemark, AllowExtraAnalysis);
 }
 

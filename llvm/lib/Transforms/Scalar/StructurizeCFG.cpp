@@ -1,5 +1,3 @@
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
 //===- StructurizeCFG.cpp -------------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -44,6 +42,7 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Scalar.h"
+#include "llvm/Transforms/Scalar/ScalarOptions.h"
 #include "llvm/Transforms/Utils.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Local.h"
@@ -62,21 +61,14 @@ const char FlowBlockName[] = "Flow";
 
 namespace {
 
-static bool
-isForceSkipUniformRegionsSpecified(const clv2::OptionsContext &Ctx) {
-  return clv2::wasOptSpecified<&clv2::ScalarOptsReg,
-                               &clv2::SC_StructurizecfgSkipUniformRegions>(Ctx);
-}
-static bool getForceSkipUniformRegions(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::ScalarOptsReg,
-                           &clv2::SC_StructurizecfgSkipUniformRegions>(Ctx,
-                                                                       false);
+static std::optional<bool> getForceSkipUniformRegions(const LLVMContext &Ctx) {
+  return Ctx.getOptions<ScalarOptions>().SC_StructurizecfgSkipUniformRegions;
 }
 
 static bool getRelaxedUniformRegions(const Function &F) {
-  return clv2::getOptValOrDefault<
-      &clv2::SC_StructurizecfgRelaxedUniformRegions>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_StructurizecfgRelaxedUniformRegions;
 }
 
 // Definition of the complex types used in this pass.
@@ -389,17 +381,16 @@ public:
     initializeStructurizeCFGLegacyPassPass(*PassRegistry::getPassRegistry());
   }
 
-  void applyOptionsFromContext(const clv2::OptionsContext &Ctx) {
-    if (isForceSkipUniformRegionsSpecified(Ctx))
-      SkipUniformRegions = getForceSkipUniformRegions(Ctx);
+  void applyOptionsFromContext(const LLVMContext &Ctx) {
+    if (std::optional<bool> Force = getForceSkipUniformRegions(Ctx))
+      SkipUniformRegions = *Force;
   }
 
   bool runOnRegion(Region *R, RGPassManager &RGM) override {
     Function *F = R->getEntry()->getParent();
     bool SkipUniform = SkipUniformRegions;
-    if (isForceSkipUniformRegionsSpecified(F->getContext().getOptionsContext()))
-      SkipUniform =
-          getForceSkipUniformRegions(F->getContext().getOptionsContext());
+    if (std::optional<bool> Force = getForceSkipUniformRegions(F->getContext()))
+      SkipUniform = *Force;
     StructurizeCFG SCFG;
     SCFG.init(R);
     if (SkipUniform) {
@@ -1477,9 +1468,8 @@ void StructurizeCFGPass::printPipeline(
 
 PreservedAnalyses StructurizeCFGPass::run(Function &F,
                                           FunctionAnalysisManager &AM) {
-  if (isForceSkipUniformRegionsSpecified(F.getContext().getOptionsContext()))
-    SkipUniformRegions =
-        getForceSkipUniformRegions(F.getContext().getOptionsContext());
+  if (std::optional<bool> Force = getForceSkipUniformRegions(F.getContext()))
+    SkipUniformRegions = *Force;
 
   bool Changed = false;
   DominatorTree *DT = &AM.getResult<DominatorTreeAnalysis>(F);

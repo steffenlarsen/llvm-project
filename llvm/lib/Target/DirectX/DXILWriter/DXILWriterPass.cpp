@@ -27,7 +27,7 @@
 #include "llvm/IR/PassManager.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/MC/MCContext.h"
-#include "llvm/MC/MCOptionsOptInfos.h"
+#include "llvm/MC/MCOptions.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Alignment.h"
 #include "llvm/Transforms/Utils/Cloning.h"
@@ -243,14 +243,11 @@ public:
 
     const clv2::OptionsContext &OptsCtx = M.getContext().getOptionsContext();
     std::string PdbDebugPath = dxil::getPdbDebugPath(OptsCtx);
-    bool EmbedDebug =
-        clv2::getOptValOr<&clv2::MCOptsReg, &clv2::MC_DXEmbedDebug>(OptsCtx,
-                                                                    false);
-    bool StripDebug =
-        clv2::getOptValOr<&clv2::MCOptsReg, &clv2::MC_DXStripDebug>(OptsCtx,
-                                                                    false);
-    bool SlimDebug = clv2::getOptValOr<&clv2::MCOptsReg, &clv2::MC_DXSlimDebug>(
-        OptsCtx, false);
+    const MCLibraryOptions &MCOpts =
+        M.getContext().getOptions<MCLibraryOptions>();
+    bool EmbedDebug = MCOpts.MC_DXEmbedDebug;
+    bool StripDebug = MCOpts.MC_DXStripDebug;
+    bool SlimDebug = MCOpts.MC_DXSlimDebug;
 
     if (SlimDebug && EmbedDebug)
       reportFatalUsageError("/Qembed_debug is not compatible with /Zs");

@@ -12,7 +12,6 @@
 #include "llvm/IR/Module.h"
 #include "llvm/SandboxIR/Constant.h"
 #include "llvm/Support/CommandLineV2.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/Regex.h"
 #include "llvm/Transforms/Vectorize/SandboxVectorizer/Debug.h"
 #include "llvm/Transforms/Vectorize/SandboxVectorizer/SandboxVectorizerPassBuilder.h"
@@ -21,24 +20,19 @@
 using namespace llvm;
 
 static bool getPrintPassPipeline(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::VEC_PrintPassPipeline>(
-      F.getContext().getOptionsContext());
+  return VectorizeOptions::Current.VEC_PrintPassPipeline;
 }
 
 /// A magic string for the default pass pipeline.
 static const char *DefaultPipelineMagicStr = "*";
 
-static std::string getUserDefinedPassPipeline(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValIfSpecified<&clv2::VectorizeOptsReg,
-                                    &clv2::VEC_UserDefinedPassPipeline>(
-      Ctx, std::string(DefaultPipelineMagicStr));
+static std::string getUserDefinedPassPipeline() {
+  return VectorizeOptions::Current.VEC_UserDefinedPassPipeline;
 }
 
 // This option is useful for bisection debugging.
 static std::string getAllowFiles(const Function &F) {
-  return clv2::getOptValIfSpecified<&clv2::VectorizeOptsReg,
-                                    &clv2::VEC_AllowFiles>(
-      F.getContext().getOptionsContext(), ".*");
+  return VectorizeOptions::Current.VEC_AllowFiles;
 }
 static constexpr char AllowFilesDelim = ',';
 
@@ -49,8 +43,7 @@ void SandboxVectorizerPass::initPipeline(const Function &F) {
   if (PipelineInitialized)
     return;
   PipelineInitialized = true;
-  std::string Pipeline =
-      getUserDefinedPassPipeline(F.getContext().getOptionsContext());
+  std::string Pipeline = getUserDefinedPassPipeline();
   if (Pipeline == DefaultPipelineMagicStr) {
     FPM.setPassPipeline(
         "seed-collection<tr-save,bundle-vec(bottom-up),load-store-vec,"

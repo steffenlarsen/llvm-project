@@ -12,8 +12,7 @@
 #include "VPlanTestBase.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/Instructions.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Transforms/Vectorize/VectorizeOptionsOptInfos.h"
+#include "llvm/Transforms/Vectorize/VectorizeOptions.h"
 #include "gtest/gtest.h"
 
 using namespace llvm;
@@ -455,12 +454,11 @@ TEST_F(VPVerifierTest, DerivedIVWithStartInLoopRegions) {
 }
 
 TEST_F(VPVerifierTest, testRUN_VPLAN_PASS) {
-  // Set up OptionsContext so VerifyEachVPlan is true via clv2.
-  auto VecOpts = clv2::VectorizeOptsReg.makeDefaults();
-  VecOpts.get<&clv2::VEC_VerifyEachVPlan>() = true;
-  clv2::OptionsContext OptsCtx;
-  OptsCtx.addView<&clv2::VectorizeOptsReg>(VecOpts);
-  C.setOptionsContext(OptsCtx);
+  // Set VerifyEachVPlan so VPlanTransforms::runPass verifies the (invalid)
+  // VPlan below and asserts. VectorizeOptions::Current is a single
+  // process-wide instance, so save/restore it around the mutation.
+  bool OldVerifyEachVPlan = VectorizeOptions::Current.VEC_VerifyEachVPlan;
+  VectorizeOptions::Current.VEC_VerifyEachVPlan = true;
 
   VPlan &Plan = getPlan();
   VPIRValue *Zero = Plan.getConstantInt(32, 0);
@@ -479,7 +477,7 @@ TEST_F(VPVerifierTest, testRUN_VPLAN_PASS) {
       { VPlanTransforms::runPass("simplifyRecipes", NopPass, Plan); },
       "Broken VPlan found, compilation aborted!");
 
-  C.setOptionsContext(llvm::clv2::defaultOptionsContext());
+  VectorizeOptions::Current.VEC_VerifyEachVPlan = OldVerifyEachVPlan;
 }
 
 class VPIRVerifierTest : public VPlanTestIRBase {};

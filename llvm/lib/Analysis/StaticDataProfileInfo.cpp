@@ -1,5 +1,5 @@
 #include "llvm/Analysis/StaticDataProfileInfo.h"
-#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
+#include "llvm/Analysis/AnalysisOptions.h"
 #include "llvm/Analysis/ProfileSummaryInfo.h"
 #include "llvm/IR/Constant.h"
 #include "llvm/IR/Constants.h"
@@ -8,7 +8,6 @@
 #include "llvm/IR/PassManager.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/ProfileData/InstrProf.h"
-#include "llvm/Support/OptionsContext.h"
 
 #define DEBUG_TYPE "static-data-profile-info"
 
@@ -17,8 +16,9 @@ using namespace llvm;
 namespace llvm {
 
 static bool getAnnotateStringLiteralSectionPrefix(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::AN_AnnotateStringLiteralSectionPrefix>(
-      M.getContext().getOptionsContext());
+  return M.getContext()
+      .getOptions<AnalysisOptions>()
+      .AN_AnnotateStringLiteralSectionPrefix;
 }
 namespace memprof {
 // Returns true iff the global variable has custom section either by

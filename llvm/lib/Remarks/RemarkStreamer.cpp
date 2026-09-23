@@ -11,9 +11,8 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Remarks/RemarkStreamer.h"
-#include "llvm/Remarks/RemarksOptionsOptInfos.h"
-#include "llvm/Support/CommandLineV2.h"
-#include "llvm/Support/OptionsContext.h"
+#include "llvm/IR/LLVMContext.h"
+#include "llvm/Remarks/RemarksOptions.h"
 #include <cassert>
 #include <optional>
 
@@ -52,17 +51,13 @@ bool RemarkStreamer::matchesFilter(StringRef Str) {
   return true;
 }
 
-bool RemarkStreamer::needsSection(const clv2::OptionsContext &Ctx) const {
-  std::optional<bool> V =
-      clv2::getOptValOr<&clv2::RemarksOptsReg, &clv2::REM_RemarksSection>(
-          Ctx, std::optional<bool>(std::nullopt));
+bool RemarkStreamer::needsSection(const LLVMContext &Ctx) const {
+  std::optional<bool> V = Ctx.getOptions<RemarksOptions>().REM_RemarksSection;
   return V.has_value() && *V;
 }
 
-bool RemarkStreamer::wantsSection(const clv2::OptionsContext &Ctx) const {
-  std::optional<bool> V =
-      clv2::getOptValOr<&clv2::RemarksOptsReg, &clv2::REM_RemarksSection>(
-          Ctx, std::optional<bool>(std::nullopt));
+bool RemarkStreamer::wantsSection(const LLVMContext &Ctx) const {
+  std::optional<bool> V = Ctx.getOptions<RemarksOptions>().REM_RemarksSection;
   if (V.has_value() && !*V)
     return false;
   // Enable remark sections by default for bitstream remarks (so dsymutil can

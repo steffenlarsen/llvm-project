@@ -21,12 +21,14 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IRPrinter/IRPrintingPasses.h"
 #include "llvm/IRReader/IRReader.h"
+#include "llvm/Option/LibraryOptions.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/OptionsContext.h"
+#include "llvm/Support/PluginLoaderOptions.h"
 #include "llvm/Support/Regex.h"
 #include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/SourceMgr.h"
@@ -39,6 +41,7 @@
 #include "llvm/Transforms/IPO/StripDeadPrototypes.h"
 #include "llvm/Transforms/IPO/StripSymbols.h"
 #include "llvm/Transforms/Utils/CodeExtractor.h"
+#include "llvm/Transforms/Utils/UtilsOptions.h"
 #include <memory>
 #include <utility>
 
@@ -106,10 +109,6 @@ static constexpr ListOptionInfo<std::string> ExtractRegExpGlobals{
 static constexpr OptionInfo<bool> OutputAssembly{
     "S", "Write output as LLVM assembly", Hidden, Cat(ExtractCat)};
 
-// --aggregate-extracted-args comes from TransformUtilsOptsReg, which
-// RegisterAllLLVMOptions() already adds; llvm-extract used to declare a second
-// option with the same name and mirror it into a global.
-
 static constexpr OptionsRegistry<
     &InputFilename, &OutputFilename, &Force, &DeleteFn, &KeepConstInit,
     &Recursive, &ExtractFuncs, &ExtractRegExpFuncs, &ExtractBlocks,
@@ -120,14 +119,37 @@ static constexpr OptionsRegistry<
 int main(int argc, char **argv) {
   InitLLVM X(argc, argv);
 
+  std::vector<const char *> ArgsAfterPlugins =
+      loadPluginsAndStripArgs(argc, argv);
+
+  // llvm::UtilsOptions has migrated off clv2 onto the new per-library
+  // OptTable struct design (see llvm/include/llvm/Option/LibraryOptions.h)
+  // and is no longer among the clv2::OptionParser registries configured
+  // below (it used to be reachable via TransformUtilsOptsReg, which
+  // RegisterAllLLVMOptions() added). Parse it out of argv first, forwarding
+  // whatever it doesn't recognize to the legacy clv2 parser unchanged.
+  SmallVector<const char *, 32> UtilsOptsRest;
+  {
+    std::string UtilsOptsErrs;
+    raw_string_ostream UtilsOptsErrsOS(UtilsOptsErrs);
+    if (Error Err = opt::parseLibraryOptionsChain<UtilsOptions>(
+            ArrayRef<const char *>(ArgsAfterPlugins).drop_front(),
+            UtilsOptsRest, UtilsOptsErrsOS)) {
+      errs() << "llvm-extract: " << toString(std::move(Err)) << "\n";
+      return 1;
+    }
+    errs() << UtilsOptsErrs;
+  }
+  SmallVector<const char *, 32> ArgvAfterUtilsOpts;
+  ArgvAfterUtilsOpts.push_back(argv[0]);
+  ArgvAfterUtilsOpts.append(UtilsOptsRest.begin(), UtilsOptsRest.end());
+
   clv2::OptionParser P;
   P.add<&ExtractToolReg>();
   RegisterAllLLVMOptions(P);
   P.hideUnrelatedOptions({&ExtractCat});
-  // Owned by TransformUtilsOptsReg rather than ExtractCat, but llvm-extract
-  // has always listed it, so keep it visible.
-  P.showOptions({"aggregate-extracted-args"});
-  auto OptsCtx = P.parse(argc, argv, "llvm extractor\n");
+  auto OptsCtx = P.parse(static_cast<int>(ArgvAfterUtilsOpts.size()),
+                         ArgvAfterUtilsOpts.data(), "llvm extractor\n");
   auto *Opts = OptsCtx->getViewPtr<&ExtractToolReg>();
 
   LLVMContext Context(*OptsCtx);

@@ -19,7 +19,7 @@
 #include "llvm/Analysis/Loads.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/CodeGen/Analysis.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsSched1.h"
 #include "llvm/CodeGen/ISDOpcodes.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
@@ -44,14 +44,13 @@
 #include "llvm/IR/GlobalValue.h"
 #include "llvm/IR/GlobalVariable.h"
 #include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Type.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/TargetParser/Triple.h"
@@ -66,30 +65,48 @@
 
 using namespace llvm;
 
-static bool getJumpIsExpensive(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_JumpIsExpensive>(Ctx);
+// TargetLoweringBase and its subtargets are constructed from a TargetMachine
+// alone, with no Function/MachineFunction/Module reachable to obtain an
+// LLVMContext from. Per the migration plan, fall back to the process-wide
+// T::Current default in that case, rather than inventing a parallel
+// TargetMachine-scoped options mechanism -- this mirrors
+// PassBuilderPipelines.cpp's nullable-context getPassesOptions(const
+// LLVMContext *Ctx) helper.
+static const CodeGenSched1Options &getSched1Options(const LLVMContext *Ctx) {
+  return Ctx ? Ctx->getOptions<CodeGenSched1Options>()
+             : CodeGenSched1Options::Current;
 }
 
-static unsigned getJumpTableDensity(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_JumpTableDensity>(Ctx);
+static bool getJumpIsExpensive(const LLVMContext *Ctx) {
+  return getSched1Options(Ctx).CGPASS_JumpIsExpensive;
 }
-static unsigned getOptsizeJumpTableDensity(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_OptsizeJumpTableDensity>(Ctx);
+
+static unsigned getJumpTableDensity(const LLVMContext *Ctx) {
+  return getSched1Options(Ctx).CGPASS_JumpTableDensity;
 }
-static unsigned getMinBitTestCmps(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_MinBitTestCmps>(Ctx);
+static unsigned getOptsizeJumpTableDensity(const LLVMContext *Ctx) {
+  return getSched1Options(Ctx).CGPASS_OptsizeJumpTableDensity;
 }
-static unsigned getMaxStoreMemset(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_MaxStoreMemset>(Ctx);
+static unsigned getMinBitTestCmps(const LLVMContext *Ctx) {
+  return getSched1Options(Ctx).CGPASS_MinBitTestCmps;
 }
-static unsigned getMaxStoreMemcpy(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_MaxStoreMemcpy>(Ctx);
+static unsigned getMaxStoreMemset(const LLVMContext *Ctx) {
+  return getSched1Options(Ctx).CGPASS_MaxStoreMemset;
 }
-static unsigned getMaxStoreMemmove(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_MaxStoreMemmove>(Ctx);
+static unsigned getMaxStoreMemcpy(const LLVMContext *Ctx) {
+  return getSched1Options(Ctx).CGPASS_MaxStoreMemcpy;
 }
-static bool getDisableStrictnodeMutation(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_DisableStrictnodeMutation>(Ctx);
+static unsigned getMaxStoreMemmove(const LLVMContext *Ctx) {
+  return getSched1Options(Ctx).CGPASS_MaxStoreMemmove;
+}
+static bool getDisableStrictnodeMutation(const LLVMContext *Ctx) {
+  return getSched1Options(Ctx).CGPASS_DisableStrictnodeMutation;
+}
+static unsigned getMinJumpTableEntries(const LLVMContext *Ctx) {
+  return getSched1Options(Ctx).CGPASS_MinJumpTableEntries;
+}
+static unsigned getMaxJumpTableSize(const LLVMContext *Ctx) {
+  return getSched1Options(Ctx).CGPASS_MaxJumpTableSize;
 }
 
 LLVM_ABI RTLIB::Libcall RTLIB::getSHL(EVT VT) {
@@ -704,7 +721,9 @@ TargetLoweringBase::TargetLoweringBase(const TargetMachine &tm,
   MaxStoresPerMemsetOptSize = MaxStoresPerMemcpyOptSize =
       MaxStoresPerMemmoveOptSize = MaxLoadsPerMemcmpOptSize = 4;
   HasExtractBitsInsn = false;
-  auto &Ctx = TM.getOptionsContext();
+  // No Function/Module is reachable from a TargetMachine alone; see
+  // getSched1Options above.
+  const LLVMContext *Ctx = nullptr;
   JumpIsExpensive = getJumpIsExpensive(Ctx);
   PredictableSelectIsExpensive = false;
   EnableExtLdPromotion = false;
@@ -727,10 +746,8 @@ TargetLoweringBase::TargetLoweringBase(const TargetMachine &tm,
   MinCmpXchgSizeInBits = 0;
   SupportsUnalignedAtomics = false;
 
-  if (auto *O = clv2::getView<&clv2::CGPassSched1Reg>(Ctx)) {
-    MinimumJumpTableEntries = O->get<&clv2::CGPASS_MinJumpTableEntries>();
-    MaximumJumpTableSize = O->get<&clv2::CGPASS_MaxJumpTableSize>();
-  }
+  MinimumJumpTableEntries = getMinJumpTableEntries(Ctx);
+  MaximumJumpTableSize = getMaxJumpTableSize(Ctx);
   MinimumBitTestCmps = getMinBitTestCmps(Ctx);
 }
 
@@ -1897,7 +1914,7 @@ bool TargetLoweringBase::allowsMemoryAccess(LLVMContext &Context,
 }
 
 unsigned TargetLoweringBase::getMaxStoresPerMemset(bool OptSize) const {
-  auto &Ctx = TM.getOptionsContext();
+  const LLVMContext *Ctx = nullptr;
   if (getMaxStoreMemset(Ctx) > 0)
     return getMaxStoreMemset(Ctx);
 
@@ -1905,7 +1922,7 @@ unsigned TargetLoweringBase::getMaxStoresPerMemset(bool OptSize) const {
 }
 
 unsigned TargetLoweringBase::getMaxStoresPerMemcpy(bool OptSize) const {
-  auto &Ctx = TM.getOptionsContext();
+  const LLVMContext *Ctx = nullptr;
   if (getMaxStoreMemcpy(Ctx) > 0)
     return getMaxStoreMemcpy(Ctx);
 
@@ -1913,7 +1930,7 @@ unsigned TargetLoweringBase::getMaxStoresPerMemcpy(bool OptSize) const {
 }
 
 unsigned TargetLoweringBase::getMaxStoresPerMemmove(bool OptSize) const {
-  auto &Ctx = TM.getOptionsContext();
+  const LLVMContext *Ctx = nullptr;
   if (getMaxStoreMemmove(Ctx) > 0)
     return getMaxStoreMemmove(Ctx);
 
@@ -2238,7 +2255,7 @@ void TargetLoweringBase::setMinimumJumpTableEntries(unsigned Val) {
 }
 
 unsigned TargetLoweringBase::getMinimumJumpTableDensity(bool OptForSize) const {
-  auto &Ctx = TM.getOptionsContext();
+  const LLVMContext *Ctx = nullptr;
   return OptForSize ? getOptsizeJumpTableDensity(Ctx)
                     : getJumpTableDensity(Ctx);
 }

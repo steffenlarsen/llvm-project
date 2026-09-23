@@ -14,7 +14,7 @@
 #include "llvm/ADT/StableHashing.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Analysis/Loads.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsMachine1.h"
 #include "llvm/CodeGen/MIRFormatter.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineJumpTableInfo.h"
@@ -29,15 +29,13 @@
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/ModuleSlotTracker.h"
 #include "llvm/MC/MCDwarf.h"
-#include "llvm/Support/CommandLineV2.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Target/TargetMachine.h"
 #include <optional>
 
 using namespace llvm;
 
-static int getPrintRegmaskNumRegs(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_PrintRegmaskNumRegs>(Ctx);
+static int getPrintRegmaskNumRegs(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenMachine1Options>().CGPASS_PrintRegmaskNumRegs;
 }
 
 static const MachineFunction *getMFIfAvailable(const MachineOperand &MO) {
@@ -1035,9 +1033,7 @@ void MachineOperand::print(raw_ostream &OS, ModuleSlotTracker &MST,
         unsigned MaskBit = i % 32;
         if (getRegMask()[MaskWord] & (1 << MaskBit)) {
           int RegmaskNumRegs =
-              RegMaskF ? getPrintRegmaskNumRegs(
-                             RegMaskF->getContext().getOptionsContext())
-                       : 32;
+              RegMaskF ? getPrintRegmaskNumRegs(RegMaskF->getContext()) : 32;
           if (RegmaskNumRegs < 0 ||
               NumRegsEmitted <= static_cast<unsigned>(RegmaskNumRegs)) {
             OS << " " << printReg(i, TRI);

@@ -1,5 +1,3 @@
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
 //===- NewGVN.cpp - Global Value Numbering Pass ---------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -103,6 +101,7 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Scalar/GVNExpression.h"
+#include "llvm/Transforms/Scalar/ScalarOptions.h"
 #include "llvm/Transforms/Utils/AssumeBundleBuilder.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/PredicateInfo.h"
@@ -148,15 +147,12 @@ DEBUG_COUNTER(PHIOfOpsCounter, "newgvn-phi",
 // egregiously slow.  This flag lets us keep it working while we work on this
 // issue.
 static bool getEnableStoreRefinement(const Function &F) {
-  return clv2::getOptValOr<&clv2::ScalarOptsReg,
-                           &clv2::SC_EnableStoreRefinement>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext().getOptions<ScalarOptions>().SC_EnableStoreRefinement;
 }
 
 /// Currently, the generation "phi of ops" can result in correctness issues.
 static bool getEnablePhiOfOps(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_EnablePhiOfOps>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<ScalarOptions>().SC_EnablePhiOfOps;
 }
 
 //===----------------------------------------------------------------------===//

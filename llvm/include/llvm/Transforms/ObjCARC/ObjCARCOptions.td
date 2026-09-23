@@ -6,25 +6,15 @@
 //
 //===----------------------------------------------------------------------===//
 
-include "llvm/Support/CLV2Options.td"
+include "llvm/Option/OptParser.td"
 
-def ObjCARCOptsReg : Registry<"llvm::arc_opts"> {
-  // Getter bodies are compiled once, in ObjCARCOptionsGetters.cpp.
-  let OutOfLineGetters = 1;
-}
+def ObjCARCOptions : OptionsStruct<"llvm"> {}
 
-def ARC_MaxPtrStates : Option<
-    "arc-opt-max-ptr-states",
+defm ARC_MaxPtrStates : ValueField<
+    "arc-opt-max-ptr-states", "unsigned", "4095",
     "Maximum number of ptr states the optimizer keeps track of",
-    "unsigned"> {
-  let Registry = ObjCARCOptsReg;
-  let Default = "4095";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def ARC_UseObjCClaimRV : Option<
-    "arc-contract-use-objc-claim-rv",
-    "Enable generation of calls to objc_claimAutoreleasedReturnValue",
-    "std::optional<bool>"> {
-  let Registry = ObjCARCOptsReg;
-}
+defm ARC_UseObjCClaimRV : OptionalValueField<
+    "arc-contract-use-objc-claim-rv", "bool", "true",
+    "Enable generation of calls to objc_claimAutoreleasedReturnValue">;

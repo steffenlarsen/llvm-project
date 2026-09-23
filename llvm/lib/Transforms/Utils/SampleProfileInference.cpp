@@ -16,9 +16,9 @@
 #include "llvm/Transforms/Utils/SampleProfileInference.h"
 #include "llvm/ADT/BitVector.h"
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/IR/LLVMContext.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Transforms/Utils/UtilsOptionsOptInfos.h"
+#include "llvm/Transforms/Utils/UtilsOptions.h"
 #include <queue>
 #include <set>
 #include <stack>
@@ -28,55 +28,45 @@ using namespace llvm;
 
 namespace {
 
-static bool
-getSampleProfileEvenFlowDistribution(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::TU_SampleProfileEvenFlowDistribution>(
-      Ctx);
+static const UtilsOptions &getUtilsOptions(const LLVMContext *Ctx) {
+  return Ctx ? Ctx->getOptions<UtilsOptions>() : UtilsOptions::Current;
 }
 
-static bool getSampleProfileRebalanceUnknown(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::TU_SampleProfileRebalanceUnknown>(Ctx);
+static bool getSampleProfileEvenFlowDistribution(const LLVMContext *Ctx) {
+  return getUtilsOptions(Ctx).TU_SampleProfileEvenFlowDistribution;
 }
 
-static bool getSampleProfileJoinIslands(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::TU_SampleProfileJoinIslands>(Ctx);
+static bool getSampleProfileRebalanceUnknown(const LLVMContext *Ctx) {
+  return getUtilsOptions(Ctx).TU_SampleProfileRebalanceUnknown;
 }
 
-static unsigned
-getSampleProfileProfiCostBlockInc(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::TU_SampleProfileProfiCostBlockInc>(
-      Ctx);
+static bool getSampleProfileJoinIslands(const LLVMContext *Ctx) {
+  return getUtilsOptions(Ctx).TU_SampleProfileJoinIslands;
 }
 
-static unsigned
-getSampleProfileProfiCostBlockDec(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::TU_SampleProfileProfiCostBlockDec>(
-      Ctx);
+static unsigned getSampleProfileProfiCostBlockInc(const LLVMContext *Ctx) {
+  return getUtilsOptions(Ctx).TU_SampleProfileProfiCostBlockInc;
 }
 
-static unsigned
-getSampleProfileProfiCostBlockEntryInc(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<
-      &clv2::TU_SampleProfileProfiCostBlockEntryInc>(Ctx);
+static unsigned getSampleProfileProfiCostBlockDec(const LLVMContext *Ctx) {
+  return getUtilsOptions(Ctx).TU_SampleProfileProfiCostBlockDec;
 }
 
-static unsigned
-getSampleProfileProfiCostBlockEntryDec(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<
-      &clv2::TU_SampleProfileProfiCostBlockEntryDec>(Ctx);
+static unsigned getSampleProfileProfiCostBlockEntryInc(const LLVMContext *Ctx) {
+  return getUtilsOptions(Ctx).TU_SampleProfileProfiCostBlockEntryInc;
 }
 
-static unsigned
-getSampleProfileProfiCostBlockZeroInc(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::TU_SampleProfileProfiCostBlockZeroInc>(
-      Ctx);
+static unsigned getSampleProfileProfiCostBlockEntryDec(const LLVMContext *Ctx) {
+  return getUtilsOptions(Ctx).TU_SampleProfileProfiCostBlockEntryDec;
+}
+
+static unsigned getSampleProfileProfiCostBlockZeroInc(const LLVMContext *Ctx) {
+  return getUtilsOptions(Ctx).TU_SampleProfileProfiCostBlockZeroInc;
 }
 
 static unsigned
-getSampleProfileProfiCostBlockUnknownInc(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValIfSpecified<
-      &clv2::TransformUtilsOptsReg,
-      &clv2::TU_SampleProfileProfiCostBlockUnknownInc>(Ctx, 0u);
+getSampleProfileProfiCostBlockUnknownInc(const LLVMContext *Ctx) {
+  return getUtilsOptions(Ctx).TU_SampleProfileProfiCostBlockUnknownInc;
 }
 
 /// A value indicating an infinite flow/capacity/weight of a block/edge.
@@ -1375,8 +1365,7 @@ void llvm::applyFlowInference(const ProfiParams &Params, FlowFunction &Func) {
 }
 
 /// Apply the profile inference algorithm for a given flow function
-void llvm::applyFlowInference(FlowFunction &Func,
-                              const clv2::OptionsContext &Ctx) {
+void llvm::applyFlowInference(FlowFunction &Func, const LLVMContext *Ctx) {
   ProfiParams Params;
   Params.EvenFlowDistribution = getSampleProfileEvenFlowDistribution(Ctx);
   Params.RebalanceUnknown = getSampleProfileRebalanceUnknown(Ctx);

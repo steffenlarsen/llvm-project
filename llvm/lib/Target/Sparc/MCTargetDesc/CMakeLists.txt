@@ -11,10 +11,14 @@ add_llvm_component_library(LLVMSparcDesc
 
   LINK_COMPONENTS
   MC
+  Option
   SparcInfo
   Support
   TargetParser
 
   ADD_TO_COMPONENT
   Sparc
+
+  DEPENDS
+  SparcOptParserTableGen
   )

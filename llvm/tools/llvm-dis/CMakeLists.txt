@@ -10,4 +10,5 @@ add_llvm_tool(llvm-dis
 
   DEPENDS
   intrinsics_gen
+  BitcodeMemProfOptParserTableGen
   )

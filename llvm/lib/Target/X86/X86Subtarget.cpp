@@ -21,6 +21,7 @@
 #include "llvm/CodeGen/GlobalISel/CallLowering.h"
 #include "llvm/CodeGen/GlobalISel/InstructionSelect.h"
 #include "llvm/CodeGen/GlobalISel/InstructionSelector.h"
+#include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/ScheduleDAGMutation.h"
 #include "llvm/IR/Attributes.h"
 #include "llvm/IR/ConstantRange.h"
@@ -33,7 +34,7 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/OptionsContext.h"
 #include "llvm/Target/TargetMachine.h"
-#include "llvm/Target/X86/X86OptionsOptInfos.h"
+#include "llvm/Target/X86/X86Options.h"
 #include "llvm/TargetParser/Triple.h"
 
 #if defined(_MSC_VER)
@@ -211,7 +212,7 @@ X86Subtarget::classifyGlobalFunctionReference(const GlobalValue *GV,
     if (((F && F->hasFnAttribute(Attribute::NonLazyBind)) ||
          (!F && M.getRtLibUseGOT())) &&
         is64Bit())
-       return X86II::MO_GOTPCREL;
+      return X86II::MO_GOTPCREL;
     // Reference ExternalSymbol directly in static relocation model.
     if (!is64Bit() && !GV && TM.getRelocationModel() == Reloc::Static)
       return X86II::MO_NO_FLAG;
@@ -363,14 +364,14 @@ const RegisterBankInfo *X86Subtarget::getRegBankInfo() const {
 }
 
 bool X86Subtarget::enableEarlyIfConversion() const {
-  return canUseCMOV() &&
-         clv2::getOptValOr<&clv2::X86OptsReg, &clv2::X86_EarlyIfConv>(
-             TM.getOptionsContext(), false);
+  return canUseCMOV() && X86Options::Current.X86_EarlyIfConv;
 }
 
 void X86Subtarget::getPostRAMutations(
+    const MachineFunction &MF,
     std::vector<std::unique_ptr<ScheduleDAGMutation>> &Mutations) const {
-  Mutations.push_back(createX86MacroFusionDAGMutation(TM.getOptionsContext()));
+  Mutations.push_back(
+      createX86MacroFusionDAGMutation(MF.getFunction().getContext()));
 }
 
 bool X86Subtarget::isPositionIndependent() const {

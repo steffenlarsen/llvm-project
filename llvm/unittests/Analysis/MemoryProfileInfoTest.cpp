@@ -7,7 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Analysis/MemoryProfileInfo.h"
-#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
+#include "llvm/Analysis/AnalysisOptions.h"
 #include "llvm/AsmParser/Parser.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Instructions.h"
@@ -519,12 +519,10 @@ declare dso_local noalias noundef ptr @malloc(i64 noundef)
   CallBase *Call = findCall(*Func, "call");
   ASSERT_NE(Call, nullptr);
 
-  // Specify that all non-cold contexts should be kept via OptionsContext.
-  auto Opts = clv2::AnalysisOptsReg.makeDefaults();
-  Opts.get<&clv2::AN_MemProfKeepAllNotColdContexts>() = true;
-  clv2::OptionsContext OptsCtx;
-  OptsCtx.addView<&clv2::AnalysisOptsReg>(Opts);
-  C.setOptionsContext(OptsCtx);
+  // Specify that all non-cold contexts should be kept.
+  AnalysisOptions Opts;
+  Opts.AN_MemProfKeepAllNotColdContexts = true;
+  C.setOptions<AnalysisOptions>(Opts);
 
   Trie.buildAndAttachMIBMetadata(Call);
 

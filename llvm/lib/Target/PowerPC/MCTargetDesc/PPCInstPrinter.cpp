@@ -22,26 +22,22 @@
 #include "llvm/MC/MCSubtargetInfo.h"
 #include "llvm/MC/MCSymbol.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/PowerPC/PowerPCOptionsOptInfos.h"
+#include "llvm/Target/PowerPC/PowerPCOptions.h"
 using namespace llvm;
 
 #define DEBUG_TYPE "asm-printer"
 
-static bool getFullRegNames(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::PowerPCOptsReg, &clv2::PPC_FullRegNames>(
-      Ctx, false);
+static bool getFullRegNames() {
+  return PowerPCOptions::Current.PPC_FullRegNames;
 }
 
-static bool getShowVSRNumsAsVR(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::PowerPCOptsReg, &clv2::PPC_ShowVSRNumsAsVR>(
-      Ctx, false);
+static bool getShowVSRNumsAsVR() {
+  return PowerPCOptions::Current.PPC_ShowVSRNumsAsVR;
 }
 
-static bool getFullRegNamesWithPercent(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::PowerPCOptsReg,
-                           &clv2::PPC_FullRegNamesWithPercent>(Ctx, false);
+static bool getFullRegNamesWithPercent() {
+  return PowerPCOptions::Current.PPC_FullRegNamesWithPercent;
 }
 
 #define PRINT_ALIAS_INSTR
@@ -116,12 +112,14 @@ void PPCInstPrinter::printInst(const MCInst *MI, uint64_t Address,
     unsigned char MB = MI->getOperand(3).getImm();
     unsigned char ME = MI->getOperand(4).getImm();
     bool useSubstituteMnemonic = false;
-    if (SH <= 31 && MB == 0 && ME == (31-SH)) {
-      O << "\tslwi "; useSubstituteMnemonic = true;
+    if (SH <= 31 && MB == 0 && ME == (31 - SH)) {
+      O << "\tslwi ";
+      useSubstituteMnemonic = true;
     }
-    if (SH <= 31 && MB == (32-SH) && ME == 31) {
-      O << "\tsrwi "; useSubstituteMnemonic = true;
-      SH = 32-SH;
+    if (SH <= 31 && MB == (32 - SH) && ME == 31) {
+      O << "\tsrwi ";
+      useSubstituteMnemonic = true;
+      SH = 32 - SH;
     }
     if (useSubstituteMnemonic) {
       printOperand(MI, 0, STI, O);
@@ -134,12 +132,11 @@ void PPCInstPrinter::printInst(const MCInst *MI, uint64_t Address,
     }
   }
 
-  if (MI->getOpcode() == PPC::RLDICR ||
-      MI->getOpcode() == PPC::RLDICR_32) {
+  if (MI->getOpcode() == PPC::RLDICR || MI->getOpcode() == PPC::RLDICR_32) {
     unsigned char SH = MI->getOperand(2).getImm();
     unsigned char ME = MI->getOperand(3).getImm();
     // rldicr RA, RS, SH, 63-SH == sldi RA, RS, SH
-    if (63-SH == ME) {
+    if (63 - SH == ME) {
       O << "\tsldi ";
       printOperand(MI, 0, STI, O);
       O << ", ";
@@ -172,14 +169,14 @@ void PPCInstPrinter::printInst(const MCInst *MI, uint64_t Address,
 
     bool IsBookE = STI.hasFeature(PPC::FeatureBookE);
     if (IsBookE && TH != 0 && TH != 16)
-      O << (unsigned int) TH << ", ";
+      O << (unsigned int)TH << ", ";
 
     printOperand(MI, 1, STI, O);
     O << ", ";
     printOperand(MI, 2, STI, O);
 
     if (!IsBookE && TH != 0 && TH != 16)
-      O << ", " << (unsigned int) TH;
+      O << ", " << (unsigned int)TH;
 
     printAnnotation(O, Annot);
     return;
@@ -400,8 +397,7 @@ void PPCInstPrinter::printS34ImmOperand(const MCInst *MI, unsigned OpNo,
     long long Value = MI->getOperand(OpNo).getImm();
     assert(isInt<34>(Value) && "Invalid s34imm argument!");
     O << (long long)Value;
-  }
-  else
+  } else
     printOperand(MI, OpNo, STI, O);
 }
 
@@ -458,15 +454,32 @@ void PPCInstPrinter::printcrbitm(const MCInst *MI, unsigned OpNo,
   MCRegister CCReg = MI->getOperand(OpNo).getReg();
   unsigned RegNo;
   switch (CCReg.id()) {
-  default: llvm_unreachable("Unknown CR register");
-  case PPC::CR0: RegNo = 0; break;
-  case PPC::CR1: RegNo = 1; break;
-  case PPC::CR2: RegNo = 2; break;
-  case PPC::CR3: RegNo = 3; break;
-  case PPC::CR4: RegNo = 4; break;
-  case PPC::CR5: RegNo = 5; break;
-  case PPC::CR6: RegNo = 6; break;
-  case PPC::CR7: RegNo = 7; break;
+  default:
+    llvm_unreachable("Unknown CR register");
+  case PPC::CR0:
+    RegNo = 0;
+    break;
+  case PPC::CR1:
+    RegNo = 1;
+    break;
+  case PPC::CR2:
+    RegNo = 2;
+    break;
+  case PPC::CR3:
+    RegNo = 3;
+    break;
+  case PPC::CR4:
+    RegNo = 4;
+    break;
+  case PPC::CR5:
+    RegNo = 5;
+    break;
+  case PPC::CR6:
+    RegNo = 6;
+    break;
+  case PPC::CR7:
+    RegNo = 7;
+    break;
   }
   O << (0x80 >> RegNo);
 }
@@ -476,7 +489,7 @@ void PPCInstPrinter::printMemRegImm(const MCInst *MI, unsigned OpNo,
                                     raw_ostream &O) {
   printS16ImmOperand(MI, OpNo, STI, O);
   O << '(';
-  if (MI->getOperand(OpNo+1).getReg() == PPC::R0)
+  if (MI->getOperand(OpNo + 1).getReg() == PPC::R0)
     O << "0";
   else
     printOperand(MI, OpNo + 1, STI, O);
@@ -563,7 +576,7 @@ void PPCInstPrinter::printTLSCall(const MCInst *MI, unsigned OpNo,
 /// showRegistersWithPercentPrefix - Check if this register name should be
 /// printed with a percentage symbol as prefix.
 bool PPCInstPrinter::showRegistersWithPercentPrefix(const char *RegName) const {
-  if ((!getFullRegNamesWithPercent(*OptsCtx) && !MAI.useFullRegisterNames()) ||
+  if ((!getFullRegNamesWithPercent() && !MAI.useFullRegisterNames()) ||
       TT.getOS() == Triple::AIX)
     return false;
 
@@ -584,27 +597,24 @@ bool PPCInstPrinter::showRegistersWithPercentPrefix(const char *RegName) const {
 const char *
 PPCInstPrinter::getVerboseConditionRegName(MCRegister Reg,
                                            unsigned RegEncoding) const {
-  if (!getFullRegNames(*OptsCtx) && !MAI.useFullRegisterNames())
+  if (!getFullRegNames() && !MAI.useFullRegisterNames())
     return nullptr;
   if (Reg < PPC::CR0EQ || Reg > PPC::CR7UN)
     return nullptr;
   const char *CRBits[] = {
-    "lt", "gt", "eq", "un",
-    "4*cr1+lt", "4*cr1+gt", "4*cr1+eq", "4*cr1+un",
-    "4*cr2+lt", "4*cr2+gt", "4*cr2+eq", "4*cr2+un",
-    "4*cr3+lt", "4*cr3+gt", "4*cr3+eq", "4*cr3+un",
-    "4*cr4+lt", "4*cr4+gt", "4*cr4+eq", "4*cr4+un",
-    "4*cr5+lt", "4*cr5+gt", "4*cr5+eq", "4*cr5+un",
-    "4*cr6+lt", "4*cr6+gt", "4*cr6+eq", "4*cr6+un",
-    "4*cr7+lt", "4*cr7+gt", "4*cr7+eq", "4*cr7+un"
-  };
+      "lt",       "gt",       "eq",       "un",       "4*cr1+lt", "4*cr1+gt",
+      "4*cr1+eq", "4*cr1+un", "4*cr2+lt", "4*cr2+gt", "4*cr2+eq", "4*cr2+un",
+      "4*cr3+lt", "4*cr3+gt", "4*cr3+eq", "4*cr3+un", "4*cr4+lt", "4*cr4+gt",
+      "4*cr4+eq", "4*cr4+un", "4*cr5+lt", "4*cr5+gt", "4*cr5+eq", "4*cr5+un",
+      "4*cr6+lt", "4*cr6+gt", "4*cr6+eq", "4*cr6+un", "4*cr7+lt", "4*cr7+gt",
+      "4*cr7+eq", "4*cr7+un"};
   return CRBits[RegEncoding];
 }
 
 // showRegistersWithPrefix - This method determines whether registers
 // should be number-only or include the prefix.
 bool PPCInstPrinter::showRegistersWithPrefix() const {
-  return getFullRegNamesWithPercent(*OptsCtx) || getFullRegNames(*OptsCtx) ||
+  return getFullRegNamesWithPercent() || getFullRegNames() ||
          MAI.useFullRegisterNames();
 }
 
@@ -613,13 +623,13 @@ void PPCInstPrinter::printOperand(const MCInst *MI, unsigned OpNo,
   const MCOperand &Op = MI->getOperand(OpNo);
   if (Op.isReg()) {
     MCRegister Reg = Op.getReg();
-    if (!getShowVSRNumsAsVR(*OptsCtx))
+    if (!getShowVSRNumsAsVR())
       Reg = PPC::getRegNumForOperand(MII.get(MI->getOpcode()), Reg, OpNo);
 
     const char *RegName;
     RegName = getVerboseConditionRegName(Reg, MRI.getEncodingValue(Reg));
     if (RegName == nullptr)
-     RegName = getRegisterName(Reg);
+      RegName = getRegisterName(Reg);
     if (showRegistersWithPercentPrefix(RegName))
       O << "%";
     if (!showRegistersWithPrefix())

@@ -15,7 +15,7 @@
 
 #include "llvm/Transforms/Instrumentation/NumericalStabilitySanitizer.h"
 #include "llvm/Support/OptionsContext.h"
-#include "llvm/Transforms/Instrumentation/InstrumentationOptionsOptInfos.h"
+#include "llvm/Transforms/Instrumentation/InstrumentationOptions.h"
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
@@ -66,22 +66,9 @@ STATISTIC(NumInstrumentedFCmp, "Number of instrumented fcmps");
 // Using smaller shadow types types can help improve speed. For example, `dlq`
 // is 3x slower to 5x faster in opt mode and 2-6x faster in dbg mode compared to
 // `dqq`.
-static std::string ClShadowMapping = "dqq";
-static bool ClInstrumentFCmp = true;
-static std::string ClCheckFunctionsFilter;
-static bool ClTruncateFCmpEq = true;
-static bool ClCheckLoads = false;
-static bool ClCheckStores = true;
-static bool ClCheckRet = true;
-static bool ClPropagateNonFTConstStoresAsFT = false;
-
-#define NSAN_GETTER(VarName, DescName)                                         \
-  static auto get##VarName(const Module &M) {                                  \
-    if (auto *O = clv2::getView<&clv2::InstrumentationOptsReg>(                \
-            M.getContext().getOptionsContext()))                               \
-      if (O->specified<&clv2::DescName>())                                     \
-        return O->get<&clv2::DescName>();                                      \
-    return VarName;                                                            \
+#define NSAN_GETTER(FnName, DescName)                                        \
+  static auto get##FnName(const Module &M) {                                 \
+    return M.getContext().getOptions<InstrumentationOptions>().DescName;     \
   }
 
 NSAN_GETTER(ClShadowMapping, INST_NsanShadowTypeMapping)

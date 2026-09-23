@@ -34,7 +34,7 @@
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/Analysis/VectorUtils.h"
 #include "llvm/CodeGen/ByteProvider.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsSelDAG.h"
 #include "llvm/CodeGen/DAGCombine.h"
 #include "llvm/CodeGen/ISDOpcodes.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
@@ -59,14 +59,12 @@
 #include "llvm/IR/Metadata.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/CodeGen.h"
-#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/DebugCounter.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/KnownBits.h"
 #include "llvm/Support/MathExtras.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOptions.h"
@@ -99,70 +97,50 @@ STATISTIC(NumFPLogicOpsConv, "Number of logic ops converted to fp ops");
 DEBUG_COUNTER(DAGCombineCounter, "dagcombine",
               "Controls whether a DAG combine is performed for a node");
 
-static bool getCombinerGlobalAliasAnalysis(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_CombinerGlobalAliasAnalysis>(
-      Ctx);
+static bool getCombinerStressLoadSlicing(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenSelDAGOptions>()
+      .CGPASS_CombinerStressLoadSlicing;
 }
 
-static bool getCombinerTopologicalSorting(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_CombinerTopologicalSorting>(
-      Ctx);
+static bool getCombinerSplitLoadIndex(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenSelDAGOptions>().CGPASS_CombinerSplitLoadIndex;
 }
 
-static std::string getCombinerAaOnlyFunc(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::CGPassSelDAGReg,
-                           &clv2::CGPASS_CombinerAaOnlyFunc>(Ctx,
-                                                             std::string());
-}
-
-static bool getCombinerUseTbaa(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_CombinerUseTbaa>(Ctx);
-}
-
-static bool getCombinerStressLoadSlicing(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_CombinerStressLoadSlicing>(Ctx);
-}
-
-static bool getCombinerSplitLoadIndex(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_CombinerSplitLoadIndex>(Ctx);
-}
-
-static bool getCombinerStoreMerging(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_CombinerStoreMerging>(Ctx);
+static bool getCombinerStoreMerging(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenSelDAGOptions>().CGPASS_CombinerStoreMerging;
 }
 
 static unsigned
-getCombinerTokenfactorInlineLimit(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_CombinerTokenfactorInlineLimit>(
-      Ctx);
+getCombinerTokenfactorInlineLimit(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenSelDAGOptions>()
+      .CGPASS_CombinerTokenfactorInlineLimit;
 }
 
 static unsigned
-getCombinerStoreMergeDependenceLimit(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<
-      &clv2::CGPASS_CombinerStoreMergeDependenceLimit>(Ctx);
+getCombinerStoreMergeDependenceLimit(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenSelDAGOptions>()
+      .CGPASS_CombinerStoreMergeDependenceLimit;
 }
 
-static bool getCombinerReduceLoadOpStoreWidth(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_CombinerReduceLoadOpStoreWidth>(
-      Ctx);
+static bool getCombinerReduceLoadOpStoreWidth(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenSelDAGOptions>()
+      .CGPASS_CombinerReduceLoadOpStoreWidth;
 }
 
 static bool getCombinerReduceLoadOpStoreWidthForceNarrowingProfitable(
-    const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<
-      &clv2::CGPASS_CombinerReduceLoadOpStoreWidthForceNarrowingProfitable>(
-      Ctx);
+    const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenSelDAGOptions>()
+      .CGPASS_CombinerReduceLoadOpStoreWidthForceNarrowingProfitable;
 }
 
 static bool
-getCombinerShrinkLoadReplaceStoreWithStore(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<
-      &clv2::CGPASS_CombinerShrinkLoadReplaceStoreWithStore>(Ctx);
+getCombinerShrinkLoadReplaceStoreWithStore(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenSelDAGOptions>()
+      .CGPASS_CombinerShrinkLoadReplaceStoreWithStore;
 }
 
-static bool getCombinerDisabled(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_CombinerDisabled>(Ctx);
+static bool getCombinerDisabled(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenSelDAGOptions>().CGPASS_CombinerDisabled;
 }
 
 namespace {
@@ -264,11 +242,10 @@ namespace {
           STI(D.getSubtarget().getSelectionDAGInfo()), OptLevel(OL),
           BatchAA(BatchAA) {
       ForCodeSize = DAG.shouldOptForSize();
-      DisableGenericCombines = getCombinerDisabled(DAG.getMachineFunction()
-                                                       .getFunction()
-                                                       .getContext()
-                                                       .getOptionsContext()) ||
-                               (STI && STI->disableGenericCombines(OptLevel));
+      DisableGenericCombines =
+          getCombinerDisabled(
+              DAG.getMachineFunction().getFunction().getContext()) ||
+          (STI && STI->disableGenericCombines(OptLevel));
     }
 
     void ConsiderForPruning(SDNode *N) {
@@ -1108,8 +1085,7 @@ static bool isAnyConstantBuildVector(SDValue V, bool NoOpaques = false) {
 
 // Determine if this an indexed load with an opaque target constant index.
 static bool canSplitIdx(LoadSDNode *LD, const Function *F = nullptr) {
-  return (F ? getCombinerSplitLoadIndex(F->getContext().getOptionsContext())
-            : true) &&
+  return (F ? getCombinerSplitLoadIndex(F->getContext()) : true) &&
          (LD->getOperand(2).getOpcode() != ISD::TargetConstant ||
           !cast<ConstantSDNode>(LD->getOperand(2))->isOpaque());
 }
@@ -1858,17 +1834,12 @@ void DAGCombiner::Run(CombineLevel AtLevel) {
   LegalTypes = Level >= AfterLegalizeTypes;
 
   bool UseTopologicalSorting =
-      (false || clv2::wasOptSpecified<&clv2::CGPassSelDAGReg,
-                                      &clv2::CGPASS_CombinerTopologicalSorting>(
-                    DAG.getMachineFunction()
-                        .getFunction()
-                        .getContext()
-                        .getOptionsContext()))
-          ? getCombinerTopologicalSorting(DAG.getMachineFunction()
-                                              .getFunction()
-                                              .getContext()
-                                              .getOptionsContext())
-          : TLI.useTopologicalSorting();
+      DAG.getMachineFunction()
+          .getFunction()
+          .getContext()
+          .getOptions<CodeGenSelDAGOptions>()
+          .CGPASS_CombinerTopologicalSorting.value_or(
+              TLI.useTopologicalSorting());
 
   WorklistInserter AddNodes(*this);
 
@@ -2286,10 +2257,8 @@ SDValue DAGCombiner::visitTokenFactor(SDNode *N) {
 
   // Don't simplify the token factor if the node itself has too many operands.
   if (N->getNumOperands() >
-      getCombinerTokenfactorInlineLimit(DAG.getMachineFunction()
-                                            .getFunction()
-                                            .getContext()
-                                            .getOptionsContext()))
+      getCombinerTokenfactorInlineLimit(
+          DAG.getMachineFunction().getFunction().getContext()))
     return SDValue();
 
   // If the sole user is a token factor, we should make sure we have a
@@ -2313,10 +2282,8 @@ SDValue DAGCombiner::visitTokenFactor(SDNode *N) {
     // We have to add the outstanding Token Factors to Ops, otherwise we might
     // drop Ops from the resulting Token Factors.
     if (Ops.size() >
-        getCombinerTokenfactorInlineLimit(DAG.getMachineFunction()
-                                              .getFunction()
-                                              .getContext()
-                                              .getOptionsContext())) {
+        getCombinerTokenfactorInlineLimit(
+            DAG.getMachineFunction().getFunction().getContext())) {
       for (unsigned j = i; j < TFs.size(); j++)
         Ops.emplace_back(TFs[j], 0);
       // Drop unprocessed Token Factors from TFs, so we do not add them to the
@@ -22586,8 +22553,7 @@ static bool isSlicingProfitable(SmallVectorImpl<LoadedSlice> &LoadedSlices,
                                 const APInt &UsedBits, bool ForCodeSize,
                                 const Function *F = nullptr) {
   unsigned NumberOfSlices = LoadedSlices.size();
-  if (F ? getCombinerStressLoadSlicing(F->getContext().getOptionsContext())
-        : false)
+  if (F ? getCombinerStressLoadSlicing(F->getContext()) : false)
     return NumberOfSlices > 1;
 
   // Check (1).
@@ -22901,10 +22867,8 @@ SDValue DAGCombiner::ReduceLoadOpStoreWidth(SDNode *N) {
   // load + replace + store sequence with a single (narrower) store, which makes
   // the load dead.
   if (Opc == ISD::OR &&
-      getCombinerShrinkLoadReplaceStoreWithStore(DAG.getMachineFunction()
-                                                     .getFunction()
-                                                     .getContext()
-                                                     .getOptionsContext())) {
+      getCombinerShrinkLoadReplaceStoreWithStore(
+          DAG.getMachineFunction().getFunction().getContext())) {
     std::pair<unsigned, unsigned> MaskedLoad;
     MaskedLoad = CheckForMaskedLoad(Value.getOperand(0), Ptr, Chain);
     if (MaskedLoad.first)
@@ -22920,10 +22884,8 @@ SDValue DAGCombiner::ReduceLoadOpStoreWidth(SDNode *N) {
         return NewST;
   }
 
-  if (!getCombinerReduceLoadOpStoreWidth(DAG.getMachineFunction()
-                                             .getFunction()
-                                             .getContext()
-                                             .getOptionsContext()))
+  if (!getCombinerReduceLoadOpStoreWidth(
+          DAG.getMachineFunction().getFunction().getContext()))
     return SDValue();
 
   if (Value.getOperand(1).getOpcode() != ISD::Constant)
@@ -22960,10 +22922,7 @@ SDValue DAGCombiner::ReduceLoadOpStoreWidth(SDNode *N) {
            (NewVT.getStoreSizeInBits() != NewBW ||
             !TLI.isOperationLegalOrCustom(Opc, NewVT) ||
             (!getCombinerReduceLoadOpStoreWidthForceNarrowingProfitable(
-                 DAG.getMachineFunction()
-                     .getFunction()
-                     .getContext()
-                     .getOptionsContext()) &&
+                 DAG.getMachineFunction().getFunction().getContext()) &&
              !TLI.isNarrowingProfitable(N, VT, NewVT)))) {
       NewBW = NextPowerOf2(NewBW);
       NewVT = EVT::getIntegerVT(*DAG.getContext(), NewBW);
@@ -23533,10 +23492,8 @@ DAGCombiner::getStoreMergeCandidates(StoreSDNode *St,
     return RootCount != StoreRootCountMap.end() &&
            RootCount->second.first == RootNode &&
            RootCount->second.second >
-               getCombinerStoreMergeDependenceLimit(DAG.getMachineFunction()
-                                                        .getFunction()
-                                                        .getContext()
-                                                        .getOptionsContext());
+               getCombinerStoreMergeDependenceLimit(
+                   DAG.getMachineFunction().getFunction().getContext());
   };
 
   auto TryToAddCandidate = [&](SDUse &Use) {
@@ -24233,10 +24190,8 @@ bool DAGCombiner::tryStoreMergeOfLoads(SmallVectorImpl<MemOpLink> &StoreNodes,
 
 bool DAGCombiner::mergeConsecutiveStores(StoreSDNode *St) {
   if (OptLevel == CodeGenOptLevel::None ||
-      !getCombinerStoreMerging(DAG.getMachineFunction()
-                                   .getFunction()
-                                   .getContext()
-                                   .getOptionsContext()))
+      !getCombinerStoreMerging(
+          DAG.getMachineFunction().getFunction().getContext()))
     return false;
 
   // TODO: Extend this function to merge stores of scalable vectors.
@@ -32132,27 +32087,14 @@ bool DAGCombiner::mayAlias(SDNode *Op0, SDNode *Op1) const {
       return false;
   }
 
-  const auto &OptsCtx =
-      DAG.getMachineFunction().getFunction().getContext().getOptionsContext();
-  bool UseAA =
-      (false ||
-       clv2::wasOptSpecified<&clv2::CGPassSelDAGReg,
-                             &clv2::CGPASS_CombinerGlobalAliasAnalysis>(
-           OptsCtx))
-          ? getCombinerGlobalAliasAnalysis(DAG.getMachineFunction()
-                                               .getFunction()
-                                               .getContext()
-                                               .getOptionsContext())
-          : DAG.getSubtarget().useAA();
+  const CodeGenSelDAGOptions &Opts =
+      DAG.getMachineFunction().getFunction().getContext()
+          .getOptions<CodeGenSelDAGOptions>();
+  bool UseAA = Opts.CGPASS_CombinerGlobalAliasAnalysis.value_or(
+      DAG.getSubtarget().useAA());
 #ifndef NDEBUG
-  if ((false ||
-       clv2::wasOptSpecified<&clv2::CGPassSelDAGReg,
-                             &clv2::CGPASS_CombinerAaOnlyFunc>(OptsCtx)) &&
-      getCombinerAaOnlyFunc(DAG.getMachineFunction()
-                                .getFunction()
-                                .getContext()
-                                .getOptionsContext()) !=
-          DAG.getMachineFunction().getName())
+  if (Opts.CGPASS_CombinerAaOnlyFunc &&
+      *Opts.CGPASS_CombinerAaOnlyFunc != DAG.getMachineFunction().getName())
     UseAA = false;
 #endif
 
@@ -32173,19 +32115,11 @@ bool DAGCombiner::mayAlias(SDNode *Op0, SDNode *Op1) const {
         Size1.isScalable() ? Size1 : LocationSize::precise(Overlap1);
     if (BatchAA->isNoAlias(
             MemoryLocation(MUC0.MMO->getValue(), Loc0,
-                           getCombinerUseTbaa(DAG.getMachineFunction()
-                                                  .getFunction()
-                                                  .getContext()
-                                                  .getOptionsContext())
-                               ? MUC0.MMO->getAAInfo()
-                               : AAMDNodes()),
+                           Opts.CGPASS_CombinerUseTbaa ? MUC0.MMO->getAAInfo()
+                                                        : AAMDNodes()),
             MemoryLocation(MUC1.MMO->getValue(), Loc1,
-                           getCombinerUseTbaa(DAG.getMachineFunction()
-                                                  .getFunction()
-                                                  .getContext()
-                                                  .getOptionsContext())
-                               ? MUC1.MMO->getAAInfo()
-                               : AAMDNodes())))
+                           Opts.CGPASS_CombinerUseTbaa ? MUC1.MMO->getAAInfo()
+                                                        : AAMDNodes())))
       return false;
   }
 

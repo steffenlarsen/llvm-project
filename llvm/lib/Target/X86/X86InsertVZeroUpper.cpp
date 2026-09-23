@@ -35,9 +35,8 @@
 #include "llvm/IR/Function.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/X86/X86OptionsOptInfos.h"
+#include "llvm/Target/X86/X86Options.h"
 #include <cassert>
 
 using namespace llvm;
@@ -47,8 +46,7 @@ using namespace llvm;
 static bool UseVZeroUpper = true;
 
 static bool getUseVZeroUpper(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::X86_UseVZeroUpper>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<X86Options>().X86_UseVZeroUpper;
 }
 
 STATISTIC(NumVZU, "Number of vzeroupper instructions inserted");

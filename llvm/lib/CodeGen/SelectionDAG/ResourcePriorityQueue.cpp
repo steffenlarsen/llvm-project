@@ -19,7 +19,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/CodeGen/ResourcePriorityQueue.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsSelDAG.h"
 #include "llvm/CodeGen/DFAPacketizer.h"
 #include "llvm/CodeGen/SelectionDAGISel.h"
 #include "llvm/CodeGen/SelectionDAGNodes.h"
@@ -28,25 +28,23 @@
 #include "llvm/CodeGen/TargetRegisterInfo.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/IR/Function.h"
-#include "llvm/Support/CommandLineV2.h"
-#include "llvm/Support/OptionsContext.h"
 
 using namespace llvm;
 
 #define DEBUG_TYPE "scheduler"
 
-static bool getDisableDfaSched(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_DisableDfaSched>(Ctx);
+static bool getDisableDfaSched(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenSelDAGOptions>().CGPASS_DisableDfaSched;
 }
 
-static int getDfaSchedRegPressureThreshold(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_DfaSchedRegPressureThreshold>(
-      Ctx);
+static int getDfaSchedRegPressureThreshold(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenSelDAGOptions>()
+      .CGPASS_DfaSchedRegPressureThreshold;
 }
 
 ResourcePriorityQueue::ResourcePriorityQueue(SelectionDAGISel *IS)
     : Picker(this), InstrItins(IS->MF->getSubtarget().getInstrItineraryData()),
-      Ctx(&IS->MF->getFunction().getContext().getOptionsContext()) {
+      Ctx(&IS->MF->getFunction().getContext()) {
   const TargetSubtargetInfo &STI = IS->MF->getSubtarget();
   TRI = STI.getRegisterInfo();
   TLI = IS->TLI;

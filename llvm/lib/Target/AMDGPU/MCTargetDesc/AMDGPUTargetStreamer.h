@@ -67,12 +67,12 @@ public:
       : MCTargetStreamer(S),
         // Assume the default COV for now, EmitDirectiveAMDHSACodeObjectVersion
         // will update this if it is encountered.
-        CodeObjectVersion(AMDGPU::getDefaultAMDHSACodeObjectVersion(
-            S.getContext().getOptionsContext())) {}
+        CodeObjectVersion(
+            AMDGPU::getDefaultAMDHSACodeObjectVersion(/*Ctx=*/nullptr)) {}
 
   AMDGPUPALMetadata *getPALMetadata() { return &PALMetadata; }
 
-  virtual void EmitDirectiveAMDGCNTarget(){};
+  virtual void EmitDirectiveAMDGCNTarget() {};
 
   virtual void EmitDirectiveAMDHSACodeObjectVersion(unsigned COV) {
     CodeObjectVersion = COV;
@@ -80,7 +80,7 @@ public:
 
   virtual void EmitAMDKernelCodeT(AMDGPU::AMDGPUMCKernelCodeT &Header) {};
 
-  virtual void EmitAMDGPUSymbolType(StringRef SymbolName, unsigned Type){};
+  virtual void EmitAMDGPUSymbolType(StringRef SymbolName, unsigned Type) {};
 
   virtual void emitAMDGPULDS(MCSymbol *Symbol, unsigned Size, Align Alignment) {
   }
@@ -144,6 +144,7 @@ public:
 
 class AMDGPUTargetAsmStreamer final : public AMDGPUTargetStreamer {
   formatted_raw_ostream &OS;
+
 public:
   AMDGPUTargetAsmStreamer(MCStreamer &S, formatted_raw_ostream &OS);
 
@@ -243,5 +244,5 @@ public:
 
   void emitAMDGPUInfo(const AMDGPU::InfoSectionData &Data) override;
 };
-}
+} // namespace llvm
 #endif

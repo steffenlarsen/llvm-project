@@ -18,7 +18,7 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/LoopInfo.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsCore2.h"
 #include "llvm/CodeGen/LiveInterval.h"
 #include "llvm/CodeGen/LiveIntervals.h"
 #include "llvm/CodeGen/LiveVariables.h"
@@ -56,18 +56,18 @@ using namespace llvm;
 
 #define DEBUG_TYPE "phi-node-elimination"
 
-static bool getDisablePhiElimEdgeSplitting(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_DisablePhiElimEdgeSplitting>(
-      Ctx);
+static bool getDisablePhiElimEdgeSplitting(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore2Options>()
+      .CGPASS_DisablePhiElimEdgeSplitting;
 }
 
-static bool getPhiElimSplitAllCriticalEdges(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_PhiElimSplitAllCriticalEdges>(
-      Ctx);
+static bool getPhiElimSplitAllCriticalEdges(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore2Options>()
+      .CGPASS_PhiElimSplitAllCriticalEdges;
 }
 
-static bool getNoPhiElimLiveOutEarlyExit(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_NoPhiElimLiveOutEarlyExit>(Ctx);
+static bool getNoPhiElimLiveOutEarlyExit(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore2Options>().CGPASS_NoPhiElimLiveOutEarlyExit;
 }
 
 namespace {
@@ -243,8 +243,7 @@ bool PHIEliminationImpl::run(MachineFunction &MF) {
   bool Changed = false;
 
   // Split critical edges to help the coalescer.
-  if (!getDisablePhiElimEdgeSplitting(
-          MF.getFunction().getContext().getOptionsContext()) &&
+  if (!getDisablePhiElimEdgeSplitting(MF.getFunction().getContext()) &&
       (LV || LIS)) {
     // A set of live-in regs for each MBB which is used to update LV
     // efficiently also with large functions.
@@ -825,13 +824,11 @@ bool PHIEliminationImpl::SplitPHIEdges(
       // Avoid splitting backedges of loops. It would introduce small
       // out-of-line blocks into the loop which is very bad for code placement.
       if (PreMBB == &MBB &&
-          !getPhiElimSplitAllCriticalEdges(
-              MF.getFunction().getContext().getOptionsContext()))
+          !getPhiElimSplitAllCriticalEdges(MF.getFunction().getContext()))
         continue;
       const MachineLoop *PreLoop = MLI ? MLI->getLoopFor(PreMBB) : nullptr;
       if (IsLoopHeader && PreLoop == CurLoop &&
-          !getPhiElimSplitAllCriticalEdges(
-              MF.getFunction().getContext().getOptionsContext()))
+          !getPhiElimSplitAllCriticalEdges(MF.getFunction().getContext()))
         continue;
 
       // LV doesn't consider a phi use live-out, so isLiveOut only returns true
@@ -842,8 +839,7 @@ bool PHIEliminationImpl::SplitPHIEdges(
       // If the copy would be a kill, there is no need to split the edge.
       bool ShouldSplit = isLiveOutPastPHIs(Reg, PreMBB);
       if (!ShouldSplit &&
-          !getNoPhiElimLiveOutEarlyExit(
-              MF.getFunction().getContext().getOptionsContext()))
+          !getNoPhiElimLiveOutEarlyExit(MF.getFunction().getContext()))
         continue;
       if (ShouldSplit) {
         LLVM_DEBUG(dbgs() << printReg(Reg) << " live-out before critical edge "
@@ -877,8 +873,7 @@ bool PHIEliminationImpl::SplitPHIEdges(
         ShouldSplit = PreLoop && !PreLoop->contains(CurLoop);
       }
       if (!ShouldSplit &&
-          !getPhiElimSplitAllCriticalEdges(
-              MF.getFunction().getContext().getOptionsContext()))
+          !getPhiElimSplitAllCriticalEdges(MF.getFunction().getContext()))
         continue;
       MachineBasicBlock *NewBB;
       if (P)

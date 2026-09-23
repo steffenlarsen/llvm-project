@@ -108,7 +108,7 @@
 #include "llvm/TargetParser/Triple.h"
 #include "llvm/Transforms/IPO.h"
 #include "llvm/Transforms/IPO/FunctionAttrs.h"
-#include "llvm/Transforms/IPO/IPOOptionsOptInfos.h"
+#include "llvm/Transforms/IPO/IPOOptions.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/CallPromotionUtils.h"
 #include "llvm/Transforms/Utils/Evaluator.h"
@@ -138,40 +138,28 @@ DEBUG_COUNTER(CallsToDevirt, "calls-to-devirt",
 namespace llvm {} // end namespace llvm
 
 static PassSummaryAction getClSummaryAction(const Module &M) {
-  return clv2::getOptValIfSpecified<&clv2::IPOOptsReg,
-                                    &clv2::IPO_WholeProgramDevirtSummaryAction>(
-      M.getContext().getOptionsContext(), PassSummaryAction::None);
+  return M.getContext()
+      .getOptions<IPOOptions>()
+      .IPO_WholeProgramDevirtSummaryAction;
 }
 static const std::string &getClReadSummary(const Module &M) {
-  if (auto *O =
-          clv2::getView<&clv2::IPOOptsReg>(M.getContext().getOptionsContext()))
-    if (O->specified<&clv2::IPO_WholeProgramDevirtReadSummary>())
-      return O->get<&clv2::IPO_WholeProgramDevirtReadSummary>();
-  static const std::string Default;
-  return Default;
+  return M.getContext()
+      .getOptions<IPOOptions>()
+      .IPO_WholeProgramDevirtReadSummary;
 }
 static const std::string &getClWriteSummary(const Module &M) {
-  if (auto *O =
-          clv2::getView<&clv2::IPOOptsReg>(M.getContext().getOptionsContext()))
-    if (O->specified<&clv2::IPO_WholeProgramDevirtWriteSummary>())
-      return O->get<&clv2::IPO_WholeProgramDevirtWriteSummary>();
-  static const std::string Default;
-  return Default;
+  return M.getContext()
+      .getOptions<IPOOptions>()
+      .IPO_WholeProgramDevirtWriteSummary;
 }
 static bool getClDevirtualizeSpeculatively(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_ClDevirtualizeSpeculatively>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_ClDevirtualizeSpeculatively;
 }
 static unsigned getClThreshold(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_ClThreshold>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_ClThreshold;
 }
 static const std::vector<std::string> &getSkipFunctionNames(const Module &M) {
-  if (auto *O =
-          clv2::getView<&clv2::IPOOptsReg>(M.getContext().getOptionsContext()))
-    return O->get<&clv2::IPO_SkipFunctionNames>();
-  static const std::vector<std::string> Empty;
-  return Empty;
+  return M.getContext().getOptions<IPOOptions>().IPO_SkipFunctionNames;
 }
 
 /// With Clang, a pure virtual class's deleting destructor is emitted as a
@@ -196,29 +184,17 @@ static const std::vector<std::string> &getSkipFunctionNames(const Module &M) {
 /// Trapping mode is useful for debugging undefined behavior leading to failures
 /// with WPD. Fallback mode is useful for ensuring safety when whole program
 /// visibility may be compromised.
-enum WPDCheckMode { None, Trap, Fallback };
+/// WPDCheckMode itself is now generated from IPOOptions.td (see
+/// WPDCheckModeEnum there) rather than declared here.
 
 static bool getWholeProgramDevirtKeepUnreachableFunction(const Module &M) {
-  return clv2::getOptValOrDefault<
-      &clv2::IPO_WholeProgramDevirtKeepUnreachableFunction>(
-      M.getContext().getOptionsContext());
+  return M.getContext()
+      .getOptions<IPOOptions>()
+      .IPO_WholeProgramDevirtKeepUnreachableFunction;
 }
 
 static WPDCheckMode getDevirtCheckMode(const Module &M) {
-  if (auto *O =
-          clv2::getView<&clv2::IPOOptsReg>(M.getContext().getOptionsContext()))
-    if (O->specified<&clv2::IPO_DevirtCheckMode>()) {
-      auto V = O->get<&clv2::IPO_DevirtCheckMode>();
-      switch (V) {
-      case clv2::WPDCheckMode_None:
-        return WPDCheckMode::None;
-      case clv2::WPDCheckMode_Trap:
-        return WPDCheckMode::Trap;
-      case clv2::WPDCheckMode_Fallback:
-        return WPDCheckMode::Fallback;
-      }
-    }
-  return WPDCheckMode::None;
+  return M.getContext().getOptions<IPOOptions>().IPO_DevirtCheckMode;
 }
 
 namespace {
@@ -395,18 +371,14 @@ template <> struct llvm::DenseMapInfo<VTableSlotSummary> {
 //   2) All function summaries indicate it's unreachable
 //   3) There is no non-function with the same GUID (which is rare)
 static bool mustBeUnreachableFunction(ValueInfo TheFnVI, const Module *M,
-                                      const clv2::OptionsContext &Ctx) {
-  bool KeepUnreachable = true;
-  if (M) {
-    if (auto *O = clv2::getView<&clv2::IPOOptsReg>(
-            M->getContext().getOptionsContext()))
-      KeepUnreachable =
-          O->get<&clv2::IPO_WholeProgramDevirtKeepUnreachableFunction>();
-  } else {
-    if (auto *O = clv2::getView<&clv2::IPOOptsReg>(Ctx))
-      KeepUnreachable =
-          O->get<&clv2::IPO_WholeProgramDevirtKeepUnreachableFunction>();
-  }
+                                      const clv2::OptionsContext & /*Ctx*/) {
+  // No LLVMContext is reachable when M is null (only the legacy Ctx, which is
+  // unrelated to the new-system per-context storage IPOOptions relies on), so
+  // this reads the process-wide IPOOptions::Current default directly instead,
+  // the same no-context fallback used by e.g. CGDataOptions/LTOOptions.
+  bool KeepUnreachable =
+      M ? M->getContext().getOptions<IPOOptions>().IPO_WholeProgramDevirtKeepUnreachableFunction
+        : IPOOptions::Current.IPO_WholeProgramDevirtKeepUnreachableFunction;
   if (KeepUnreachable)
     return false;
 
@@ -776,21 +748,15 @@ struct DevirtIndex {
         ExternallyVisibleSymbolNamesPtr(ExternallyVisibleSymbolNamesPtr), M(M),
         Ctx(&Ctx) {
     {
-      const std::vector<std::string> *Names = nullptr;
-      static const std::vector<std::string> Empty;
-      if (M) {
-        if (auto *O = clv2::getView<&clv2::IPOOptsReg>(
-                M->getContext().getOptionsContext()))
-          Names = &O->get<&clv2::IPO_SkipFunctionNames>();
-        else
-          Names = &Empty;
-      } else {
-        if (auto *O = clv2::getView<&clv2::IPOOptsReg>(Ctx))
-          Names = &O->get<&clv2::IPO_SkipFunctionNames>();
-        else
-          Names = &Empty;
-      }
-      FunctionsToSkip.init(*Names);
+      // No LLVMContext is reachable when M is null (only the legacy Ctx,
+      // which is unrelated to the new-system per-context storage IPOOptions
+      // relies on), so this reads the process-wide IPOOptions::Current
+      // default directly instead, the same no-context fallback used by e.g.
+      // CGDataOptions/LTOOptions.
+      const std::vector<std::string> &Names =
+          M ? M->getContext().getOptions<IPOOptions>().IPO_SkipFunctionNames
+            : IPOOptions::Current.IPO_SkipFunctionNames;
+      FunctionsToSkip.init(Names);
     }
   }
 
@@ -835,19 +801,15 @@ PreservedAnalyses WholeProgramDevirtPass::run(Module &M,
 // internal option, and not force disabled.
 bool llvm::hasWholeProgramVisibility(bool WholeProgramVisibilityEnabledInLTO,
                                      const Module *M,
-                                     const clv2::OptionsContext &Ctx) {
-  bool WPV = false;
-  bool DisableWPV = false;
-  const ipo_opts::ParsedOpts *O =
-      M ? clv2::getView<&clv2::IPOOptsReg>(M->getContext().getOptionsContext())
-        : clv2::getView<&clv2::IPOOptsReg>(Ctx);
-  if (O) {
-    if (O->specified<&clv2::IPO_WholeProgramVisibility>())
-      WPV = O->get<&clv2::IPO_WholeProgramVisibility>();
-    if (O->specified<&clv2::IPO_DisableWholeProgramVisibility>())
-      DisableWPV = O->get<&clv2::IPO_DisableWholeProgramVisibility>();
-  }
-  return (WholeProgramVisibilityEnabledInLTO || WPV) && !DisableWPV;
+                                     const clv2::OptionsContext & /*Ctx*/) {
+  // No LLVMContext is reachable when M is null (only the legacy Ctx, which is
+  // unrelated to the new-system per-context storage IPOOptions relies on), so
+  // this reads the process-wide IPOOptions::Current default directly instead,
+  // the same no-context fallback used by e.g. CGDataOptions/LTOOptions.
+  const IPOOptions &Opts =
+      M ? M->getContext().getOptions<IPOOptions>() : IPOOptions::Current;
+  return (WholeProgramVisibilityEnabledInLTO || Opts.IPO_WholeProgramVisibility) &&
+         !Opts.IPO_DisableWholeProgramVisibility;
 }
 
 static bool
@@ -1454,15 +1416,12 @@ bool DevirtIndex::trySingleImplDevirt(MutableArrayRef<ValueInfo> TargetsForSlot,
     return false;
 
   // Collect functions devirtualized at least for one call site for stats.
-  bool PrintDevirt = false;
-  if (M) {
-    if (auto *O = clv2::getView<&clv2::IPOOptsReg>(
-            M->getContext().getOptionsContext()))
-      PrintDevirt = O->get<&clv2::IPO_PrintSummaryDevirt>();
-  } else {
-    if (auto *O = clv2::getView<&clv2::IPOOptsReg>(*Ctx))
-      PrintDevirt = O->get<&clv2::IPO_PrintSummaryDevirt>();
-  }
+  // No LLVMContext is reachable when M is null (only the legacy Ctx, which is
+  // unrelated to the new-system per-context storage IPOOptions relies on), so
+  // this reads the process-wide IPOOptions::Current default directly instead.
+  bool PrintDevirt =
+      M ? M->getContext().getOptions<IPOOptions>().IPO_PrintSummaryDevirt
+        : IPOOptions::Current.IPO_PrintSummaryDevirt;
   if (PrintDevirt || AreStatisticsEnabled())
     DevirtTargets.insert(TheFn);
 
@@ -2723,16 +2682,13 @@ void DevirtIndex::run() {
   }
 
   // Optionally have the thin link print message for each devirtualized
-  // function.
-  bool PrintDevirt = false;
-  if (M) {
-    if (auto *O = clv2::getView<&clv2::IPOOptsReg>(
-            M->getContext().getOptionsContext()))
-      PrintDevirt = O->get<&clv2::IPO_PrintSummaryDevirt>();
-  } else {
-    if (auto *O = clv2::getView<&clv2::IPOOptsReg>(*Ctx))
-      PrintDevirt = O->get<&clv2::IPO_PrintSummaryDevirt>();
-  }
+  // function. No LLVMContext is reachable when M is null (only the legacy
+  // Ctx, which is unrelated to the new-system per-context storage IPOOptions
+  // relies on), so this reads the process-wide IPOOptions::Current default
+  // directly instead.
+  bool PrintDevirt =
+      M ? M->getContext().getOptions<IPOOptions>().IPO_PrintSummaryDevirt
+        : IPOOptions::Current.IPO_PrintSummaryDevirt;
   if (PrintDevirt)
     for (const auto &DT : DevirtTargets)
       errs() << "Devirtualized call to " << DT << "\n";

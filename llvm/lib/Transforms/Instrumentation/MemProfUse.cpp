@@ -16,7 +16,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/StringRef.h"
-#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
+#include "llvm/Analysis/AnalysisOptions.h"
 #include "llvm/Analysis/MemoryProfileInfo.h"
 #include "llvm/Analysis/OptimizationRemarkEmitter.h"
 #include "llvm/Analysis/StaticDataProfileInfo.h"
@@ -36,7 +36,7 @@
 #include "llvm/Support/MD5.h"
 #include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/VirtualFileSystem.h"
-#include "llvm/Transforms/Instrumentation/InstrumentationOptionsOptInfos.h"
+#include "llvm/Transforms/Instrumentation/InstrumentationOptions.h"
 #include "llvm/Transforms/Utils/LongestCommonSequence.h"
 #include <map>
 #include <set>
@@ -46,13 +46,9 @@ using namespace llvm::memprof;
 
 #define DEBUG_TYPE "memprof"
 
-#define MEMPROFUSE_GETTER(FnName, DescName, Default)                           \
-  static auto get##FnName(const Module &M) {                                   \
-    if (auto *O = clv2::getView<&clv2::InstrumentationOptsReg>(                \
-            M.getContext().getOptionsContext()))                               \
-      if (O->specified<&clv2::DescName>())                                     \
-        return O->get<&clv2::DescName>();                                      \
-    return Default;                                                            \
+#define MEMPROFUSE_GETTER(FnName, DescName, Default)                         \
+  static auto get##FnName(const Module &M) {                                 \
+    return M.getContext().getOptions<InstrumentationOptions>().DescName;     \
   }
 
 MEMPROFUSE_GETTER(ClMemProfMatchHotColdNew, INST_MemprofMatchHotColdNew, false)
@@ -117,22 +113,23 @@ static uint64_t computeStackId(const memprof::Frame &Frame) {
 }
 
 static AllocationType getAllocType(const AllocationInfo *AllocInfo,
-                                   const clv2::OptionsContext &Ctx) {
+                                   const ProfileDataOptions &Opts) {
   return getAllocType(AllocInfo->Info.getTotalLifetimeAccessDensity(),
                       AllocInfo->Info.getAllocCount(),
-                      AllocInfo->Info.getTotalLifetime(), Ctx);
+                      AllocInfo->Info.getTotalLifetime(), Opts);
 }
 
 static AllocationType addCallStack(CallStackTrie &AllocTrie,
                                    const AllocationInfo *AllocInfo,
                                    uint64_t FullStackId,
-                                   const clv2::OptionsContext &Ctx) {
+                                   const AnalysisOptions &AnOpts,
+                                   const ProfileDataOptions &Opts) {
   SmallVector<uint64_t> StackIds;
   for (const auto &StackFrame : AllocInfo->CallStack)
     StackIds.push_back(computeStackId(StackFrame));
-  auto AllocType = getAllocType(AllocInfo, Ctx);
+  auto AllocType = getAllocType(AllocInfo, Opts);
   std::vector<ContextTotalSize> ContextSizeInfo;
-  if (recordContextSizeInfoForAnalysis(Ctx)) {
+  if (recordContextSizeInfoForAnalysis(AnOpts)) {
     auto TotalSize = AllocInfo->Info.getTotalSize();
     assert(TotalSize);
     assert(FullStackId != 0);
@@ -468,7 +465,8 @@ handleAllocSite(Instruction &I, CallBase *CI,
     auto NewSize = AllocInfo->Info.getTotalSize();
     if ((CurSize > NewSize) ||
         (CurSize == NewSize &&
-         getAllocType(AllocInfo, M.getContext().getOptionsContext()) !=
+         getAllocType(AllocInfo,
+                      M.getContext().getOptions<ProfileDataOptions>()) !=
              AllocationType::NotCold))
       continue;
     It->second = AllocInfo;
@@ -486,8 +484,10 @@ handleAllocSite(Instruction &I, CallBase *CI,
     if (stackFrameIncludesInlinedCallStack(AllocInfo->CallStack,
                                            InlinedCallStack)) {
       NumOfMemProfMatchedAllocContexts++;
-      auto AllocType = addCallStack(AllocTrie, AllocInfo, FullStackId,
-                                    M.getContext().getOptionsContext());
+      auto AllocType = addCallStack(
+          AllocTrie, AllocInfo, FullStackId,
+          M.getContext().getOptions<AnalysisOptions>(),
+          M.getContext().getOptions<ProfileDataOptions>());
       TotalSize += AllocInfo->Info.getTotalSize();
       if (AllocType == AllocationType::Cold)
         TotalColdSize += AllocInfo->Info.getTotalSize();
@@ -692,15 +692,12 @@ readMemprof(Module &M, Function &F, IndexedInstrProfReader *MemProfReader,
     handleAllErrors(std::move(Err), [&](const InstrProfError &IPE) {
       auto Err = IPE.get();
       bool SkipWarning = false;
-      bool PGOWarnMissingVal = false;
-      auto &OptsCtx = F.getContext().getOptionsContext();
-      bool NoPGOWarnMismatchVal = NoPGOWarnMismatch.value_or(
-          clv2::getOptValOrDefault<&clv2::INST_NoPGOWarnMismatch>(OptsCtx));
+      const auto &Opts = F.getContext().getOptions<InstrumentationOptions>();
+      bool NoPGOWarnMismatchVal =
+          NoPGOWarnMismatch.value_or(Opts.INST_NoPGOWarnMismatch);
       bool NoPGOWarnMismatchComdatWeakVal =
-          clv2::getOptValOrDefault<&clv2::INST_NoPGOWarnMismatchComdatWeak>(
-              OptsCtx);
-      if (auto *O = clv2::getView<&clv2::InstrumentationOptsReg>(OptsCtx))
-        PGOWarnMissingVal = O->get<&clv2::INST_PGOWarnMissing>();
+          Opts.INST_NoPGOWarnMismatchComdatWeak;
+      bool PGOWarnMissingVal = Opts.INST_PGOWarnMissing;
       LLVM_DEBUG(dbgs() << "Error in reading profile for Func " << FuncName
                         << ": ");
       if (Err == instrprof_error::unknown_function) {
@@ -1012,11 +1009,9 @@ bool MemProfUsePass::annotateGlobalVariables(
     // Skip string literals as their mangled names don't stay stable across
     // binary releases.
     {
-      bool AnnotateStr = false;
-      if (auto *O = clv2::getView<&clv2::AnalysisOptsReg>(
-              M.getContext().getOptionsContext()))
-        if (O->specified<&clv2::AN_AnnotateStringLiteralSectionPrefix>())
-          AnnotateStr = O->get<&clv2::AN_AnnotateStringLiteralSectionPrefix>();
+      bool AnnotateStr = M.getContext()
+                             .getOptions<AnalysisOptions>()
+                             .AN_AnnotateStringLiteralSectionPrefix;
       if (!AnnotateStr && Name.starts_with(".str"))
         continue;
     }

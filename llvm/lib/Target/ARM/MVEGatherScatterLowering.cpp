@@ -39,8 +39,7 @@
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/ARM/ARMOptionsOptInfos.h"
+#include "llvm/Target/ARM/ARMOptions.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include <cassert>
 
@@ -49,8 +48,7 @@ using namespace llvm;
 #define DEBUG_TYPE "arm-mve-gather-scatter-lowering"
 
 static bool getEnableMaskedGatherScatters(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::ARM_EnableMaskedGatherScatters>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<ARMOptions>().ARM_EnableMaskedGatherScatters;
 }
 
 namespace {
@@ -509,11 +507,11 @@ Instruction *MVEGatherScatterLowering::tryCreateMaskedGatherOffset(
       // If the gather has a single extend of the correct type, use an extending
       // gather and replace the ext. In which case the correct root to replace
       // is not the CallInst itself, but the instruction which extends it.
-      Instruction* User = cast<Instruction>(*I->users().begin());
+      Instruction *User = cast<Instruction>(*I->users().begin());
       if (isa<SExtInst>(User) &&
           User->getType()->getPrimitiveSizeInBits() == 128) {
-        LLVM_DEBUG(dbgs() << "masked gathers: Incorporating extend: "
-                          << *User << "\n");
+        LLVM_DEBUG(dbgs() << "masked gathers: Incorporating extend: " << *User
+                          << "\n");
         Extend = User;
         ResultTy = User->getType();
         Unsigned = 0;

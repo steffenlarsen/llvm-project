@@ -19,13 +19,12 @@
 #include "llvm/MC/MCSection.h"
 #include "llvm/MC/MCSectionELF.h"
 #include "llvm/MC/MCSubtargetInfo.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/AArch64/AArch64OptionsOptInfos.h"
+#include "llvm/Target/AArch64/AArch64Options.h"
 
 using namespace llvm;
 
-static bool getMarkBTIProperty(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::A64_MarkBTIProperty>(Ctx);
+static bool getMarkBTIProperty() {
+  return AArch64Options::Current.A64_MarkBTIProperty;
 }
 
 //
@@ -65,7 +64,7 @@ void AArch64TargetStreamer::emitConstantPools() {
 // finish() - write out any non-empty assembler constant pools and
 //   write out note.gnu.properties if need.
 void AArch64TargetStreamer::finish() {
-  if (getMarkBTIProperty(Streamer.getContext().getOptionsContext()))
+  if (getMarkBTIProperty())
     emitNoteSection(ELF::GNU_PROPERTY_AARCH64_FEATURE_1_BTI);
 }
 
@@ -99,7 +98,7 @@ void AArch64TargetStreamer::emitNoteSection(unsigned Flags,
 
   // Emit the note header.
   OutStreamer.emitValueToAlignment(Align(8));
-  OutStreamer.emitIntValue(4, 4);     // data size for "GNU\0"
+  OutStreamer.emitIntValue(4, 4);      // data size for "GNU\0"
   OutStreamer.emitIntValue(DescSz, 4); // Elf_Prop array size
   OutStreamer.emitIntValue(ELF::NT_GNU_PROPERTY_TYPE_0, 4);
   OutStreamer.emitBytes(StringRef("GNU", 4)); // note name

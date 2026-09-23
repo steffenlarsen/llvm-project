@@ -17,19 +17,18 @@
 #include "llvm/IR/Function.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/IntrinsicInst.h"
+#include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Operator.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/DebugCounter.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Transforms/Utils/Local.h"
-#include "llvm/Transforms/Utils/UtilsOptionsOptInfos.h"
+#include "llvm/Transforms/Utils/UtilsOptions.h"
 
 using namespace llvm;
 
-bool llvm::getEnableKnowledgeRetention(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::TransformUtilsOptsReg,
-                           &clv2::TU_EnableKnowledgeRetention>(Ctx, false);
+bool llvm::getEnableKnowledgeRetention(const LLVMContext *Ctx) {
+  return Ctx && Ctx->getOptions<UtilsOptions>().TU_EnableKnowledgeRetention;
 }
 
 #define DEBUG_TYPE "assume-builder"
@@ -48,15 +47,15 @@ namespace {
 
 bool isUsefullToPreserve(Attribute::AttrKind Kind) {
   switch (Kind) {
-    case Attribute::NonNull:
-    case Attribute::NoUndef:
-    case Attribute::Alignment:
-    case Attribute::Dereferenceable:
-    case Attribute::DereferenceableOrNull:
-    case Attribute::Cold:
-      return true;
-    default:
-      return false;
+  case Attribute::NonNull:
+  case Attribute::NoUndef:
+  case Attribute::Alignment:
+  case Attribute::Dereferenceable:
+  case Attribute::DereferenceableOrNull:
+  case Attribute::Cold:
+    return true;
+  default:
+    return false;
   }
 }
 
@@ -101,8 +100,8 @@ struct AssumeBuilderState {
   using MapKey = std::pair<Value *, Attribute::AttrKind>;
   SmallMapVector<MapKey, uint64_t, 8> AssumedKnowledgeMap;
   Instruction *InstBeingModified = nullptr;
-  AssumptionCache* AC = nullptr;
-  DominatorTree* DT = nullptr;
+  AssumptionCache *AC = nullptr;
+  DominatorTree *DT = nullptr;
 
   AssumeBuilderState(Module *M, Instruction *I = nullptr,
                      AssumptionCache *AC = nullptr, DominatorTree *DT = nullptr)
@@ -112,7 +111,7 @@ struct AssumeBuilderState {
     if (!InstBeingModified || !RK.WasOn || !AC)
       return false;
     bool HasBeenPreserved = false;
-    Use* ToUpdate = nullptr;
+    Use *ToUpdate = nullptr;
     getKnowledgeForValue(
         RK.WasOn, {RK.AttrKind}, *AC,
         [&](RetainedKnowledge RKOther, Instruction *Assume,
@@ -281,8 +280,7 @@ struct AssumeBuilderState {
 } // namespace
 
 AssumeInst *llvm::buildAssumeFromInst(Instruction *I) {
-  if (!getEnableKnowledgeRetention(
-          I->getFunction()->getContext().getOptionsContext()))
+  if (!getEnableKnowledgeRetention(&I->getFunction()->getContext()))
     return nullptr;
   AssumeBuilderState Builder(I->getModule());
   Builder.addInstruction(I);
@@ -291,8 +289,7 @@ AssumeInst *llvm::buildAssumeFromInst(Instruction *I) {
 
 bool llvm::salvageKnowledge(Instruction *I, AssumptionCache *AC,
                             DominatorTree *DT) {
-  if (!getEnableKnowledgeRetention(
-          I->getFunction()->getContext().getOptionsContext()) ||
+  if (!getEnableKnowledgeRetention(&I->getFunction()->getContext()) ||
       I->isTerminator())
     return false;
   bool Changed = false;
@@ -397,7 +394,7 @@ struct AssumeSimplify {
             continue;
           }
           RetainedKnowledge RK =
-            getKnowledgeFromBundle(cast<AssumeInst>(*Assume), BOI);
+              getKnowledgeFromBundle(cast<AssumeInst>(*Assume), BOI);
           if (auto *Arg = dyn_cast_or_null<Argument>(RK.WasOn)) {
             bool HasSameKindAttr = Arg->hasAttribute(RK.AttrKind);
             if (HasSameKindAttr)
@@ -457,7 +454,7 @@ struct AssumeSimplify {
       CleanupToDo.insert(I);
       for (CallInst::BundleOpInfo &BOI : I->bundle_op_infos()) {
         RetainedKnowledge RK =
-          getKnowledgeFromBundle(cast<AssumeInst>(*I), BOI);
+            getKnowledgeFromBundle(cast<AssumeInst>(*I), BOI);
         if (!RK)
           continue;
         Builder.addKnowledge(RK);
@@ -540,7 +537,7 @@ bool simplifyAssumes(Function &F, AssumptionCache *AC, DominatorTree *DT) {
 
 PreservedAnalyses AssumeSimplifyPass::run(Function &F,
                                           FunctionAnalysisManager &AM) {
-  if (!getEnableKnowledgeRetention(F.getContext().getOptionsContext()))
+  if (!getEnableKnowledgeRetention(&F.getContext()))
     return PreservedAnalyses::all();
   if (!simplifyAssumes(F, &AM.getResult<AssumptionAnalysis>(F),
                        AM.getCachedResult<DominatorTreeAnalysis>(F)))
@@ -553,7 +550,7 @@ PreservedAnalyses AssumeSimplifyPass::run(Function &F,
 PreservedAnalyses AssumeBuilderPass::run(Function &F,
                                          FunctionAnalysisManager &AM) {
   AssumptionCache *AC = &AM.getResult<AssumptionAnalysis>(F);
-  DominatorTree* DT = AM.getCachedResult<DominatorTreeAnalysis>(F);
+  DominatorTree *DT = AM.getCachedResult<DominatorTreeAnalysis>(F);
   bool Changed = false;
   for (Instruction &I : instructions(F))
     Changed |= salvageKnowledge(&I, AC, DT);

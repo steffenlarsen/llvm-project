@@ -27,7 +27,6 @@
 // Pull in OpName enum definition and getNamedOperandIdx() declaration.
 #define GET_INSTRINFO_OPERAND_ENUM
 #include "AMDGPUGenInstrInfo.inc"
-#include "llvm/Support/OptionsContext.h"
 
 struct amd_kernel_code_t;
 
@@ -37,6 +36,7 @@ struct Align;
 class Argument;
 class Function;
 class GlobalValue;
+class LLVMContext;
 class MachineInstr;
 class MCInstrInfo;
 class MCRegisterClass;
@@ -46,9 +46,6 @@ class MDNode;
 class StringRef;
 class Triple;
 class raw_ostream;
-namespace clv2 {
-class OptionsContext;
-}
 
 namespace AMDGPU {
 
@@ -81,14 +78,16 @@ bool isHsaAbi(const MCSubtargetInfo &STI);
 /// \returns Code object version from the IR module flag.
 unsigned getAMDHSACodeObjectVersion(const Module &M);
 
-/// \returns Code object version from ELF's e_ident[EI_ABIVERSION].
+/// \returns Code object version from ELF's e_ident[EI_ABIVERSION]. \p Ctx may
+/// be null when no LLVMContext is available (e.g. in the disassembler).
 unsigned getAMDHSACodeObjectVersion(unsigned ABIVersion,
-                                    const clv2::OptionsContext &Ctx);
+                                    const LLVMContext *Ctx);
 
 /// \returns The default HSA code object version. This should only be used when
 /// we lack a more accurate CodeObjectVersion value (e.g. from the IR module
-/// flag or a .amdhsa_code_object_version directive)
-unsigned getDefaultAMDHSACodeObjectVersion(const clv2::OptionsContext &Ctx);
+/// flag or a .amdhsa_code_object_version directive). \p Ctx may be null when
+/// no LLVMContext is available (e.g. in the disassembler).
+unsigned getDefaultAMDHSACodeObjectVersion(const LLVMContext *Ctx);
 
 /// \returns ABIVersion suitable for use in ELF's e_ident[EI_ABIVERSION]. \param
 /// CodeObjectVersion is a value returned by getAMDHSACodeObjectVersion().

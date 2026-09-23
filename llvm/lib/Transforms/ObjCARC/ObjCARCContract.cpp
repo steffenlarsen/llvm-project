@@ -41,11 +41,10 @@
 #include "llvm/IR/PassManager.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/TargetParser/Triple.h"
 #include "llvm/Transforms/ObjCARC.h"
-#include "llvm/Transforms/ObjCARC/ObjCARCOptionsOptInfos.h"
+#include "llvm/Transforms/ObjCARC/ObjCARCOptions.h"
 #include "llvm/Transforms/Utils/Local.h"
 
 using namespace llvm;
@@ -57,8 +56,7 @@ STATISTIC(NumPeeps,       "Number of calls peephole-optimized");
 STATISTIC(NumStoreStrongs, "Number objc_storeStrong calls formed");
 
 static std::optional<bool> getUseObjCClaimRV(const Module &M) {
-  return clv2::getOptValOr<&clv2::ObjCARCOptsReg, &clv2::ARC_UseObjCClaimRV>(
-      M.getContext().getOptionsContext(), std::nullopt);
+  return M.getContext().getOptions<ObjCARCOptions>().ARC_UseObjCClaimRV;
 }
 
 //===----------------------------------------------------------------------===//

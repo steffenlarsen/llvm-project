@@ -20,7 +20,7 @@
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/iterator_range.h"
 #include "llvm/Analysis/ProfileSummaryInfo.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsCore2.h"
 #include "llvm/CodeGen/LivePhysRegs.h"
 #include "llvm/CodeGen/MBFIWrapper.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
@@ -43,10 +43,8 @@
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/BranchProbability.h"
-#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <cassert>
@@ -60,48 +58,48 @@ using namespace llvm;
 
 #define DEBUG_TYPE "if-converter"
 
-static int getIfcvtFnStart(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_IfcvtFnStart>(Ctx);
+static int getIfcvtFnStart(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore2Options>().CGPASS_IfcvtFnStart;
 }
 
-static int getIfcvtFnStop(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_IfcvtFnStop>(Ctx);
+static int getIfcvtFnStop(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore2Options>().CGPASS_IfcvtFnStop;
 }
 
-static int getIfcvtLimit(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_IfcvtLimit>(Ctx);
+static int getIfcvtLimit(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore2Options>().CGPASS_IfcvtLimit;
 }
 
-static bool getDisableIfcvtSimple(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_DisableIfcvtSimple>(Ctx);
+static bool getDisableIfcvtSimple(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore2Options>().CGPASS_DisableIfcvtSimple;
 }
 
-static bool getDisableIfcvtSimpleFalse(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_DisableIfcvtSimpleFalse>(Ctx);
+static bool getDisableIfcvtSimpleFalse(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore2Options>().CGPASS_DisableIfcvtSimpleFalse;
 }
 
-static bool getDisableIfcvtTriangle(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_DisableIfcvtTriangle>(Ctx);
+static bool getDisableIfcvtTriangle(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore2Options>().CGPASS_DisableIfcvtTriangle;
 }
 
-static bool getDisableIfcvtTriangleRev(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_DisableIfcvtTriangleRev>(Ctx);
+static bool getDisableIfcvtTriangleRev(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore2Options>().CGPASS_DisableIfcvtTriangleRev;
 }
 
-static bool getDisableIfcvtTriangleFalse(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_DisableIfcvtTriangleFalse>(Ctx);
+static bool getDisableIfcvtTriangleFalse(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore2Options>().CGPASS_DisableIfcvtTriangleFalse;
 }
 
-static bool getDisableIfcvtDiamond(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_DisableIfcvtDiamond>(Ctx);
+static bool getDisableIfcvtDiamond(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore2Options>().CGPASS_DisableIfcvtDiamond;
 }
 
-static bool getDisableIfcvtForkedDiamond(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_DisableIfcvtForkedDiamond>(Ctx);
+static bool getDisableIfcvtForkedDiamond(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore2Options>().CGPASS_DisableIfcvtForkedDiamond;
 }
 
-static bool getIfcvtBranchFold(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_IfcvtBranchFold>(Ctx);
+static bool getIfcvtBranchFold(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore2Options>().CGPASS_IfcvtBranchFold;
 }
 
 STATISTIC(NumSimple,       "Number of simple if-conversions performed");
@@ -505,19 +503,16 @@ bool IfConverter::runOnMachineFunction(MachineFunction &MF) {
   if (!PreRegAlloc) {
     // Tail merge tend to expose more if-conversion opportunities.
     BranchFolder BF(true, false, MBFI, *MBPI, PSI,
-                    MF.getFunction().getContext().getOptionsContext());
+                    MF.getFunction().getContext());
     BFChange = BF.OptimizeFunction(MF, TII, ST.getRegisterInfo());
   }
 
   LLVM_DEBUG(dbgs() << "\nIfcvt: function (" << ++FnNum << ") \'"
                     << MF.getName() << "\'");
 
-  if (FnNum <
-          getIfcvtFnStart(MF.getFunction().getContext().getOptionsContext()) ||
-      (getIfcvtFnStop(MF.getFunction().getContext().getOptionsContext()) !=
-           -1 &&
-       FnNum >
-           getIfcvtFnStop(MF.getFunction().getContext().getOptionsContext()))) {
+  if (FnNum < getIfcvtFnStart(MF.getFunction().getContext()) ||
+      (getIfcvtFnStop(MF.getFunction().getContext()) != -1 &&
+       FnNum > getIfcvtFnStop(MF.getFunction().getContext()))) {
     LLVM_DEBUG(dbgs() << " skipped\n");
     return false;
   }
@@ -530,10 +525,8 @@ bool IfConverter::runOnMachineFunction(MachineFunction &MF) {
   MadeChange = false;
   unsigned NumIfCvts = NumSimple + NumSimpleFalse + NumTriangle +
     NumTriangleRev + NumTriangleFalse + NumTriangleFRev + NumDiamonds;
-  while (getIfcvtLimit(MF.getFunction().getContext().getOptionsContext()) ==
-             -1 ||
-         (int)NumIfCvts <
-             getIfcvtLimit(MF.getFunction().getContext().getOptionsContext())) {
+  while (getIfcvtLimit(MF.getFunction().getContext()) == -1 ||
+         (int)NumIfCvts < getIfcvtLimit(MF.getFunction().getContext())) {
     // Do an initial analysis for each basic block and find all the potential
     // candidates to perform if-conversion.
     bool Change = false;
@@ -562,11 +555,8 @@ bool IfConverter::runOnMachineFunction(MachineFunction &MF) {
       case ICSimpleFalse: {
         bool isFalse = Kind == ICSimpleFalse;
         if ((isFalse &&
-             getDisableIfcvtSimpleFalse(
-                 MF.getFunction().getContext().getOptionsContext())) ||
-            (!isFalse &&
-             getDisableIfcvtSimple(
-                 MF.getFunction().getContext().getOptionsContext())))
+             getDisableIfcvtSimpleFalse(MF.getFunction().getContext())) ||
+            (!isFalse && getDisableIfcvtSimple(MF.getFunction().getContext())))
           break;
         LLVM_DEBUG(dbgs() << "Ifcvt (Simple"
                           << (Kind == ICSimpleFalse ? " false" : "")
@@ -588,16 +578,13 @@ bool IfConverter::runOnMachineFunction(MachineFunction &MF) {
       case ICTriangleFRev: {
         bool isFalse = Kind == ICTriangleFalse;
         bool isRev   = (Kind == ICTriangleRev || Kind == ICTriangleFRev);
-        if (getDisableIfcvtTriangle(
-                MF.getFunction().getContext().getOptionsContext()) &&
+        if (getDisableIfcvtTriangle(MF.getFunction().getContext()) &&
             !isFalse && !isRev)
           break;
-        if (getDisableIfcvtTriangleRev(
-                MF.getFunction().getContext().getOptionsContext()) &&
+        if (getDisableIfcvtTriangleRev(MF.getFunction().getContext()) &&
             !isFalse && isRev)
           break;
-        if (getDisableIfcvtTriangleFalse(
-                MF.getFunction().getContext().getOptionsContext()) &&
+        if (getDisableIfcvtTriangleFalse(MF.getFunction().getContext()) &&
             isFalse && !isRev)
           break;
         LLVM_DEBUG(dbgs() << "Ifcvt (Triangle");
@@ -621,8 +608,7 @@ bool IfConverter::runOnMachineFunction(MachineFunction &MF) {
         break;
       }
       case ICDiamond:
-        if (getDisableIfcvtDiamond(
-                MF.getFunction().getContext().getOptionsContext()))
+        if (getDisableIfcvtDiamond(MF.getFunction().getContext()))
           break;
         LLVM_DEBUG(dbgs() << "Ifcvt (Diamond): " << printMBBReference(*BBI.BB)
                           << " (T:" << BBI.TrueBB->getNumber()
@@ -634,8 +620,7 @@ bool IfConverter::runOnMachineFunction(MachineFunction &MF) {
         if (RetVal) ++NumDiamonds;
         break;
       case ICForkedDiamond:
-        if (getDisableIfcvtForkedDiamond(
-                MF.getFunction().getContext().getOptionsContext()))
+        if (getDisableIfcvtForkedDiamond(MF.getFunction().getContext()))
           break;
         LLVM_DEBUG(dbgs() << "Ifcvt (Forked Diamond): "
                           << printMBBReference(*BBI.BB)
@@ -656,10 +641,8 @@ bool IfConverter::runOnMachineFunction(MachineFunction &MF) {
 
       NumIfCvts = NumSimple + NumSimpleFalse + NumTriangle + NumTriangleRev +
         NumTriangleFalse + NumTriangleFRev + NumDiamonds;
-      if (getIfcvtLimit(MF.getFunction().getContext().getOptionsContext()) !=
-              -1 &&
-          (int)NumIfCvts >=
-              getIfcvtLimit(MF.getFunction().getContext().getOptionsContext()))
+      if (getIfcvtLimit(MF.getFunction().getContext()) != -1 &&
+          (int)NumIfCvts >= getIfcvtLimit(MF.getFunction().getContext()))
         break;
     }
 
@@ -671,10 +654,9 @@ bool IfConverter::runOnMachineFunction(MachineFunction &MF) {
   Tokens.clear();
   BBAnalysis.clear();
 
-  if (MadeChange &&
-      getIfcvtBranchFold(MF.getFunction().getContext().getOptionsContext())) {
+  if (MadeChange && getIfcvtBranchFold(MF.getFunction().getContext())) {
     BranchFolder BF(false, false, MBFI, *MBPI, PSI,
-                    MF.getFunction().getContext().getOptionsContext());
+                    MF.getFunction().getContext());
     BF.OptimizeFunction(MF, TII, MF.getSubtarget().getRegisterInfo());
   }
 

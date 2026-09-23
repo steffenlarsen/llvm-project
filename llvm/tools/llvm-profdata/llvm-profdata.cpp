@@ -18,6 +18,7 @@
 #include "llvm/HTTP/HTTPClient.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/Object/Binary.h"
+#include "llvm/Option/LibraryOptions.h"
 #include "llvm/ProfileData/DataAccessProf.h"
 #include "llvm/ProfileData/InstrProfCorrelator.h"
 #include "llvm/ProfileData/InstrProfReader.h"
@@ -27,7 +28,7 @@
 #include "llvm/ProfileData/MemProfSummaryBuilder.h"
 #include "llvm/ProfileData/MemProfYAML.h"
 #include "llvm/ProfileData/ProfileCommon.h"
-#include "llvm/ProfileData/ProfileDataOptionsOptInfos.h"
+#include "llvm/ProfileData/ProfileDataOptions.h"
 #include "llvm/ProfileData/SampleProfReader.h"
 #include "llvm/ProfileData/SampleProfWriter.h"
 #include "llvm/Support/BalancedPartitioning.h"
@@ -291,12 +292,6 @@ inline constexpr clv2::OptionInfo<uint64_t> OutputSizeLimitOpt{
     "Trim cold functions until profile size is below specified "
     "limit in bytes. This uses a heursitic and functions may be "
     "excessively trimmed",
-    clv2::Hidden};
-
-inline constexpr clv2::OptionInfo<bool> WriteMD5ProfSymListOpt{
-    "md5-prof-sym-list",
-    "Write ProfileSymbolList (Cold Symbols) as 64-bit MD5 hashes in Eytzinger "
-    "layout",
     clv2::Hidden};
 
 inline constexpr clv2::OptionInfo<bool> WriteMD5IndexedTablesOpt{
@@ -650,8 +645,8 @@ inline constexpr clv2::SubCommandInfo<
     &RemappingFileA, &UseMD5Opt, &CompressAllSectionsOpt,
     &SampleMergeColdContextOpt, &SampleTrimColdContextOpt,
     &SampleColdContextFrameDepthOpt, &OutputSizeLimitOpt,
-    &WriteMD5ProfSymListOpt, &WriteMD5IndexedTablesOpt, &GenPartialProfileOpt,
-    &SplitLayoutOpt, &SupplInstrWithSampleOpt, &ZeroCounterThresholdOpt,
+    &WriteMD5IndexedTablesOpt, &GenPartialProfileOpt, &SplitLayoutOpt,
+    &SupplInstrWithSampleOpt, &ZeroCounterThresholdOpt,
     &SupplMinSizeThresholdOpt, &InstrProfColdThresholdOpt,
     &TemporalProfTraceReservoirSizeOpt, &TemporalProfMaxTraceLengthOpt,
     &FuncNameNegativeFilterOpt, &FailModeOpt, &OutputSparseOpt, &NumThreadsOpt,
@@ -1856,11 +1851,16 @@ static void mergeSampleProfile(const WeightedFileVector &Inputs,
   if (ProfileIsCS &&
       (Args.SampleMergeColdContext || Args.SampleTrimColdContext)) {
     // Use threshold calculated from profile summary unless specified.
+    // No Module/LLVMContext is available here to bridge OptsCtx to the new
+    // per-type options system, so read the process-wide default, which
+    // parseLibraryOptionsChain<ProfileDataOptions> (see main() below) keeps
+    // up to date from argv.
     SampleProfileSummaryBuilder Builder(ProfileSummaryBuilder::DefaultCutoffs);
-    auto Summary = Builder.computeSummaryForProfiles(ProfileMap, OptsCtx);
+    auto Summary = Builder.computeSummaryForProfiles(
+        ProfileMap, ProfileDataOptions::Current);
     uint64_t SampleProfColdThreshold =
         ProfileSummaryBuilder::getColdCountThreshold(
-            (Summary->getDetailedSummary()), OptsCtx);
+            (Summary->getDetailedSummary()), ProfileDataOptions::Current);
 
     // Trim and merge cold context profile using cold threshold above;
     SampleContextTrimmer(ProfileMap)
@@ -1875,7 +1875,9 @@ static void mergeSampleProfile(const WeightedFileVector &Inputs,
     ProfileIsCS = FunctionSamples::ProfileIsCS = false;
   } else if (ProfileIsCS && Args.ProfileLayout == llvm::sampleprof::SPL_Nest) {
     ProfileConverter CSConverter(ProfileMap);
-    CSConverter.convertCSProfiles(OptsCtx);
+    // See the computeSummaryForProfiles() call above for why
+    // ProfileDataOptions::Current is used here instead of OptsCtx.
+    CSConverter.convertCSProfiles(ProfileDataOptions::Current);
     ProfileIsCS = FunctionSamples::ProfileIsCS = false;
   }
 
@@ -2938,10 +2940,14 @@ std::error_code SampleOverlapAggregator::loadProfiles() {
   // profile summary.
   ProfileSummary &BasePS = BaseReader->getSummary();
   ProfileSummary &TestPS = TestReader->getSummary();
+  // No Module/LLVMContext is available here to bridge OptsCtx to the new
+  // per-type options system, so read the process-wide default, which
+  // parseLibraryOptionsChain<ProfileDataOptions> (see main() below) keeps
+  // up to date from argv.
   BaseHotThreshold = ProfileSummaryBuilder::getHotCountThreshold(
-      BasePS.getDetailedSummary(), *OptsCtx);
+      BasePS.getDetailedSummary(), ProfileDataOptions::Current);
   TestHotThreshold = ProfileSummaryBuilder::getHotCountThreshold(
-      TestPS.getDetailedSummary(), *OptsCtx);
+      TestPS.getDetailedSummary(), ProfileDataOptions::Current);
 
   return std::error_code();
 }
@@ -3256,8 +3262,12 @@ static int showInstrProfile(const ShowArgs &Args, raw_fd_ostream &OS,
   }
 
   if (Args.ShowHotFuncList) {
+    // No Module/LLVMContext is available here to bridge OptsCtx to the new
+    // per-type options system, so read the process-wide default, which
+    // parseLibraryOptionsChain<ProfileDataOptions> (see main() below) keeps
+    // up to date from argv.
     auto HotCountThreshold = ProfileSummaryBuilder::getHotCountThreshold(
-        PS->getDetailedSummary(), OptsCtx);
+        PS->getDetailedSummary(), ProfileDataOptions::Current);
     OS << "# Hot count threshold: " << HotCountThreshold << "\n";
     for (auto [Name, MaxCount] : NameAndMaxCount) {
       if (MaxCount < HotCountThreshold)
@@ -3720,47 +3730,38 @@ int main(int argc, const char *argv[]) {
     return 1;
   }
 
+  // llvm::ProfileDataOptions has migrated off clv2 onto the new per-library
+  // OptTable struct design (see llvm/include/llvm/Option/LibraryOptions.h)
+  // and is no longer among the clv2::OptionParser registries configured
+  // below (it used to be registered via the old clv2 registry, with a
+  // "Visible versions" block re-exposing the 4 options that were Hidden
+  // there purely for --help; the new .td marks none of them hidden, so that
+  // workaround is no longer needed). Parse its options out of argv first,
+  // forwarding whatever it doesn't recognize to the legacy clv2 parser
+  // unchanged.
+  SmallVector<const char *, 32> ProfileDataRest;
+  {
+    std::string ProfileDataErrs;
+    raw_string_ostream ProfileDataErrsOS(ProfileDataErrs);
+    if (Error Err = opt::parseLibraryOptionsChain<ProfileDataOptions>(
+            ArrayRef<const char *>(argv + 1, argv + argc), ProfileDataRest,
+            ProfileDataErrsOS)) {
+      errs() << ProgName << ": " << toString(std::move(Err)) << "\n";
+      return 1;
+    }
+    errs() << ProfileDataErrs;
+  }
+  SmallVector<const char *, 32> ArgvAfterProfileData;
+  ArgvAfterProfileData.push_back(argv[0]);
+  ArgvAfterProfileData.append(ProfileDataRest.begin(), ProfileDataRest.end());
+
   clv2::OptionParser P;
   P.add<&ProfToolReg>();
-  P.add<&clv2::ProfileDataOptsReg>();
   RegisterCoreLLVMOptions(P);
   P.showOptions({"disable-auto-upgrade-debug-info", "disable-i2p-p2i-opt",
                  "elide-all-zero-branch-weights"});
-  {
-    // Visible versions of options that are Hidden in ProfileDataOptsReg
-    static constexpr clv2::OptionInfo<bool> V4{
-        "enable-name-compression", "Enable name/filename string compression",
-        clv2::Init{true}};
-    static constexpr clv2::OptionInfo<bool> V5{
-        "enable-vtable-profile-use",
-        "If ThinLTO and WPD is enabled and this option is true, vtable "
-        "profiles will be used by ICP pass for more efficient indirect "
-        "call sequence. If false, type profiles won't be used.",
-        clv2::Init{false}};
-    static constexpr clv2::OptionInfo<bool> V6{
-        "enable-vtable-value-profiling",
-        "If true, the virtual table address will be instrumented to know "
-        "the types of a C++ pointer. The information is used in indirect "
-        "call promotion to do selective vtable-based comparison.",
-        clv2::Init{false}};
-    static constexpr clv2::OptionInfo<bool> V7{
-        "generate-merged-base-profiles",
-        "When generating nested context-sensitive profiles, always generate "
-        "extra base profile for function with all its context profiles merged "
-        "into it.",
-        clv2::Init{false}};
-    static constexpr clv2::OptionsRegistry<&V4, &V5, &V6, &V7> VisReg;
-    using PT = decltype(VisReg)::ParsedOptionsT;
-    auto *S = new PT();
-    decltype(VisReg)::applyDefaultsTo(*S);
-    std::vector<clv2::detail::OptionEntry> Es;
-    std::vector<clv2::detail::AliasEntry> As;
-    std::vector<clv2::detail::SubCommandSpec> Ss;
-    decltype(VisReg)::staticBuildInto(*S, Es, As, Ss);
-    for (auto &E : Es)
-      P.addDynamicEntry(std::move(E));
-  }
-  auto OptsCtx = P.parse(argc, argv, "LLVM profile data\n");
+  auto OptsCtx = P.parse(static_cast<int>(ArgvAfterProfileData.size()),
+                         ArgvAfterProfileData.data(), "LLVM profile data\n");
   auto *Opts = OptsCtx->getViewPtr<&ProfToolReg>();
 
   // Extract global options.
@@ -3874,7 +3875,13 @@ int main(int argc, const char *argv[]) {
     Args.SampleColdContextFrameDepth = M.get<&SampleColdContextFrameDepthOpt>();
     Args.OutputSizeLimit = M.get<&OutputSizeLimitOpt>();
     Args.GenPartialProfile = M.get<&GenPartialProfileOpt>();
-    Args.WriteMD5ProfSymList = M.get<&WriteMD5ProfSymListOpt>();
+    // -md5-prof-sym-list is now owned by ProfileDataOptions (same spelling,
+    // help text, and default as this subcommand's former local flag), and
+    // parseLibraryOptionsChain<ProfileDataOptions> (see main() below) strips
+    // it from argv before this SubCommandInfo ever sees it, so read the
+    // shared field directly instead of a local OptionInfo.
+    Args.WriteMD5ProfSymList =
+        ProfileDataOptions::Current.PD_WriteMD5ProfSymList;
     Args.WriteMD5IndexedTables = M.get<&WriteMD5IndexedTablesOpt>();
     Args.SplitLayout = M.get<&SplitLayoutOpt>();
     Args.SupplInstrWithSample = M.get<&SupplInstrWithSampleOpt>();

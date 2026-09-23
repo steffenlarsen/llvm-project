@@ -15,7 +15,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/iterator_range.h"
-#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
+#include "llvm/Analysis/AnalysisOptions.h"
 #include "llvm/Analysis/LazyCallGraph.h"
 #include "llvm/IR/Constant.h"
 #include "llvm/IR/InstIterator.h"
@@ -28,7 +28,6 @@
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cassert>
 #include <optional>
@@ -39,17 +38,10 @@ using namespace llvm;
 
 STATISTIC(LargestCGSCC, "Number of functions in the largest SCC");
 
-// Explicit template instantiations and specialization definitions for core
-// template typedefs.
-namespace llvm {
-bool AbortOnMaxDevirtIterationsReached = false;
-} // namespace llvm
-
 static bool getAbortOnMaxDevirtIterationsReached(const Function &F) {
-  return clv2::getOptValIfSpecified<
-      &clv2::AnalysisOptsReg, &clv2::AN_AbortOnMaxDevirtIterationsReached>(
-      F.getContext().getOptionsContext(),
-      llvm::AbortOnMaxDevirtIterationsReached);
+  return F.getContext()
+      .getOptions<AnalysisOptions>()
+      .AN_AbortOnMaxDevirtIterationsReached;
 }
 
 namespace llvm {
@@ -716,7 +708,8 @@ bool FunctionAnalysisManagerCGSCCProxy::Result::invalidate(
   // forcibly cleared. When preserved, this proxy will only invalidate results
   // cached on functions *still in the module* at the end of the module pass.
   auto PAC = PA.getChecker<FunctionAnalysisManagerCGSCCProxy>();
-  if (!PAC.preserved() && !PAC.preservedSet<AllAnalysesOn<LazyCallGraph::SCC>>()) {
+  if (!PAC.preserved() &&
+      !PAC.preservedSet<AllAnalysesOn<LazyCallGraph::SCC>>()) {
     for (LazyCallGraph::Node &N : C)
       FAM->invalidate(N.getFunction(), PA);
 
@@ -979,8 +972,8 @@ static LazyCallGraph::SCC &updateCGAndAnalysisManagerForPass(
     (void)TargetRC;
     // TODO: This only allows trivial edges to be added for now.
 #ifdef EXPENSIVE_CHECKS
-    assert((RC == &TargetRC ||
-           RC->isAncestorOf(TargetRC)) && "New ref edge is not trivial!");
+    assert((RC == &TargetRC || RC->isAncestorOf(TargetRC)) &&
+           "New ref edge is not trivial!");
 #endif
     RC->insertTrivialRefEdge(N, *RefTarget);
   }
@@ -992,8 +985,8 @@ static LazyCallGraph::SCC &updateCGAndAnalysisManagerForPass(
     (void)TargetRC;
     // TODO: This only allows trivial edges to be added for now.
 #ifdef EXPENSIVE_CHECKS
-    assert((RC == &TargetRC ||
-           RC->isAncestorOf(TargetRC)) && "New call edge is not trivial!");
+    assert((RC == &TargetRC || RC->isAncestorOf(TargetRC)) &&
+           "New call edge is not trivial!");
 #endif
     // Add a trivial ref edge to be promoted later on alongside
     // PromotedRefTargets.

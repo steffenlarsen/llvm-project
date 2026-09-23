@@ -23,7 +23,7 @@
 #include "llvm/ADT/iterator.h"
 #include "llvm/ADT/iterator_range.h"
 #include "llvm/Analysis/AliasAnalysis.h"
-#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
+#include "llvm/Analysis/AnalysisOptions.h"
 #include "llvm/Analysis/CFGPrinter.h"
 #include "llvm/Analysis/IteratedDominanceFrontier.h"
 #include "llvm/Analysis/Loads.h"
@@ -63,9 +63,8 @@ using namespace llvm;
 
 #define DEBUG_TYPE "memoryssa"
 
-static std::string getDotCFGMSSA(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValIfSpecified<&clv2::AnalysisOptsReg,
-                                    &clv2::AN_DotCFGMSSA>(Ctx, std::string{});
+static std::string getDotCFGMSSA(const AnalysisOptions &Opts) {
+  return Opts.AN_DotCFGMSSA;
 }
 
 INITIALIZE_PASS_BEGIN(MemorySSAWrapperPass, "memoryssa", "Memory SSA", false,
@@ -75,16 +74,21 @@ INITIALIZE_PASS_DEPENDENCY(AAResultsWrapperPass)
 INITIALIZE_PASS_END(MemorySSAWrapperPass, "memoryssa", "Memory SSA", false,
                     true)
 
-static unsigned getMaxCheckLimit(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::AN_MaxCheckLimit>(Ctx);
+static unsigned getMaxCheckLimit(const AnalysisOptions &Opts) {
+  return Opts.AN_MaxCheckLimit;
 }
 
 // Always verify MemorySSA if expensive checking is enabled.
-bool llvm::getVerifyMemorySSA(const clv2::OptionsContext &Ctx) {
-  auto *O = clv2::getView<&clv2::AnalysisOptsReg>(Ctx);
-  if (O)
-    if (O->specified<&clv2::AN_VerifyMemorySSA>())
-      return O->get<&clv2::AN_VerifyMemorySSA>();
+bool llvm::getVerifyMemorySSA(const clv2::OptionsContext &) {
+  // AN_VerifyMemorySSA now lives in AnalysisOptions, which is reached via an
+  // LLVMContext -- callers of this function only have a clv2::OptionsContext
+  // in scope, so read the process-wide default instead (same pattern used in
+  // CSPreInliner.cpp for ProfileDataOptions::Current). Note this can no
+  // longer distinguish "explicitly disabled" from "unspecified", so an
+  // explicit `-verify-memoryssa=false` no longer overrides the
+  // EXPENSIVE_CHECKS-on default below; see report to task owner.
+  if (AnalysisOptions::Current.AN_VerifyMemorySSA)
+    return true;
 #ifdef EXPENSIVE_CHECKS
   return true;
 #else
@@ -449,8 +453,8 @@ checkClobberSanity(MemoryAccess *Start, MemoryAccess *ClobberAt,
 
       if (const auto *MU = dyn_cast<MemoryUse>(MA)) {
         (void)MU;
-        assert (MU == Start &&
-                "Can only find use in def chain if Start is a use");
+        assert(MU == Start &&
+               "Can only find use in def chain if Start is a use");
         continue;
       }
 
@@ -1115,7 +1119,7 @@ void MemorySSA::renameSuccessorPhis(BasicBlock *BB, MemoryAccess *IncomingVal,
           Phi->setIncomingValue(I, IncomingVal);
           ReplacementDone = true;
         }
-      (void) ReplacementDone;
+      (void)ReplacementDone;
       assert(ReplacementDone && "Incomplete phi during partial rename");
     } else
       Phi->addIncoming(IncomingVal, BB);
@@ -1237,7 +1241,8 @@ void MemorySSA::markUnreachableAsLiveOnEntry(BasicBlock *BB) {
 }
 
 MemorySSA::MemorySSA(Function &Func, AliasAnalysis *AA, DominatorTree *DT)
-    : DT(DT), F(&Func), OptsCtx(&Func.getContext().getOptionsContext()),
+    : DT(DT), F(&Func),
+      OptsCtx(&Func.getContext().getOptions<AnalysisOptions>()),
       LiveOnEntryDef(nullptr), Walker(nullptr), SkipWalker(nullptr) {
   // Build MemorySSA using a batch alias analysis. This reuses the internal
   // state that AA collects during an alias()/getModRefInfo() call. This is
@@ -1255,8 +1260,10 @@ MemorySSA::MemorySSA(Function &Func, AliasAnalysis *AA, DominatorTree *DT)
 }
 
 MemorySSA::MemorySSA(Loop &L, AliasAnalysis *AA, DominatorTree *DT)
-    : DT(DT), L(&L),
-      OptsCtx(&L.getHeader()->getParent()->getContext().getOptionsContext()),
+    : DT(DT), L(&L), OptsCtx(&L.getHeader()
+                                  ->getParent()
+                                  ->getContext()
+                                  .getOptions<AnalysisOptions>()),
       LiveOnEntryDef(nullptr), Walker(nullptr), SkipWalker(nullptr) {
   // Build MemorySSA using a batch alias analysis. This reuses the internal
   // state that AA collects during an alias()/getModRefInfo() call. This is
@@ -1616,8 +1623,7 @@ MemorySSAWalker *MemorySSA::getSkipSelfWalker() {
 
   SkipWalker = std::make_unique<SkipSelfWalker>(this, WalkerBase.get());
   return SkipWalker.get();
- }
-
+}
 
 // This is a helper function used by the creation routines. It places NewAccess
 // into the access and defs lists for a given basic block, at the given
@@ -1935,14 +1941,14 @@ void MemorySSA::verifyMemorySSA(VerificationLevel VL) const {
 #endif
   // Previously, the verification used to also verify that the clobberingAccess
   // cached by MemorySSA is the same as the clobberingAccess found at a later
-  // query to AA. This does not hold true in general due to the current fragility
-  // of BasicAA which has arbitrary caps on the things it analyzes before giving
-  // up. As a result, transformations that are correct, will lead to BasicAA
-  // returning different Alias answers before and after that transformation.
-  // Invalidating MemorySSA is not an option, as the results in BasicAA can be so
-  // random, in the worst case we'd need to rebuild MemorySSA from scratch after
-  // every transformation, which defeats the purpose of using it. For such an
-  // example, see test4 added in D51960.
+  // query to AA. This does not hold true in general due to the current
+  // fragility of BasicAA which has arbitrary caps on the things it analyzes
+  // before giving up. As a result, transformations that are correct, will lead
+  // to BasicAA returning different Alias answers before and after that
+  // transformation. Invalidating MemorySSA is not an option, as the results in
+  // BasicAA can be so random, in the worst case we'd need to rebuild MemorySSA
+  // from scratch after every transformation, which defeats the purpose of using
+  // it. For such an example, see test4 added in D51960.
 }
 
 template <typename IterT>
@@ -2217,9 +2223,12 @@ void MemorySSA::ensureOptimizedUses() {
 
 void MemoryAccess::print(raw_ostream &OS) const {
   switch (getValueID()) {
-  case MemoryPhiVal: return static_cast<const MemoryPhi *>(this)->print(OS);
-  case MemoryDefVal: return static_cast<const MemoryDef *>(this)->print(OS);
-  case MemoryUseVal: return static_cast<const MemoryUse *>(this)->print(OS);
+  case MemoryPhiVal:
+    return static_cast<const MemoryPhi *>(this)->print(OS);
+  case MemoryDefVal:
+    return static_cast<const MemoryDef *>(this)->print(OS);
+  case MemoryUseVal:
+    return static_cast<const MemoryUse *>(this)->print(OS);
   }
   llvm_unreachable("invalid value id");
 }
@@ -2391,7 +2400,8 @@ PreservedAnalyses MemorySSAPrinterPass::run(Function &F,
   auto &MSSA = AM.getResult<MemorySSAAnalysis>(F).getMSSA();
   if (EnsureOptimizedUses)
     MSSA.ensureOptimizedUses();
-  std::string DotFile = getDotCFGMSSA(F.getContext().getOptionsContext());
+  std::string DotFile =
+      getDotCFGMSSA(F.getContext().getOptions<AnalysisOptions>());
   if (DotFile != "") {
     DOTFuncMSSAInfo CFGInfo(F, MSSA);
     WriteGraph(&CFGInfo, "", false, "MSSA", DotFile);

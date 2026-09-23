@@ -1,4 +1,4 @@
-//===- MipsOptions.td - CLV2 option defs for Mips ---------*- tablegen -*-===//
+//===- MipsOptions.td - Mips target options -*- tablegen -*-===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -6,314 +6,191 @@
 //
 //===----------------------------------------------------------------------===//
 
-include "llvm/Support/CLV2Options.td"
+include "llvm/Option/OptParser.td"
 
-def MipsOptsReg : Registry<"llvm::mips_opts"> {
-  // Getter bodies are compiled once, in MipsOptionsGetters.cpp.
-  let OutOfLineGetters = 1;
-}
+def MipsOptions : OptionsStruct<"llvm"> {}
 
 // --- MCTargetDesc/MipsABIInfo.cpp ---
 
-def MIPS_EmitJalrReloc : Option<
-    "mips-jalr-reloc",
+defm MIPS_EmitJalrReloc : BoolField<
+    "mips-jalr-reloc", "1",
     "MIPS: Emit R_{MICRO}MIPS_JALR relocation with jalr",
-    "bool"> {
-  let Registry = MipsOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def MIPS_NoZeroDivCheck : Option<
-    "mno-check-zero-division",
+defm MIPS_NoZeroDivCheck : BoolField<
+    "mno-check-zero-division", "false",
     "MIPS: Don't trap on integer division by zero.",
-    "bool"> {
-  let Registry = MipsOptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // --- MCTargetDesc/MipsTargetStreamer.cpp ---
 
-def MIPS_RoundSectionSizes : Option<
-    "mips-round-section-sizes",
+defm MIPS_RoundSectionSizes : BoolField<
+    "mips-round-section-sizes", "false",
     "Round section sizes up to the section alignment",
-    "bool"> {
-  let Registry = MipsOptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // --- Mips16ISelLowering.cpp ---
 
-def MIPS_DontExpandCondPseudos16 : Option<
-    "mips16-dont-expand-cond-pseudo",
+defm MIPS_DontExpandCondPseudos16 : BoolField<
+    "mips16-dont-expand-cond-pseudo", "false",
     "Don't expand conditional move related pseudos for Mips 16",
-    "bool"> {
-  let Default = "false";
-  let Registry = MipsOptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // --- MipsBranchExpansion.cpp ---
 
-def MIPS_SkipLongBranch : Option<
-    "skip-mips-long-branch",
+defm MIPS_SkipLongBranch : BoolField<
+    "skip-mips-long-branch", "false",
     "MIPS: Skip branch expansion pass.",
-    "bool"> {
-  let Default = "false";
-  let Registry = MipsOptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def MIPS_ForceLongBranch : Option<
-    "force-mips-long-branch",
+defm MIPS_ForceLongBranch : BoolField<
+    "force-mips-long-branch", "false",
     "MIPS: Expand all branches to long format.",
-    "bool"> {
-  let Default = "false";
-  let Registry = MipsOptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // --- MipsConstantIslandPass.cpp ---
 
-def MIPS_AlignConstantIslands : Option<
-    "mips-align-constant-islands",
+defm MIPS_AlignConstantIslands : BoolField<
+    "mips-align-constant-islands", "1",
     "Align constant islands in code",
-    "bool"> {
-  let Registry = MipsOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def MIPS_ConstantIslandsSmallOffset : Option<
-    "mips-constant-islands-small-offset",
+defm MIPS_ConstantIslandsSmallOffset : ValueField<
+    "mips-constant-islands-small-offset", "int", "0",
     "Make small offsets be this amount for testing purposes",
-    "int"> {
-  let Default = "0";
-  let Registry = MipsOptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def MIPS_NoLoadRelaxation : Option<
-    "mips-constant-islands-no-load-relaxation",
+defm MIPS_NoLoadRelaxation : BoolField<
+    "mips-constant-islands-no-load-relaxation", "false",
     "Don't relax loads to long loads - for testing purposes",
-    "bool"> {
-  let Default = "false";
-  let Registry = MipsOptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // --- MipsDelaySlotFiller.cpp ---
 
-def MIPS_DisableDelaySlotFiller : Option<
-    "disable-mips-delay-filler",
+defm MIPS_DisableDelaySlotFiller : BoolField<
+    "disable-mips-delay-filler", "false",
     "Fill all delay slots with NOPs.",
-    "bool"> {
-  let Default = "false";
-  let Registry = MipsOptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def MIPS_DisableForwardSearch : Option<
-    "disable-mips-df-forward-search",
+defm MIPS_DisableForwardSearch : BoolField<
+    "disable-mips-df-forward-search", "1",
     "Disallow MIPS delay filler to search forward.",
-    "bool"> {
-  let Registry = MipsOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def MIPS_DisableSuccBBSearch : Option<
-    "disable-mips-df-succbb-search",
+defm MIPS_DisableSuccBBSearch : BoolField<
+    "disable-mips-df-succbb-search", "1",
     "Disallow MIPS delay filler to search successor basic blocks.",
-    "bool"> {
-  let Registry = MipsOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def MIPS_DisableBackwardSearch : Option<
-    "disable-mips-df-backward-search",
+defm MIPS_DisableBackwardSearch : BoolField<
+    "disable-mips-df-backward-search", "false",
     "Disallow MIPS delay filler to search backward.",
-    "bool"> {
-  let Default = "false";
-  let Registry = MipsOptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // --- MipsISelLowering.cpp ---
 
-def MIPS_UseTailCalls : Option<
-    "mips-tail-calls",
+defm MIPS_UseTailCalls : BoolField<
+    "mips-tail-calls", "false",
     "MIPS: permit tail calls.",
-    "bool"> {
-  let Default = "false";
-  let Registry = MipsOptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // --- MipsMachineFunction.cpp ---
 
-def MIPS_FixGlobalBaseReg : Option<
-    "mips-fix-global-base-reg",
+defm MIPS_FixGlobalBaseReg : BoolField<
+    "mips-fix-global-base-reg", "1",
     "Always use $gp as the global base register.",
-    "bool"> {
-  let Registry = MipsOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // --- MipsOptimizePICCall.cpp ---
 
-def MIPS_LoadTargetFromGOT : Option<
-    "mips-load-target-from-got",
+defm MIPS_LoadTargetFromGOT : BoolField<
+    "mips-load-target-from-got", "1",
     "Load target address from GOT",
-    "bool"> {
-  let Registry = MipsOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def MIPS_EraseGPOpnd : Option<
-    "mips-erase-gp-opnd",
+defm MIPS_EraseGPOpnd : BoolField<
+    "mips-erase-gp-opnd", "1",
     "Erase GP Operand",
-    "bool"> {
-  let Registry = MipsOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // --- MipsOs16.cpp ---
 
-def MIPS_Mips32FunctionMask : Option<
-    "mips32-function-mask",
+defm MIPS_Mips32FunctionMask : ValueField<
+    "mips32-function-mask", "std::string", "\"\"",
     "Force function to be mips32",
-    "std::string"> {
-  let Default = "\"\"";
-  let Registry = MipsOptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // --- MipsSEISelLowering.cpp ---
 
-def MIPS_NoDPLoadStore : Option<
-    "mno-ldc1-sdc1",
+defm MIPS_NoDPLoadStore : BoolField<
+    "mno-ldc1-sdc1", "false",
     "Expand double precision loads and stores to their single precision "
-    "counterparts",
-    "bool"> {
-  let Registry = MipsOptsReg;
-}
+    "counterparts">;
 
 // --- MipsSubtarget.cpp ---
 
-def MipsCompactBranchNever : EnumValue<"never",
-    "Do not use compact branches if possible."> {
-  let CppName = "Never";
-}
+// The spellings below are the string tokens accepted on the command line
+// (unlike e.g. LoongArch's numeric-instruction-count enum, these have no
+// external C++ counterpart to collide ordinals with).
+def MipsCompactBranch : OptionEnum<"MipsCompactBranch", [
+    EnumMember<"Never", "never">,
+    EnumMember<"Optimal", "optimal">,
+    EnumMember<"Always", "always">]>;
 
-def MipsCompactBranchOptimal : EnumValue<"optimal",
-    "Use compact branches where appropriate (default)."> {
-  let CppName = "Optimal";
-}
+defm MIPS_CompactBranchPolicy : EnumField<
+    "mips-compact-branches", MipsCompactBranch,
+    "MipsCompactBranch::Optimal",
+    "MIPS Specific: Compact branch policy.">;
 
-def MipsCompactBranchAlways : EnumValue<"always",
-    "Always use compact branches if possible."> {
-  let CppName = "Always";
-}
-
-def MipsCompactBranch : EnumType<"MipsCompactBranch",
-    [MipsCompactBranchNever, MipsCompactBranchOptimal,
-     MipsCompactBranchAlways]>;
-
-def MIPS_CompactBranchPolicy : Option<
-    "mips-compact-branches", "MIPS Specific: Compact branch policy.",
-    "MipsCompactBranch"> {
-  let Registry = MipsOptsReg;
-  let Default = "optimal";
-}
-
-def MIPS_Mixed16_32 : Option<
-    "mips-mixed-16-32",
+defm MIPS_Mixed16_32 : BoolField<
+    "mips-mixed-16-32", "false",
     "Allow for a mixture of Mips16 and Mips32 code in a single output file",
-    "bool"> {
-  let Registry = MipsOptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def MIPS_Os16 : Option<
-    "mips-os16",
+defm MIPS_Os16 : BoolField<
+    "mips-os16", "false",
     "Compile all functions that don't use floating point as Mips 16",
-    "bool"> {
-  let Registry = MipsOptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def MIPS_Mips16HardFloat : Option<
-    "mips16-hard-float",
-    "Enable mips16 hard float.",
-    "bool"> {
-  let Registry = MipsOptsReg;
-}
+defm MIPS_Mips16HardFloat : BoolField<
+    "mips16-hard-float", "false",
+    "Enable mips16 hard float.">;
 
-def MIPS_Mips16ConstantIslands : Option<
-    "mips16-constant-islands",
-    "Enable mips16 constant islands.",
-    "bool"> {
-  let Registry = MipsOptsReg;
-  let Default = "1";
-}
+defm MIPS_Mips16ConstantIslands : BoolField<
+    "mips16-constant-islands", "1",
+    "Enable mips16 constant islands.">;
 
-def MIPS_GPOpt : Option<
-    "mgpopt",
+defm MIPS_GPOpt : BoolField<
+    "mgpopt", "false",
     "Enable gp-relative addressing of mips small data items",
-    "bool"> {
-  let Registry = MipsOptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // --- MipsTargetObjectFile.cpp ---
 
-def MIPS_SSThreshold : Option<
-    "mips-ssection-threshold",
+defm MIPS_SSThreshold : ValueField<
+    "mips-ssection-threshold", "unsigned", "8",
     "Small data and bss section threshold size (default=8)",
-    "unsigned"> {
-  let Registry = MipsOptsReg;
-  let Default = "8";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def MIPS_LocalSData : Option<
-    "mlocal-sdata",
+defm MIPS_LocalSData : BoolField<
+    "mlocal-sdata", "1",
     "MIPS: Use gp_rel for object-local data.",
-    "bool"> {
-  let Registry = MipsOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def MIPS_ExternSData : Option<
-    "mextern-sdata",
+defm MIPS_ExternSData : BoolField<
+    "mextern-sdata", "1",
     "MIPS: Use gp_rel for data that is not defined by the current object.",
-    "bool"> {
-  let Registry = MipsOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def MIPS_EmbeddedData : Option<
-    "membedded-data",
+defm MIPS_EmbeddedData : BoolField<
+    "membedded-data", "false",
     "MIPS: Try to allocate variables in the following"
     " sections if possible: .rodata, .sdata, .data .",
-    "bool"> {
-  let Registry = MipsOptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // --- MipsTargetMachine.cpp ---
 
-def MIPS_EnableMulMulFix : Option<
-    "mfix4300",
+defm MIPS_EnableMulMulFix : BoolField<
+    "mfix4300", "false",
     "Enable the VR4300 mulmul bug fix.",
-    "bool"> {
-  let Registry = MipsOptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;

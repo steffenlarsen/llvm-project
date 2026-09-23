@@ -43,6 +43,7 @@
 #include "llvm/Support/FileUtilities.h"
 #include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/PluginLoaderOptions.h"
 #include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/SystemUtils.h"
@@ -567,7 +568,11 @@ int main(int argc, char **argv) {
   P.add<&UselistorderToolReg>();
   RegisterAllLLVMOptions(P);
   P.hideUnrelatedOptions({&VerifyUselistorderCat});
-  auto OptsCtx = P.parse(argc, argv, "llvm tool to verify use-list order\n");
+  std::vector<const char *> ArgsAfterPlugins =
+      loadPluginsAndStripArgs(argc, argv);
+  auto OptsCtx =
+      P.parse(static_cast<int>(ArgsAfterPlugins.size()),
+              ArgsAfterPlugins.data(), "llvm tool to verify use-list order\n");
   auto *Opts = OptsCtx->getViewPtr<&UselistorderToolReg>();
 
   bool DoSaveTemps = Opts->get<&SaveTemps>();

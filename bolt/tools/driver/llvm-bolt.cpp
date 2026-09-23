@@ -31,6 +31,7 @@
 #include "llvm/Support/Error.h"
 #include "llvm/Support/ManagedStatic.h"
 #include "llvm/Support/Path.h"
+#include "llvm/Support/PluginLoaderOptions.h"
 #include "llvm/Support/PrettyStackTrace.h"
 #include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/Signals.h"
@@ -116,10 +117,12 @@ void perf2boltMode(int argc, char **argv, BoltDriverOptions &DriverOpts) {
   // BOLTPASS_PrintSortedBy OptionInfo
   P.hideUnrelatedOptions(ArrayRef(Perf2BoltCats));
   cl::AddExtraVersionPrinter(printBoltRevision);
-  auto OptsCtx =
-      P.parse(argc, argv,
-              "perf2bolt - BOLT data aggregator\n"
-              "\nEXAMPLE: perf2bolt -p=perf.data executable -o data.fdata\n");
+  std::vector<const char *> ArgsAfterPlugins =
+      loadPluginsAndStripArgs(argc, argv);
+  auto OptsCtx = P.parse(
+      static_cast<int>(ArgsAfterPlugins.size()), ArgsAfterPlugins.data(),
+      "perf2bolt - BOLT data aggregator\n"
+      "\nEXAMPLE: perf2bolt -p=perf.data executable -o data.fdata\n");
   auto *Opts = OptsCtx->getViewPtr<&BoltDriverReg>();
   DriverOpts.InputFilename = Opts->get<&BoltInputFile>();
   DriverOpts.InputFilename2 = Opts->get<&BoltInputFile2>();
@@ -171,8 +174,10 @@ void boltDiffMode(int argc, char **argv, BoltDriverOptions &DriverOpts) {
   // BOLTPASS_PrintSortedBy OptionInfo
   P.hideUnrelatedOptions(ArrayRef(BoltDiffCats));
   cl::AddExtraVersionPrinter(printBoltRevision);
+  std::vector<const char *> ArgsAfterPlugins =
+      loadPluginsAndStripArgs(argc, argv);
   auto OptsCtx = P.parse(
-      argc, argv,
+      static_cast<int>(ArgsAfterPlugins.size()), ArgsAfterPlugins.data(),
       "llvm-boltdiff - BOLT binary diff tool\n"
       "\nEXAMPLE: llvm-boltdiff -data=a.fdata -data2=b.fdata exec1 exec2\n");
   auto *Opts = OptsCtx->getViewPtr<&BoltDriverReg>();
@@ -222,8 +227,11 @@ void boltMode(int argc, char **argv, BoltDriverOptions &DriverOpts) {
   cl::AddExtraVersionPrinter(printBoltRevision);
   cl::AddExtraVersionPrinter(TargetRegistry::printRegisteredTargetsForVersion);
 
-  auto OptsCtx =
-      P.parse(argc, argv, "BOLT - Binary Optimization and Layout Tool\n");
+  std::vector<const char *> ArgsAfterPlugins =
+      loadPluginsAndStripArgs(argc, argv);
+  auto OptsCtx = P.parse(static_cast<int>(ArgsAfterPlugins.size()),
+                         ArgsAfterPlugins.data(),
+                         "BOLT - Binary Optimization and Layout Tool\n");
   auto *Opts = OptsCtx->getViewPtr<&BoltDriverReg>();
   DriverOpts.InputFilename = Opts->get<&BoltInputFile>();
   DriverOpts.InputFilename2 = Opts->get<&BoltInputFile2>();

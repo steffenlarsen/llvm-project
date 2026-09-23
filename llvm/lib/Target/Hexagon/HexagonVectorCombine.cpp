@@ -39,12 +39,10 @@
 #include "llvm/IR/PatternMatch.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/KnownBits.h"
 #include "llvm/Support/MathExtras.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
+#include "llvm/Target/Hexagon/HexagonOptions.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Transforms/Utils/Local.h"
 
@@ -80,38 +78,33 @@ unsigned MinLoadGroupSizeForAlignment = 4;
 } // end anonymous namespace
 
 static unsigned getMinLoadGroupSizeForAlignment(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_MinLoadGroupSizeForAlignment>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<HexagonOptions>()
+      .HEX_MinLoadGroupSizeForAlignment;
 }
 
 static bool getDumpModule(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_HVCDumpModule>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_HVCDumpModule;
 }
 
 static bool getVAEnabled(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_HVCVAEnabled>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_HVCVAEnabled;
 }
 
 static bool getVIEnabled(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_HVCVIEnabled>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_HVCVIEnabled;
 }
 
 static bool getVADoFullStores(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_HVCVADoFullStores>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_HVCVADoFullStores;
 }
 
 static unsigned getVAGroupCountLimit(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_HVCVAGroupCountLimit>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_HVCVAGroupCountLimit;
 }
 
 static unsigned getVAGroupSizeLimit(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_HVCVAGroupSizeLimit>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_HVCVAGroupSizeLimit;
 }
 
 namespace {

@@ -29,12 +29,12 @@
 #include "llvm/CodeGen/RegAllocRegistry.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/LLVMContext.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/Compiler.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Target/TargetOptions.h"
-#include "llvm/Target/WebAssembly/WebAssemblyOptionsOptInfos.h"
+#include "llvm/Target/WebAssembly/WebAssemblyOptions.h"
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Utils.h"
 #include <optional>
@@ -43,59 +43,50 @@ using namespace llvm;
 #define DEBUG_TYPE "wasm"
 
 // Helpers for pass-pipeline configuration time, where no IR context is
-// available. These read directly from the global CLI override.
+// available. These read directly from the process-wide default.
 bool WebAssembly::getWasmEnableEmEH(const Function *F) {
   if (F)
-    return clv2::getOptValOr<&clv2::WebAssemblyOptsReg, &clv2::WASM_EnableEmEH>(
-        F->getContext().getOptionsContext(), false);
-  return false;
+    return F->getContext().getOptions<WebAssemblyOptions>().WASM_EnableEmEH;
+  return WebAssemblyOptions::Current.WASM_EnableEmEH;
 }
-bool WebAssembly::getWasmEnableEmEH(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::WASM_EnableEmEH>(Ctx);
+bool WebAssembly::getWasmEnableEmEH(const LLVMContext &Ctx) {
+  return Ctx.getOptions<WebAssemblyOptions>().WASM_EnableEmEH;
 }
 
 bool WebAssembly::getWasmEnableEmSjLj(const Function *F) {
   if (F)
-    return clv2::getOptValOr<&clv2::WebAssemblyOptsReg,
-                             &clv2::WASM_EnableEmSjLj>(
-        F->getContext().getOptionsContext(), false);
-  return false;
+    return F->getContext().getOptions<WebAssemblyOptions>().WASM_EnableEmSjLj;
+  return WebAssemblyOptions::Current.WASM_EnableEmSjLj;
 }
-bool WebAssembly::getWasmEnableEmSjLj(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::WASM_EnableEmSjLj>(Ctx);
+bool WebAssembly::getWasmEnableEmSjLj(const LLVMContext &Ctx) {
+  return Ctx.getOptions<WebAssemblyOptions>().WASM_EnableEmSjLj;
 }
 
 bool WebAssembly::getWasmEnableEH(const Function *F) {
   if (F)
-    return clv2::getOptValOr<&clv2::WebAssemblyOptsReg, &clv2::WASM_EnableEH>(
-        F->getContext().getOptionsContext(), false);
-  return false;
+    return F->getContext().getOptions<WebAssemblyOptions>().WASM_EnableEH;
+  return WebAssemblyOptions::Current.WASM_EnableEH;
 }
-bool WebAssembly::getWasmEnableEH(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::WebAssemblyOptsReg, &clv2::WASM_EnableEH>(
-      Ctx, false);
+bool WebAssembly::getWasmEnableEH(const LLVMContext &Ctx) {
+  return Ctx.getOptions<WebAssemblyOptions>().WASM_EnableEH;
 }
 
 bool WebAssembly::getWasmEnableSjLj(const Function *F) {
   if (F)
-    return clv2::getOptValOr<&clv2::WebAssemblyOptsReg, &clv2::WASM_EnableSjLj>(
-        F->getContext().getOptionsContext(), false);
-  return false;
+    return F->getContext().getOptions<WebAssemblyOptions>().WASM_EnableSjLj;
+  return WebAssemblyOptions::Current.WASM_EnableSjLj;
 }
-bool WebAssembly::getWasmEnableSjLj(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::WebAssemblyOptsReg, &clv2::WASM_EnableSjLj>(
-      Ctx, false);
+bool WebAssembly::getWasmEnableSjLj(const LLVMContext &Ctx) {
+  return Ctx.getOptions<WebAssemblyOptions>().WASM_EnableSjLj;
 }
 
 bool WebAssembly::getWasmUseLegacyEH(const Function *F) {
   if (F)
-    return clv2::getOptValOr<&clv2::WebAssemblyOptsReg,
-                             &clv2::WASM_UseLegacyEH>(
-        F->getContext().getOptionsContext(), true);
-  return true;
+    return F->getContext().getOptions<WebAssemblyOptions>().WASM_UseLegacyEH;
+  return WebAssemblyOptions::Current.WASM_UseLegacyEH;
 }
-bool WebAssembly::getWasmUseLegacyEH(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::WASM_UseLegacyEH>(Ctx);
+bool WebAssembly::getWasmUseLegacyEH(const LLVMContext &Ctx) {
+  return Ctx.getOptions<WebAssemblyOptions>().WASM_UseLegacyEH;
 }
 
 extern "C" LLVM_ABI LLVM_EXTERNAL_VISIBILITY void
@@ -153,33 +144,33 @@ static Reloc::Model getEffectiveRelocModel(std::optional<Reloc::Model> RM) {
 }
 
 static void basicCheckForEHAndSjLj(TargetMachine *TM) {
-  auto &Ctx = TM->getOptionsContext();
-
+  // No Function/Module is reachable here (this runs at TargetMachine
+  // construction time), so these read the process-wide default.
+  //
   // Emscripten EH is selected by the exception model. WASM_EnableEmEH is a
   // deprecated cl::opt alias, OR-ed in here until it is removed.
   bool EnableEmEH =
       TM->Options.ExceptionModel == ExceptionHandling::Emscripten ||
-      WebAssembly::getWasmEnableEmEH(Ctx);
+      WebAssembly::getWasmEnableEmEH();
 
   // You can't enable two modes of EH at the same time
-  if (EnableEmEH && WebAssembly::getWasmEnableEH(Ctx))
+  if (EnableEmEH && WebAssembly::getWasmEnableEH())
     report_fatal_error(
         "-exception-model=emscripten not allowed with -wasm-enable-eh");
   // You can't enable two modes of SjLj at the same time
-  if (WebAssembly::getWasmEnableEmSjLj(Ctx) &&
-      WebAssembly::getWasmEnableSjLj(Ctx))
+  if (WebAssembly::getWasmEnableEmSjLj() &&
+      WebAssembly::getWasmEnableSjLj())
     report_fatal_error(
         "-enable-emscripten-sjlj not allowed with -wasm-enable-sjlj");
   // You can't mix Emscripten EH with Wasm SjLj.
-  if (EnableEmEH && WebAssembly::getWasmEnableSjLj(Ctx))
+  if (EnableEmEH && WebAssembly::getWasmEnableSjLj())
     report_fatal_error(
         "-exception-model=emscripten not allowed with -wasm-enable-sjlj");
 
   if (TM->Options.ExceptionModel == ExceptionHandling::Default) {
     // FIXME: These flags should be removed in favor of directly using the
     // generically configured ExceptionsType
-    if (WebAssembly::getWasmEnableEH(Ctx) ||
-        WebAssembly::getWasmEnableSjLj(Ctx))
+    if (WebAssembly::getWasmEnableEH() || WebAssembly::getWasmEnableSjLj())
       TM->Options.ExceptionModel = ExceptionHandling::Wasm;
   }
 
@@ -190,16 +181,16 @@ static void basicCheckForEHAndSjLj(TargetMachine *TM) {
       TM->Options.ExceptionModel != ExceptionHandling::Emscripten)
     report_fatal_error(
         "-exception-model should be either 'none', 'wasm', or 'emscripten'");
-  if (WebAssembly::getWasmEnableEH(Ctx) &&
+  if (WebAssembly::getWasmEnableEH() &&
       TM->Options.ExceptionModel != ExceptionHandling::Wasm)
     report_fatal_error(
         "-wasm-enable-eh only allowed with -exception-model=wasm");
-  if (WebAssembly::getWasmEnableSjLj(Ctx) &&
+  if (WebAssembly::getWasmEnableSjLj() &&
       TM->Options.ExceptionModel != ExceptionHandling::Wasm)
     report_fatal_error(
         "-wasm-enable-sjlj only allowed with -exception-model=wasm");
-  if ((!WebAssembly::getWasmEnableEH(Ctx) &&
-       !WebAssembly::getWasmEnableSjLj(Ctx)) &&
+  if ((!WebAssembly::getWasmEnableEH() &&
+       !WebAssembly::getWasmEnableSjLj()) &&
       TM->Options.ExceptionModel == ExceptionHandling::Wasm)
     report_fatal_error(
         "-exception-model=wasm only allowed with at least one of "
@@ -364,11 +355,12 @@ void WebAssemblyPassConfig::addIRPasses() {
   // TargetPassConfig::addPassesToHandleExceptions, but that runs after these IR
   // passes and Emscripten SjLj handling expects all invokes to be lowered
   // before.
-  auto &Ctx = getWebAssemblyTargetMachine().getOptionsContext();
+  // No Function/Module is reachable here (this runs at pass-pipeline
+  // configuration time), so these read the process-wide default.
   bool EnableEmEH =
       TM->Options.ExceptionModel == ExceptionHandling::Emscripten ||
-      WebAssembly::getWasmEnableEmEH(Ctx);
-  if (!EnableEmEH && !WebAssembly::getWasmEnableEH(Ctx)) {
+      WebAssembly::getWasmEnableEmEH();
+  if (!EnableEmEH && !WebAssembly::getWasmEnableEH()) {
     addPass(createLowerInvokePass());
     // The lower invoke pass may create unreachable code. Remove it in order not
     // to process dead blocks in setjmp/longjmp handling.
@@ -379,8 +371,8 @@ void WebAssemblyPassConfig::addIRPasses() {
   // done in WasmEHPrepare pass, Wasm SjLj preparation shares libraries and
   // transformation algorithms with Emscripten SjLj, so we run
   // LowerEmscriptenEHSjLj pass also when Wasm SjLj is enabled.
-  if (EnableEmEH || WebAssembly::getWasmEnableEmSjLj(Ctx) ||
-      WebAssembly::getWasmEnableSjLj(Ctx))
+  if (EnableEmEH || WebAssembly::getWasmEnableEmSjLj() ||
+      WebAssembly::getWasmEnableSjLj())
     addPass(createWebAssemblyLowerEmscriptenEHSjLjLegacyPass(EnableEmEH));
 
   // Expand indirectbr instructions to switches.
@@ -520,9 +512,7 @@ void WebAssemblyPassConfig::addPreEmitPass() {
   addPass(createWebAssemblyCFGStackifyLegacyPass());
 
   // Insert explicit local.get and local.set operators.
-  if (!clv2::getOptValOr<&clv2::WebAssemblyOptsReg,
-                         &clv2::WASM_DisableExplicitLocals>(
-          TM->getOptionsContext(), false))
+  if (!WebAssemblyOptions::Current.WASM_DisableExplicitLocals)
     addPass(createWebAssemblyExplicitLocalsLegacyPass());
 
   // Lower br_unless into br_if.
@@ -536,9 +526,7 @@ void WebAssemblyPassConfig::addPreEmitPass() {
   addPass(createWebAssemblyRegNumberingLegacyPass());
 
   // Fix debug_values whose defs have been stackified.
-  if (!clv2::getOptValOr<&clv2::WebAssemblyOptsReg,
-                         &clv2::WASM_DisableExplicitLocals>(
-          TM->getOptionsContext(), false))
+  if (!WebAssemblyOptions::Current.WASM_DisableExplicitLocals)
     addPass(createWebAssemblyDebugFixupLegacyPass());
 
   // Collect information to prepare for MC lowering / asm printing.

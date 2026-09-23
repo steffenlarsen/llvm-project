@@ -46,7 +46,7 @@
 #include "llvm/Support/OptionsContext.h"
 #include "llvm/Target/TargetLoweringObjectFile.h"
 #include "llvm/Target/TargetOptions.h"
-#include "llvm/Target/X86/X86OptionsOptInfos.h"
+#include "llvm/Target/X86/X86Options.h"
 #include "llvm/TargetParser/Triple.h"
 #include "llvm/Transforms/CFGuard.h"
 #include <memory>
@@ -321,14 +321,16 @@ void X86TargetMachine::reset() { SubtargetMap.clear(); }
 ScheduleDAGInstrs *
 X86TargetMachine::createMachineScheduler(MachineSchedContext *C) const {
   ScheduleDAGMILive *DAG = createSchedLive(C);
-  DAG->addMutation(createX86MacroFusionDAGMutation(getOptionsContext()));
+  DAG->addMutation(
+      createX86MacroFusionDAGMutation(C->MF->getFunction().getContext()));
   return DAG;
 }
 
 ScheduleDAGInstrs *
 X86TargetMachine::createPostMachineScheduler(MachineSchedContext *C) const {
   ScheduleDAGMI *DAG = createSchedPostRA(C);
-  DAG->addMutation(createX86MacroFusionDAGMutation(getOptionsContext()));
+  DAG->addMutation(
+      createX86MacroFusionDAGMutation(C->MF->getFunction().getContext()));
   return DAG;
 }
 
@@ -351,7 +353,7 @@ namespace {
 class X86PassConfig : public TargetPassConfig {
 public:
   X86PassConfig(X86TargetMachine &TM, PassManagerBase &PM)
-    : TargetPassConfig(TM, PM) {}
+      : TargetPassConfig(TM, PM) {}
 
   X86TargetMachine &getX86TargetMachine() const {
     return getTM<X86TargetMachine>();
@@ -392,10 +394,10 @@ char X86ExecutionDomainFix::ID;
 } // end anonymous namespace
 
 INITIALIZE_PASS_BEGIN(X86ExecutionDomainFix, "x86-execution-domain-fix",
-  "X86 Execution Domain Fix", false, false)
+                      "X86 Execution Domain Fix", false, false)
 INITIALIZE_PASS_DEPENDENCY(ReachingDefInfoWrapperPass)
 INITIALIZE_PASS_END(X86ExecutionDomainFix, "x86-execution-domain-fix",
-  "X86 Execution Domain Fix", false, false)
+                    "X86 Execution Domain Fix", false, false)
 
 TargetPassConfig *X86TargetMachine::createPassConfig(PassManagerBase &PM) {
   return new X86PassConfig(*this, PM);
@@ -489,8 +491,7 @@ void X86PassConfig::addPreLegalizeMachineIR() {
 
 bool X86PassConfig::addILPOpts() {
   addPass(&EarlyIfConverterLegacyID);
-  if (clv2::getOptValOr<&clv2::X86OptsReg, &clv2::X86_MachineCombiner>(
-          TM->getOptionsContext(), true))
+  if (X86Options::Current.X86_MachineCombiner)
     addPass(&MachineCombinerID);
   addPass(createX86CmovConversionLegacyPass());
   return true;
@@ -647,9 +648,7 @@ static bool onlyAllocateTileRegisters(const TargetRegisterInfo &TRI,
 
 bool X86PassConfig::addRegAssignAndRewriteOptimized() {
   // Don't support tile RA when RA is specified by command line "-regalloc".
-  if (!isCustomizedRegAlloc() &&
-      clv2::getOptValOr<&clv2::X86OptsReg, &clv2::X86_TileRA>(
-          TM->getOptionsContext(), true)) {
+  if (!isCustomizedRegAlloc() && X86Options::Current.X86_TileRA) {
     // Allocate tile register first.
     addPass(createGreedyRegisterAllocator(onlyAllocateTileRegisters));
     addPass(createX86TileConfigLegacyPass());

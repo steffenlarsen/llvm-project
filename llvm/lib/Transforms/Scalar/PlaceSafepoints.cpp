@@ -1,5 +1,3 @@
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
 //===- PlaceSafepoints.cpp - Place GC Safepoints --------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -67,6 +65,7 @@
 #include "llvm/IR/Statepoint.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Transforms/Scalar.h"
+#include "llvm/Transforms/Scalar/ScalarOptions.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/Local.h"
@@ -86,15 +85,13 @@ STATISTIC(FiniteExecution,
 // Ignore opportunities to avoid placing safepoints on backedges, useful for
 // validation
 static bool getAllBackedges(const Function &F) {
-  return clv2::getOptValOr<&clv2::ScalarOptsReg, &clv2::SC_SppAllBackedges>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext().getOptions<ScalarOptions>().SC_SppAllBackedges;
 }
 
 /// How narrow does the trip count of a loop have to be to have to be considered
 /// "counted"?  Counted loops do not get safepoints at backedges.
 static int getCountedLoopTripWidth(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_SppCountedLoopTripWidth>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<ScalarOptions>().SC_SppCountedLoopTripWidth;
 }
 
 // If true, split the backedge of a loop when placing the safepoint, otherwise
@@ -102,8 +99,7 @@ static int getCountedLoopTripWidth(const Function &F) {
 // experimentation, but in practice, it looks like splitting the backedge
 // optimizes better.
 static bool getSplitBackedge(const Function &F) {
-  return clv2::getOptValOr<&clv2::ScalarOptsReg, &clv2::SC_SppSplitBackedge>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext().getOptions<ScalarOptions>().SC_SppSplitBackedge;
 }
 
 namespace {
@@ -166,16 +162,13 @@ private:
 } // namespace
 
 static bool getNoEntry(const Function &F) {
-  return clv2::getOptValOr<&clv2::ScalarOptsReg, &clv2::SC_SppNoEntry>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext().getOptions<ScalarOptions>().SC_SppNoEntry;
 }
 static bool getNoCall(const Function &F) {
-  return clv2::getOptValOr<&clv2::ScalarOptsReg, &clv2::SC_SppNoCall>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext().getOptions<ScalarOptions>().SC_SppNoCall;
 }
 static bool getNoBackedge(const Function &F) {
-  return clv2::getOptValOr<&clv2::ScalarOptsReg, &clv2::SC_SppNoBackedge>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext().getOptions<ScalarOptions>().SC_SppNoBackedge;
 }
 
 char PlaceBackedgeSafepointsLegacyPass::ID = 0;

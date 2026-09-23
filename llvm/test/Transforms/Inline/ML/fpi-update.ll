@@ -7,7 +7,7 @@ target triple = "x86_64-grtev4-linux-gnu"
 
 ; RUN: opt %if have_mlir_lowering_inliner %{ -enable-ml-inliner=release -mlgo-model=inliner %} %else %{ -enable-ml-inliner=release %} -passes='scc-oz-module-inliner,print<inline-advisor>' \
 ; RUN:     -keep-inline-advisor-for-printing -max-devirt-iterations=0 \
-; RUN:     -mandatory-inlining-first=0 -S < %s 2>&1 | FileCheck %s 
+; RUN:     -no-mandatory-inlining-first -S < %s 2>&1 | FileCheck %s 
 
 define void @caller(i32 %i) #1 {
   call void @callee(i32 %i)

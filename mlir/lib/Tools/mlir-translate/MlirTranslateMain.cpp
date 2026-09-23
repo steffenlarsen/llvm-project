@@ -17,7 +17,8 @@
 #include "mlir/Tools/mlir-translate/Translation.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/IR/IROptionsOptInfos.h"
+#include "llvm/IR/IROptions.h"
+#include "llvm/Option/LibraryOptions.h"
 #include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/OptionsContext.h"
@@ -248,7 +249,6 @@ LogicalResult mlir::mlirTranslateMain(
   llvm::clv2::OptionParser P;
   registerTranslationSelectors(P);
   P.add<&MlirTranslateToolReg>();
-  P.add<&IROptsReg, llvm::ir_opts::applyIROptions>();
   P.add<&MLIROptsReg>();
   P.add<&MLIRTranslateOptsReg>();
   llvm::RegisterCommonLLVMOptionsHidden(P);
@@ -376,7 +376,31 @@ LogicalResult mlir::mlirTranslateMain(
   });
   if (ConfigureParser)
     ConfigureParser(P);
-  auto OptsCtx = P.parse(argc, argv, toolName);
+
+  // llvm::IROptions has migrated off clv2 onto the new per-library
+  // OptTable/hand-written struct design (see llvm/include/llvm/Option/
+  // LibraryOptions.h) and is no longer a clv2::OptionsRegistry P can P.add<>().
+  // Unlike opt/optdriver.cpp -- which only forwards a -mllvm sub-argv through
+  // this chain -- mlir-translate routes its *entire* argv through the clv2
+  // parser below, so the chain has to run over the full argv here too,
+  // forwarding whatever it doesn't recognize into P.parse().
+  llvm::SmallVector<const char *, 32> ArgvAfterLibraryOpts;
+  ArgvAfterLibraryOpts.push_back(argv[0]);
+  {
+    std::string LibraryOptsErrs;
+    llvm::raw_string_ostream LibraryOptsErrsOS(LibraryOptsErrs);
+    if (llvm::Error Err = llvm::opt::parseLibraryOptionsChain<llvm::IROptions>(
+            llvm::ArrayRef<const char *>(argv + 1, argv + argc),
+            ArgvAfterLibraryOpts, LibraryOptsErrsOS)) {
+      llvm::errs() << toolName << ": " << llvm::toString(std::move(Err))
+                   << "\n";
+      return failure();
+    }
+    llvm::errs() << LibraryOptsErrs;
+  }
+  llvm::ir_opts::applyIROptions();
+  auto OptsCtx = P.parse(static_cast<int>(ArgvAfterLibraryOpts.size()),
+                         ArgvAfterLibraryOpts.data(), toolName);
   auto *Opts = OptsCtx->getViewPtr<&MlirTranslateToolReg>();
 
   // Initialize the timing manager.

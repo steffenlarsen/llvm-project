@@ -20,7 +20,7 @@
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsSelDAG.h"
 #include "llvm/CodeGen/FunctionLoweringInfo.h"
 #include "llvm/CodeGen/GCMetadata.h"
 #include "llvm/CodeGen/ISDOpcodes.h"
@@ -43,8 +43,6 @@
 #include "llvm/IR/Statepoint.h"
 #include "llvm/IR/Type.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLineV2.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOptions.h"
 #include <cassert>
@@ -64,19 +62,19 @@ STATISTIC(NumOfStatepoints, "Number of statepoint nodes encountered");
 STATISTIC(StatepointMaxSlotsRequired,
           "Maximum number of stack slots required for a singe statepoint");
 
-static bool getUseRegistersForDeoptValues(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_UseRegistersForDeoptValues>(
-      Ctx);
+static bool getUseRegistersForDeoptValues(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenSelDAGOptions>()
+      .CGPASS_UseRegistersForDeoptValues;
 }
 
 static bool
-getUseRegistersForGcValuesInLandingPad(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<
-      &clv2::CGPASS_UseRegistersForGcValuesInLandingPad>(Ctx);
+getUseRegistersForGcValuesInLandingPad(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenSelDAGOptions>()
+      .CGPASS_UseRegistersForGcValuesInLandingPad;
 }
 
-static unsigned getMaxRegistersForGcValues(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_MaxRegistersForGcValues>(Ctx);
+static unsigned getMaxRegistersForGcValues(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenSelDAGOptions>().CGPASS_MaxRegistersForGcValues;
 }
 
 typedef FunctionLoweringInfo::StatepointRelocationRecord RecordType;
@@ -547,14 +545,12 @@ lowerStatepointMetaArgs(SmallVectorImpl<SDValue> &Ops,
 
   // Decide which deriver pointers will go on VRegs
   const Function &F = Builder.DAG.getMachineFunction().getFunction();
-  unsigned MaxVRegPtrs =
-      getMaxRegistersForGcValues(F.getContext().getOptionsContext());
+  unsigned MaxVRegPtrs = getMaxRegistersForGcValues(F.getContext());
 
   // Pointers used on exceptional path of invoke statepoint.
   // We cannot assing them to VRegs.
   SmallSet<SDValue, 8> LPadPointers;
-  if (!getUseRegistersForGcValuesInLandingPad(
-          F.getContext().getOptionsContext()))
+  if (!getUseRegistersForGcValuesInLandingPad(F.getContext()))
     if (const auto *StInvoke =
             dyn_cast_or_null<InvokeInst>(SI.StatepointInstr)) {
       LandingPadInst *LPI = StInvoke->getLandingPadInst();
@@ -615,8 +611,7 @@ lowerStatepointMetaArgs(SmallVectorImpl<SDValue> &Ops,
       return true;
     if (isGCValue(V, Builder))
       return !LowerAsVReg.count(Builder.getValue(V));
-    return !(LiveInDeopt ||
-             getUseRegistersForDeoptValues(F.getContext().getOptionsContext()));
+    return !(LiveInDeopt || getUseRegistersForDeoptValues(F.getContext()));
   };
 
   // Before we actually start lowering (and allocating spill slots for values),

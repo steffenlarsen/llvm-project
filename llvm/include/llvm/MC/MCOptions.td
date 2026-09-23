@@ -1,4 +1,4 @@
-//===- MCOptions.td - CLV2 option defs for MC ---------------*- tablegen -*-===//
+//===- MCOptions.td - MC options -*- tablegen -*-===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -6,326 +6,203 @@
 //
 //===----------------------------------------------------------------------===//
 
-include "llvm/Support/CLV2Options.td"
+include "llvm/Option/OptParser.td"
 
-def MCOptsReg : Registry<"llvm::mc_opts"> {
-  // Getter bodies are compiled once, in MCOptionsGetters.cpp.
-  let OutOfLineGetters = 1;
-}
-
-def MCScheduleOptionsCategory : OptionCategory<"Machine scheduling model options">;
+// Named MCLibraryOptions rather than the more obvious "MCOptions": two tools
+// (llvm-mca.cpp, llvm-mc.cpp) already have a local variable literally named
+// MCOptions holding an MCTargetOptions instance, and reusing that name here
+// would make parseLibraryOptionsChain<..., MCOptions, ...> fragile / shadow
+// that variable's name in the same scope. Mirrors the InstCombineCLOptions
+// precedent (renamed away from InstCombineOptions to dodge a pre-existing
+// name in InstCombine.h).
+def MCLibraryOptions : OptionsStruct<"llvm"> {}
 
 // =========================================================================
 // External enums (defined in MCTargetOptions.h)
 // =========================================================================
 
-def EmitDwarfUnwindTypeAlways : EnumValue<"always",
-    "Always emit EH frame entries"> {
-  let CppName = "Always";
-}
-
-def EmitDwarfUnwindTypeNoCompactUnwind : EnumValue<"no-compact-unwind",
-    "Only emit EH frame entries when compact unwind is not available"> {
-  let CppName = "NoCompactUnwind";
-}
-
-def EmitDwarfUnwindTypeDwarfOnly : EnumValue<"dwarf-only",
-    "Force compact unwind to reference DWARF"> {
-  let CppName = "DwarfOnly";
-}
-
-def EmitDwarfUnwindTypeDefault : EnumValue<"default",
-    "Use target platform default"> {
-  let CppName = "Default";
-}
-
-def EmitDwarfUnwindTypeEnum : EnumType<"EmitDwarfUnwindType",
-    [EmitDwarfUnwindTypeAlways, EmitDwarfUnwindTypeNoCompactUnwind,
-     EmitDwarfUnwindTypeDwarfOnly, EmitDwarfUnwindTypeDefault]> {
+def EmitDwarfUnwindTypeEnum : OptionEnum<"llvm::EmitDwarfUnwindType", [
+    EnumMember<"Always", "always">,
+    EnumMember<"NoCompactUnwind", "no-compact-unwind">,
+    EnumMember<"DwarfOnly", "dwarf-only">,
+    EnumMember<"Default", "default">]> {
   let External = 1;
+  let Ident = "EmitDwarfUnwindType";
 }
 
-def RelocSectionSymTypeAll : EnumValue<"all",
-    "Use section symbols for all eligible local symbols"> {
-  let CppName = "All";
-}
-
-def RelocSectionSymTypeInternal : EnumValue<"internal",
-    "Only use section symbols for internal local symbols"> {
-  let CppName = "Internal";
-}
-
-def RelocSectionSymTypeNone : EnumValue<"none",
-    "Never use section symbols"> {
-  let CppName = "None";
-}
-
-def RelocSectionSymTypeEnum : EnumType<"RelocSectionSymType",
-    [RelocSectionSymTypeAll, RelocSectionSymTypeInternal,
-     RelocSectionSymTypeNone]> {
+def RelocSectionSymTypeEnum : OptionEnum<"llvm::RelocSectionSymType", [
+    EnumMember<"All", "all">,
+    EnumMember<"Internal", "internal">,
+    EnumMember<"None", "none">]> {
   let External = 1;
+  let Ident = "RelocSectionSymType";
 }
 
 // =========================================================================
 // Inline enum: DefaultOnOff
 // =========================================================================
 
-def DefaultOnOffDefault : EnumValue<"Default", "Default for platform"> {
-  let CppName = "Default";
-}
-
-def DefaultOnOffEnable : EnumValue<"Enable", "Enabled"> {
-  let CppName = "Enable";
-}
-
-def DefaultOnOffDisable : EnumValue<"Disable", "Disabled"> {
-  let CppName = "Disable";
-}
-
-def DefaultOnOffEnum : EnumType<"DefaultOnOff",
-    [DefaultOnOffDefault, DefaultOnOffEnable, DefaultOnOffDisable]>;
+// Spellings are capitalized (unlike this library's other enums) to match a
+// pre-existing lit test (DebugInfo/Generic/extended-loc-directive.ll) that
+// passes -dwarf-extended-loc=Enable / =Disable.
+def DefaultOnOffEnum : OptionEnum<"DefaultOnOff", [
+    EnumMember<"Default", "Default">,
+    EnumMember<"Enable", "Enable">,
+    EnumMember<"Disable", "Disable">]>;
 
 // =========================================================================
 // Options
 // =========================================================================
 
-def MC_RelaxAll : Option<
-    "mc-relax-all",
-    "When used with filetype=obj, relax all fixups in the emitted object file",
-    "bool"> {
-  let Registry = MCOptsReg;
-}
+// getRelaxAll() resolves to a plain bool (default false), but
+// getExplicitRelaxAll() must distinguish "never specified" from an explicit
+// value -- hence std::optional<bool> via OptionalValueField rather than a
+// plain BoolField.
+defm MC_RelaxAll : OptionalValueField<
+    "mc-relax-all", "bool", "true",
+    "When used with filetype=obj, relax all fixups in the emitted object "
+    "file">;
 
-def MC_IncrementalLinkerCompatible : Option<
-    "incremental-linker-compatible",
-    "When used with filetype=obj, emit an object file which can be used with "
-    "an incremental linker",
-    "bool"> {
-  let Registry = MCOptsReg;
-}
+defm MC_IncrementalLinkerCompatible : BoolField<
+    "incremental-linker-compatible", "false",
+    "When used with filetype=obj, emit an object file which can be used "
+    "with an incremental linker">;
 
-def MC_FDPIC : Option<"fdpic", "Use the FDPIC ABI",
-    "bool"> {
-  let Registry = MCOptsReg;
-}
+defm MC_FDPIC : BoolField<"fdpic", "false", "Use the FDPIC ABI">;
 
-def MC_DwarfVersion : Option<
-    "dwarf-version", "Dwarf version",
-    "int"> {
-  let Registry = MCOptsReg;
-  let Default = "0";
-}
+defm MC_DwarfVersion : ValueField<
+    "dwarf-version", "int", "0", "Dwarf version">;
 
-def MC_Dwarf64 : Option<
-    "dwarf64", "Generate debugging info in the 64-bit DWARF format",
-    "bool"> {
-  let Registry = MCOptsReg;
-}
+defm MC_Dwarf64 : BoolField<
+    "dwarf64", "false",
+    "Generate debugging info in the 64-bit DWARF format">;
 
-def MC_EmitDwarfUnwind : Option<
-    "emit-dwarf-unwind",
-    "Whether to emit DWARF EH frame entries.",
-    "EmitDwarfUnwindType"> {
-  let Registry = MCOptsReg;
-  let Default = "default";
-}
+defm MC_EmitDwarfUnwind : EnumField<
+    "emit-dwarf-unwind", EmitDwarfUnwindTypeEnum,
+    "llvm::EmitDwarfUnwindType::Default",
+    "Whether to emit DWARF EH frame entries.">;
 
-def MC_EmitCompactUnwindNonCanonical : Option<
-    "emit-compact-unwind-non-canonical",
-    "Whether to try to emit Compact Unwind for non canonical entries.",
-    "bool"> {
-  let Registry = MCOptsReg;
-}
+defm MC_EmitCompactUnwindNonCanonical : BoolField<
+    "emit-compact-unwind-non-canonical", "false",
+    "Whether to try to emit Compact Unwind for non canonical entries.">;
 
-def MC_EmitSFrameUnwind : Option<
-    "gsframe",
-    "Whether to emit .sframe unwind sections.",
-    "bool"> {
-  let Registry = MCOptsReg;
-}
+defm MC_EmitSFrameUnwind : BoolField<
+    "gsframe", "false", "Whether to emit .sframe unwind sections.">;
 
-def MC_ShowMCInst : Option<
-    "asm-show-inst",
-    "Emit internal instruction representation to assembly file",
-    "bool"> {
-  let Registry = MCOptsReg;
-}
+defm MC_ShowMCInst : BoolField<
+    "asm-show-inst", "false",
+    "Emit internal instruction representation to assembly file">;
 
-def MC_FatalWarnings : Option<
-    "fatal-warnings", "Treat warnings as errors",
-    "bool"> {
-  let Registry = MCOptsReg;
-}
+defm MC_FatalWarnings : BoolField<
+    "fatal-warnings", "false", "Treat warnings as errors">;
 
-def MC_NoWarn : Option<
-    "no-warn", "Suppress all warnings",
-    "bool"> {
-  let Registry = MCOptsReg;
-}
+defm MC_NoWarn : BoolField<
+    "no-warn", "false", "Suppress all warnings">;
 
-def MC_NoWarnW : Alias<"W", "no-warn", "Alias for --no-warn"> {
-  let Registry = MCOptsReg;
-}
+def MC_NoWarnW : Flag<["-", "--"], "W">, Alias<MC_NoWarn>,
+    HelpText<"Alias for --no-warn">;
 
-def MC_NoDeprecatedWarn : Option<
-    "no-deprecated-warn", "Suppress all deprecated warnings",
-    "bool"> {
-  let Registry = MCOptsReg;
-}
+defm MC_NoDeprecatedWarn : BoolField<
+    "no-deprecated-warn", "false", "Suppress all deprecated warnings">;
 
-def MC_NoTypeCheck : Option<
-    "no-type-check", "Suppress type errors (Wasm)",
-    "bool"> {
-  let Registry = MCOptsReg;
-}
+defm MC_NoTypeCheck : BoolField<
+    "no-type-check", "false", "Suppress type errors (Wasm)">;
 
-def MC_SaveTempLabels : Option<
-    "save-temp-labels", "Don't discard temporary labels",
-    "bool"> {
-  let Registry = MCOptsReg;
-}
+defm MC_SaveTempLabels : BoolField<
+    "save-temp-labels", "false", "Don't discard temporary labels">;
 
-def MC_Crel : Option<
-    "crel", "Use CREL relocation format for ELF",
-    "bool"> {
-  let Registry = MCOptsReg;
-}
+defm MC_Crel : BoolField<
+    "crel", "false", "Use CREL relocation format for ELF">;
 
-def MC_ImplicitMapSyms : Option<
-    "implicit-mapsyms",
+defm MC_ImplicitMapSyms : BoolField<
+    "implicit-mapsyms", "false",
     "Allow mapping symbol at section beginning to be implicit, lowering "
     "number of mapping symbols at the expense of some portability. "
     "Recommended for projects that can build all their object files using "
-    "this option",
-    "bool"> {
-  let Registry = MCOptsReg;
-}
+    "this option">;
 
-def MC_X86RelaxRelocations : Option<
-    "x86-relax-relocations",
+defm MC_X86RelaxRelocations : BoolField<
+    "x86-relax-relocations", "true",
     "Emit GOTPCRELX/REX_GOTPCRELX/CODE_4_GOTPCRELX instead of GOTPCREL on "
-    "x86-64 ELF",
-    "bool"> {
-  let Registry = MCOptsReg;
-  let Default = "1";
-}
+    "x86-64 ELF">;
 
-def MC_X86Sse2Avx : Option<
-    "x86-sse2avx",
-    "Specify that the assembler should encode SSE instructions with VEX prefix",
-    "bool"> {
-  let Registry = MCOptsReg;
-}
+defm MC_X86Sse2Avx : BoolField<
+    "x86-sse2avx", "false",
+    "Specify that the assembler should encode SSE instructions with VEX "
+    "prefix">;
 
-def MC_RelocSectionSym : Option<
-    "reloc-section-sym",
-    "Control section symbol conversion for relocations",
-    "RelocSectionSymType"> {
-  let Registry = MCOptsReg;
-  let Default = "all";
-}
+defm MC_RelocSectionSym : EnumField<
+    "reloc-section-sym", RelocSectionSymTypeEnum,
+    "llvm::RelocSectionSymType::All",
+    "Control section symbol conversion for relocations">;
 
-def MC_LargeEHEncoding : Option<
-    "large-eh-encoding",
+defm MC_LargeEHEncoding : BoolField<
+    "large-eh-encoding", "false",
     "Force 8-byte (sdata8) pointer encodings for ELF "
     "exception-handling sections to avoid relocation overflows in "
     "large binaries (x86_64: FDE/personality/LSDA/TType; "
-    "AArch64/PPC64: FDE only, the rest are already sdata8)",
-    "bool"> {
-  let Registry = MCOptsReg;
-}
+    "AArch64/PPC64: FDE only, the rest are already sdata8)">;
 
-def MC_DisableIntegratedAS : Option<
-    "no-integrated-as", "Disable integrated assembler",
-    "bool"> {
-  let Registry = MCOptsReg;
-}
+defm MC_DisableIntegratedAS : BoolField<
+    "no-integrated-as", "false", "Disable integrated assembler">;
 
-def MC_ABIName : Option<
-    "target-abi",
-    "The name of the ABI to be targeted from the backend.",
-    "std::string"> {
-  let Registry = MCOptsReg;
-}
+defm MC_ABIName : ValueField<
+    "target-abi", "std::string", "\"\"",
+    "The name of the ABI to be targeted from the backend.">;
 
-def MC_AsSecureLogFile : Option<
-    "as-secure-log-file", "As secure log file name",
-    "std::string"> {
-  let Registry = MCOptsReg;
-  let Hidden = 1;
-}
+defm MC_AsSecureLogFile : ValueField<
+    "as-secure-log-file", "std::string", "\"\"",
+    "As secure log file name",
+    /*hidden=*/1>;
 
 // --- MCAsmInfo.cpp options ---
 
-def MC_DwarfExtendedLoc : Option<
-    "dwarf-extended-loc",
+defm MC_DwarfExtendedLoc : EnumField<
+    "dwarf-extended-loc", DefaultOnOffEnum, "DefaultOnOff::Default",
     "Disable emission of the extended flags in .loc directives.",
-    "DefaultOnOff"> {
-  let Registry = MCOptsReg;
-  let Default = "Default";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def MC_UseLEB128Directives : Option<
-    "use-leb128-directives",
+// getUseLEB128Directives() must distinguish "never specified" from an
+// explicit value (see MCAsmInfo.cpp / MCAsmInfoXCOFF.cpp), hence
+// std::optional<bool> via OptionalValueField rather than a plain BoolField.
+defm MC_UseLEB128Directives : OptionalValueField<
+    "use-leb128-directives", "bool", "true",
     "Disable the usage of LEB128 directives, and generate .byte instead.",
-    "bool"> {
-  let Registry = MCOptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // --- MCLFI.cpp options ---
 
-def MC_LFIEnableRewriter : Option<
-    "lfi-enable-rewriter", "Enable rewriting for LFI.",
-    "bool"> {
-  let Registry = MCOptsReg;
-  let Hidden = 1;
-}
+defm MC_LFIEnableRewriter : BoolField<
+    "lfi-enable-rewriter", "true", "Enable rewriting for LFI.",
+    /*hidden=*/1>;
 
 // --- MCParser/MCAsmParser.cpp options ---
 
-def MC_AsmMacroMaxNestingDepth : Option<
-    "asm-macro-max-nesting-depth",
+defm MC_AsmMacroMaxNestingDepth : ValueField<
+    "asm-macro-max-nesting-depth", "unsigned", "100",
     "The maximum nesting depth allowed for assembly macros.",
-    "unsigned"> {
-  let Registry = MCOptsReg;
-  let Default = "100";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // --- MCDXContainerWriter.cpp options ---
 
-def MC_DXEmbedDebug : Option<
-    "dx-embed-debug", "Embed PDB in shader container",
-    "bool"> {
-  let Registry = MCOptsReg;
-}
+defm MC_DXEmbedDebug : BoolField<
+    "dx-embed-debug", "false", "Embed PDB in shader container">;
 
-def MC_DXStripDebug : Option<
-    "dx-strip-debug", "Strip debug information from shader bytecode",
-    "bool"> {
-  let Registry = MCOptsReg;
-}
+defm MC_DXStripDebug : BoolField<
+    "dx-strip-debug", "false",
+    "Strip debug information from shader bytecode">;
 
-def MC_DXSlimDebug : Option<
-    "dx-slim-debug", "Generate slim PDB without ILDB part",
-    "bool"> {
-  let Registry = MCOptsReg;
-}
+defm MC_DXSlimDebug : BoolField<
+    "dx-slim-debug", "false",
+    "Generate slim PDB without ILDB part">;
 
 // --- MCSchedule.cpp options ---
 
-def MC_RSScaleFactor : Option<
-    "sched-model-reservation-station-scale-factor",
+defm MC_RSScaleFactor : ValueField<
+    "sched-model-reservation-station-scale-factor", "float", "1.0",
     "Scale the buffer size of all reservation stations by a positive "
     "factor. Buffer sizes of -1/0/1 (unlimited/unbuffered/in-order) "
     "are preserved. Likewise, if the scaled result is <= 1, the "
     "original size is kept. Computed sizes "
     "are truncated towards zero.",
-    "float"> {
-  let Registry = MCOptsReg;
-  let Default = "1.0";
-  let Hidden = 1;
-  let Category = MCScheduleOptionsCategory;
-}
+    /*hidden=*/1>;

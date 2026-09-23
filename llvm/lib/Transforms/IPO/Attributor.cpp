@@ -14,8 +14,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Transforms/IPO/Attributor.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Transforms/IPO/IPOOptionsOptInfos.h"
+#include "llvm/Transforms/IPO/IPOOptions.h"
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/PointerIntPair.h"
@@ -84,10 +83,8 @@ STATISTIC(NumAttributesManifested,
           "Number of abstract attributes manifested in IR");
 
 // TODO: Determine a good default value.
-unsigned
-llvm::getMaxInitializationChainLength(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::IPO_MaxInitializationChainLengthX>(
-      Ctx);
+unsigned llvm::getMaxInitializationChainLength(const LLVMContext &Ctx) {
+  return Ctx.getOptions<IPOOptions>().IPO_MaxInitializationChainLengthX;
 }
 
 //
@@ -98,111 +95,85 @@ llvm::getMaxInitializationChainLength(const clv2::OptionsContext &Ctx) {
 // This will become more evolved once we perform two interleaved fixpoint
 // iterations: bottom-up and top-down.
 static unsigned getSetFixpointIterations(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_SetFixpointIterations>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_SetFixpointIterations;
 }
 
 static unsigned getMaxSpecializationPerCB(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_MaxSpecializationPerCB>(
-      M.getContext().getOptionsContext());
+  return M.getContext()
+      .getOptions<IPOOptions>()
+      .IPO_MaxSpecializationPerCB.value_or(0);
 }
 
 static bool getMaxSpecializationPerCBSpecified(const Module &M) {
-  return clv2::wasOptSpecified<&clv2::IPOOptsReg,
-                               &clv2::IPO_MaxSpecializationPerCB>(
-      M.getContext().getOptionsContext());
+  return M.getContext()
+      .getOptions<IPOOptions>()
+      .IPO_MaxSpecializationPerCB.has_value();
 }
 
 static bool getAnnotateDeclarationCallSites(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_AnnotateDeclarationCallSites>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_AnnotateDeclarationCallSites;
 }
 
 static bool getEnableHeapToStack(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_EnableHeapToStack>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_EnableHeapToStack;
 }
 
 static bool getAllowShallowWrappers(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_AllowShallowWrappers>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_AllowShallowWrappers;
 }
 
 static bool getAllowDeepWrapper(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_AllowDeepWrapper>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_AllowDeepWrapper;
 }
 
 #ifndef NDEBUG
 static const std::vector<std::string> &getSeedAllowList(const Module &M) {
-  if (auto *O =
-          clv2::getView<&clv2::IPOOptsReg>(M.getContext().getOptionsContext()))
-    if (O->specified<&clv2::IPO_SeedAllowList>())
-      return O->get<&clv2::IPO_SeedAllowList>();
-  static const std::vector<std::string> Default;
-  return Default;
+  return M.getContext().getOptions<IPOOptions>().IPO_SeedAllowList;
 }
 
 static const std::vector<std::string> &
 getFunctionSeedAllowList(const Module &M) {
-  if (auto *O =
-          clv2::getView<&clv2::IPOOptsReg>(M.getContext().getOptionsContext()))
-    if (O->specified<&clv2::IPO_FunctionSeedAllowList>())
-      return O->get<&clv2::IPO_FunctionSeedAllowList>();
-  static const std::vector<std::string> Default;
-  return Default;
+  return M.getContext().getOptions<IPOOptions>().IPO_FunctionSeedAllowList;
 }
 #endif
 
 static bool getDumpDepGraph(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_DumpDepGraph>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_DumpDepGraph;
 }
 
 static const std::string &getDepGraphDotFileNamePrefix(const Module &M) {
-  if (auto *O =
-          clv2::getView<&clv2::IPOOptsReg>(M.getContext().getOptionsContext()))
-    if (O->specified<&clv2::IPO_DepGraphDotFileNamePrefix>())
-      return O->get<&clv2::IPO_DepGraphDotFileNamePrefix>();
-  static const std::string Default;
-  return Default;
+  return M.getContext().getOptions<IPOOptions>().IPO_DepGraphDotFileNamePrefix;
 }
 
 static bool getViewDepGraph(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_ViewDepGraph>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_ViewDepGraph;
 }
 
 static bool getPrintDependencies(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_PrintDependencies>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_PrintDependencies;
 }
 
 static bool getEnableCallSiteSpecific(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_EnableCallSiteSpecific>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_EnableCallSiteSpecific;
 }
 
 static bool getPrintCallGraph(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_PrintCallGraph>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_PrintCallGraph;
 }
 
 static bool getSimplifyAllLoads(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_SimplifyAllLoads>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_SimplifyAllLoads;
 }
 
 static bool getCloseWorldAssumption(const Module &M) {
-  return clv2::getOptValIfSpecified<&clv2::IPOOptsReg,
-                                    &clv2::IPO_CloseWorldAssumption>(
-      M.getContext().getOptionsContext(), false);
+  return M.getContext().getOptions<IPOOptions>().IPO_CloseWorldAssumption.value_or(
+      false);
 }
 
 static bool getCloseWorldAssumptionSpecified(const Module &M) {
-  return clv2::wasOptSpecified<&clv2::IPOOptsReg,
-                               &clv2::IPO_CloseWorldAssumption>(
-      M.getContext().getOptionsContext());
+  return M.getContext()
+      .getOptions<IPOOptions>()
+      .IPO_CloseWorldAssumption.has_value();
 }
 
 /// Logic operators for the change status enum class.

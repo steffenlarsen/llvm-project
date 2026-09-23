@@ -13,9 +13,9 @@
 #include "llvm/CodeGen/MachineBlockFrequencyInfo.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/iterator.h"
-#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
+#include "llvm/Analysis/AnalysisOptions.h"
 #include "llvm/Analysis/BlockFrequencyInfoImpl.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsMachine1.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineBranchProbabilityInfo.h"
 #include "llvm/CodeGen/MachineCycleAnalysis.h"
@@ -75,26 +75,20 @@ static constexpr clv2::OptionsRegistry<&OI_ViewBlockLayoutWithBFI,
                                        &OI_ViewMachineBlockFreqPropDAG>
     MBFIOptsReg;
 
-namespace an_opts = llvm::an_opts;
-
-static std::string getViewBlockFreqFuncName(const clv2::OptionsContext &Ctx) {
-  return std::string(
-      clv2::getOptValOr<&clv2::AnalysisOptsReg,
-                        &clv2::AN_ViewBlockFreqFuncName>(Ctx, std::string{}));
+static std::string getViewBlockFreqFuncName(const AnalysisOptions &Opts) {
+  return Opts.AN_ViewBlockFreqFuncName;
 }
 
-static unsigned getViewHotFreqPercent(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::AN_ViewHotFreqPercent>(Ctx);
+static unsigned getViewHotFreqPercent(const AnalysisOptions &Opts) {
+  return Opts.AN_ViewHotFreqPercent;
 }
 
-static std::string getPrintBFIFuncName(const clv2::OptionsContext &Ctx) {
-  return std::string(
-      clv2::getOptValOr<&clv2::AnalysisOptsReg, &clv2::AN_PrintBFIFuncName>(
-          Ctx, std::string{}));
+static std::string getPrintBFIFuncName(const AnalysisOptions &Opts) {
+  return Opts.AN_PrintBFIFuncName;
 }
 
-static bool getPrintMachineBfi(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_PrintMachineBfi>(Ctx);
+static bool getPrintMachineBfi(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenMachine1Options>().CGPASS_PrintMachineBfi;
 }
 
 static GVDAGType getGVDT(const clv2::OptionsContext &Ctx) {
@@ -171,18 +165,22 @@ struct llvm::DOTGraphTraits<MachineBlockFrequencyInfo *>
 
   std::string getNodeAttributes(const MachineBasicBlock *Node,
                                 const MachineBlockFrequencyInfo *Graph) {
-    const auto &Ctx =
-        Node->getParent()->getFunction().getContext().getOptionsContext();
+    const auto &Opts = Node->getParent()
+                           ->getFunction()
+                           .getContext()
+                           .getOptions<AnalysisOptions>();
     return MBFIDOTGraphTraitsBase::getNodeAttributes(
-        Node, Graph, getViewHotFreqPercent(Ctx));
+        Node, Graph, getViewHotFreqPercent(Opts));
   }
 
   std::string getEdgeAttributes(const MachineBasicBlock *Node, EdgeIter EI,
                                 const MachineBlockFrequencyInfo *MBFI) {
-    const auto &Ctx =
-        Node->getParent()->getFunction().getContext().getOptionsContext();
+    const auto &Opts = Node->getParent()
+                           ->getFunction()
+                           .getContext()
+                           .getOptions<AnalysisOptions>();
     return MBFIDOTGraphTraitsBase::getEdgeAttributes(
-        Node, EI, MBFI, MBFI->getMBPI(), getViewHotFreqPercent(Ctx));
+        Node, EI, MBFI, MBFI->getMBPI(), getViewHotFreqPercent(Opts));
   }
 };
 
@@ -257,16 +255,18 @@ void MachineBlockFrequencyInfo::calculate(
     MBFI.reset(new ImplType);
   const clv2::OptionsContext &Ctx =
       F.getFunction().getContext().getOptionsContext();
-  MBFI->setOptionsContext(Ctx);
+  const AnalysisOptions &Opts =
+      F.getFunction().getContext().getOptions<AnalysisOptions>();
+  MBFI->setOptionsContext(Opts);
   MBFI->calculate(F, MBPI, MCI);
   if (getGVDT(Ctx) != GVDT_None &&
-      (getViewBlockFreqFuncName(Ctx).empty() ||
-       F.getName() == getViewBlockFreqFuncName(Ctx))) {
+      (getViewBlockFreqFuncName(Opts).empty() ||
+       F.getName() == getViewBlockFreqFuncName(Opts))) {
     view("MachineBlockFrequencyDAGS." + F.getName());
   }
-  if (getPrintMachineBfi(F.getFunction().getContext().getOptionsContext()) &&
-      (getPrintBFIFuncName(Ctx).empty() ||
-       F.getName() == getPrintBFIFuncName(Ctx))) {
+  if (getPrintMachineBfi(F.getFunction().getContext()) &&
+      (getPrintBFIFuncName(Opts).empty() ||
+       F.getName() == getPrintBFIFuncName(Opts))) {
     MBFI->print(dbgs());
   }
 }

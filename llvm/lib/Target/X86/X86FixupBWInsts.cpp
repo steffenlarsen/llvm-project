@@ -60,9 +60,8 @@
 #include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/IR/Function.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/X86/X86OptionsOptInfos.h"
+#include "llvm/Target/X86/X86Options.h"
 using namespace llvm;
 
 #define FIXUPBW_DESC "X86 Byte/Word Instruction Fixup"
@@ -74,8 +73,7 @@ using namespace llvm;
 static bool FixupBWInsts = true;
 
 static bool getFixupBWInsts(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::X86_FixupBWInsts>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<X86Options>().X86_FixupBWInsts;
 }
 
 namespace {
@@ -263,7 +261,7 @@ Register X86FixupBWInstImpl::getSuperRegDestIfDead(MachineInstr *OrigMI) const {
     return Register();
 
   bool IsDefined = false;
-  for (auto &MO: OrigMI->implicit_operands()) {
+  for (auto &MO : OrigMI->implicit_operands()) {
     if (!MO.isReg())
       continue;
 

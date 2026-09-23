@@ -21,7 +21,6 @@
 #include "llvm/Support/CommandLineTokenizer.h"
 #include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/Path.h"
-#include "llvm/Support/PluginLoader.h"
 #include "llvm/Support/Regex.h"
 #include "llvm/Support/StringSaver.h"
 #include "llvm/Support/raw_ostream.h"
@@ -1384,42 +1383,10 @@ static SplitArg splitOptionArg(StringRef Arg) {
   return {FullName, Name, InlineVal, HasInlineVal};
 }
 
-/// dlopen any -load arguments before dynamic registrations are snapshotted.
-/// No-op unless this parse actually has a -load option, so a stray -load on a
-/// tool without one still reports as an unknown argument.
-static void preloadPlugins(int argc, const char *const *argv) {
-  if (!llvm::pluginLoaderOptionRegistered())
-    return;
-  for (int I = 1; I < argc; ++I) {
-    StringRef Arg = argv[I];
-    if (!Arg.starts_with("-"))
-      continue;
-    SplitArg Split = splitOptionArg(Arg);
-    if (Split.Name != "load")
-      continue;
-    StringRef File;
-    if (Split.HasInlineVal)
-      File = Split.InlineVal;
-    else if (I + 1 < argc)
-      File = argv[++I];
-    if (File.empty())
-      continue;
-    PluginLoader PL;
-    PL = File.str();
-  }
-}
-
 bool clv2::detail::runParser(std::vector<OptionEntry> &GlobalEntries,
                              std::vector<SubCommandSpec> &SubCommands, int argc,
                              const char *const *argv, raw_ostream *Errs,
                              ParseFrame &Frame, bool DrainDynamic) {
-  // -load brings in a shared object whose static initialisers register more
-  // options. Those initialisers run at dlopen, which the option's own callback
-  // performs part-way through the parse, after the snapshots below have been
-  // taken, so the plugin's options would be missing from this parse entirely.
-  // Load them up front instead, and only when the tool actually offers -load.
-  preloadPlugins(argc, argv);
-
   // Instantiate per-parse storage for every dynamically-registered registry.
   std::vector<OptionEntry *> GlobalDynSnap =
       DrainDynamic ? getDynamicEntries().snapshot()

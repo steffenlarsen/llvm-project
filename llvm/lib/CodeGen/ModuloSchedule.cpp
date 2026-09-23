@@ -9,27 +9,26 @@
 #include "llvm/CodeGen/ModuloSchedule.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Analysis/MemoryLocation.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsSched1.h"
 #include "llvm/CodeGen/LiveIntervals.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineLoopInfo.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/LLVMContext.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/MC/MCContext.h"
-#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 
 #define DEBUG_TYPE "pipeliner"
 using namespace llvm;
 
-static bool getPipelinerSwapBranchTargetsMve(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_PipelinerSwapBranchTargetsMve>(
-      Ctx);
+static bool getPipelinerSwapBranchTargetsMve(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenSched1Options>()
+      .CGPASS_PipelinerSwapBranchTargetsMve;
 }
 
 void ModuloSchedule::print(raw_ostream &OS) {
@@ -2178,7 +2177,7 @@ void ModuloScheduleExpanderMVE::insertCondBranch(MachineBasicBlock &MBB,
                                                       LastStage0Insts);
 
   if (getPipelinerSwapBranchTargetsMve(
-          MBB.getParent()->getFunction().getContext().getOptionsContext())) {
+          MBB.getParent()->getFunction().getContext())) {
     // Set SwapBranchTargetsMVE to true if a target prefers to replace TBB and
     // FBB for optimal performance.
     if (TII->reverseBranchCondition(Cond))

@@ -14,11 +14,10 @@
 
 #include "llvm/Analysis/LastRunTrackingAnalysis.h"
 #include "llvm/ADT/Statistic.h"
-#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
+#include "llvm/Analysis/AnalysisOptions.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Support/CommandLineCompat.h"
-#include "llvm/Support/OptionsContext.h"
 
 using namespace llvm;
 
@@ -29,8 +28,7 @@ STATISTIC(NumLRTQueries, "Number of LastRunTracking queries");
 static bool DisableLastRunTracking = false;
 
 static bool getDisableLastRunTracking(const LLVMContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::AN_DisableLastRunTracking>(
-      Ctx.getOptionsContext());
+  return Ctx.getOptions<AnalysisOptions>().AN_DisableLastRunTracking;
 }
 
 LastRunTrackingInfo LastRunTrackingAnalysis::run(Function &F,

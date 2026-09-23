@@ -23,7 +23,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/AliasSetTracker.h"
-#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
+#include "llvm/Analysis/AnalysisOptions.h"
 #include "llvm/Analysis/AssumeBundleQueries.h"
 #include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/Analysis/LoopAnalysisManager.h"
@@ -55,11 +55,9 @@
 #include "llvm/IR/Value.h"
 #include "llvm/IR/ValueHandle.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <cassert>
@@ -82,62 +80,56 @@ unsigned MaxDependences = 100;
 
 unsigned MaxForkedSCEVDepth = 5;
 static unsigned getMaxForkedSCEVDepth(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AN_MaxForkedSCEVDepth>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<AnalysisOptions>().AN_MaxForkedSCEVDepth;
 }
 
-namespace an_opts = llvm::an_opts;
-
 ElementCount
-VectorizerParams::getVectorizationFactor(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValIfSpecified<&clv2::AnalysisOptsReg,
-                                    &clv2::AN_VectorizationFactor>(
-      Ctx, ElementCount::getFixed(0));
+VectorizerParams::getVectorizationFactor(const AnalysisOptions &Opts) {
+  return Opts.AN_VectorizationFactor;
 }
 
 unsigned
-VectorizerParams::getVectorizationInterleave(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValIfSpecified<&clv2::AnalysisOptsReg,
-                                    &clv2::AN_VectorizationInterleave>(Ctx, 0u);
+VectorizerParams::getVectorizationInterleave(const AnalysisOptions &Opts) {
+  return Opts.AN_VectorizationInterleave.value_or(0u);
 }
 
 unsigned VectorizerParams::getRuntimeMemoryCheckThreshold(
-    const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::AN_RuntimeMemoryCheckThreshold>(Ctx);
+    const AnalysisOptions &Opts) {
+  return Opts.AN_RuntimeMemoryCheckThreshold;
 }
 
-bool VectorizerParams::getHoistRuntimeChecks(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::AN_HoistRuntimeChecks>(Ctx);
+bool VectorizerParams::getHoistRuntimeChecks(const AnalysisOptions &Opts) {
+  return Opts.AN_HoistRuntimeChecks;
 }
 
 static unsigned getMemoryCheckMergeThreshold(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AN_MemoryCheckMergeThreshold>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<AnalysisOptions>()
+      .AN_MemoryCheckMergeThreshold;
 }
 
 static unsigned getMaxDependences(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AN_MaxDependences>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<AnalysisOptions>().AN_MaxDependences;
 }
 
 static bool getEnableMemAccessVersioning(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AN_EnableMemAccessVersioning>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<AnalysisOptions>()
+      .AN_EnableMemAccessVersioning;
 }
 
 static bool getEnableForwardingConflictDetection(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AN_EnableForwardingConflictDetection>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<AnalysisOptions>()
+      .AN_EnableForwardingConflictDetection;
 }
 
 static bool getSpeculateUnitStride(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AN_SpeculateUnitStride>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<AnalysisOptions>().AN_SpeculateUnitStride;
 }
 
-bool VectorizerParams::isInterleaveForced(const clv2::OptionsContext &Ctx) {
-  return clv2::wasOptSpecified<&clv2::AnalysisOptsReg,
-                               &clv2::AN_VectorizationInterleave>(Ctx);
+bool VectorizerParams::isInterleaveForced(const AnalysisOptions &Opts) {
+  return Opts.AN_VectorizationInterleave.has_value();
 }
 
 const SCEV *
@@ -571,10 +563,11 @@ bool RuntimePointerChecking::tryToCreateDiffCheck(
   // loop, then it's probably better to avoid creating diff checks because
   // they may not be hoisted. We should instead let llvm::addRuntimeChecks
   // do the expanded full range overlap checks, which can be hoisted.
-  if (VectorizerParams::getHoistRuntimeChecks(InnerLoop->getHeader()
-                                                  ->getParent()
-                                                  ->getContext()
-                                                  .getOptionsContext()) &&
+  const AnalysisOptions &HoistOpts = InnerLoop->getHeader()
+                                         ->getParent()
+                                         ->getContext()
+                                         .getOptions<AnalysisOptions>();
+  if (VectorizerParams::getHoistRuntimeChecks(HoistOpts) &&
       InnerLoop->getParentLoop() && isa<SCEVAddRecExpr>(SinkStartInt) &&
       isa<SCEVAddRecExpr>(SrcStartInt)) {
     auto *SrcStartAR = cast<SCEVAddRecExpr>(SrcStartInt);
@@ -2461,14 +2454,15 @@ MemoryDepChecker::isDependent(const MemAccessInfo &A, unsigned AIdx,
     return Dependence::Unknown;
   }
   // Bail out early if passed-in parameters make vectorization not feasible.
-  const auto &LAAOptsCtx =
-      InnermostLoop->getHeader()->getParent()->getContext().getOptionsContext();
+  const AnalysisOptions &LAAOpts = InnermostLoop->getHeader()
+                                       ->getParent()
+                                       ->getContext()
+                                       .getOptions<AnalysisOptions>();
   unsigned MinForcedFactor = std::max(
-      1U,
-      VectorizerParams::getVectorizationFactor(LAAOptsCtx).getKnownMinValue());
+      1U, VectorizerParams::getVectorizationFactor(LAAOpts).getKnownMinValue());
   unsigned ForcedUnroll =
-      (VectorizerParams::getVectorizationInterleave(LAAOptsCtx)
-           ? VectorizerParams::getVectorizationInterleave(LAAOptsCtx)
+      (VectorizerParams::getVectorizationInterleave(LAAOpts)
+           ? VectorizerParams::getVectorizationInterleave(LAAOpts)
            : 1);
   // The minimum number of iterations for a vectorized/unrolled version.
   unsigned MinNumIter = std::max(MinForcedFactor * ForcedUnroll, 2U);

@@ -1,7 +1,6 @@
 # AsmParser
 add_llvm_component_library(LLVMAsmParser
-  AsmParserOptionsGetters.cpp
-  AsmParserOptionsRegistration.cpp
+  AsmParserOptions.cpp
   AsmParserContext.cpp
   LLLexer.cpp
   LLParser.cpp
@@ -12,10 +11,12 @@ add_llvm_component_library(LLVMAsmParser
 
   DEPENDS
   intrinsics_gen
+  AsmParserOptParserTableGen
 
   LINK_COMPONENTS
   BinaryFormat
   Core
+  Option
   Support
   TargetParser
   )

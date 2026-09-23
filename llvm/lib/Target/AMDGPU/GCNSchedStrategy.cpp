@@ -46,7 +46,7 @@
 #include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/AMDGPU/AMDGPUOptionsOptInfos.h"
+#include "llvm/Target/AMDGPU/AMDGPUOptions.h"
 
 #define DEBUG_TYPE "machine-scheduler"
 
@@ -57,58 +57,57 @@ using namespace llvm;
 #endif
 
 static bool getDisableUnclusterHighRP(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AMDGPU_DisableUnclusterHighRP>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<AMDGPUOptions>()
+      .AMDGPU_DisableUnclusterHighRP;
 }
 
 static bool getDisableClusteredLowOccupancy(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AMDGPU_DisableClusteredLowOccupancy>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<AMDGPUOptions>()
+      .AMDGPU_DisableClusteredLowOccupancy;
 }
 
 static unsigned getScheduleMetricBias(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AMDGPU_ScheduleMetricBias>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<AMDGPUOptions>().AMDGPU_ScheduleMetricBias;
 }
 
 static bool getRelaxedOcc(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AMDGPU_RelaxedOcc>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<AMDGPUOptions>().AMDGPU_RelaxedOcc;
 }
 
 static unsigned getPendingQueueLimit(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AMDGPU_PendingQueueLimit>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<AMDGPUOptions>().AMDGPU_PendingQueueLimit;
 }
 
 static bool getDisableRewriteMFMAFormSchedStage(const Function &F) {
-  return clv2::getOptValOrDefault<
-      &clv2::AMDGPU_DisableRewriteMFMAFormSchedStage>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<AMDGPUOptions>()
+      .AMDGPU_DisableRewriteMFMAFormSchedStage;
 }
 
 static bool getGCNTrackers(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AMDGPU_GCNTrackers>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<AMDGPUOptions>().AMDGPU_GCNTrackers.value_or(
+      false);
 }
 
 static bool getGCNTrackersWasSpecified(const Function &F) {
-  return clv2::wasOptSpecified<&clv2::AMDGPUOptsReg,
-                               &llvm::clv2::AMDGPU_GCNTrackers>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<AMDGPUOptions>()
+      .AMDGPU_GCNTrackers.has_value();
 }
 
 #if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
 static bool getPrintMaxRPRegUsageBeforeScheduler(const Function &F) {
-  return clv2::getOptValOrDefault<
-      &clv2::AMDGPU_PrintMaxRPRegUsageBeforeScheduler>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<AMDGPUOptions>()
+      .AMDGPU_PrintMaxRPRegUsageBeforeScheduler;
 }
 
 static bool getPrintMaxRPRegUsageAfterScheduler(const Function &F) {
-  return clv2::getOptValOrDefault<
-      &clv2::AMDGPU_PrintMaxRPRegUsageAfterScheduler>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<AMDGPUOptions>()
+      .AMDGPU_PrintMaxRPRegUsageAfterScheduler;
 }
 #endif
 
@@ -117,13 +116,11 @@ const unsigned ScheduleMetrics::ScaleFactor = 100;
 GCNSchedStrategy::GCNSchedStrategy(const MachineSchedContext *C)
     : GenericScheduler(C), TargetOccupancy(0), MF(nullptr),
       DownwardTracker(*C->LIS), UpwardTracker(*C->LIS), HasHighPressure(false) {
-  if (C->MF) {
-    const auto &Ctx = C->MF->getSubtarget().getOptionsContext();
-    if (auto *O = clv2::getView<&clv2::AMDGPUOptsReg>(Ctx)) {
-      if (O->specified<&llvm::clv2::AMDGPU_GCNTrackers>())
-        GCNTrackersOverride = O->get<&llvm::clv2::AMDGPU_GCNTrackers>();
-    }
-  }
+  if (C->MF)
+    GCNTrackersOverride = C->MF->getFunction()
+                              .getContext()
+                              .getOptions<AMDGPUOptions>()
+                              .AMDGPU_GCNTrackers;
 }
 
 void GCNSchedStrategy::initialize(ScheduleDAGMI *DAG) {
@@ -176,9 +173,10 @@ void GCNSchedStrategy::initialize(ScheduleDAGMI *DAG) {
   AGPRCriticalLimit = std::min(VGPRCriticalLimit, AGPRExcessLimit);
 
   // Apply VGPR excess threshold percentage if specified.
-  unsigned VGPRThreshPct =
-      clv2::getOptValOrDefault<&clv2::AMDGPU_VGPRThresholdPercent>(
-          MF->getFunction().getContext().getOptionsContext());
+  unsigned VGPRThreshPct = MF->getFunction()
+                               .getContext()
+                               .getOptions<AMDGPUOptions>()
+                               .AMDGPU_VGPRThresholdPercent;
   if (VGPRThreshPct > 0) {
     [[maybe_unused]] unsigned OriginalVGPRExcessLimit = VGPRExcessLimit;
     [[maybe_unused]] unsigned OriginalVGPRCriticalLimit = VGPRCriticalLimit;
@@ -780,9 +778,10 @@ GCNMaxOccupancySchedStrategy::GCNMaxOccupancySchedStrategy(
   {
     bool Disable = true;
     if (C->MF)
-      Disable = clv2::getOptValOrDefault<
-          &clv2::AMDGPU_DisableRewriteMFMAFormSchedStage>(
-          C->MF->getSubtarget().getOptionsContext());
+      Disable = C->MF->getFunction()
+                    .getContext()
+                    .getOptions<AMDGPUOptions>()
+                    .AMDGPU_DisableRewriteMFMAFormSchedStage;
     if (!Disable)
       SchedStages.push_back(GCNSchedStageID::RewriteMFMAForm);
   }
@@ -2122,8 +2121,7 @@ GCNSchedStage::getScheduleMetrics(const std::vector<SUnit> &InputSchedule) {
 #ifndef NDEBUG
   LLVM_DEBUG(
       printScheduleModel(ReadyCyclesSorted);
-      dbgs() << "\n\t"
-             << "Metric: "
+      dbgs() << "\n\t" << "Metric: "
              << (SumBubbles
                      ? (SumBubbles * ScheduleMetrics::ScaleFactor) / CurrCycle
                      : 1)
@@ -2158,8 +2156,7 @@ GCNSchedStage::getScheduleMetrics(const GCNScheduleDAGMILive &DAG) {
 #ifndef NDEBUG
   LLVM_DEBUG(
       printScheduleModel(ReadyCyclesSorted);
-      dbgs() << "\n\t"
-             << "Metric: "
+      dbgs() << "\n\t" << "Metric: "
              << (SumBubbles
                      ? (SumBubbles * ScheduleMetrics::ScaleFactor) / CurrCycle
                      : 1)

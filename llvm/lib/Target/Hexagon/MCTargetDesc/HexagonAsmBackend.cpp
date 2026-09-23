@@ -24,8 +24,7 @@
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/EndianStream.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
+#include "llvm/Target/Hexagon/HexagonOptions.h"
 
 #include <sstream>
 
@@ -34,9 +33,8 @@ using namespace Hexagon;
 
 #define DEBUG_TYPE "hexagon-asm-backend"
 
-static bool getDisableFixup(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_DisableFixup>(
-      Ctx, false);
+static bool getDisableFixup() {
+  return HexagonOptions::Current.HEX_DisableFixup;
 }
 
 namespace {
@@ -328,7 +326,7 @@ public:
       case fixup_Hexagon_B9_PCREL_X:
       case fixup_Hexagon_B7_PCREL:
       case fixup_Hexagon_B7_PCREL_X:
-        if (getDisableFixup(getContext().getOptionsContext()))
+        if (getDisableFixup())
           return true;
         break;
 
@@ -807,7 +805,6 @@ MCAsmBackend *llvm::createHexagonAsmBackend(Target const &T,
   const Triple &TT = STI.getTargetTriple();
   uint8_t OSABI = MCELFObjectTargetWriter::getOSABI(TT.getOS());
 
-  StringRef CPUString =
-      Hexagon_MC::selectHexagonCPU(STI.getCPU(), Options.getOptsCtx());
+  StringRef CPUString = Hexagon_MC::selectHexagonCPU(STI.getCPU());
   return new HexagonAsmBackend(T, TT, OSABI, CPUString);
 }

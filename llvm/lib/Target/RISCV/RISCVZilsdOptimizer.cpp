@@ -37,8 +37,7 @@
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/RISCV/RISCVOptionsOptInfos.h"
+#include "llvm/Target/RISCV/RISCVOptions.h"
 #include <algorithm>
 
 using namespace llvm;
@@ -48,16 +47,14 @@ using namespace llvm;
 STATISTIC(NumLDFormed, "Number of LD instructions formed");
 STATISTIC(NumSDFormed, "Number of SD instructions formed");
 
-static unsigned MaxRescheduleDistance = 10;
-
 static bool getDisableZilsdOpt(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::RV_DisableZilsdOpt>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<RISCVOptions>().RV_DisableZilsdOpt;
 }
 
 static unsigned getMaxRescheduleDistance(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::RV_ZilsdMaxRescheduleDistance>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<RISCVOptions>()
+      .RV_ZilsdMaxRescheduleDistance;
 }
 
 namespace {

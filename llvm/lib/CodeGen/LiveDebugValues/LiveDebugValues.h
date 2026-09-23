@@ -10,9 +10,7 @@
 #define LLVM_LIB_CODEGEN_LIVEDEBUGVALUES_LIVEDEBUGVALUES_H
 
 namespace llvm {
-namespace clv2 {
-class OptionsContext;
-}
+class LLVMContext;
 class MachineDominatorTree;
 class MachineFunction;
 class TargetPassConfig;
@@ -41,7 +39,7 @@ extern LDVImpl *makeVarLocBasedLiveDebugValues();
 extern LDVImpl *makeInstrRefBasedLiveDebugValues();
 
 extern bool debuginfoShouldUseDebugInstrRef(const Triple &T,
-                                            const clv2::OptionsContext &Ctx);
+                                            const LLVMContext &Ctx);
 
 } // namespace llvm
 

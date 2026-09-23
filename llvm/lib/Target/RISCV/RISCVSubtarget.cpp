@@ -24,22 +24,10 @@
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/RISCV/RISCVOptionsOptInfos.h"
+#include "llvm/Target/RISCV/RISCVOptions.h"
 
 using namespace llvm;
-
-static unsigned getSchedMispredictPenalty(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::RISCVOptsReg,
-                           &clv2::RV_SchedMispredictPenalty>(
-      Ctx, MCSchedModel::DefaultMispredictPenalty);
-}
-
-static unsigned getSchedLoadLatency(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::RISCVOptsReg, &clv2::RV_SchedLoadLatency>(
-      Ctx, MCSchedModel::DefaultLoadLatency);
-}
 
 #define DEBUG_TYPE "riscv-macro-fusion"
 
@@ -58,47 +46,6 @@ namespace llvm::RISCVTuneInfoTable {
 #define GET_RISCVTuneInfoTable_IMPL
 #include "RISCVGenSearchableTables.inc"
 } // namespace llvm::RISCVTuneInfoTable
-
-#include "llvm/Target/RISCV/RISCVOptionsOptInfos.h"
-
-static bool getRISCVDisableUsingConstantPoolForLargeInts(const Function &F) {
-  return clv2::getOptValOr<&clv2::RISCVOptsReg,
-                           &clv2::RV_DisableUsingConstantPoolForLargeInts>(
-      F.getContext().getOptionsContext(), false);
-}
-
-static unsigned getRISCVMaxBuildIntsCost(const Function &F) {
-  return clv2::getOptValOr<&clv2::RISCVOptsReg, &clv2::RV_MaxBuildIntsCost>(
-      F.getContext().getOptionsContext(), 0);
-}
-
-static bool getUseAA(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::RV_UseAA>(
-      F.getContext().getOptionsContext());
-}
-
-static bool getUseMIPSLoadStorePairsOpt(const Function &F) {
-  return clv2::getOptValOr<&clv2::RISCVOptsReg,
-                           &clv2::RV_UseMIPSLoadStorePairs>(
-      F.getContext().getOptionsContext(), false);
-}
-
-static bool getUseMIPSCCMovInsn(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::RV_UseMIPSCCMovInsn>(
-      F.getContext().getOptionsContext());
-}
-
-static unsigned getRISCVMinimumJumpTableEntries(const Function &F) {
-  return clv2::getOptValOr<&clv2::RISCVOptsReg,
-                           &clv2::RV_MinimumJumpTableEntries>(
-      F.getContext().getOptionsContext(), 0);
-}
-
-static bool getRISCVMinimumJumpTableEntriesWasSpecified(const Function &F) {
-  return clv2::wasOptSpecified<&clv2::RISCVOptsReg,
-                               &clv2::RV_MinimumJumpTableEntries>(
-      F.getContext().getOptionsContext());
-}
 
 void RISCVSubtarget::anchor() {}
 
@@ -202,9 +149,7 @@ const RISCVRegisterBankInfo *RISCVSubtarget::getRegBankInfo() const {
 }
 
 bool RISCVSubtarget::useConstantPoolForLargeInts() const {
-  return !clv2::getOptValOr<&clv2::RISCVOptsReg,
-                            &clv2::RV_DisableUsingConstantPoolForLargeInts>(
-      getOptionsContext(), false);
+  return !RISCVOptions::Current.RV_DisableUsingConstantPoolForLargeInts;
 }
 
 // Returns true if VT is a P extension packed SIMD type.
@@ -233,24 +178,20 @@ unsigned RISCVSubtarget::getMaxBuildIntsCost() const {
   // instruction. Usually, address calculation and instructions used for
   // building integers (addi, slli, etc.) can be done in one cycle, so here we
   // set the default cost to (LoadLatency + 1) if no threshold is provided.
-  unsigned Cost = 0;
-  if (auto *O = clv2::getView<&clv2::RISCVOptsReg>(getOptionsContext()))
-    Cost = O->get<&clv2::RV_MaxBuildIntsCost>();
+  unsigned Cost = RISCVOptions::Current.RV_MaxBuildIntsCost;
   return Cost == 0 ? getLoadLatency() + 1 : std::max<unsigned>(2, Cost);
 }
 
 unsigned RISCVSubtarget::getMispredictionPenalty() const {
-  if (clv2::wasOptSpecified<&clv2::RISCVOptsReg,
-                            &clv2::RV_SchedMispredictPenalty>(
-          getOptionsContext()))
-    return getSchedMispredictPenalty(getOptionsContext());
+  if (std::optional<unsigned> Val =
+          RISCVOptions::Current.RV_SchedMispredictPenalty)
+    return *Val;
   return getSchedModel().MispredictPenalty;
 }
 
 unsigned RISCVSubtarget::getLoadLatency() const {
-  if (clv2::wasOptSpecified<&clv2::RISCVOptsReg, &clv2::RV_SchedLoadLatency>(
-          getOptionsContext()))
-    return getSchedLoadLatency(getOptionsContext());
+  if (std::optional<unsigned> Val = RISCVOptions::Current.RV_SchedLoadLatency)
+    return *Val;
   return getSchedModel().LoadLatency;
 }
 
@@ -310,18 +251,15 @@ void RISCVSubtarget::mirFileLoaded(MachineFunction &MF) const {
     MFI.computeMaxCallFrameSize(MF);
 }
 
-  /// Enable use of alias analysis during code generation (during MI
-  /// scheduling, DAGCombine, etc.).
-bool RISCVSubtarget::useAA() const {
-  return clv2::getOptValOr<&clv2::RISCVOptsReg, &clv2::RV_UseAA>(
-      getTargetLowering()->getTargetMachine().getOptionsContext(), true);
-}
+/// Enable use of alias analysis during code generation (during MI
+/// scheduling, DAGCombine, etc.).
+bool RISCVSubtarget::useAA() const { return RISCVOptions::Current.RV_UseAA; }
 
 unsigned RISCVSubtarget::getMinimumJumpTableEntries() const {
-  return clv2::getOptValIfSpecified<&clv2::RISCVOptsReg,
-                                    &clv2::RV_MinimumJumpTableEntries>(
-      getTargetLowering()->getTargetMachine().getOptionsContext(),
-      TuneInfo->MinimumJumpTableEntries);
+  if (std::optional<unsigned> Val =
+          RISCVOptions::Current.RV_MinimumJumpTableEntries)
+    return *Val;
+  return TuneInfo->MinimumJumpTableEntries;
 }
 
 void RISCVSubtarget::overrideSchedPolicy(MachineSchedPolicy &Policy,
@@ -356,16 +294,9 @@ void RISCVSubtarget::overridePostRASchedPolicy(
 }
 
 bool RISCVSubtarget::useMIPSLoadStorePairs() const {
-  return clv2::getOptValOr<&clv2::RISCVOptsReg,
-                           &clv2::RV_UseMIPSLoadStorePairs>(
-             getTargetLowering()->getTargetMachine().getOptionsContext(),
-             false) &&
-         HasVendorXMIPSLSP;
+  return RISCVOptions::Current.RV_UseMIPSLoadStorePairs && HasVendorXMIPSLSP;
 }
 
 bool RISCVSubtarget::useMIPSCCMovInsn() const {
-  return clv2::getOptValOr<&clv2::RISCVOptsReg, &clv2::RV_UseMIPSCCMovInsn>(
-             getTargetLowering()->getTargetMachine().getOptionsContext(),
-             true) &&
-         HasVendorXMIPSCMov;
+  return RISCVOptions::Current.RV_UseMIPSCCMovInsn && HasVendorXMIPSCMov;
 }

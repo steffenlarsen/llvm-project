@@ -35,9 +35,8 @@
 #include "llvm/Pass.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
+#include "llvm/Target/Hexagon/HexagonOptions.h"
 #include <cassert>
 #include <cstdint>
 
@@ -47,13 +46,11 @@ using namespace llvm;
 using namespace rdf;
 
 static int getCodeGrowthLimit(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_CodeGrowthLimit>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_CodeGrowthLimit;
 }
 
 static unsigned getRDFFuncBlockLimit(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_RDFFuncBlockLimit>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_RDFFuncBlockLimit;
 }
 
 namespace {

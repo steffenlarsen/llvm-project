@@ -29,8 +29,7 @@
 #include "llvm/IR/Module.h"
 #include "llvm/Object/COFF.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/AArch64/AArch64OptionsOptInfos.h"
+#include "llvm/Target/AArch64/AArch64Options.h"
 #include "llvm/TargetParser/Triple.h"
 
 using namespace llvm;
@@ -43,13 +42,11 @@ using OperandBundleDef = OperandBundleDefT<Value *>;
 STATISTIC(Arm64ECCallsLowered, "Number of Arm64EC calls lowered");
 
 static bool getLowerDirectToIndirect(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::A64_LowerDirectToIndirect>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<AArch64Options>().A64_LowerDirectToIndirect;
 }
 
 static bool getGenerateThunks(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::A64_GenerateThunks>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<AArch64Options>().A64_GenerateThunks;
 }
 
 namespace {
@@ -702,8 +699,7 @@ Function *AArch64Arm64ECCallLowering::buildGuestExitThunk(Function *F) {
   // This is treated as a direct call, so do not use GuardFnCFGlobal.
   LoadInst *GuardCheckLoad = B.CreateLoad(PtrTy, GuardFnGlobal);
   Function *Thunk = buildExitThunk(F->getFunctionType(), F->getAttributes());
-  CallInst *GuardCheck = B.CreateCall(
-      GuardFnType, GuardCheckLoad, {F, Thunk});
+  CallInst *GuardCheck = B.CreateCall(GuardFnType, GuardCheckLoad, {F, Thunk});
   Value *GuardCheckDest = B.CreateExtractValue(GuardCheck, 0);
   Value *GuardFinalDest = B.CreateExtractValue(GuardCheck, 1);
 
@@ -810,9 +806,8 @@ void AArch64Arm64ECCallLowering::lowerCall(CallBase *CB) {
   // Create new call instruction. The CFGuard check should always be a call,
   // even if the original CallBase is an Invoke or CallBr instruction.
   Function *Thunk = buildExitThunk(CB->getFunctionType(), CB->getAttributes());
-  CallInst *GuardCheck =
-      B.CreateCall(GuardFnType, GuardCheckLoad, {CalledOperand, Thunk},
-                   Bundles);
+  CallInst *GuardCheck = B.CreateCall(GuardFnType, GuardCheckLoad,
+                                      {CalledOperand, Thunk}, Bundles);
   Value *GuardCheckDest = B.CreateExtractValue(GuardCheck, 0);
   Value *GuardFinalDest = B.CreateExtractValue(GuardCheck, 1);
 

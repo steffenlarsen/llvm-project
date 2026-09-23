@@ -22,8 +22,7 @@
 #include "llvm/IR/GlobalVariable.h"
 #include "llvm/IR/MDBuilder.h"
 #include "llvm/IR/Module.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Transforms/IPO/IPOOptionsOptInfos.h"
+#include "llvm/Transforms/IPO/IPOOptions.h"
 #include "llvm/Transforms/Utils/GlobalStatus.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 
@@ -37,21 +36,19 @@ using namespace llvm;
 // variables is generally not safe.
 
 static bool getConvertToLocal(const Module &M) {
-  return clv2::getOptValIfSpecified<&clv2::IPOOptsReg,
-                                    &clv2::IPO_ConvertToLocal>(
-      M.getContext().getOptionsContext(), false);
+  return M.getContext().getOptions<IPOOptions>().IPO_ConvertToLocal;
 }
 
 static unsigned getConvertGlobalVariableInAddrSpace(const Module &M) {
-  return clv2::getOptValIfSpecified<
-      &clv2::IPOOptsReg, &clv2::IPO_ConvertGlobalVariableInAddrSpace>(
-      M.getContext().getOptionsContext(), 0);
+  return M.getContext()
+      .getOptions<IPOOptions>()
+      .IPO_ConvertGlobalVariableInAddrSpace.value_or(0);
 }
 
 static bool getConvertGlobalVariableInAddrSpaceSpecified(const Module &M) {
-  return clv2::wasOptSpecified<&clv2::IPOOptsReg,
-                               &clv2::IPO_ConvertGlobalVariableInAddrSpace>(
-      M.getContext().getOptionsContext());
+  return M.getContext()
+      .getOptions<IPOOptions>()
+      .IPO_ConvertGlobalVariableInAddrSpace.has_value();
 }
 
 STATISTIC(NumRemovals, "Number of functions removed");

@@ -2647,7 +2647,8 @@ void CoverageMappingModuleGen::emit() {
   {
     llvm::raw_string_ostream OS(Filenames);
     CoverageFilenamesSectionWriter(FilenameStrs)
-        .write(OS, /*Compress=*/true, Ctx.getOptionsContext());
+        .write(OS, /*Compress=*/true,
+               Ctx.getOptions<llvm::ProfileDataOptions>());
   }
   auto *FilenamesVal =
       llvm::ConstantDataArray::getString(Ctx, Filenames, false);

@@ -28,6 +28,7 @@
 #include "llvm/Support/LineIterator.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Path.h"
+#include "llvm/Support/PluginLoaderOptions.h"
 #include "llvm/Support/Program.h"
 #include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/TypeSize.h"
@@ -520,10 +521,12 @@ int main(int argc, const char **argv) {
   P.add<&OptReportToolReg>();
   RegisterAllLLVMOptions(P);
   P.hideUnrelatedOptions({&OptReportCategory});
-  auto OptsCtx =
-      P.parse(argc, argv,
-              "A tool to generate an optimization report from YAML optimization"
-              " record files.\n");
+  std::vector<const char *> ArgsAfterPlugins =
+      loadPluginsAndStripArgs(argc, argv);
+  auto OptsCtx = P.parse(
+      static_cast<int>(ArgsAfterPlugins.size()), ArgsAfterPlugins.data(),
+      "A tool to generate an optimization report from YAML optimization"
+      " record files.\n");
   auto *ParsedOpts = OptsCtx->getViewPtr<&OptReportToolReg>();
 
   OptReportOptions Opts;

@@ -1121,10 +1121,7 @@ TEST(Local, SimplifyCFGWithNullAC) {
   // %test.bb is expected to be simplified by FoldCondBranchOnPHI.
   EXPECT_TRUE(simplifyCFG(
       TestBB, TTI,
-      getRequireAndPreserveDomTree(F.getContext().getOptionsContext())
-          ? &DTU
-          : nullptr,
-      Options));
+      getRequireAndPreserveDomTree(&F.getContext()) ? &DTU : nullptr, Options));
 }
 
 TEST(LocalTest, TargetTypeInfoHasNoReplacementProperty) {

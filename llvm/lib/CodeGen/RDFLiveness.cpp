@@ -28,7 +28,7 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallSet.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsCore2.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineDominanceFrontier.h"
 #include "llvm/CodeGen/MachineDominators.h"
@@ -55,8 +55,8 @@
 
 using namespace llvm;
 
-static unsigned getRdfLivenessMaxRec(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_RdfLivenessMaxRec>(Ctx);
+static unsigned getRdfLivenessMaxRec(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore2Options>().CGPASS_RdfLivenessMaxRec;
 }
 
 namespace llvm::rdf {
@@ -308,8 +308,7 @@ Liveness::getAllReachingDefsRec(RegisterRef RefRR, NodeAddr<RefNode *> RefA,
                                 NodeSet &Visited, const NodeSet &Defs) {
   return getAllReachingDefsRecImpl(
       RefRR, RefA, Visited, Defs, 0,
-      getRdfLivenessMaxRec(
-          DFG.getMF().getFunction().getContext().getOptionsContext()));
+      getRdfLivenessMaxRec(DFG.getMF().getFunction().getContext()));
 }
 
 std::pair<NodeSet, bool>

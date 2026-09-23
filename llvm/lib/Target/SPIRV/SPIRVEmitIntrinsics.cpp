@@ -29,8 +29,7 @@
 #include "llvm/IR/TypedPointerType.h"
 #include "llvm/IR/Value.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/SPIRV/SPIRVOptionsOptInfos.h"
+#include "llvm/Target/SPIRV/SPIRVOptions.h"
 #include "llvm/Transforms/Utils/Local.h"
 
 #include <cassert>
@@ -61,8 +60,7 @@ using namespace llvm::PatternMatch;
 #define DEBUG_TYPE "spirv-emit-intrinsics"
 
 static bool getEmitOpNames(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SPIRV_EmitOpNames>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<SPIRVOptions>().SPIRV_EmitOpNames;
 }
 
 namespace llvm::SPIRV {

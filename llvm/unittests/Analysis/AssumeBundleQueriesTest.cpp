@@ -17,7 +17,7 @@
 #include "llvm/Support/Regex.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Transforms/Utils/AssumeBundleBuilder.h"
-#include "llvm/Transforms/Utils/UtilsOptionsOptInfos.h"
+#include "llvm/Transforms/Utils/UtilsOptions.h"
 #include "gtest/gtest.h"
 
 using namespace llvm;
@@ -26,14 +26,14 @@ static void RunTest(
     StringRef Head, StringRef Tail,
     std::vector<std::pair<StringRef, llvm::function_ref<void(Instruction *)>>>
         &Tests,
-    const clv2::OptionsContext &OptCtx = clv2::defaultOptionsContext()) {
+    const UtilsOptions &Opts = UtilsOptions()) {
   for (auto &Elem : Tests) {
     std::string IR;
     IR.append(Head.begin(), Head.end());
     IR.append(Elem.first.begin(), Elem.first.end());
     IR.append(Tail.begin(), Tail.end());
     LLVMContext C{llvm::clv2::defaultOptionsContext()};
-    C.setOptionsContext(OptCtx);
+    C.setOptions<UtilsOptions>(Opts);
     SMDiagnostic Err;
     std::unique_ptr<Module> Mod = parseAssemblyString(IR, Err, C);
     if (!Mod)
@@ -68,11 +68,9 @@ static bool MapHasRightValue(RetainedKnowledgeMap &Map, AssumeInst *II,
 }
 
 TEST(AssumeQueryAPI, fillMapFromAssume) {
-  // Set up OptionsContext with EnableKnowledgeRetention = true.
-  auto TUOpts = clv2::TransformUtilsOptsReg.makeDefaults();
-  TUOpts.get<&clv2::TU_EnableKnowledgeRetention>() = true;
-  clv2::OptionsContext OptCtx;
-  OptCtx.addView<&clv2::TransformUtilsOptsReg>(TUOpts);
+  // Set up UtilsOptions with EnableKnowledgeRetention = true.
+  UtilsOptions Opts;
+  Opts.TU_EnableKnowledgeRetention = true;
 
   StringRef Head = "declare void @llvm.assume(i1)\n"
                    "declare void @func(ptr, ptr, ptr)\n"
@@ -216,7 +214,7 @@ TEST(AssumeQueryAPI, fillMapFromAssume) {
 
         ASSERT_TRUE(Map.empty());
       }));
-  RunTest(Head, Tail, Tests, OptCtx);
+  RunTest(Head, Tail, Tests, Opts);
 }
 
 TEST(AssumeQueryAPI, AssumptionCache) {

@@ -25,7 +25,7 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Analysis/OptimizationRemarkEmitter.h"
 #include "llvm/CodeGen/CalcSpillWeights.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsRegAlloc.h"
 #include "llvm/CodeGen/EdgeBundles.h"
 #include "llvm/CodeGen/LiveDebugVariables.h"
 #include "llvm/CodeGen/LiveInterval.h"
@@ -66,10 +66,8 @@
 #include "llvm/Pass.h"
 #include "llvm/Support/BlockFrequency.h"
 #include "llvm/Support/BranchProbability.h"
-#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/MathExtras.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/Timer.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
@@ -85,51 +83,52 @@ STATISTIC(NumGlobalSplits, "Number of split global live ranges");
 STATISTIC(NumLocalSplits, "Number of split local live ranges");
 STATISTIC(NumEvicted, "Number of interferences evicted");
 
-static unsigned getRegallocCsrFirstTimeCost(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_RegallocCsrFirstTimeCost>(Ctx);
+// std::optional<T>: unspecified falls back to a target-computed default at
+// the call site (TRI->getCSRCost()/getCSRCostScale()/
+// regClassPriorityTrumpsGlobalness()/reverseLocalAssignment()), which an
+// always-present field couldn't distinguish from an explicit value equal to
+// the schema's own default.
+static std::optional<unsigned>
+getRegallocCsrFirstTimeCost(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenRegAllocOptions>()
+      .CGPASS_RegallocCsrFirstTimeCost;
 }
 
-static unsigned getRegallocCsrCostScale(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_RegallocCsrCostScale>(Ctx);
+static std::optional<unsigned> getRegallocCsrCostScale(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenRegAllocOptions>().CGPASS_RegallocCsrCostScale;
 }
 
-static bool
-getRegallocCsrCostScaleWasSpecified(const clv2::OptionsContext &Ctx) {
-  return clv2::wasOptSpecified<&clv2::CGPASS_RegallocCsrCostScale>(Ctx);
+static std::optional<bool>
+getGreedyRegclassPriorityTrumpsGlobalness(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenRegAllocOptions>()
+      .CGPASS_GreedyRegclassPriorityTrumpsGlobalness;
 }
 
-static bool
-getGreedyRegclassPriorityTrumpsGlobalness(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<
-      &clv2::CGPASS_GreedyRegclassPriorityTrumpsGlobalness>(Ctx);
+static std::optional<bool> getGreedyReverseLocalAssignment(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenRegAllocOptions>()
+      .CGPASS_GreedyReverseLocalAssignment;
 }
 
-static bool getGreedyReverseLocalAssignment(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_GreedyReverseLocalAssignment>(
-      Ctx);
+static unsigned getLcrMaxDepth(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenRegAllocOptions>().CGPASS_LcrMaxDepth;
 }
 
-static unsigned getLcrMaxDepth(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_LcrMaxDepth>(Ctx);
+static unsigned getLcrMaxInterf(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenRegAllocOptions>().CGPASS_LcrMaxInterf;
 }
 
-static unsigned getLcrMaxInterf(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_LcrMaxInterf>(Ctx);
+static bool getExhaustiveRegisterSearch(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenRegAllocOptions>().CGPASS_ExhaustiveRegisterSearch;
 }
 
-static bool getExhaustiveRegisterSearch(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_ExhaustiveRegisterSearch>(Ctx);
+static uint64_t getGrowRegionComplexityBudget(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenRegAllocOptions>()
+      .CGPASS_GrowRegionComplexityBudget;
 }
 
-static uint64_t getGrowRegionComplexityBudget(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_GrowRegionComplexityBudget>(
-      Ctx);
-}
-
-static unsigned
-getSplitThresholdForRegWithHint(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_SplitThresholdForRegWithHint>(
-      Ctx);
+static unsigned getSplitThresholdForRegWithHint(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenRegAllocOptions>()
+      .CGPASS_SplitThresholdForRegWithHint;
 }
 
 static RegisterRegAlloc greedyRegAlloc("greedy", "greedy register allocator",
@@ -860,8 +859,8 @@ bool RAGreedy::growRegion(GlobalSplitCandidate &Cand) {
   unsigned Visited = 0;
 #endif
 
-  unsigned long Budget = getGrowRegionComplexityBudget(
-      MF->getFunction().getContext().getOptionsContext());
+  unsigned long Budget =
+      getGrowRegionComplexityBudget(MF->getFunction().getContext());
   while (true) {
     ArrayRef<unsigned> NewBundles = SpillPlacer->getRecentPositive();
     // Find new through blocks in the periphery of PrefRegBundles.
@@ -1427,9 +1426,7 @@ bool RAGreedy::trySplitAroundHintReg(MCRegister Hint,
 
   // Decrease the cost so it will be split in colder blocks.
   BranchProbability Threshold(
-      getSplitThresholdForRegWithHint(
-          MF->getFunction().getContext().getOptionsContext()),
-      100);
+      getSplitThresholdForRegWithHint(MF->getFunction().getContext()), 100);
   Cost *= Threshold;
   if (Cost == BlockFrequency(0))
     return false;
@@ -2036,14 +2033,10 @@ bool RAGreedy::mayRecolorAllInterferences(
     LiveIntervalUnion::Query &Q = Matrix->query(VirtReg, Unit);
     // If there is LastChanceRecoloringMaxInterference or more interferences,
     // chances are one would not be recolorable.
-    if (Q
-                .interferingVRegs(getLcrMaxInterf(
-                    MF->getFunction().getContext().getOptionsContext()))
+    if (Q.interferingVRegs(getLcrMaxInterf(MF->getFunction().getContext()))
                 .size() >=
-            getLcrMaxInterf(
-                MF->getFunction().getContext().getOptionsContext()) &&
-        !getExhaustiveRegisterSearch(
-            MF->getFunction().getContext().getOptionsContext())) {
+            getLcrMaxInterf(MF->getFunction().getContext()) &&
+        !getExhaustiveRegisterSearch(MF->getFunction().getContext())) {
       LLVM_DEBUG(dbgs() << "Early abort: too many interferences.\n");
       CutOffInfo |= CO_Interf;
       return false;
@@ -2137,10 +2130,8 @@ MCRegister RAGreedy::tryLastChanceRecoloring(
   // We may want to reconsider that if we end up with a too large search space
   // for target with hundreds of registers.
   // Indeed, in that case we may want to cut the search space earlier.
-  if (Depth >=
-          getLcrMaxDepth(MF->getFunction().getContext().getOptionsContext()) &&
-      !getExhaustiveRegisterSearch(
-          MF->getFunction().getContext().getOptionsContext())) {
+  if (Depth >= getLcrMaxDepth(MF->getFunction().getContext()) &&
+      !getExhaustiveRegisterSearch(MF->getFunction().getContext())) {
     LLVM_DEBUG(dbgs() << "Abort because max depth has been reached.\n");
     CutOffInfo |= CO_Depth;
     return ~0u;
@@ -2414,27 +2405,17 @@ void RAGreedy::aboutToRemoveInterval(const LiveInterval &LI) {
 }
 
 void RAGreedy::initializeCSRCost() {
-  const clv2::OptionsContext &Ctx =
-      MF->getFunction().getContext().getOptionsContext();
-  if ((!false &&
-       !clv2::wasOptSpecified<&clv2::CGPassRegAllocReg,
-                              &clv2::CGPASS_RegallocCsrCostScale>(Ctx)) &&
-      ((false ||
-        clv2::wasOptSpecified<&clv2::CGPassRegAllocReg,
-                              &clv2::CGPASS_RegallocCsrFirstTimeCost>(Ctx)) ||
-       TRI->getCSRCost())) {
+  const LLVMContext &Ctx = MF->getFunction().getContext();
+  std::optional<unsigned> CsrCostScale = getRegallocCsrCostScale(Ctx);
+  std::optional<unsigned> CsrFirstTimeCost = getRegallocCsrFirstTimeCost(Ctx);
+  if (!CsrCostScale && (CsrFirstTimeCost || TRI->getCSRCost())) {
     // We should deprecate the usage of CSRFirstTimeCost!
     // We use the command-line option if it is explicitly set, otherwise use the
     // larger one out of the command-line option and the value reported by TRI.
-    CSRCost = BlockFrequency(
-        (false ||
-         clv2::wasOptSpecified<&clv2::CGPassRegAllocReg,
-                               &clv2::CGPASS_RegallocCsrFirstTimeCost>(Ctx))
-            ? getRegallocCsrFirstTimeCost(
-                  MF->getFunction().getContext().getOptionsContext())
-            : std::max(getRegallocCsrFirstTimeCost(
-                           MF->getFunction().getContext().getOptionsContext()),
-                       TRI->getCSRCost()));
+    CSRCost = BlockFrequency(CsrFirstTimeCost
+                                  ? *CsrFirstTimeCost
+                                  : std::max(CsrFirstTimeCost.value_or(0u),
+                                             TRI->getCSRCost()));
     if (!CSRCost.getFrequency())
       return;
 
@@ -2460,10 +2441,8 @@ void RAGreedy::initializeCSRCost() {
     CSRCost = BlockFrequency(TRI->getCSRFirstUseCost(*MF) * EntryFreq);
     unsigned Scale = TRI->getCSRCostScale(*MF);
     // Command line specified CSRCostScale can override target's default value.
-    const clv2::OptionsContext &Ctx =
-        MF->getFunction().getContext().getOptionsContext();
-    if (getRegallocCsrCostScaleWasSpecified(Ctx))
-      Scale = getRegallocCsrCostScale(Ctx);
+    if (CsrCostScale)
+      Scale = *CsrCostScale;
 
     if (Scale < 100)
       CSRCost *= BranchProbability(Scale, 100);
@@ -2970,23 +2949,13 @@ bool RAGreedy::run(MachineFunction &mf) {
   initializeCSRCost();
 
   RegCosts = TRI->getRegisterCosts(*MF);
-  const clv2::OptionsContext &Ctx =
-      MF->getFunction().getContext().getOptionsContext();
+  const LLVMContext &Ctx = MF->getFunction().getContext();
   RegClassPriorityTrumpsGlobalness =
-      (false || clv2::wasOptSpecified<
-                    &clv2::CGPassRegAllocReg,
-                    &clv2::CGPASS_GreedyRegclassPriorityTrumpsGlobalness>(Ctx))
-          ? getGreedyRegclassPriorityTrumpsGlobalness(
-                MF->getFunction().getContext().getOptionsContext())
-          : TRI->regClassPriorityTrumpsGlobalness(*MF);
+      getGreedyRegclassPriorityTrumpsGlobalness(Ctx).value_or(
+          TRI->regClassPriorityTrumpsGlobalness(*MF));
 
-  ReverseLocalAssignment =
-      (false ||
-       clv2::wasOptSpecified<&clv2::CGPassRegAllocReg,
-                             &clv2::CGPASS_GreedyReverseLocalAssignment>(Ctx))
-          ? getGreedyReverseLocalAssignment(
-                MF->getFunction().getContext().getOptionsContext())
-          : TRI->reverseLocalAssignment();
+  ReverseLocalAssignment = getGreedyReverseLocalAssignment(Ctx).value_or(
+      TRI->reverseLocalAssignment());
 
   ExtraInfo.emplace();
 

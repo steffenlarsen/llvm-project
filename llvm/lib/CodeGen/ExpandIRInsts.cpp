@@ -33,7 +33,7 @@
 #include "llvm/Analysis/GlobalsModRef.h"
 #include "llvm/Analysis/SimplifyQuery.h"
 #include "llvm/Analysis/ValueTracking.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsCore1.h"
 #include "llvm/CodeGen/ISDOpcodes.h"
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/CodeGen/RuntimeLibcallUtil.h"
@@ -53,9 +53,7 @@
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/IntegerDivision.h"
@@ -65,16 +63,12 @@
 
 using namespace llvm;
 
-static unsigned getExpandFpConvertBits(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::CGPassCore1Reg,
-                           &clv2::CGPASS_ExpandFpConvertBits>(
-      Ctx, llvm::IntegerType::MAX_INT_BITS);
+static unsigned getExpandFpConvertBits(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore1Options>().CGPASS_ExpandFpConvertBits;
 }
 
-static unsigned getExpandDivRemBits(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::CGPassCore1Reg,
-                           &clv2::CGPASS_ExpandDivRemBits>(
-      Ctx, llvm::IntegerType::MAX_INT_BITS);
+static unsigned getExpandDivRemBits(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore1Options>().CGPASS_ExpandDivRemBits;
 }
 
 static bool isConstantPowerOfTwo(Value *V, bool SignedOp) {
@@ -1285,16 +1279,16 @@ static bool runImpl(Function &F, const TargetLowering &TLI,
 
   unsigned MaxLegalFpConvertBitWidth =
       TLI.getMaxLargeFPConvertBitWidthSupported();
-  if (getExpandFpConvertBits(F.getContext().getOptionsContext()) !=
+  if (getExpandFpConvertBits(F.getContext()) !=
       llvm::IntegerType::MAX_INT_BITS)
     MaxLegalFpConvertBitWidth =
-        getExpandFpConvertBits(F.getContext().getOptionsContext());
+        getExpandFpConvertBits(F.getContext());
 
   unsigned MaxLegalDivRemBitWidth = TLI.getMaxDivRemBitWidthSupported();
-  if (getExpandDivRemBits(F.getContext().getOptionsContext()) !=
+  if (getExpandDivRemBits(F.getContext()) !=
       llvm::IntegerType::MAX_INT_BITS)
     MaxLegalDivRemBitWidth =
-        getExpandDivRemBits(F.getContext().getOptionsContext());
+        getExpandDivRemBits(F.getContext());
 
   bool DisableExpandLargeFp =
       MaxLegalFpConvertBitWidth >= IntegerType::MAX_INT_BITS;

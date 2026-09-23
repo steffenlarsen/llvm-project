@@ -14,19 +14,15 @@
 #include "llvm/IR/Module.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCSectionELF.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/Lanai/LanaiOptionsOptInfos.h"
+#include "llvm/Target/Lanai/LanaiOptions.h"
 #include "llvm/Target/TargetMachine.h"
 
 using namespace llvm;
 
-static unsigned SSThreshold = 0;
-
 static unsigned getSSThreshold(const Module *M) {
   if (M)
-    return clv2::getOptValOr<&clv2::LanaiOptsReg, &clv2::LANAI_SSThreshold>(
-        M->getContext().getOptionsContext(), SSThreshold);
-  return SSThreshold;
+    return M->getContext().getOptions<LanaiOptions>().LANAI_SSThreshold;
+  return 0;
 }
 
 void LanaiTargetObjectFile::Initialize(MCContext &Ctx,

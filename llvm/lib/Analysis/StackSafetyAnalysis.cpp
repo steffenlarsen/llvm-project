@@ -13,7 +13,7 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
-#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
+#include "llvm/Analysis/AnalysisOptions.h"
 #include "llvm/Analysis/ModuleSummaryAnalysis.h"
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/Analysis/StackLifetime.h"
@@ -30,7 +30,6 @@
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/FormatVariadic.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <tuple>
@@ -56,22 +55,23 @@ STATISTIC(NumCombinedParamAccessesAfter,
           "Number of total param accesses after generateParamAccessSummary.");
 STATISTIC(NumCombinedDataFlowNodes,
           "Number of total nodes in combined index for dataflow processing.");
-STATISTIC(NumIndexCalleeUnhandled, "Number of index callee which are unhandled.");
-STATISTIC(NumIndexCalleeMultipleWeak, "Number of index callee non-unique weak.");
-STATISTIC(NumIndexCalleeMultipleExternal, "Number of index callee non-unique external.");
+STATISTIC(NumIndexCalleeUnhandled,
+          "Number of index callee which are unhandled.");
+STATISTIC(NumIndexCalleeMultipleWeak,
+          "Number of index callee non-unique weak.");
+STATISTIC(NumIndexCalleeMultipleExternal,
+          "Number of index callee non-unique external.");
 
-static int getStackSafetyMaxIterations(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::AN_StackSafetyMaxIterations>(Ctx);
+static int getStackSafetyMaxIterations(const AnalysisOptions &Opts) {
+  return Opts.AN_StackSafetyMaxIterations;
 }
 
 static bool getStackSafetyPrint(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::AN_StackSafetyPrint>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<AnalysisOptions>().AN_StackSafetyPrint;
 }
 
 static bool getStackSafetyRun(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::AN_StackSafetyRun>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<AnalysisOptions>().AN_StackSafetyRun;
 }
 
 namespace {
@@ -149,9 +149,8 @@ template <typename CalleeTy>
 raw_ostream &operator<<(raw_ostream &OS, const UseInfo<CalleeTy> &U) {
   OS << U.Range;
   for (auto &Call : U.Calls)
-    OS << ", "
-       << "@" << Call.first.Callee->getName() << "(arg" << Call.first.ParamNo
-       << ", " << Call.second << ")";
+    OS << ", " << "@" << Call.first.Callee->getName() << "(arg"
+       << Call.first.ParamNo << ", " << Call.second << ")";
   return OS;
 }
 
@@ -266,7 +265,6 @@ class StackSafetyLocalAnalysis {
 
   void analyzeAllUses(Value *Ptr, UseInfo<GlobalValue> &AS,
                       const StackLifetime &SL);
-
 
   bool isSafeAccess(const Use &U, AllocaInst *AI, const SCEV *AccessSize);
   bool isSafeAccess(const Use &U, AllocaInst *AI, Value *V);
@@ -436,7 +434,7 @@ void StackSafetyLocalAnalysis::analyzeAllUses(Value *Ptr,
 
       assert(V == UI.get());
 
-      auto RecordStore = [&](const Value* StoredVal) {
+      auto RecordStore = [&](const Value *StoredVal) {
         if (V == StoredVal) {
           // Stored the pointer - conservatively assume it may be unsafe.
           US.addRange(I, UnknownRange, /*IsSafe=*/false);
@@ -734,8 +732,8 @@ FunctionSummary *findCalleeFunctionSummary(ValueInfo VI, StringRef ModuleId) {
   if (!VI)
     return nullptr;
   auto SummaryList = VI.getSummaryList();
-  GlobalValueSummary* S = nullptr;
-  for (const auto& GVS : SummaryList) {
+  GlobalValueSummary *S = nullptr;
+  for (const auto &GVS : SummaryList) {
     if (!GVS->isLive())
       continue;
     if (const AliasSummary *AS = dyn_cast<AliasSummary>(GVS.get()))
@@ -826,9 +824,9 @@ void resolveAllCalls(UseInfo<GlobalValue> &Use,
 
     if (!Index)
       return Use.updateRange(FullSet);
-    FunctionSummary *FS =
-        findCalleeFunctionSummary(Index->getValueInfo(C.first.Callee->getGUID()),
-                                  C.first.Callee->getParent()->getModuleIdentifier());
+    FunctionSummary *FS = findCalleeFunctionSummary(
+        Index->getValueInfo(C.first.Callee->getGUID()),
+        C.first.Callee->getParent()->getModuleIdentifier());
     ++NumModuleCalleeLookupTotal;
     if (!FS) {
       ++NumModuleCalleeLookupFailed;
@@ -862,10 +860,10 @@ GVToSSI createGlobalStackSafetyInfo(
 
   uint32_t PointerSize =
       Copy.begin()->first->getDataLayout().getPointerSizeInBits();
-  const clv2::OptionsContext &Ctx =
-      Copy.begin()->first->getContext().getOptionsContext();
+  const AnalysisOptions &Opts =
+      Copy.begin()->first->getContext().getOptions<AnalysisOptions>();
   StackSafetyDataFlowAnalysis<GlobalValue> SSDFA(
-      PointerSize, std::move(Copy), getStackSafetyMaxIterations(Ctx));
+      PointerSize, std::move(Copy), getStackSafetyMaxIterations(Opts));
 
   for (const auto &F : SSDFA.run()) {
     auto FI = F.second;
@@ -1025,8 +1023,7 @@ void StackSafetyGlobalInfo::print(raw_ostream &O) const {
   for (const auto &F : M.functions()) {
     if (!F.isDeclaration()) {
       SSI.find(&F)->second.print(O, F.getName(), &F);
-      O << "    safe accesses:"
-        << "\n";
+      O << "    safe accesses:" << "\n";
       for (const auto &I : instructions(F)) {
         const CallInst *Call = dyn_cast<CallInst>(&I);
         if ((isa<StoreInst>(I) || isa<LoadInst>(I) || isa<MemIntrinsic>(I) ||
@@ -1199,7 +1196,7 @@ void llvm::generateParamAccessSummary(ModuleSummaryIndex &Index) {
   // A summary index carries no Module, so there is no session context here.
   StackSafetyDataFlowAnalysis<FunctionSummary> SSDFA(
       FunctionSummary::ParamAccess::RangeWidth, std::move(Functions),
-      getStackSafetyMaxIterations(clv2::defaultOptionsContext()));
+      getStackSafetyMaxIterations(AnalysisOptions::Current));
   for (const auto &KV : SSDFA.run()) {
     std::vector<FunctionSummary::ParamAccess> NewParams;
     NewParams.reserve(KV.second.Params.size());

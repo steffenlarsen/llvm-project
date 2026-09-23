@@ -143,9 +143,8 @@
 #include "llvm/Pass.h"
 #include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
+#include "llvm/Target/Hexagon/HexagonOptions.h"
 #include <vector>
 
 #define DEBUG_TYPE "hexagon-xqf-gen"
@@ -153,23 +152,31 @@
 using namespace llvm;
 
 static bool getEnableHVXXQFloat(const MachineFunction &MF) {
-  return clv2::getOptValOrDefault<&clv2::HEX_EnableHVXXQFloat>(
-      MF.getFunction().getContext().getOptionsContext());
+  return MF.getFunction()
+      .getContext()
+      .getOptions<HexagonOptions>()
+      .HEX_EnableHVXXQFloat;
 }
 
 static bool getEnableConversionsRemoval(const MachineFunction &MF) {
-  return clv2::getOptValOrDefault<&clv2::HEX_EnableConversionsRemoval>(
-      MF.getFunction().getContext().getOptionsContext());
+  return MF.getFunction()
+      .getContext()
+      .getOptions<HexagonOptions>()
+      .HEX_EnableConversionsRemoval;
 }
 
 static bool getPrintDebug(const MachineFunction &MF) {
-  return clv2::getOptValOrDefault<&clv2::HEX_PrintDebugXQF>(
-      MF.getFunction().getContext().getOptionsContext());
+  return MF.getFunction()
+      .getContext()
+      .getOptions<HexagonOptions>()
+      .HEX_PrintDebugXQF;
 }
 
 static QFloatMode getQFloatModeValue(const MachineFunction &MF) {
-  return clv2::getOptValOrDefault<&clv2::HEX_QFloatMode>(
-      MF.getFunction().getContext().getOptionsContext());
+  return MF.getFunction()
+      .getContext()
+      .getOptions<HexagonOptions>()
+      .HEX_QFloatMode;
 }
 // This vector contains the opcodes which generate qf32 from add/subtract
 static constexpr unsigned XQFPAdd32[] = {

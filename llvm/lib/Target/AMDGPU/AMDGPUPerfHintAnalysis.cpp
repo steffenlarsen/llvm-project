@@ -27,8 +27,7 @@
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/AMDGPU/AMDGPUOptionsOptInfos.h"
+#include "llvm/Target/AMDGPU/AMDGPUOptions.h"
 #include "llvm/Target/TargetMachine.h"
 
 using namespace llvm;
@@ -36,28 +35,23 @@ using namespace llvm;
 #define DEBUG_TYPE "amdgpu-perf-hint"
 
 static unsigned getMemBoundThresh(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AMDGPU_MemBoundThresh>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<AMDGPUOptions>().AMDGPU_MemBoundThresh;
 }
 
 static unsigned getLimitWaveThresh(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AMDGPU_LimitWaveThresh>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<AMDGPUOptions>().AMDGPU_LimitWaveThresh;
 }
 
 static unsigned getIAWeight(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AMDGPU_IAWeight>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<AMDGPUOptions>().AMDGPU_IAWeight;
 }
 
 static unsigned getLSWeight(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AMDGPU_LSWeight>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<AMDGPUOptions>().AMDGPU_LSWeight;
 }
 
 static unsigned getLargeStrideThresh(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AMDGPU_LargeStrideThresh>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<AMDGPUOptions>().AMDGPU_LargeStrideThresh;
 }
 
 STATISTIC(NumMemBound, "Number of functions marked as memory bound");
@@ -124,8 +118,8 @@ private:
   bool isGlobalLoadUsedInBB(const Instruction &) const;
 };
 
-static std::pair<const Value *, const Type *> getMemoryInstrPtrAndType(
-    const Instruction *Inst) {
+static std::pair<const Value *, const Type *>
+getMemoryInstrPtrAndType(const Instruction *Inst) {
   if (const auto *LI = dyn_cast<LoadInst>(Inst))
     return {LI->getPointerOperand(), LI->getType()};
   if (const auto *SI = dyn_cast<StoreInst>(Inst))
@@ -393,8 +387,8 @@ bool AMDGPUPerfHint::MemAccessInfo::isLargeStride(MemAccessInfo &Reference,
                                             : Reference.Offset - Offset;
   bool Result = Diff > getLargeStrideThresh(F);
   LLVM_DEBUG(dbgs() << "[isLargeStride compare]\n"
-               << print() << "<=>\n"
-               << Reference.print() << "Result:" << Result << '\n');
+                    << print() << "<=>\n"
+                    << Reference.print() << "Result:" << Result << '\n');
   return Result;
 }
 

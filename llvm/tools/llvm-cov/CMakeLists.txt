@@ -21,6 +21,9 @@ add_llvm_tool(llvm-cov
   SourceCoverageViewHTML.cpp
   SourceCoverageViewText.cpp
   TestingSupport.cpp
+
+  DEPENDS
+  ProfileDataOptParserTableGen
   )
 
 target_link_libraries(llvm-cov PRIVATE LLVMHTTP LLVMDebuginfod)

@@ -57,10 +57,9 @@
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/IPO.h"
-#include "llvm/Transforms/IPO/IPOOptionsOptInfos.h"
+#include "llvm/Transforms/IPO/IPOOptions.h"
 #include "llvm/Transforms/Utils/CtorUtils.h"
 #include "llvm/Transforms/Utils/Evaluator.h"
 #include "llvm/Transforms/Utils/GlobalStatus.h"
@@ -96,20 +95,16 @@ STATISTIC(NumIFuncsResolved, "Number of statically resolved IFuncs");
 STATISTIC(NumIFuncsDeleted, "Number of IFuncs removed");
 
 static bool getOptimizeNonFMVCallers(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_OptimizeNonFMVCallers>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_OptimizeNonFMVCallers;
 }
 static unsigned getMaxIFuncVersions(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_MaxIFuncVersions>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_MaxIFuncVersions;
 }
 static bool getEnableColdCCStressTest(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_EnableColdCCStressTest>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_EnableColdCCStressTest;
 }
 static int getColdCCRelFreq(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_ColdCCRelFreq>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_ColdCCRelFreq;
 }
 
 /// Is this global variable possibly used by a leak checker as a root?  If so,

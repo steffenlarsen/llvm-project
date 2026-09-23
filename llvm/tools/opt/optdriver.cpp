@@ -16,7 +16,7 @@
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/StringSet.h"
 #include "llvm/ADT/StringSwitch.h"
-#include "llvm/Analysis/AnalysisOptionsRegistration.h"
+#include "llvm/Analysis/AnalysisOptions.h"
 #include "llvm/Analysis/CallGraph.h"
 #include "llvm/Analysis/CallGraphSCCPass.h"
 #include "llvm/Analysis/DependenceAnalysis.h"
@@ -25,29 +25,49 @@
 #include "llvm/Analysis/RuntimeLibcallInfo.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
-#include "llvm/AsmParser/AsmParserOptionsRegistration.h"
+#include "llvm/AsmParser/AsmParserOptions.h"
 #include "llvm/AsmParser/Parser.h"
-#include "llvm/Bitcode/BitcodeOptionsRegistration.h"
-#include "llvm/CGData/CGDataOptionsRegistration.h"
+#include "llvm/Bitcode/BitcodeMemProfOptions.h"
+#include "llvm/Bitcode/BitcodeOptions.h"
+#include "llvm/CGData/CGDataOptions.h"
 #include "llvm/CodeGen/CodeGenOptionsRegistration.h"
+#include "llvm/CodeGen/CodeGenPassOptionsAsmPrint.h"
+#include "llvm/CodeGen/CodeGenPassOptionsCore1.h"
+#include "llvm/CodeGen/CodeGenPassOptionsCore2.h"
+#include "llvm/CodeGen/CodeGenPassOptionsGISel.h"
+#include "llvm/CodeGen/CodeGenPassOptionsMachine1.h"
+#include "llvm/CodeGen/CodeGenPassOptionsMachine2.h"
+#include "llvm/CodeGen/CodeGenPassOptionsRegAlloc.h"
+#include "llvm/CodeGen/CodeGenPassOptionsSched1.h"
+#include "llvm/CodeGen/CodeGenPassOptionsSched2.h"
+#include "llvm/CodeGen/CodeGenPassOptionsSelDAG.h"
 #include "llvm/Config/Targets.h"
+#include "llvm/Target/AArch64/AArch64Options.h"
+#include "llvm/Target/AMDGPU/AMDGPUOptions.h"
+#include "llvm/Target/Hexagon/HexagonOptions.h"
 #if LLVM_HAS_ARC_TARGET
-#include "llvm/Target/ARC/ARCOptionsOptInfos.h"
+#include "llvm/Target/ARC/ARCOptions.h"
 #endif
 #if LLVM_HAS_CSKY_TARGET
-#include "llvm/Target/CSKY/CSKYOptionsOptInfos.h"
+#include "llvm/Target/CSKY/CSKYOptions.h"
+#endif
+#if LLVM_HAS_LANAI_TARGET
+#include "llvm/Target/Lanai/LanaiOptions.h"
 #endif
 #if LLVM_HAS_M68K_TARGET
-#include "llvm/Target/M68k/M68kOptionsOptInfos.h"
+#include "llvm/Target/M68k/M68kOptions.h"
+#endif
+#if LLVM_HAS_SYSTEMZ_TARGET
+#include "llvm/Target/SystemZ/SystemZOptions.h"
 #endif
 #include "llvm/CodeGen/CommandFlags.h"
 #include "llvm/CodeGen/CommandFlagsOptInfos.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
 #include "llvm/Config/llvm-config.h"
-#include "llvm/Frontend/OpenMP/OpenMPOptionsRegistration.h"
+#include "llvm/Frontend/OpenMP/OpenMPOptions.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/DebugInfo.h"
-#include "llvm/IR/IROptionsRegistration.h"
+#include "llvm/IR/IROptions.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/LLVMRemarkStreamer.h"
 #include "llvm/IR/LegacyPassManager.h"
@@ -56,52 +76,63 @@
 #include "llvm/IR/Verifier.h"
 #include "llvm/IRReader/IRReader.h"
 #include "llvm/InitializePasses.h"
-#include "llvm/LTO/LTOOptionsRegistration.h"
+#include "llvm/LTO/LTOOptions.h"
 #include "llvm/LinkAllIR.h"
 #include "llvm/LinkAllPasses.h"
-#include "llvm/MC/MCOptionsRegistration.h"
+#include "llvm/MC/MCOptions.h"
 #include "llvm/MC/MCTargetOptions.h"
 #include "llvm/MC/MCTargetOptionsCommandFlags.h"
 #include "llvm/MC/TargetRegistry.h"
-#include "llvm/Object/ObjectOptionsRegistration.h"
-#include "llvm/Passes/PassesOptionsRegistration.h"
+#include "llvm/Object/ObjectOptions.h"
+#include "llvm/Option/LibraryOptions.h"
+#include "llvm/Passes/PassesOptions.h"
 #include "llvm/Plugins/PassPlugin.h"
-#include "llvm/ProfileData/ProfileDataOptionsRegistration.h"
-#include "llvm/Remarks/RemarksOptionsRegistration.h"
+#include "llvm/ProfileData/ProfileDataOptions.h"
+#include "llvm/Remarks/RemarksOptions.h"
+#include "llvm/Support/ColorOptions.h"
 #include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/OptionsContext.h"
-#include "llvm/Support/PluginLoader.h"
+#include "llvm/Support/PluginLoaderOptions.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/SupportOptions.h"
-#include "llvm/Support/SupportOptionsOptInfos.h"
 #include "llvm/Support/SystemUtils.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/TimeProfiler.h"
 #include "llvm/Support/ToolOutputFile.h"
 #include "llvm/Support/YAMLTraits.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/ARM/ARMOptions.h"
+#include "llvm/Target/BPF/BPFOptions.h"
+#include "llvm/Target/LoongArch/LoongArchOptions.h"
+#include "llvm/Target/MSP430/MSP430Options.h"
+#include "llvm/Target/Mips/MipsOptions.h"
+#include "llvm/Target/NVPTX/NVPTXOptions.h"
+#include "llvm/Target/PowerPC/PowerPCOptions.h"
+#include "llvm/Target/RISCV/RISCVOptions.h"
+#include "llvm/Target/SPIRV/SPIRVOptions.h"
+#include "llvm/Target/Sparc/SparcOptions.h"
 #include "llvm/Target/TargetMachine.h"
-#include "llvm/Target/TargetOptionsRegistration.h"
+#include "llvm/Target/WebAssembly/WebAssemblyOptions.h"
+#include "llvm/Target/X86/X86Options.h"
+#include "llvm/Target/XCore/XCoreOptions.h"
 #include "llvm/TargetParser/Host.h"
 #include "llvm/TargetParser/SubtargetFeature.h"
 #include "llvm/TargetParser/Triple.h"
-#include "llvm/Transforms/AggressiveInstCombine/AggressiveInstCombineOptionsRegistration.h"
-#include "llvm/Transforms/Coroutines/CoroutinesOptionsRegistration.h"
-#include "llvm/Transforms/IPO/IPOOptionsRegistration.h"
+#include "llvm/Transforms/AggressiveInstCombine/AggressiveInstCombineOptions.h"
+#include "llvm/Transforms/Coroutines/CoroutinesOptions.h"
+#include "llvm/Transforms/IPO/IPOOptions.h"
 #include "llvm/Transforms/IPO/WholeProgramDevirt.h"
-#include "llvm/Transforms/InstCombine/InstCombineOptionsRegistration.h"
-#include "llvm/Transforms/Instrumentation/InstrumentationOptionsRegistration.h"
-#include "llvm/Transforms/ObjCARC/ObjCARCOptionsRegistration.h"
+#include "llvm/Transforms/InstCombine/InstCombineOptions.h"
+#include "llvm/Transforms/Instrumentation/InstrumentationOptions.h"
+#include "llvm/Transforms/ObjCARC/ObjCARCOptions.h"
 #include "llvm/Transforms/Scalar.h"
-#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
-#include "llvm/Transforms/Scalar/ScalarOptionsRegistration.h"
+#include "llvm/Transforms/Scalar/ScalarOptions.h"
 #include "llvm/Transforms/Utils/AssignGUID.h"
-#include "llvm/Transforms/Utils/UtilsOptionsRegistration.h"
+#include "llvm/Transforms/Utils/UtilsOptions.h"
 #include "llvm/Transforms/Vectorize/VectorizeOptions.h"
-#include "llvm/Transforms/Vectorize/VectorizeOptionsRegistration.h"
 #include <deque>
 #ifdef LINK_POLLY_INTO_TOOLS
 #include "polly/PollyOptionsOptInfos.h"
@@ -302,7 +333,6 @@ inline constexpr ListOptionInfo<std::string> PassPlugins{
     "load-pass-plugin", "Load passes from plugin library", ZeroOrMore};
 
 // CG_* option descriptors are provided by CommandFlagsOptInfos.h (CGOptsReg).
-// CG_* from CommandFlagsOptInfos.h, MC_* from MCOptionsOptInfos.h.
 
 //===----------------------------------------------------------------------===//
 // NewPMDriver options
@@ -591,65 +621,6 @@ inline constexpr OptionsRegistry<
 static void configureOptRegistries(clv2::OptionParser &P) {
   P.add<&OptToolReg>();
   registerCGOptsOptions(P);
-  registerMCOptsOptions(P);
-  P.add<&SupportOptsReg, support::applySupportOptions>();
-  registerRemarksOptsOptions(P);
-  registerObjectOptsOptions(P);
-  registerAsmParserOptsOptions(P);
-  registerPassesOptsOptions(P);
-  registerLTOOptsOptions(P);
-  registerIROptsOptions(P);
-  registerBitcodeOptsOptions(P);
-  registerAggressiveInstCombineOptsOptions(P);
-  registerCoroutinesOptsOptions(P);
-  registerObjCARCOptsOptions(P);
-  registerInstCombineOptsOptions(P);
-  registerTransformUtilsOptsOptions(P);
-  registerVectorizeOptsOptions(P);
-  registerAnalysisOptsOptions(P);
-  registerScalarOptsOptions(P);
-  registerIPOOptsOptions(P);
-  registerInstrumentationOptsOptions(P);
-  registerProfileDataOptsOptions(P);
-  registerCGPassAsmPrintOptions(P);
-  registerCGPassCore1Options(P);
-  registerCGPassCore2Options(P);
-  registerCGPassGISelOptions(P);
-  registerCGPassMachine1Options(P);
-  registerCGPassMachine2Options(P);
-  registerCGPassAllocOptions(P);
-  registerCGPassSched1Options(P);
-  registerCGPassSched2Options(P);
-  registerCGPassSelDAGOptions(P);
-  registerCGDataOptsOptions(P);
-  registerOMPOptsOptions(P);
-#if LLVM_HAS_ARC_TARGET
-  P.add<&clv2::ARCOptsReg>();
-#endif
-#if LLVM_HAS_CSKY_TARGET
-  P.add<&clv2::CSKYOptsReg>();
-#endif
-#if LLVM_HAS_M68K_TARGET
-  P.add<&clv2::M68kOptsReg>();
-#endif
-  registerX86Options(P);
-  registerAArch64Options(P);
-  registerAMDGPUOptionsWithBridge(P);
-  registerARMOptions(P);
-  registerHexagonOptions(P);
-  registerRISCVOptions(P);
-  registerPowerPCOptions(P);
-  registerMipsOptions(P);
-  registerSystemZOptions(P);
-  registerSparcOptions(P);
-  registerWebAssemblyOptions(P);
-  registerLoongArchOptions(P);
-  registerNVPTXOptions(P);
-  registerLanaiOptions(P);
-  registerBPFOptions(P);
-  registerSPIRVOptions(P);
-  registerMSP430Options(P);
-  registerXCoreOptions(P);
 #ifdef LINK_POLLY_INTO_TOOLS
   // Polly is statically linked into opt via the extension mechanism, so its
   // options have to be registered here or every -polly-* flag is rejected.
@@ -919,8 +890,6 @@ static bool shouldForceLegacyPM(ArrayRef<std::string> PassNames) {
 extern "C" int
 optMain(int argc, char **argv,
         ArrayRef<std::function<void(PassBuilder &)>> PassBuilderCallbacks) {
-  registerPluginLoaderOption();
-
   // Enable debug stream buffering.
   EnableDebugBuffering = true;
 
@@ -1029,15 +998,78 @@ optMain(int argc, char **argv,
     }
   }
 
+  // llvm::PassesOptions, llvm::PluginLoaderOptions, and llvm::ColorOptions
+  // have migrated off clv2 onto the new per-library OptTable/hand-written
+  // struct design (see llvm/include/llvm/Option/LibraryOptions.h) and are no
+  // longer among the clv2::OptionParser registries configured above. Parse
+  // them out of argv first, forwarding whatever none of them recognizes to
+  // the legacy clv2 parser unchanged.
+  SmallVector<const char *, 32> LibraryOptsRest;
+  {
+    std::string LibraryOptsErrs;
+    raw_string_ostream LibraryOptsErrsOS(LibraryOptsErrs);
+    // Experimental targets each contribute one extra type to the chain when
+    // built in; kept as flat inline #if blocks (rather than nesting an
+    // #if/#elif per combination) so adding another experimental target here
+    // doesn't double the number of branches.
+    if (Error Err = opt::parseLibraryOptionsChain<
+            PluginLoaderOptions, SupportOptions, PassesOptions, ColorOptions,
+            BitcodeOptions, BitcodeMemProfOptions, CodeGenAsmPrintOptions,
+            CodeGenGISelOptions, CodeGenMachine1Options, CodeGenMachine2Options,
+            CodeGenRegAllocOptions, CodeGenSched1Options, CodeGenSched2Options,
+            CodeGenSelDAGOptions, CodeGenCore2Options, CodeGenCore1Options,
+            ObjectOptions, RemarksOptions, AsmParserOptions, XCoreOptions,
+            ObjCARCOptions, MSP430Options, SparcOptions, WebAssemblyOptions,
+            SPIRVOptions, BPFOptions, LoongArchOptions, MipsOptions,
+            NVPTXOptions, AArch64Options, ARMOptions, RISCVOptions, X86Options,
+            PowerPCOptions, HexagonOptions,
+#if LLVM_HAS_ARC_TARGET
+            ARCOptions,
+#endif
+#if LLVM_HAS_CSKY_TARGET
+            CSKYOptions,
+#endif
+#if LLVM_HAS_LANAI_TARGET
+            LanaiOptions,
+#endif
+#if LLVM_HAS_M68K_TARGET
+            M68kOptions,
+#endif
+#if LLVM_HAS_SYSTEMZ_TARGET
+            SystemZOptions,
+#endif
+            CoroutinesOptions, OpenMPOptions, AggressiveInstCombineOptions,
+            InstCombineCLOptions, CGDataOptions, LTOOptions, ProfileDataOptions,
+            MCLibraryOptions, IROptions, UtilsOptions, VectorizeOptions,
+            AMDGPUOptions, InstrumentationOptions, IPOOptions, ScalarOptions>(
+            ArrayRef<const char *>(argv + 1, argv + argc), LibraryOptsRest,
+            LibraryOptsErrsOS)) {
+      errs() << "opt: " << toString(std::move(Err)) << "\n";
+      return 1;
+    }
+    errs() << LibraryOptsErrs;
+  }
+  // IROptions has no automatic apply step (unlike the other libraries in
+  // the chain above, which are read on demand via Ctx.getOptions<T>()); it
+  // must sync a couple of legacy globals (TimePassesIsEnabled/
+  // TimePassesPerRun and the OptBisect singleton) explicitly. See
+  // llvm/lib/IR/IROptions.cpp.
+  llvm::ir_opts::applyIROptions();
+  loadRequestedPlugins();
+  SmallVector<const char *, 32> ArgvAfterPasses;
+  ArgvAfterPasses.push_back(argv[0]);
+  ArgvAfterPasses.append(LibraryOptsRest.begin(), LibraryOptsRest.end());
+
   clv2::OptionParser P;
   configureOptRegistries(P);
   // Pick up options that libraries register at static-init time.
   P.enableGlobalDynamicEntries();
   for (auto &E : LegacyEntries)
     P.addDynamicEntry(std::move(E));
-  auto OptsCtxOwner = P.parse(
-      argc, argv, "llvm .bc -> .bc modular optimizer and analysis printer\n",
-      /*Errs=*/nullptr);
+  auto OptsCtxOwner =
+      P.parse(static_cast<int>(ArgvAfterPasses.size()), ArgvAfterPasses.data(),
+              "llvm .bc -> .bc modular optimizer and analysis printer\n",
+              /*Errs=*/nullptr);
   const auto &OptsCtx = *OptsCtxOwner;
   const auto *Opts = OptsCtx.getViewPtr<&OptToolReg>();
 
@@ -1768,12 +1800,10 @@ optMain(int argc, char **argv,
         // Thread OptionsContext to passes that need CLI option values
         // at getAnalysisUsage time (before a Function is available).
         if (StringRef(PassInf->getPassArgument()) == "structurizecfg") {
-          if (auto *O = clv2::getView<&clv2::ScalarOptsReg>(OptsCtx)) {
-            if (O->specified<&clv2::SC_StructurizecfgSkipUniformRegions>() &&
-                O->get<&clv2::SC_StructurizecfgSkipUniformRegions>()) {
-              delete P;
-              P = createStructurizeCFGPass(true);
-            }
+          if (Context.getOptions<ScalarOptions>()
+                  .SC_StructurizecfgSkipUniformRegions.value_or(false)) {
+            delete P;
+            P = createStructurizeCFGPass(true);
           }
         }
         // Add the pass to the pass manager.

@@ -15,7 +15,10 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "FileCheckOptions.h"
 #include "llvm/FileCheck/FileCheck.h"
+#include "llvm/Option/LibraryOptions.h"
+#include "llvm/Option/OptTable.h"
 #include "llvm/Support/Allocator.h"
 #include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/CommandLineV2.h"
@@ -26,180 +29,10 @@
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/StringSaver.h"
 #include "llvm/Support/SupportOptions.h"
-#include "llvm/Support/SupportOptionsOptInfos.h"
 #include "llvm/Support/WithColor.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cmath>
 using namespace llvm;
-
-// The order of DumpInputValue members affects their precedence, as documented
-// for -dump-input below.
-enum DumpInputValue {
-  DumpInputNever,
-  DumpInputFail,
-  DumpInputAlways,
-  DumpInputHelp
-};
-
-// The order of DumpInputFilterValue members affects their precedence, as
-// documented for -dump-input-filter below.
-enum DumpInputFilterValue {
-  DumpInputFilterError,
-  DumpInputFilterAnnotation,
-  DumpInputFilterAnnotationFull,
-  DumpInputFilterAll
-};
-
-// clv2 option descriptors — constexpr, no global constructors.
-
-static constexpr clv2::OptionInfo<std::string> CheckFilenameOpt{
-    "", "<check-file>", clv2::Positional{}};
-
-static constexpr clv2::OptionInfo<unsigned> DumpInputLabelWidthOpt{
-    "dump-input-label-width",
-    "In the dump requested by -dump-input, set <N> as the minimum "
-    "width for the initial label column.  When there are multiple "
-    "occurrences of this option, the last specified has precedence. "
-    "The default is 0, meaning that the actual labels fully "
-    "determine the width.  FileCheck's own test suite uses this "
-    "option to avoid a fluctuating column width when checking input "
-    "dumps.  This option is not expected to be useful elsewhere.",
-    clv2::value_desc("N"), clv2::Init{0u}, clv2::Hidden};
-
-static constexpr clv2::OptionInfo<std::string> InputFilenameOpt{
-    "input-file", "File to check (defaults to stdin)", clv2::Init{"-"},
-    clv2::value_desc("filename")};
-
-static constexpr clv2::ListOptionInfo<std::string> CheckPrefixesOpt{
-    "check-prefixes",
-    "Comma separated list of prefixes to use from check "
-    "file\n(defaults to 'CHECK')",
-    clv2::CommaSeparated};
-
-static constexpr clv2::AliasInfo CheckPrefixesAliasOpt{
-    "check-prefix", "check-prefixes", "Alias for -check-prefixes"};
-
-static constexpr clv2::ListOptionInfo<std::string> CommentPrefixesOpt{
-    "comment-prefixes",
-    "Comma-separated list of comment prefixes to use from check file\n"
-    "(defaults to 'COM,RUN'). Please avoid using this feature in\n"
-    "LLVM's LIT-based test suites, which should be easier to\n"
-    "maintain if they all follow a consistent comment style. This\n"
-    "feature is meant for non-LIT test suites using FileCheck.",
-    clv2::CommaSeparated, clv2::Hidden};
-
-static constexpr clv2::OptionInfo<bool> NoCanonicalizeWhiteSpaceOpt{
-    "strict-whitespace",
-    "Do not treat all horizontal whitespace as equivalent"};
-
-static constexpr clv2::OptionInfo<bool> IgnoreCaseOpt{
-    "ignore-case", "Use case-insensitive matching"};
-
-static constexpr clv2::ListOptionInfo<std::string> ImplicitCheckNotOpt{
-    "implicit-check-not",
-    "Add an implicit negative check with this pattern to every\n"
-    "positive check. This can be used to ensure that no instances of\n"
-    "this pattern occur which are not matched by a positive pattern",
-    clv2::value_desc("pattern")};
-
-static constexpr clv2::ListOptionInfo<std::string> GlobalDefinesOpt{
-    "D", "Define a variable to be used in capture patterns.",
-    clv2::AlwaysPrefixFormat, clv2::value_desc("VAR=VALUE")};
-
-static constexpr clv2::OptionInfo<bool> AllowEmptyInputOpt{
-    "allow-empty",
-    "Allow the input file to be empty. This is useful when making\n"
-    "checks that some error message does not occur, for example."};
-
-static constexpr clv2::OptionInfo<bool> AllowUnusedPrefixesOpt{
-    "allow-unused-prefixes",
-    "Allow prefixes to be specified but not appear in the test."};
-
-static constexpr clv2::OptionInfo<bool> MatchFullLinesOpt{
-    "match-full-lines",
-    "Require all positive matches to cover an entire input line.\n"
-    "Allows leading and trailing whitespace if --strict-whitespace\n"
-    "is not also passed."};
-
-static constexpr clv2::OptionInfo<bool> EnableVarScopeOpt{
-    "enable-var-scope",
-    "Enables scope for regex variables. Variables with names that\n"
-    "do not start with '$' will be reset at the beginning of\n"
-    "each CHECK-LABEL block."};
-
-static constexpr clv2::OptionInfo<bool> AllowDeprecatedDagOverlapOpt{
-    "allow-deprecated-dag-overlap",
-    "Enable overlapping among matches in a group of consecutive\n"
-    "CHECK-DAG directives.  This option is deprecated and is only\n"
-    "provided for convenience as old tests are migrated to the new\n"
-    "non-overlapping CHECK-DAG implementation.\n"};
-
-static constexpr clv2::OptionInfo<bool> VerboseOpt{
-    "v", "Print directive pattern matches, or add them to the input dump\n"
-         "if enabled.\n"};
-
-static constexpr clv2::OptionInfo<bool> VerboseVerboseOpt{
-    "vv", "Print information helpful in diagnosing internal FileCheck\n"
-          "issues, or add it to the input dump if enabled.  Implies\n"
-          "-v.\n"};
-
-static constexpr clv2::EnumVal<DumpInputValue> DumpInputVals[] = {
-    {"help", DumpInputHelp, "Explain input dump and quit"},
-    {"always", DumpInputAlways, "Always dump input"},
-    {"fail", DumpInputFail, "Dump input on failure"},
-    {"never", DumpInputNever, "Never dump input"},
-};
-
-static constexpr clv2::ListOptionInfo<DumpInputValue> DumpInputsOpt{
-    "dump-input",
-    "Dump input to stderr, adding annotations representing\n"
-    "currently enabled diagnostics.  When there are multiple\n"
-    "occurrences of this option, the <value> that appears earliest\n"
-    "in the list below has precedence.  The default is 'fail'.\n",
-    clv2::ValuesRef<DumpInputValue>(DumpInputVals),
-};
-
-static constexpr clv2::EnumVal<DumpInputFilterValue> DumpInputFilterVals[] = {
-    {"all", DumpInputFilterAll, "All input lines"},
-    {"annotation-full", DumpInputFilterAnnotationFull,
-     "Input lines with annotations"},
-    {"annotation", DumpInputFilterAnnotation,
-     "Input lines with starting points of annotations"},
-    {"error", DumpInputFilterError,
-     "Input lines with starting points of error annotations"},
-};
-
-static constexpr clv2::ListOptionInfo<DumpInputFilterValue> DumpInputFiltersOpt{
-    "dump-input-filter",
-    "In the dump requested by -dump-input, print only input lines of\n"
-    "kind <value> plus any context specified by -dump-input-context.\n"
-    "When there are multiple occurrences of this option, the <value>\n"
-    "that appears earliest in the list below has precedence.  The\n"
-    "default is 'error' when -dump-input=fail, and it's 'all' when\n"
-    "-dump-input=always.\n",
-    clv2::ValuesRef<DumpInputFilterValue>(DumpInputFilterVals)};
-
-static constexpr clv2::ListOptionInfo<unsigned> DumpInputContextsOpt{
-    "dump-input-context",
-    "In the dump requested by -dump-input, print <N> input lines\n"
-    "before and <N> input lines after any lines specified by\n"
-    "-dump-input-filter.  When there are multiple occurrences of\n"
-    "this option, the largest specified <N> has precedence.  The\n"
-    "default is 5.\n",
-    clv2::value_desc("N")};
-
-// clv2 registry assembling all FileCheck options.
-static constexpr clv2::OptionsRegistry<
-    &CheckFilenameOpt, &InputFilenameOpt, &CheckPrefixesOpt,
-    &CheckPrefixesAliasOpt, &CommentPrefixesOpt, &NoCanonicalizeWhiteSpaceOpt,
-    &IgnoreCaseOpt, &ImplicitCheckNotOpt, &GlobalDefinesOpt,
-    &AllowEmptyInputOpt, &AllowUnusedPrefixesOpt, &MatchFullLinesOpt,
-    &EnableVarScopeOpt, &AllowDeprecatedDagOverlapOpt, &VerboseOpt,
-    &VerboseVerboseOpt, &DumpInputsOpt, &DumpInputFiltersOpt,
-    &DumpInputContextsOpt, &DumpInputLabelWidthOpt>
-    FileCheckToolReg{
-        "\nOptions are parsed from the environment variable FILECHECK_OPTS "
-        "and\nfrom the command line.\n"};
 
 static void DumpCommandLine(int argc, char **argv) {
   errs() << "FileCheck command line: ";
@@ -844,21 +677,21 @@ static unsigned FindInputLineInFilter(
     DumpInputFilterValue DumpInputFilter, unsigned CurInputLine,
     const std::vector<InputAnnotation>::iterator &AnnotationBeg,
     const std::vector<InputAnnotation>::iterator &AnnotationEnd) {
-  if (DumpInputFilter == DumpInputFilterAll)
+  if (DumpInputFilter == DumpInputFilterValue::All)
     return CurInputLine;
   for (auto AnnotationItr = AnnotationBeg; AnnotationItr != AnnotationEnd;
        ++AnnotationItr) {
     switch (DumpInputFilter) {
-    case DumpInputFilterAll:
-      llvm_unreachable("unexpected DumpInputFilterAll");
+    case DumpInputFilterValue::All:
+      llvm_unreachable("unexpected DumpInputFilterValue::All");
       break;
-    case DumpInputFilterAnnotationFull:
+    case DumpInputFilterValue::AnnotationFull:
       return AnnotationItr->InputLine;
-    case DumpInputFilterAnnotation:
+    case DumpInputFilterValue::Annotation:
       if (AnnotationItr->IsFirstLine)
         return AnnotationItr->InputLine;
       break;
-    case DumpInputFilterError:
+    case DumpInputFilterValue::Error:
       if (AnnotationItr->IsFirstLine && AnnotationItr->Marker.FiltersAsError)
         return AnnotationItr->InputLine;
       break;
@@ -1121,52 +954,85 @@ int main(int argc, char **argv) {
   }
   for (int I = 1; I < argc; ++I)
     ExpandedArgv.push_back(argv[I]);
+
+  for (const char *Arg : ArrayRef(ExpandedArgv).drop_front()) {
+    StringRef A(Arg);
+    if (A == "-help" || A == "--help" || A == "-help-hidden" ||
+        A == "--help-hidden") {
+      FileCheckOptions::table().printHelp(
+          outs(), "FileCheck [options] <check-file>", "FileCheck",
+          /*ShowHidden=*/A.ends_with("-hidden"));
+      break;
+    }
+  }
+
+  SmallVector<const char *> FileCheckOptsRest;
+  {
+    std::string FileCheckOptsErrs;
+    raw_string_ostream FileCheckOptsErrsOS(FileCheckOptsErrs);
+    // SupportOptions goes first: it steals the next token as the value of a
+    // separate-spelling option (-info-output-file <f>), which
+    // FileCheckOptions would otherwise collect as a positional.
+    if (Error Err =
+            opt::parseLibraryOptionsChain<SupportOptions, FileCheckOptions>(
+                ArrayRef(ExpandedArgv).drop_front(), FileCheckOptsRest,
+                FileCheckOptsErrsOS)) {
+      errs() << "FileCheck: " << toString(std::move(Err)) << "\n";
+      return 2;
+    }
+    errs() << FileCheckOptsErrs;
+  }
+
+  SmallVector<const char *> ArgvAfterFileCheckOpts;
+  ArgvAfterFileCheckOpts.push_back(ExpandedArgv[0]);
+  ArgvAfterFileCheckOpts.append(FileCheckOptsRest.begin(),
+                                FileCheckOptsRest.end());
+
   clv2::OptionParser P;
-  P.add<&FileCheckToolReg>();
-  P.add<&clv2::SupportOptsReg, support::applySupportOptions>();
   P.setExtraHelp("\nOptions are parsed from the environment variable "
                  "FILECHECK_OPTS and\nfrom the command line.\n");
-  auto OptsCtx =
-      P.parse(static_cast<int>(ExpandedArgv.size()), ExpandedArgv.data());
-  auto *Opts = OptsCtx->getViewPtr<&FileCheckToolReg>();
+  P.parse(static_cast<int>(ArgvAfterFileCheckOpts.size()),
+          ArgvAfterFileCheckOpts.data());
 
   // Extract parsed values into local variables for convenience.
-  unsigned DumpInputLabelWidth = Opts->get<&DumpInputLabelWidthOpt>();
-  const auto &CheckFilename = Opts->get<&CheckFilenameOpt>();
-  std::string InputFilename = Opts->get<&InputFilenameOpt>();
-  const auto &CheckPrefixes = Opts->get<&CheckPrefixesOpt>();
-  const auto &CommentPrefixes = Opts->get<&CommentPrefixesOpt>();
-  const auto &ImplicitCheckNot = Opts->get<&ImplicitCheckNotOpt>();
-  const auto &GlobalDefines = Opts->get<&GlobalDefinesOpt>();
-  bool AllowEmptyInput = Opts->get<&AllowEmptyInputOpt>();
-  bool AllowUnusedPrefixes = Opts->get<&AllowUnusedPrefixesOpt>();
-  bool NoCanonicalizeWhiteSpace = Opts->get<&NoCanonicalizeWhiteSpaceOpt>();
-  bool IgnoreCase = Opts->get<&IgnoreCaseOpt>();
-  bool MatchFullLines = Opts->get<&MatchFullLinesOpt>();
-  bool EnableVarScope = Opts->get<&EnableVarScopeOpt>();
-  bool AllowDeprecatedDagOverlap = Opts->get<&AllowDeprecatedDagOverlapOpt>();
-  bool Verbose = Opts->get<&VerboseOpt>();
-  bool VerboseVerbose = Opts->get<&VerboseVerboseOpt>();
-  const auto &DumpInputs = Opts->get<&DumpInputsOpt>();
-  const auto &DumpInputFilters = Opts->get<&DumpInputFiltersOpt>();
-  const auto &DumpInputContexts = Opts->get<&DumpInputContextsOpt>();
+  FileCheckOptions &Opts = FileCheckOptions::Current;
+  unsigned DumpInputLabelWidth = Opts.DumpInputLabelWidth;
+  const std::string &CheckFilename = Opts.CheckFilename;
+  std::string InputFilename = Opts.InputFilename;
+  const auto &CheckPrefixes = Opts.CheckPrefixes;
+  const auto &CommentPrefixes = Opts.CommentPrefixes;
+  const auto &ImplicitCheckNot = Opts.ImplicitCheckNot;
+  const auto &GlobalDefines = Opts.GlobalDefines;
+  bool AllowEmptyInput = Opts.AllowEmptyInput;
+  bool AllowUnusedPrefixes = Opts.AllowUnusedPrefixes;
+  bool NoCanonicalizeWhiteSpace = Opts.NoCanonicalizeWhiteSpace;
+  bool IgnoreCase = Opts.IgnoreCase;
+  bool MatchFullLines = Opts.MatchFullLines;
+  bool EnableVarScope = Opts.EnableVarScope;
+  bool AllowDeprecatedDagOverlap = Opts.AllowDeprecatedDagOverlap;
+  bool Verbose = Opts.Verbose;
+  bool VerboseVerbose = Opts.VerboseVerbose;
+  const auto &DumpInputs = Opts.DumpInputs;
+  const auto &DumpInputFilters = Opts.DumpInputFilters;
+  const auto &DumpInputContexts = Opts.DumpInputContexts;
 
   // Select -dump-input* values.  The -help documentation specifies the default
   // value and which value to choose if an option is specified multiple times.
   // In the latter case, the general rule of thumb is to choose the value that
   // provides the most information.
-  DumpInputValue DumpInput =
-      DumpInputs.empty() ? DumpInputFail : *llvm::max_element(DumpInputs);
+  DumpInputValue DumpInput = DumpInputs.empty() ? DumpInputValue::Fail
+                                                 : *llvm::max_element(DumpInputs);
   DumpInputFilterValue DumpInputFilter;
   if (DumpInputFilters.empty())
-    DumpInputFilter = DumpInput == DumpInputAlways ? DumpInputFilterAll
-                                                   : DumpInputFilterError;
+    DumpInputFilter = DumpInput == DumpInputValue::Always
+                           ? DumpInputFilterValue::All
+                           : DumpInputFilterValue::Error;
   else
     DumpInputFilter = *llvm::max_element(DumpInputFilters);
   unsigned DumpInputContext =
       DumpInputContexts.empty() ? 5 : *llvm::max_element(DumpInputContexts);
 
-  if (DumpInput == DumpInputHelp) {
+  if (DumpInput == DumpInputValue::Help) {
     DumpInputAnnotationHelp(outs());
     return 0;
   }
@@ -1270,11 +1136,12 @@ int main(int argc, char **argv) {
 
   FileCheckDiagList Diags;
   int ExitCode = FC.checkInput(SM, InputFileText,
-                               DumpInput == DumpInputNever ? nullptr : &Diags)
+                               DumpInput == DumpInputValue::Never ? nullptr
+                                                                   : &Diags)
                      ? EXIT_SUCCESS
                      : 1;
-  if (DumpInput == DumpInputAlways ||
-      (ExitCode == 1 && DumpInput == DumpInputFail)) {
+  if (DumpInput == DumpInputValue::Always ||
+      (ExitCode == 1 && DumpInput == DumpInputValue::Fail)) {
     errs() << "\n"
            << "Input file: " << InputFilename << "\n"
            << "Check file: " << CheckFilename << "\n"

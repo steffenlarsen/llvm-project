@@ -14,7 +14,7 @@
 #include "llvm/ADT/PostOrderIterator.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
+#include "llvm/Analysis/AnalysisOptions.h"
 #include "llvm/Analysis/ConstantFolding.h"
 #include "llvm/Analysis/CycleAnalysis.h"
 #include "llvm/Analysis/PostDominators.h"
@@ -40,7 +40,6 @@
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cassert>
 #include <cstdint>
@@ -53,13 +52,13 @@ using namespace llvm;
 static bool PrintBranchProb = false;
 
 static bool getPrintBranchProb(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AN_PrintBranchProb>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<AnalysisOptions>().AN_PrintBranchProb;
 }
 
 static std::string getPrintBranchProbFuncName(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AN_PrintBranchProbFuncName>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<AnalysisOptions>()
+      .AN_PrintBranchProbFuncName;
 }
 
 INITIALIZE_PASS_BEGIN(BranchProbabilityInfoWrapperPass, "branch-prob",
@@ -344,7 +343,7 @@ bool BPIConstruction::calcMetadataWeights(const BasicBlock *BB) {
   // Set the probability.
   SmallVector<BranchProbability, 2> BP;
   for (unsigned I = 0, E = TI->getNumSuccessors(); I != E; ++I)
-    BP.push_back({ Weights[I], static_cast<uint32_t>(WeightSum) });
+    BP.push_back({Weights[I], static_cast<uint32_t>(WeightSum)});
 
   // Examine the metadata against unreachable heuristic.
   // If the unreachable heuristic is more strong then we use it for this edge.
@@ -508,8 +507,8 @@ computeUnlikelySuccessors(const BasicBlock *BB, const CycleInfo &CI, CycleRef C,
     return;
 
   // Trace the phi node to find all values that come from successors of BB
-  SmallPtrSet<PHINode*, 8> VisitedInsts;
-  SmallVector<PHINode*, 8> WorkList;
+  SmallPtrSet<PHINode *, 8> VisitedInsts;
+  SmallVector<PHINode *, 8> WorkList;
   WorkList.push_back(CmpPHI);
   VisitedInsts.insert(CmpPHI);
   while (!WorkList.empty()) {
@@ -899,12 +898,9 @@ bool BPIConstruction::calcZeroHeuristics(const BasicBlock *BB,
         Func = TLI->getLibFunc(*CalledFn);
 
   bool Likely;
-  if (Func == LibFunc_strcasecmp ||
-      Func == LibFunc_strcmp ||
-      Func == LibFunc_strncasecmp ||
-      Func == LibFunc_strncmp ||
-      Func == LibFunc_memcmp ||
-      Func == LibFunc_bcmp) {
+  if (Func == LibFunc_strcasecmp || Func == LibFunc_strcmp ||
+      Func == LibFunc_strncasecmp || Func == LibFunc_strncmp ||
+      Func == LibFunc_memcmp || Func == LibFunc_bcmp) {
     /// strcmp and similar functions return zero, negative, or positive, if the
     /// first string is equal, less, or greater than the second. We consider it
     /// likely that the strings are not equal, so a comparison with zero is
@@ -1080,8 +1076,8 @@ void BranchProbabilityInfo::print(raw_ostream &OS) const {
   }
 }
 
-bool BranchProbabilityInfo::
-isEdgeHot(const BasicBlock *Src, const BasicBlock *Dst) const {
+bool BranchProbabilityInfo::isEdgeHot(const BasicBlock *Src,
+                                      const BasicBlock *Dst) const {
   // Hot probability is at least 4/5 = 80%
   // FIXME: Compare against a static "hot" BranchProbability.
   return getEdgeProbability(Src, Dst) > BranchProbability(4, 5);
@@ -1170,10 +1166,8 @@ void BranchProbabilityInfo::swapSuccEdgesProbabilities(const BasicBlock *Src) {
   std::swap(MP[0], MP[1]);
 }
 
-raw_ostream &
-BranchProbabilityInfo::printEdgeProbability(raw_ostream &OS,
-                                            const BasicBlock *Src,
-                                            const BasicBlock *Dst) const {
+raw_ostream &BranchProbabilityInfo::printEdgeProbability(
+    raw_ostream &OS, const BasicBlock *Src, const BasicBlock *Dst) const {
   const BranchProbability Prob = getEdgeProbability(Src, Dst);
   OS << "edge ";
   Src->printAsOperand(OS, false, Src->getModule());

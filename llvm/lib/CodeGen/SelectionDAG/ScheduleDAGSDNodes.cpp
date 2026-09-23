@@ -19,7 +19,7 @@
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsSelDAG.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/SelectionDAG.h"
@@ -31,9 +31,7 @@
 #include "llvm/IR/Function.h"
 #include "llvm/IR/MemoryModelRelaxationAnnotations.h"
 #include "llvm/MC/MCInstrItineraries.h"
-#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
 using namespace llvm;
@@ -45,8 +43,8 @@ STATISTIC(LoadsClustered, "Number of loads clustered together");
 // This allows the latency-based scheduler to notice high latency instructions
 // without a target itinerary. The choice of number here has more to do with
 // balancing scheduler heuristics than with the actual machine latency.
-static int getSchedHighLatencyCycles(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_SchedHighLatencyCycles>(Ctx);
+static int getSchedHighLatencyCycles(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenSelDAGOptions>().CGPASS_SchedHighLatencyCycles;
 }
 
 ScheduleDAGSDNodes::ScheduleDAGSDNodes(MachineFunction &mf)
@@ -632,8 +630,8 @@ void ScheduleDAGSDNodes::computeLatency(SUnit *SU) {
   if (!InstrItins || InstrItins->isEmpty()) {
     if (N && N->isMachineOpcode() &&
         TII->isHighLatencyDef(N->getMachineOpcode()))
-      SU->Latency = getSchedHighLatencyCycles(
-          MF.getFunction().getContext().getOptionsContext());
+      SU->Latency =
+          getSchedHighLatencyCycles(MF.getFunction().getContext());
     else
       SU->Latency = 1;
     return;

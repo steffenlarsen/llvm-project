@@ -13,7 +13,7 @@
 
 #include "llvm/CodeGen/RegisterUsageInfo.h"
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsSched2.h"
 #include "llvm/CodeGen/MachineOperand.h"
 #include "llvm/CodeGen/TargetRegisterInfo.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
@@ -23,7 +23,6 @@
 #include "llvm/IR/PassManager.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
 #include <cstdint>
@@ -48,8 +47,7 @@ bool PhysicalRegisterUsageInfo::doInitialization(Module &M) {
 
 bool PhysicalRegisterUsageInfo::doFinalization(Module &M) {
   if (TM &&
-      clv2::getOptValOr<&clv2::CGPassSched2Reg, &clv2::CGPASS_PrintRegusage>(
-          TM->getOptionsContext(), false))
+      M.getContext().getOptions<CodeGenSched2Options>().CGPASS_PrintRegusage)
     print(errs());
 
   RegMasks.shrink_and_clear();

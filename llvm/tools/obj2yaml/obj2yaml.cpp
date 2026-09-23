@@ -14,6 +14,7 @@
 #include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Errc.h"
 #include "llvm/Support/InitLLVM.h"
+#include "llvm/Support/PluginLoaderOptions.h"
 #include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/ToolOutputFile.h"
 #include "llvm/Support/WithColor.h"
@@ -118,8 +119,11 @@ int main(int argc, char *argv[]) {
   P.add<&Obj2YamlToolReg>();
   RegisterAllLLVMOptions(P);
   P.hideUnrelatedOptions({&Obj2YamlCat});
-  auto OptsCtx =
-      P.parse(argc, argv, "Dump a YAML description from an object file");
+  std::vector<const char *> ArgsAfterPlugins =
+      loadPluginsAndStripArgs(argc, argv);
+  auto OptsCtx = P.parse(static_cast<int>(ArgsAfterPlugins.size()),
+                          ArgsAfterPlugins.data(),
+                          "Dump a YAML description from an object file");
   auto *Opts = OptsCtx->getViewPtr<&Obj2YamlToolReg>();
 
   const std::string &InFile = Opts->get<&InputFilename>();

@@ -1,5 +1,6 @@
 set(LLVM_LINK_COMPONENTS
   AllOptions
+  AllTargetsDescs
   Option
   Support
   )
@@ -49,7 +50,20 @@ add_clang_library(clangFrontendTool
   ExecuteCompilerInvocation.cpp
 
   DEPENDS
+  BPFOptParserTableGen
+  CGDataOptParserTableGen
   ClangDriverOptions
+  HexagonOptParserTableGen
+  InstCombineOptParserTableGen
+  InstrumentationOptParserTableGen
+  IPOOptParserTableGen
+  ScalarOptParserTableGen
+  LTOOptParserTableGen
+  LoongArchOptParserTableGen
+  NVPTXOptParserTableGen
+  ProfileDataOptParserTableGen
+  UtilsOptParserTableGen
+  WebAssemblyOptParserTableGen
   ${deps}
 
   LINK_LIBS

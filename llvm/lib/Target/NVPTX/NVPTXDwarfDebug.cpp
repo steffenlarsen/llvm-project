@@ -23,15 +23,13 @@
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/Support/NVPTXAddrSpace.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/NVPTX/NVPTXOptionsOptInfos.h"
+#include "llvm/Target/NVPTX/NVPTXOptions.h"
 #include "llvm/Target/TargetMachine.h"
 
 using namespace llvm;
 
 static bool getLineInfoWithInlinedAt(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::NVPTX_LineInfoWithInlinedAt>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<NVPTXOptions>().NVPTX_LineInfoWithInlinedAt;
 }
 
 NVPTXDwarfDebug::NVPTXDwarfDebug(AsmPrinter *A) : DwarfDebug(A) {

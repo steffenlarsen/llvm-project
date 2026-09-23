@@ -41,8 +41,14 @@
 
 using namespace llvm;
 
-// Written by applySupportOptions() — read directly by signal handlers.
+// Written by SupportOptions::parse()/applySupportOptions() — read directly by
+// signal handlers.
 bool DisableSymbolicationFlag = false;
+static ManagedStatic<std::string> CrashDiagnosticsDirectory;
+
+void llvm::setCrashDiagnosticsDirectory(StringRef Dir) {
+  *CrashDiagnosticsDirectory = Dir.str();
+}
 
 void llvm::initSignalsOptions() {
 }

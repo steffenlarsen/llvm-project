@@ -18,20 +18,17 @@
 #include "llvm/MC/MCInst.h"
 #include "llvm/MC/MCInstrDesc.h"
 #include "llvm/MC/MCInstrInfo.h"
-#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
+#include "llvm/Target/Hexagon/HexagonOptions.h"
 #include <cassert>
 
 #define DEBUG_TYPE "hexagon-shuffle"
 
 using namespace llvm;
 
-static bool getDisableShuffle(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_DisableShuffle>(
-      Ctx, false);
+static bool getDisableShuffle() {
+  return HexagonOptions::Current.HEX_DisableShuffle;
 }
 
 void HexagonMCShuffler::init(MCInst &MCB) {
@@ -109,7 +106,7 @@ bool llvm::HexagonMCShuffle(MCContext &Context, bool ReportErrors,
                             MCInst &MCB) {
   HexagonMCShuffler MCS(Context, ReportErrors, MCII, STI, MCB);
 
-  if (getDisableShuffle(Context.getOptionsContext()))
+  if (getDisableShuffle())
     // Ignore if user chose so.
     return false;
 
@@ -135,8 +132,7 @@ bool llvm::HexagonMCShuffle(MCContext &Context, MCInstrInfo const &MCII,
                             MCSubtargetInfo const &STI, MCInst &MCB,
                             SmallVector<DuplexCandidate, 8> possibleDuplexes) {
 
-  if (getDisableShuffle(Context.getOptionsContext()) ||
-      possibleDuplexes.size() == 0)
+  if (getDisableShuffle() || possibleDuplexes.size() == 0)
     return false;
 
   if (!HexagonMCInstrInfo::bundleSize(MCB)) {
@@ -206,7 +202,7 @@ bool llvm::HexagonMCShuffle(MCContext &Context, MCInstrInfo const &MCII,
       return false;
   }
 
-  if (getDisableShuffle(Context.getOptionsContext()))
+  if (getDisableShuffle())
     return false;
 
   // mgl: temporary code (shuffler doesn't take into account the fact that

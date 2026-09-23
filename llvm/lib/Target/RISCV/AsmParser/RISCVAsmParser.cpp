@@ -38,9 +38,8 @@
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/MathExtras.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/RISCVAttributes.h"
-#include "llvm/Target/RISCV/RISCVOptionsOptInfos.h"
+#include "llvm/Target/RISCV/RISCVOptions.h"
 #include "llvm/TargetParser/RISCVISAInfo.h"
 
 #include <limits>
@@ -54,9 +53,8 @@ using namespace llvm;
 STATISTIC(RISCVNumInstrsCompressed,
           "Number of RISC-V Compressed instructions emitted");
 
-static bool getAddBuildAttributes(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::RISCVOptsReg, &clv2::RV_AddBuildAttributes>(
-      Ctx, false);
+static bool getAddBuildAttributes() {
+  return RISCVOptions::Current.RV_AddBuildAttributes;
 }
 
 namespace {
@@ -337,7 +335,7 @@ public:
     const MCObjectFileInfo *MOFI = Parser.getContext().getObjectFileInfo();
     ParserOptions.IsPicEnabled = MOFI->isPositionIndependent();
 
-    if (getAddBuildAttributes(getContext().getOptionsContext()))
+    if (getAddBuildAttributes())
       getTargetStreamer().emitTargetAttributes(STI, /*EmitStackAlign*/ false);
   }
 
@@ -1287,7 +1285,7 @@ public:
   }
 
   static std::unique_ptr<RISCVOperand> createRegList(unsigned RlistEncode,
-                                                   SMLoc S) {
+                                                     SMLoc S) {
     auto Op = std::make_unique<RISCVOperand>(KindTy::RegList);
     Op->RegList.Encoding = RlistEncode;
     Op->StartLoc = S;
@@ -1304,7 +1302,8 @@ public:
     return Op;
   }
 
-  static std::unique_ptr<RISCVOperand> createStackAdj(unsigned StackAdj, SMLoc S) {
+  static std::unique_ptr<RISCVOperand> createStackAdj(unsigned StackAdj,
+                                                      SMLoc S) {
     auto Op = std::make_unique<RISCVOperand>(KindTy::StackAdj);
     Op->StackAdj.Val = StackAdj;
     Op->StartLoc = S;
@@ -2284,8 +2283,8 @@ ParseStatus RISCVAsmParser::parseFPImm(OperandVector &Operands) {
   if (IsNegative)
     RealVal.changeSign();
 
-  Operands.push_back(RISCVOperand::createFPImm(
-      RealVal.bitcastToAPInt().getZExtValue(), S));
+  Operands.push_back(
+      RISCVOperand::createFPImm(RealVal.bitcastToAPInt().getZExtValue(), S));
 
   Lex(); // Eat the token.
 
@@ -3430,9 +3429,10 @@ bool RISCVAsmParser::parseDirectiveOption() {
 
           std::string Buffer;
           raw_string_ostream OutputErrMsg(Buffer);
-          handleAllErrors(ParseResult.takeError(), [&](llvm::StringError &ErrMsg) {
-            OutputErrMsg << ErrMsg.getMessage();
-          });
+          handleAllErrors(ParseResult.takeError(),
+                          [&](llvm::StringError &ErrMsg) {
+                            OutputErrMsg << ErrMsg.getMessage();
+                          });
 
           return Error(Loc, OutputErrMsg.str());
         }

@@ -1,4 +1,3 @@
-#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
 //===- DFAJumpThreading.cpp - Threads a switch statement inside a loop ----===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -73,11 +72,11 @@
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
-#include "llvm/IR/IROptionsOptInfos.h"
+#include "llvm/IR/IROptions.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Transforms/Scalar/DFAJumpThreading.h"
+#include "llvm/Transforms/Scalar/ScalarOptions.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/SSAUpdaterBulk.h"
 #include "llvm/Transforms/Utils/ValueMapper.h"
@@ -97,44 +96,35 @@ STATISTIC(NumPaths, "Number of individual paths threaded");
 
 namespace llvm {
 static bool getClViewCfgBefore(const Function &F) {
-  return clv2::getOptValOr<&clv2::ScalarOptsReg,
-                           &clv2::SC_DfaJumpViewCfgBefore>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext().getOptions<ScalarOptions>().SC_DfaJumpViewCfgBefore;
 }
 
 static bool getEarlyExitHeuristic(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_DfaEarlyExitHeuristic>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<ScalarOptions>().SC_DfaEarlyExitHeuristic;
 }
 
 static unsigned getMaxPathLength(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_DfaMaxPathLength>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<ScalarOptions>().SC_DfaMaxPathLength;
 }
 
 static unsigned getMaxNumVisitiedPaths(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_DfaMaxNumVisitedPaths>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<ScalarOptions>().SC_DfaMaxNumVisitedPaths;
 }
 
 static unsigned getMaxNumPaths(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_DfaMaxNumPaths>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<ScalarOptions>().SC_DfaMaxNumPaths;
 }
 
 static unsigned getCostThreshold(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_DfaCostThreshold>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<ScalarOptions>().SC_DfaCostThreshold;
 }
 
 static double getMaxClonedRate(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_DfaMaxClonedRate>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<ScalarOptions>().SC_DfaMaxClonedRate;
 }
 
 static unsigned getMaxOuterUseBlocks(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_DfaMaxOutUseBlocks>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<ScalarOptions>().SC_DfaMaxOutUseBlocks;
 }
 
 } // namespace llvm
@@ -1558,10 +1548,7 @@ bool DFAJumpThreading::run(Function &F) {
 #endif
 
   {
-    bool DoVerifyDom = false;
-    if (auto *O =
-            clv2::getView<&clv2::IROptsReg>(F.getContext().getOptionsContext()))
-      DoVerifyDom = O->get<&clv2::IR_VerifyDomInfo>();
+    bool DoVerifyDom = F.getContext().getOptions<IROptions>().IR_VerifyDomInfo;
     if (MadeChanges && DoVerifyDom)
       assert(DTU->getDomTree().verify(DominatorTree::VerificationLevel::Full) &&
              "Failed to maintain validity of domtree!");

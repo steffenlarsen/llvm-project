@@ -36,6 +36,12 @@ add_llvm_tool(llvm-objdump
   WasmDump.cpp
   XCOFFDump.cpp
   DEPENDS
+  AArch64OptParserTableGen
+  AMDGPUOptParserTableGen
+  BPFOptParserTableGen
+  HexagonOptParserTableGen
+  LoongArchOptParserTableGen
+  NVPTXOptParserTableGen
   ObjdumpOptsTableGen
   OtoolOptsTableGen
   GENERATE_DRIVER

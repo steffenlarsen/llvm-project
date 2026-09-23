@@ -11,6 +11,7 @@
 #include "clang/Basic/AllDiagnostics.h"
 #include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/CommandLineV2.h"
+#include "llvm/Support/PluginLoaderOptions.h"
 #include "llvm/Support/RegisterLLVMOptions.h"
 #include <optional>
 
@@ -58,8 +59,10 @@ int FindDiagnosticID::run(unsigned int argc, char **argv,
   P.add<&FindDiagIDReg>();
   llvm::RegisterAllLLVMOptions(P);
   P.hideUnrelatedOptions({&FindDiagnosticIDOptions});
-  auto OptsCtx =
-      P.parse((int)Args.size(), Args.data(), "Diagnostic ID mapping utility\n");
+  std::vector<const char *> ArgsAfterPlugins =
+      llvm::loadPluginsAndStripArgs((int)Args.size(), Args.data());
+  auto OptsCtx = P.parse((int)ArgsAfterPlugins.size(), ArgsAfterPlugins.data(),
+                         "Diagnostic ID mapping utility\n");
   auto *Opts = OptsCtx->getViewPtr<&FindDiagIDReg>();
 
   std::string DiagnosticName = Opts->get<&FDDiagNameOpt>();

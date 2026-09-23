@@ -34,10 +34,9 @@
 #include "llvm/Pass.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/MathExtras.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/Timer.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
+#include "llvm/Target/Hexagon/HexagonOptions.h"
 #include <algorithm>
 #include <cassert>
 #include <cstdint>
@@ -50,7 +49,6 @@
 using namespace llvm;
 
 static unsigned VRegIndexCutoff = ~0U;
-static bool VRegIndexCutoffWasSpecified = false;
 // The distance cutoff is selected based on the precheckin-perf results:
 // cutoffs 20, 25, 35, and 40 are worse than 30.
 static unsigned VRegDistCutoff = 30U;
@@ -63,55 +61,47 @@ static unsigned MaxIFMSize = 1024;
 // extenders, but often not practical.
 
 static unsigned getVRegDistCutoff(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_VRegDistCutoff>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_VRegDistCutoff;
 }
 
 static unsigned getMaxIFMSize(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_MaxIFMSize>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_MaxIFMSize;
 }
 
 static bool getOptTiming(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_OptTiming>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_OptTiming;
 }
 
 static bool getOptSelectAll0(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_OptSelectAll0>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_OptSelectAll0;
 }
 
 static bool getOptSelectHas0(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_OptSelectHas0>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_OptSelectHas0;
 }
 
 static bool getOptConst(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_OptInsertConst>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_OptInsertConst;
 }
 
 static unsigned getVRegIndexCutoff(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_VRegIndexCutoff>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<HexagonOptions>()
+      .HEX_VRegIndexCutoff.value_or(~0U);
 }
 
 static bool getVRegIndexCutoffWasSpecified(const Function &F) {
-  if (auto *O = clv2::getView<&clv2::HexagonOptsReg>(
-          F.getContext().getOptionsContext()))
-    return O->specified<&clv2::HEX_VRegIndexCutoff>();
-  return VRegIndexCutoffWasSpecified;
+  return F.getContext()
+      .getOptions<HexagonOptions>()
+      .HEX_VRegIndexCutoff.has_value();
 }
 
 static unsigned getMaxORLSize(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_MaxORLSize>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_MaxORLSize;
 }
 
 static bool getOptTimingDetail(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_OptTimingDetail>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_OptTimingDetail;
 }
 
 // The preprocessor gets confused when the DEBUG macro is passed larger

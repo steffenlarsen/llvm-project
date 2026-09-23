@@ -20,7 +20,7 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsCore2.h"
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/CodeGen/TargetLowering.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
@@ -47,8 +47,8 @@
 
 using namespace llvm;
 
-static bool getDisableTypePromotion(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_DisableTypePromotion>(Ctx);
+static bool getDisableTypePromotion(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore2Options>().CGPASS_DisableTypePromotion;
 }
 
 // The goal of this pass is to enable more efficient code generation for
@@ -953,7 +953,7 @@ bool TypePromotionImpl::TryToPromote(Value *V, unsigned PromotedWidth,
 bool TypePromotionImpl::run(Function &F, const TargetMachine *TM,
                             const TargetTransformInfo &TTI,
                             const LoopInfo &LI) {
-  if (getDisableTypePromotion(F.getContext().getOptionsContext()))
+  if (getDisableTypePromotion(F.getContext()))
     return false;
 
   LLVM_DEBUG(dbgs() << "IR Promotion: Running on " << F.getName() << "\n");

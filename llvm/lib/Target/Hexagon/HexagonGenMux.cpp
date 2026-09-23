@@ -39,8 +39,7 @@
 #include "llvm/MC/MCInstrDesc.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/MathExtras.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
+#include "llvm/Target/Hexagon/HexagonOptions.h"
 #include <algorithm>
 #include <cassert>
 #include <iterator>
@@ -53,8 +52,7 @@ using namespace llvm;
 // Initialize this to 0 to always prefer generating mux by default.
 
 static unsigned getMinPredDist(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_MinPredDist>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_MinPredDist;
 }
 
 namespace {

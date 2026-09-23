@@ -41,10 +41,9 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetOptions.h"
-#include "llvm/Target/X86/X86OptionsOptInfos.h"
+#include "llvm/Target/X86/X86Options.h"
 #include <atomic>
 #include <optional>
 
@@ -59,39 +58,31 @@ static unsigned PartialRegUpdateClearance = 64;
 static unsigned UndefRegClearance = 128;
 
 static bool getNoFusing(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::X86_DisableSpillFusing>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<X86Options>().X86_DisableSpillFusing;
 }
 
 static bool getPrintFailedFusing(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::X86_PrintFailedFusing>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<X86Options>().X86_PrintFailedFusing;
 }
 
 static bool getReMatPICStubLoad(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::X86_ReMatPICStubLoad>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<X86Options>().X86_ReMatPICStubLoad;
 }
 
 static unsigned optPartialRegUpdateClearance(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::X86_PartialRegUpdateClearance>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<X86Options>().X86_PartialRegUpdateClearance;
 }
 
 static unsigned optUndefRegClearance(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::X86_UndefRegClearance>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<X86Options>().X86_UndefRegClearance;
 }
 
 static bool getX86EnableAPXForRelocation(const Function &F) {
-  return clv2::getOptValOr<&clv2::X86OptsReg,
-                           &clv2::X86_EnableAPXForRelocation>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext().getOptions<X86Options>().X86_EnableAPXForRelocation;
 }
 
 static unsigned getMaxNFConversions(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::X86_MaxNFConversions>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<X86Options>().X86_MaxNFConversions;
 }
 
 // Pin the vtable to this file.
@@ -768,8 +759,7 @@ static bool regIsPICBase(Register BaseReg, const MachineRegisterInfo &MRI) {
   return isPICBase;
 }
 
-bool X86InstrInfo::isReMaterializableImpl(
-    const MachineInstr &MI) const {
+bool X86InstrInfo::isReMaterializableImpl(const MachineInstr &MI) const {
   switch (MI.getOpcode()) {
   default:
     // This function should only be called for opcodes with the ReMaterializable
@@ -1285,32 +1275,32 @@ MachineInstr *X86InstrInfo::convertToThreeAddressWithLEA(unsigned MIOpc,
   switch (MIOpc) {
   default:
     llvm_unreachable("Unreachable!");
-  CASE_NF(SHL8ri)
-  CASE_NF(SHL16ri) {
-    unsigned ShAmt = MI.getOperand(2).getImm();
-    MIB.addReg(0)
-        .addImm(1LL << ShAmt)
-        .addReg(InRegLEA, RegState::Kill)
-        .addImm(0)
-        .addReg(0);
-    break;
-  }
-  CASE_NF(INC8r)
-  CASE_NF(INC16r)
+    CASE_NF(SHL8ri)
+    CASE_NF(SHL16ri) {
+      unsigned ShAmt = MI.getOperand(2).getImm();
+      MIB.addReg(0)
+          .addImm(1LL << ShAmt)
+          .addReg(InRegLEA, RegState::Kill)
+          .addImm(0)
+          .addReg(0);
+      break;
+    }
+    CASE_NF(INC8r)
+    CASE_NF(INC16r)
     addRegOffset(MIB, InRegLEA, true, 1);
     break;
-  CASE_NF(DEC8r)
-  CASE_NF(DEC16r)
+    CASE_NF(DEC8r)
+    CASE_NF(DEC16r)
     addRegOffset(MIB, InRegLEA, true, -1);
     break;
-  CASE_NF(ADD8ri)
-  CASE_NF(ADD16ri)
+    CASE_NF(ADD8ri)
+    CASE_NF(ADD16ri)
   case X86::ADD8ri_DB:
   case X86::ADD16ri_DB:
     addRegOffset(MIB, InRegLEA, true, MI.getOperand(2).getImm());
     break;
-  CASE_NF(ADD8rr)
-  CASE_NF(ADD16rr)
+    CASE_NF(ADD8rr)
+    CASE_NF(ADD16rr)
   case X86::ADD8rr_DB:
   case X86::ADD16rr_DB: {
     Src2 = MI.getOperand(2).getReg();
@@ -1452,128 +1442,129 @@ MachineInstr *X86InstrInfo::convertToThreeAddress(MachineInstr &MI,
   switch (MIOpc) {
   default:
     llvm_unreachable("Unreachable!");
-  CASE_NF(SHL64ri) {
-    assert(MI.getNumOperands() >= 3 && "Unknown shift instruction!");
-    unsigned ShAmt = getTruncatedShiftCount(MI, 2);
-    if (!isTruncatedShiftCountForLEA(ShAmt))
-      return nullptr;
+    CASE_NF(SHL64ri) {
+      assert(MI.getNumOperands() >= 3 && "Unknown shift instruction!");
+      unsigned ShAmt = getTruncatedShiftCount(MI, 2);
+      if (!isTruncatedShiftCountForLEA(ShAmt))
+        return nullptr;
 
-    // LEA can't handle RSP.
-    if (Src.getReg().isVirtual() && !MF.getRegInfo().constrainRegClass(
-                                        Src.getReg(), &X86::GR64_NOSPRegClass))
-      return nullptr;
+      // LEA can't handle RSP.
+      if (Src.getReg().isVirtual() &&
+          !MF.getRegInfo().constrainRegClass(Src.getReg(),
+                                             &X86::GR64_NOSPRegClass))
+        return nullptr;
 
-    NewMI = BuildMI(MF, MI.getDebugLoc(), get(X86::LEA64r))
-                .add(Dest)
-                .addReg(0)
-                .addImm(1LL << ShAmt)
-                .add(Src)
-                .addImm(0)
-                .addReg(0);
-    break;
-  }
-  CASE_NF(SHL32ri) {
-    assert(MI.getNumOperands() >= 3 && "Unknown shift instruction!");
-    unsigned ShAmt = getTruncatedShiftCount(MI, 2);
-    if (!isTruncatedShiftCountForLEA(ShAmt))
-      return nullptr;
+      NewMI = BuildMI(MF, MI.getDebugLoc(), get(X86::LEA64r))
+                  .add(Dest)
+                  .addReg(0)
+                  .addImm(1LL << ShAmt)
+                  .add(Src)
+                  .addImm(0)
+                  .addReg(0);
+      break;
+    }
+    CASE_NF(SHL32ri) {
+      assert(MI.getNumOperands() >= 3 && "Unknown shift instruction!");
+      unsigned ShAmt = getTruncatedShiftCount(MI, 2);
+      if (!isTruncatedShiftCountForLEA(ShAmt))
+        return nullptr;
 
-    unsigned Opc = Is64Bit ? X86::LEA64_32r : X86::LEA32r;
+      unsigned Opc = Is64Bit ? X86::LEA64_32r : X86::LEA32r;
 
-    // LEA can't handle ESP.
-    bool isKill;
-    MachineOperand ImplicitOp = MachineOperand::CreateReg(0, false);
-    if (!classifyLEAReg(MI, Src, Opc, /*AllowSP=*/false, SrcReg, SrcSubReg,
-                        isKill, ImplicitOp, LV, LIS))
-      return nullptr;
+      // LEA can't handle ESP.
+      bool isKill;
+      MachineOperand ImplicitOp = MachineOperand::CreateReg(0, false);
+      if (!classifyLEAReg(MI, Src, Opc, /*AllowSP=*/false, SrcReg, SrcSubReg,
+                          isKill, ImplicitOp, LV, LIS))
+        return nullptr;
 
-    MachineInstrBuilder MIB =
-        BuildMI(MF, MI.getDebugLoc(), get(Opc))
-            .add(Dest)
-            .addReg(0)
-            .addImm(1LL << ShAmt)
-            .addReg(SrcReg, getKillRegState(isKill), SrcSubReg)
-            .addImm(0)
-            .addReg(0);
-    if (ImplicitOp.getReg() != 0)
-      MIB.add(ImplicitOp);
-    NewMI = MIB;
+      MachineInstrBuilder MIB =
+          BuildMI(MF, MI.getDebugLoc(), get(Opc))
+              .add(Dest)
+              .addReg(0)
+              .addImm(1LL << ShAmt)
+              .addReg(SrcReg, getKillRegState(isKill), SrcSubReg)
+              .addImm(0)
+              .addReg(0);
+      if (ImplicitOp.getReg() != 0)
+        MIB.add(ImplicitOp);
+      NewMI = MIB;
 
-    // Add kills if classifyLEAReg created a new register.
-    if (LV && SrcReg != Src.getReg())
-      LV->getVarInfo(SrcReg).Kills.push_back(NewMI);
-    break;
-  }
-  CASE_NF(SHL8ri)
+      // Add kills if classifyLEAReg created a new register.
+      if (LV && SrcReg != Src.getReg())
+        LV->getVarInfo(SrcReg).Kills.push_back(NewMI);
+      break;
+    }
+    CASE_NF(SHL8ri)
     Is8BitOp = true;
     [[fallthrough]];
-  CASE_NF(SHL16ri) {
-    assert(MI.getNumOperands() >= 3 && "Unknown shift instruction!");
-    unsigned ShAmt = getTruncatedShiftCount(MI, 2);
-    if (!isTruncatedShiftCountForLEA(ShAmt))
-      return nullptr;
-    return convertToThreeAddressWithLEA(MIOpc, MI, LV, LIS, Is8BitOp);
-  }
-  CASE_NF(INC64r)
-  CASE_NF(INC32r) {
-    assert(MI.getNumOperands() >= 2 && "Unknown inc instruction!");
-    unsigned Opc = (MIOpc == X86::INC64r || MIOpc == X86::INC64r_NF)
-                       ? X86::LEA64r
-                       : (Is64Bit ? X86::LEA64_32r : X86::LEA32r);
-    bool isKill;
-    MachineOperand ImplicitOp = MachineOperand::CreateReg(0, false);
-    if (!classifyLEAReg(MI, Src, Opc, /*AllowSP=*/false, SrcReg, SrcSubReg,
-                        isKill, ImplicitOp, LV, LIS))
-      return nullptr;
+    CASE_NF(SHL16ri) {
+      assert(MI.getNumOperands() >= 3 && "Unknown shift instruction!");
+      unsigned ShAmt = getTruncatedShiftCount(MI, 2);
+      if (!isTruncatedShiftCountForLEA(ShAmt))
+        return nullptr;
+      return convertToThreeAddressWithLEA(MIOpc, MI, LV, LIS, Is8BitOp);
+    }
+    CASE_NF(INC64r)
+    CASE_NF(INC32r) {
+      assert(MI.getNumOperands() >= 2 && "Unknown inc instruction!");
+      unsigned Opc = (MIOpc == X86::INC64r || MIOpc == X86::INC64r_NF)
+                         ? X86::LEA64r
+                         : (Is64Bit ? X86::LEA64_32r : X86::LEA32r);
+      bool isKill;
+      MachineOperand ImplicitOp = MachineOperand::CreateReg(0, false);
+      if (!classifyLEAReg(MI, Src, Opc, /*AllowSP=*/false, SrcReg, SrcSubReg,
+                          isKill, ImplicitOp, LV, LIS))
+        return nullptr;
 
-    MachineInstrBuilder MIB = BuildMI(MF, MI.getDebugLoc(), get(Opc))
-                                  .add(Dest)
-                                  .addReg(SrcReg, getKillRegState(isKill));
-    if (ImplicitOp.getReg() != 0)
-      MIB.add(ImplicitOp);
+      MachineInstrBuilder MIB = BuildMI(MF, MI.getDebugLoc(), get(Opc))
+                                    .add(Dest)
+                                    .addReg(SrcReg, getKillRegState(isKill));
+      if (ImplicitOp.getReg() != 0)
+        MIB.add(ImplicitOp);
 
-    NewMI = addOffset(MIB, 1);
+      NewMI = addOffset(MIB, 1);
 
-    // Add kills if classifyLEAReg created a new register.
-    if (LV && SrcReg != Src.getReg())
-      LV->getVarInfo(SrcReg).Kills.push_back(NewMI);
-    break;
-  }
-  CASE_NF(DEC64r)
-  CASE_NF(DEC32r) {
-    assert(MI.getNumOperands() >= 2 && "Unknown dec instruction!");
-    unsigned Opc = (MIOpc == X86::DEC64r || MIOpc == X86::DEC64r_NF)
-                       ? X86::LEA64r
-                       : (Is64Bit ? X86::LEA64_32r : X86::LEA32r);
+      // Add kills if classifyLEAReg created a new register.
+      if (LV && SrcReg != Src.getReg())
+        LV->getVarInfo(SrcReg).Kills.push_back(NewMI);
+      break;
+    }
+    CASE_NF(DEC64r)
+    CASE_NF(DEC32r) {
+      assert(MI.getNumOperands() >= 2 && "Unknown dec instruction!");
+      unsigned Opc = (MIOpc == X86::DEC64r || MIOpc == X86::DEC64r_NF)
+                         ? X86::LEA64r
+                         : (Is64Bit ? X86::LEA64_32r : X86::LEA32r);
 
-    bool isKill;
-    MachineOperand ImplicitOp = MachineOperand::CreateReg(0, false);
-    if (!classifyLEAReg(MI, Src, Opc, /*AllowSP=*/false, SrcReg, SrcSubReg,
-                        isKill, ImplicitOp, LV, LIS))
-      return nullptr;
+      bool isKill;
+      MachineOperand ImplicitOp = MachineOperand::CreateReg(0, false);
+      if (!classifyLEAReg(MI, Src, Opc, /*AllowSP=*/false, SrcReg, SrcSubReg,
+                          isKill, ImplicitOp, LV, LIS))
+        return nullptr;
 
-    MachineInstrBuilder MIB = BuildMI(MF, MI.getDebugLoc(), get(Opc))
-                                  .add(Dest)
-                                  .addReg(SrcReg, getKillRegState(isKill));
-    if (ImplicitOp.getReg() != 0)
-      MIB.add(ImplicitOp);
+      MachineInstrBuilder MIB = BuildMI(MF, MI.getDebugLoc(), get(Opc))
+                                    .add(Dest)
+                                    .addReg(SrcReg, getKillRegState(isKill));
+      if (ImplicitOp.getReg() != 0)
+        MIB.add(ImplicitOp);
 
-    NewMI = addOffset(MIB, -1);
+      NewMI = addOffset(MIB, -1);
 
-    // Add kills if classifyLEAReg created a new register.
-    if (LV && SrcReg != Src.getReg())
-      LV->getVarInfo(SrcReg).Kills.push_back(NewMI);
-    break;
-  }
-  CASE_NF(DEC8r)
-  CASE_NF(INC8r)
+      // Add kills if classifyLEAReg created a new register.
+      if (LV && SrcReg != Src.getReg())
+        LV->getVarInfo(SrcReg).Kills.push_back(NewMI);
+      break;
+    }
+    CASE_NF(DEC8r)
+    CASE_NF(INC8r)
     Is8BitOp = true;
     [[fallthrough]];
-  CASE_NF(DEC16r)
-  CASE_NF(INC16r)
+    CASE_NF(DEC16r)
+    CASE_NF(INC16r)
     return convertToThreeAddressWithLEA(MIOpc, MI, LV, LIS, Is8BitOp);
-  CASE_NF(ADD64rr)
-  CASE_NF(ADD32rr)
+    CASE_NF(ADD64rr)
+    CASE_NF(ADD32rr)
   case X86::ADD64rr_DB:
   case X86::ADD32rr_DB: {
     assert(MI.getNumOperands() >= 3 && "Unknown add instruction!");
@@ -1624,21 +1615,21 @@ MachineInstr *X86InstrInfo::convertToThreeAddress(MachineInstr &MI,
     NumRegOperands = 3;
     break;
   }
-  CASE_NF(ADD8rr)
+    CASE_NF(ADD8rr)
   case X86::ADD8rr_DB:
     Is8BitOp = true;
     [[fallthrough]];
-  CASE_NF(ADD16rr)
+    CASE_NF(ADD16rr)
   case X86::ADD16rr_DB:
     return convertToThreeAddressWithLEA(MIOpc, MI, LV, LIS, Is8BitOp);
-  CASE_NF(ADD64ri32)
+    CASE_NF(ADD64ri32)
   case X86::ADD64ri32_DB:
     assert(MI.getNumOperands() >= 3 && "Unknown add instruction!");
     NewMI = addOffset(
         BuildMI(MF, MI.getDebugLoc(), get(X86::LEA64r)).add(Dest).add(Src),
         MI.getOperand(2));
     break;
-  CASE_NF(ADD32ri)
+    CASE_NF(ADD32ri)
   case X86::ADD32ri_DB: {
     assert(MI.getNumOperands() >= 3 && "Unknown add instruction!");
     unsigned Opc = Is64Bit ? X86::LEA64_32r : X86::LEA32r;
@@ -1663,62 +1654,62 @@ MachineInstr *X86InstrInfo::convertToThreeAddress(MachineInstr &MI,
       LV->getVarInfo(SrcReg).Kills.push_back(NewMI);
     break;
   }
-  CASE_NF(ADD8ri)
+    CASE_NF(ADD8ri)
   case X86::ADD8ri_DB:
     Is8BitOp = true;
     [[fallthrough]];
-  CASE_NF(ADD16ri)
+    CASE_NF(ADD16ri)
   case X86::ADD16ri_DB:
     return convertToThreeAddressWithLEA(MIOpc, MI, LV, LIS, Is8BitOp);
-  CASE_NF(SUB8ri)
-  CASE_NF(SUB16ri)
+    CASE_NF(SUB8ri)
+    CASE_NF(SUB16ri)
     /// FIXME: Support these similar to ADD8ri/ADD16ri*.
     return nullptr;
-  CASE_NF(SUB32ri) {
-    if (!MI.getOperand(2).isImm())
-      return nullptr;
-    int64_t Imm = MI.getOperand(2).getImm();
-    if (!isInt<32>(-Imm))
-      return nullptr;
+    CASE_NF(SUB32ri) {
+      if (!MI.getOperand(2).isImm())
+        return nullptr;
+      int64_t Imm = MI.getOperand(2).getImm();
+      if (!isInt<32>(-Imm))
+        return nullptr;
 
-    assert(MI.getNumOperands() >= 3 && "Unknown add instruction!");
-    unsigned Opc = Is64Bit ? X86::LEA64_32r : X86::LEA32r;
+      assert(MI.getNumOperands() >= 3 && "Unknown add instruction!");
+      unsigned Opc = Is64Bit ? X86::LEA64_32r : X86::LEA32r;
 
-    bool isKill;
-    MachineOperand ImplicitOp = MachineOperand::CreateReg(0, false);
-    if (!classifyLEAReg(MI, Src, Opc, /*AllowSP=*/true, SrcReg, SrcSubReg,
-                        isKill, ImplicitOp, LV, LIS))
-      return nullptr;
+      bool isKill;
+      MachineOperand ImplicitOp = MachineOperand::CreateReg(0, false);
+      if (!classifyLEAReg(MI, Src, Opc, /*AllowSP=*/true, SrcReg, SrcSubReg,
+                          isKill, ImplicitOp, LV, LIS))
+        return nullptr;
 
-    MachineInstrBuilder MIB =
-        BuildMI(MF, MI.getDebugLoc(), get(Opc))
-            .add(Dest)
-            .addReg(SrcReg, getKillRegState(isKill), SrcSubReg);
-    if (ImplicitOp.getReg() != 0)
-      MIB.add(ImplicitOp);
+      MachineInstrBuilder MIB =
+          BuildMI(MF, MI.getDebugLoc(), get(Opc))
+              .add(Dest)
+              .addReg(SrcReg, getKillRegState(isKill), SrcSubReg);
+      if (ImplicitOp.getReg() != 0)
+        MIB.add(ImplicitOp);
 
-    NewMI = addOffset(MIB, -Imm);
+      NewMI = addOffset(MIB, -Imm);
 
-    // Add kills if classifyLEAReg created a new register.
-    if (LV && SrcReg != Src.getReg())
-      LV->getVarInfo(SrcReg).Kills.push_back(NewMI);
-    break;
-  }
+      // Add kills if classifyLEAReg created a new register.
+      if (LV && SrcReg != Src.getReg())
+        LV->getVarInfo(SrcReg).Kills.push_back(NewMI);
+      break;
+    }
 
-  CASE_NF(SUB64ri32) {
-    if (!MI.getOperand(2).isImm())
-      return nullptr;
-    int64_t Imm = MI.getOperand(2).getImm();
-    if (!isInt<32>(-Imm))
-      return nullptr;
+    CASE_NF(SUB64ri32) {
+      if (!MI.getOperand(2).isImm())
+        return nullptr;
+      int64_t Imm = MI.getOperand(2).getImm();
+      if (!isInt<32>(-Imm))
+        return nullptr;
 
-    assert(MI.getNumOperands() >= 3 && "Unknown sub instruction!");
+      assert(MI.getNumOperands() >= 3 && "Unknown sub instruction!");
 
-    MachineInstrBuilder MIB =
-        BuildMI(MF, MI.getDebugLoc(), get(X86::LEA64r)).add(Dest).add(Src);
-    NewMI = addOffset(MIB, -Imm);
-    break;
-  }
+      MachineInstrBuilder MIB =
+          BuildMI(MF, MI.getDebugLoc(), get(X86::LEA64r)).add(Dest).add(Src);
+      NewMI = addOffset(MIB, -Imm);
+      break;
+    }
 
   case X86::VMOVDQU8Z128rmk:
   case X86::VMOVDQU8Z256rmk:
@@ -2322,17 +2313,17 @@ MachineInstr *X86InstrInfo::commuteInstructionImpl(MachineInstr &MI, bool NewMI,
   case X86::OP##_ND:
 
   switch (Opc) {
-  // SHLD B, C, I <-> SHRD C, B, (BitWidth - I)
-  CASE_ND(SHRD16rri8)
-  CASE_ND(SHLD16rri8)
-  CASE_ND(SHRD32rri8)
-  CASE_ND(SHLD32rri8)
-  CASE_ND(SHRD64rri8)
-  CASE_ND(SHLD64rri8) {
-    unsigned Size;
-    switch (Opc) {
-    default:
-      llvm_unreachable("Unreachable!");
+    // SHLD B, C, I <-> SHRD C, B, (BitWidth - I)
+    CASE_ND(SHRD16rri8)
+    CASE_ND(SHLD16rri8)
+    CASE_ND(SHRD32rri8)
+    CASE_ND(SHLD32rri8)
+    CASE_ND(SHRD64rri8)
+    CASE_ND(SHLD64rri8) {
+      unsigned Size;
+      switch (Opc) {
+      default:
+        llvm_unreachable("Unreachable!");
 #define FROM_TO_SIZE(A, B, S)                                                  \
   case X86::A:                                                                 \
     Opc = X86::B;                                                              \
@@ -2351,16 +2342,16 @@ MachineInstr *X86InstrInfo::commuteInstructionImpl(MachineInstr &MI, bool NewMI,
     Size = S;                                                                  \
     break;
 
-    FROM_TO_SIZE(SHRD16rri8, SHLD16rri8, 16)
-    FROM_TO_SIZE(SHRD32rri8, SHLD32rri8, 32)
-    FROM_TO_SIZE(SHRD64rri8, SHLD64rri8, 64)
+        FROM_TO_SIZE(SHRD16rri8, SHLD16rri8, 16)
+        FROM_TO_SIZE(SHRD32rri8, SHLD32rri8, 32)
+        FROM_TO_SIZE(SHRD64rri8, SHLD64rri8, 64)
 #undef FROM_TO_SIZE
+      }
+      WorkingMI = CloneIfNew(MI);
+      WorkingMI->setDesc(get(Opc));
+      WorkingMI->getOperand(3).setImm(Size - MI.getOperand(3).getImm());
+      break;
     }
-    WorkingMI = CloneIfNew(MI);
-    WorkingMI->setDesc(get(Opc));
-    WorkingMI->getOperand(3).setImm(Size - MI.getOperand(3).getImm());
-    break;
-  }
   case X86::PFSUBrr:
   case X86::PFSUBRrr:
     // PFSUB  x, y: x = x - y
@@ -2644,15 +2635,16 @@ MachineInstr *X86InstrInfo::commuteInstructionImpl(MachineInstr &MI, bool NewMI,
     WorkingMI = CloneIfNew(MI);
     WorkingMI->setDesc(get(Opc));
     break;
-  CASE_ND(CMOV16rr)
-  CASE_ND(CMOV32rr)
-  CASE_ND(CMOV64rr) {
-    WorkingMI = CloneIfNew(MI);
-    unsigned OpNo = MI.getDesc().getNumOperands() - 1;
-    X86::CondCode CC = static_cast<X86::CondCode>(MI.getOperand(OpNo).getImm());
-    WorkingMI->getOperand(OpNo).setImm(X86::GetOppositeBranchCondition(CC));
-    break;
-  }
+    CASE_ND(CMOV16rr)
+    CASE_ND(CMOV32rr)
+    CASE_ND(CMOV64rr) {
+      WorkingMI = CloneIfNew(MI);
+      unsigned OpNo = MI.getDesc().getNumOperands() - 1;
+      X86::CondCode CC =
+          static_cast<X86::CondCode>(MI.getOperand(OpNo).getImm());
+      WorkingMI->getOperand(OpNo).setImm(X86::GetOppositeBranchCondition(CC));
+      break;
+    }
   case X86::VPTERNLOGDZrri:
   case X86::VPTERNLOGDZrmi:
   case X86::VPTERNLOGDZ128rri:
@@ -4878,29 +4870,29 @@ bool X86InstrInfo::analyzeCompare(const MachineInstr &MI, Register &SrcReg,
       CmpMask = CmpValue = 0;
     }
     return true;
-  // A SUB can be used to perform comparison.
-  CASE_ND(SUB64rm)
-  CASE_ND(SUB32rm)
-  CASE_ND(SUB16rm)
-  CASE_ND(SUB8rm)
+    // A SUB can be used to perform comparison.
+    CASE_ND(SUB64rm)
+    CASE_ND(SUB32rm)
+    CASE_ND(SUB16rm)
+    CASE_ND(SUB8rm)
     SrcReg = MI.getOperand(1).getReg();
     SrcReg2 = 0;
     CmpMask = 0;
     CmpValue = 0;
     return true;
-  CASE_ND(SUB64rr)
-  CASE_ND(SUB32rr)
-  CASE_ND(SUB16rr)
-  CASE_ND(SUB8rr)
+    CASE_ND(SUB64rr)
+    CASE_ND(SUB32rr)
+    CASE_ND(SUB16rr)
+    CASE_ND(SUB8rr)
     SrcReg = MI.getOperand(1).getReg();
     SrcReg2 = MI.getOperand(2).getReg();
     CmpMask = 0;
     CmpValue = 0;
     return true;
-  CASE_ND(SUB64ri32)
-  CASE_ND(SUB32ri)
-  CASE_ND(SUB16ri)
-  CASE_ND(SUB8ri)
+    CASE_ND(SUB64ri32)
+    CASE_ND(SUB32ri)
+    CASE_ND(SUB16ri)
+    CASE_ND(SUB8ri)
     SrcReg = MI.getOperand(1).getReg();
     SrcReg2 = 0;
     if (MI.getOperand(2).isImm()) {
@@ -4955,27 +4947,27 @@ bool X86InstrInfo::isRedundantFlagInstr(const MachineInstr &FlagI,
   case X86::CMP32rr:
   case X86::CMP16rr:
   case X86::CMP8rr:
-  CASE_ND(SUB64rr)
-  CASE_ND(SUB32rr)
-  CASE_ND(SUB16rr)
-  CASE_ND(SUB8rr) {
-    Register OISrcReg;
-    Register OISrcReg2;
-    int64_t OIMask;
-    int64_t OIValue;
-    if (!analyzeCompare(OI, OISrcReg, OISrcReg2, OIMask, OIValue) ||
-        OIMask != ImmMask || OIValue != ImmValue)
+    CASE_ND(SUB64rr)
+    CASE_ND(SUB32rr)
+    CASE_ND(SUB16rr)
+    CASE_ND(SUB8rr) {
+      Register OISrcReg;
+      Register OISrcReg2;
+      int64_t OIMask;
+      int64_t OIValue;
+      if (!analyzeCompare(OI, OISrcReg, OISrcReg2, OIMask, OIValue) ||
+          OIMask != ImmMask || OIValue != ImmValue)
+        return false;
+      if (SrcReg == OISrcReg && SrcReg2 == OISrcReg2) {
+        *IsSwapped = false;
+        return true;
+      }
+      if (SrcReg == OISrcReg2 && SrcReg2 == OISrcReg) {
+        *IsSwapped = true;
+        return true;
+      }
       return false;
-    if (SrcReg == OISrcReg && SrcReg2 == OISrcReg2) {
-      *IsSwapped = false;
-      return true;
     }
-    if (SrcReg == OISrcReg2 && SrcReg2 == OISrcReg) {
-      *IsSwapped = true;
-      return true;
-    }
-    return false;
-  }
   case X86::CMP64ri32:
   case X86::CMP32ri:
   case X86::CMP16ri:
@@ -4984,10 +4976,10 @@ bool X86InstrInfo::isRedundantFlagInstr(const MachineInstr &FlagI,
   case X86::TEST32ri:
   case X86::TEST16ri:
   case X86::TEST8ri:
-  CASE_ND(SUB64ri32)
-  CASE_ND(SUB32ri)
-  CASE_ND(SUB16ri)
-  CASE_ND(SUB8ri)
+    CASE_ND(SUB64ri32)
+    CASE_ND(SUB32ri)
+    CASE_ND(SUB16ri)
+    CASE_ND(SUB8ri)
   case X86::TEST64rr:
   case X86::TEST32rr:
   case X86::TEST16rr:
@@ -5069,105 +5061,105 @@ inline static bool isDefConvertible(const MachineInstr &MI, bool &NoSignFlag,
   default:
     return false;
 
-  // The shift instructions only modify ZF if their shift count is non-zero.
-  // N.B.: The processor truncates the shift count depending on the encoding.
-  CASE_ND(SAR8ri)
-  CASE_ND(SAR16ri)
-  CASE_ND(SAR32ri)
-  CASE_ND(SAR64ri)
-  CASE_ND(SHR8ri)
-  CASE_ND(SHR16ri)
-  CASE_ND(SHR32ri)
-  CASE_ND(SHR64ri)
+    // The shift instructions only modify ZF if their shift count is non-zero.
+    // N.B.: The processor truncates the shift count depending on the encoding.
+    CASE_ND(SAR8ri)
+    CASE_ND(SAR16ri)
+    CASE_ND(SAR32ri)
+    CASE_ND(SAR64ri)
+    CASE_ND(SHR8ri)
+    CASE_ND(SHR16ri)
+    CASE_ND(SHR32ri)
+    CASE_ND(SHR64ri)
     return getTruncatedShiftCount(MI, 2) != 0;
 
-  // Some left shift instructions can be turned into LEA instructions but only
-  // if their flags aren't used. Avoid transforming such instructions.
-  CASE_ND(SHL8ri)
-  CASE_ND(SHL16ri)
-  CASE_ND(SHL32ri)
-  CASE_ND(SHL64ri) {
-    unsigned ShAmt = getTruncatedShiftCount(MI, 2);
-    // Converting to LEA only pays off when the shifted operand stays live,
-    // since it spares a register copy; when the shift is the operand's only
-    // user, reusing the flags is strictly better.
-    if (isTruncatedShiftCountForLEA(ShAmt)) {
-      Register SrcReg = MI.getOperand(1).getReg();
-      const MachineRegisterInfo &MRI = MI.getMF()->getRegInfo();
-      if (!SrcReg.isVirtual() || !MRI.hasOneNonDBGUse(SrcReg))
-        return false;
+    // Some left shift instructions can be turned into LEA instructions but only
+    // if their flags aren't used. Avoid transforming such instructions.
+    CASE_ND(SHL8ri)
+    CASE_ND(SHL16ri)
+    CASE_ND(SHL32ri)
+    CASE_ND(SHL64ri) {
+      unsigned ShAmt = getTruncatedShiftCount(MI, 2);
+      // Converting to LEA only pays off when the shifted operand stays live,
+      // since it spares a register copy; when the shift is the operand's only
+      // user, reusing the flags is strictly better.
+      if (isTruncatedShiftCountForLEA(ShAmt)) {
+        Register SrcReg = MI.getOperand(1).getReg();
+        const MachineRegisterInfo &MRI = MI.getMF()->getRegInfo();
+        if (!SrcReg.isVirtual() || !MRI.hasOneNonDBGUse(SrcReg))
+          return false;
+      }
+      return ShAmt != 0;
     }
-    return ShAmt != 0;
-  }
 
-  CASE_ND(SHRD16rri8)
-  CASE_ND(SHRD32rri8)
-  CASE_ND(SHRD64rri8)
-  CASE_ND(SHLD16rri8)
-  CASE_ND(SHLD32rri8)
-  CASE_ND(SHLD64rri8)
+    CASE_ND(SHRD16rri8)
+    CASE_ND(SHRD32rri8)
+    CASE_ND(SHRD64rri8)
+    CASE_ND(SHLD16rri8)
+    CASE_ND(SHLD32rri8)
+    CASE_ND(SHLD64rri8)
     return getTruncatedShiftCount(MI, 3) != 0;
 
-  CASE_ND(SUB64ri32)
-  CASE_ND(SUB32ri)
-  CASE_ND(SUB16ri)
-  CASE_ND(SUB8ri)
-  CASE_ND(SUB64rr)
-  CASE_ND(SUB32rr)
-  CASE_ND(SUB16rr)
-  CASE_ND(SUB8rr)
-  CASE_ND(SUB64rm)
-  CASE_ND(SUB32rm)
-  CASE_ND(SUB16rm)
-  CASE_ND(SUB8rm)
-  CASE_ND(DEC64r)
-  CASE_ND(DEC32r)
-  CASE_ND(DEC16r)
-  CASE_ND(DEC8r)
-  CASE_ND(ADD64ri32)
-  CASE_ND(ADD32ri)
-  CASE_ND(ADD16ri)
-  CASE_ND(ADD8ri)
-  CASE_ND(ADD64rr)
-  CASE_ND(ADD32rr)
-  CASE_ND(ADD16rr)
-  CASE_ND(ADD8rr)
-  CASE_ND(ADD64rm)
-  CASE_ND(ADD32rm)
-  CASE_ND(ADD16rm)
-  CASE_ND(ADD8rm)
-  CASE_ND(INC64r)
-  CASE_ND(INC32r)
-  CASE_ND(INC16r)
-  CASE_ND(INC8r)
-  CASE_ND(ADC64ri32)
-  CASE_ND(ADC32ri)
-  CASE_ND(ADC16ri)
-  CASE_ND(ADC8ri)
-  CASE_ND(ADC64rr)
-  CASE_ND(ADC32rr)
-  CASE_ND(ADC16rr)
-  CASE_ND(ADC8rr)
-  CASE_ND(ADC64rm)
-  CASE_ND(ADC32rm)
-  CASE_ND(ADC16rm)
-  CASE_ND(ADC8rm)
-  CASE_ND(SBB64ri32)
-  CASE_ND(SBB32ri)
-  CASE_ND(SBB16ri)
-  CASE_ND(SBB8ri)
-  CASE_ND(SBB64rr)
-  CASE_ND(SBB32rr)
-  CASE_ND(SBB16rr)
-  CASE_ND(SBB8rr)
-  CASE_ND(SBB64rm)
-  CASE_ND(SBB32rm)
-  CASE_ND(SBB16rm)
-  CASE_ND(SBB8rm)
-  CASE_ND(NEG8r)
-  CASE_ND(NEG16r)
-  CASE_ND(NEG32r)
-  CASE_ND(NEG64r)
+    CASE_ND(SUB64ri32)
+    CASE_ND(SUB32ri)
+    CASE_ND(SUB16ri)
+    CASE_ND(SUB8ri)
+    CASE_ND(SUB64rr)
+    CASE_ND(SUB32rr)
+    CASE_ND(SUB16rr)
+    CASE_ND(SUB8rr)
+    CASE_ND(SUB64rm)
+    CASE_ND(SUB32rm)
+    CASE_ND(SUB16rm)
+    CASE_ND(SUB8rm)
+    CASE_ND(DEC64r)
+    CASE_ND(DEC32r)
+    CASE_ND(DEC16r)
+    CASE_ND(DEC8r)
+    CASE_ND(ADD64ri32)
+    CASE_ND(ADD32ri)
+    CASE_ND(ADD16ri)
+    CASE_ND(ADD8ri)
+    CASE_ND(ADD64rr)
+    CASE_ND(ADD32rr)
+    CASE_ND(ADD16rr)
+    CASE_ND(ADD8rr)
+    CASE_ND(ADD64rm)
+    CASE_ND(ADD32rm)
+    CASE_ND(ADD16rm)
+    CASE_ND(ADD8rm)
+    CASE_ND(INC64r)
+    CASE_ND(INC32r)
+    CASE_ND(INC16r)
+    CASE_ND(INC8r)
+    CASE_ND(ADC64ri32)
+    CASE_ND(ADC32ri)
+    CASE_ND(ADC16ri)
+    CASE_ND(ADC8ri)
+    CASE_ND(ADC64rr)
+    CASE_ND(ADC32rr)
+    CASE_ND(ADC16rr)
+    CASE_ND(ADC8rr)
+    CASE_ND(ADC64rm)
+    CASE_ND(ADC32rm)
+    CASE_ND(ADC16rm)
+    CASE_ND(ADC8rm)
+    CASE_ND(SBB64ri32)
+    CASE_ND(SBB32ri)
+    CASE_ND(SBB16ri)
+    CASE_ND(SBB8ri)
+    CASE_ND(SBB64rr)
+    CASE_ND(SBB32rr)
+    CASE_ND(SBB16rr)
+    CASE_ND(SBB8rr)
+    CASE_ND(SBB64rm)
+    CASE_ND(SBB32rm)
+    CASE_ND(SBB16rm)
+    CASE_ND(SBB8rm)
+    CASE_ND(NEG8r)
+    CASE_ND(NEG16r)
+    CASE_ND(NEG32r)
+    CASE_ND(NEG64r)
   case X86::LZCNT16rr:
   case X86::LZCNT16rm:
   case X86::LZCNT32rr:
@@ -5187,58 +5179,58 @@ inline static bool isDefConvertible(const MachineInstr &MI, bool &NoSignFlag,
   case X86::TZCNT64rr:
   case X86::TZCNT64rm:
     return true;
-  CASE_ND(AND64ri32)
-  CASE_ND(AND32ri)
-  CASE_ND(AND16ri)
-  CASE_ND(AND8ri)
-  CASE_ND(AND64rr)
-  CASE_ND(AND32rr)
-  CASE_ND(AND16rr)
-  CASE_ND(AND8rr)
-  CASE_ND(AND64rm)
-  CASE_ND(AND32rm)
-  CASE_ND(AND16rm)
-  CASE_ND(AND8rm)
-  CASE_ND(XOR64ri32)
-  CASE_ND(XOR32ri)
-  CASE_ND(XOR16ri)
-  CASE_ND(XOR8ri)
-  CASE_ND(XOR64rr)
-  CASE_ND(XOR32rr)
-  CASE_ND(XOR16rr)
-  CASE_ND(XOR8rr)
-  CASE_ND(XOR64rm)
-  CASE_ND(XOR32rm)
-  CASE_ND(XOR16rm)
-  CASE_ND(XOR8rm)
-  CASE_ND(OR64ri32)
-  CASE_ND(OR32ri)
-  CASE_ND(OR16ri)
-  CASE_ND(OR8ri)
-  CASE_ND(OR64rr)
-  CASE_ND(OR32rr)
-  CASE_ND(OR16rr)
-  CASE_ND(OR8rr)
-  CASE_ND(OR64rm)
-  CASE_ND(OR32rm)
-  CASE_ND(OR16rm)
-  CASE_ND(OR8rm)
-  CASE_EVEX(ANDN32rr)
-  CASE_EVEX(ANDN32rm)
-  CASE_EVEX(ANDN64rr)
-  CASE_EVEX(ANDN64rm)
-  CASE_EVEX(BLSI32rr)
-  CASE_EVEX(BLSI32rm)
-  CASE_EVEX(BLSI64rr)
-  CASE_EVEX(BLSI64rm)
-  CASE_EVEX(BLSMSK32rr)
-  CASE_EVEX(BLSMSK32rm)
-  CASE_EVEX(BLSMSK64rr)
-  CASE_EVEX(BLSMSK64rm)
-  CASE_EVEX(BLSR32rr)
-  CASE_EVEX(BLSR32rm)
-  CASE_EVEX(BLSR64rr)
-  CASE_EVEX(BLSR64rm)
+    CASE_ND(AND64ri32)
+    CASE_ND(AND32ri)
+    CASE_ND(AND16ri)
+    CASE_ND(AND8ri)
+    CASE_ND(AND64rr)
+    CASE_ND(AND32rr)
+    CASE_ND(AND16rr)
+    CASE_ND(AND8rr)
+    CASE_ND(AND64rm)
+    CASE_ND(AND32rm)
+    CASE_ND(AND16rm)
+    CASE_ND(AND8rm)
+    CASE_ND(XOR64ri32)
+    CASE_ND(XOR32ri)
+    CASE_ND(XOR16ri)
+    CASE_ND(XOR8ri)
+    CASE_ND(XOR64rr)
+    CASE_ND(XOR32rr)
+    CASE_ND(XOR16rr)
+    CASE_ND(XOR8rr)
+    CASE_ND(XOR64rm)
+    CASE_ND(XOR32rm)
+    CASE_ND(XOR16rm)
+    CASE_ND(XOR8rm)
+    CASE_ND(OR64ri32)
+    CASE_ND(OR32ri)
+    CASE_ND(OR16ri)
+    CASE_ND(OR8ri)
+    CASE_ND(OR64rr)
+    CASE_ND(OR32rr)
+    CASE_ND(OR16rr)
+    CASE_ND(OR8rr)
+    CASE_ND(OR64rm)
+    CASE_ND(OR32rm)
+    CASE_ND(OR16rm)
+    CASE_ND(OR8rm)
+    CASE_EVEX(ANDN32rr)
+    CASE_EVEX(ANDN32rm)
+    CASE_EVEX(ANDN64rr)
+    CASE_EVEX(ANDN64rm)
+    CASE_EVEX(BLSI32rr)
+    CASE_EVEX(BLSI32rm)
+    CASE_EVEX(BLSI64rr)
+    CASE_EVEX(BLSI64rm)
+    CASE_EVEX(BLSMSK32rr)
+    CASE_EVEX(BLSMSK32rm)
+    CASE_EVEX(BLSMSK64rr)
+    CASE_EVEX(BLSMSK64rm)
+    CASE_EVEX(BLSR32rr)
+    CASE_EVEX(BLSR32rm)
+    CASE_EVEX(BLSR64rr)
+    CASE_EVEX(BLSR64rm)
   case X86::BLCFILL32rr:
   case X86::BLCFILL32rm:
   case X86::BLCFILL64rr:
@@ -5267,10 +5259,10 @@ inline static bool isDefConvertible(const MachineInstr &MI, bool &NoSignFlag,
   case X86::BLSIC32rm:
   case X86::BLSIC64rr:
   case X86::BLSIC64rm:
-  CASE_EVEX(BZHI32rr)
-  CASE_EVEX(BZHI32rm)
-  CASE_EVEX(BZHI64rr)
-  CASE_EVEX(BZHI64rm)
+    CASE_EVEX(BZHI32rr)
+    CASE_EVEX(BZHI32rm)
+    CASE_EVEX(BZHI64rr)
+    CASE_EVEX(BZHI64rm)
   case X86::T1MSKC32rr:
   case X86::T1MSKC32rm:
   case X86::T1MSKC64rr:
@@ -5284,10 +5276,10 @@ inline static bool isDefConvertible(const MachineInstr &MI, bool &NoSignFlag,
     // overflow flag.
     ClearsOverflowFlag = true;
     return true;
-  CASE_EVEX(BEXTR32rr)
-  CASE_EVEX(BEXTR64rr)
-  CASE_EVEX(BEXTR32rm)
-  CASE_EVEX(BEXTR64rm)
+    CASE_EVEX(BEXTR32rr)
+    CASE_EVEX(BEXTR64rr)
+    CASE_EVEX(BEXTR32rm)
+    CASE_EVEX(BEXTR64rm)
   case X86::BEXTRI32ri:
   case X86::BEXTRI32mi:
   case X86::BEXTRI64ri:
@@ -5300,15 +5292,17 @@ inline static bool isDefConvertible(const MachineInstr &MI, bool &NoSignFlag,
 }
 
 /// Check whether the use can be converted to remove a comparison against zero.
-/// Returns the EFLAGS condition and the operand that we are comparing against zero.
-static std::pair<X86::CondCode, unsigned> isUseDefConvertible(const MachineInstr &MI) {
+/// Returns the EFLAGS condition and the operand that we are comparing against
+/// zero.
+static std::pair<X86::CondCode, unsigned>
+isUseDefConvertible(const MachineInstr &MI) {
   switch (MI.getOpcode()) {
   default:
     return std::make_pair(X86::COND_INVALID, ~0U);
-  CASE_ND(NEG8r)
-  CASE_ND(NEG16r)
-  CASE_ND(NEG32r)
-  CASE_ND(NEG64r)
+    CASE_ND(NEG8r)
+    CASE_ND(NEG16r)
+    CASE_ND(NEG32r)
+    CASE_ND(NEG64r)
     return std::make_pair(X86::COND_AE, 1U);
   case X86::LZCNT16rr:
   case X86::LZCNT32rr:
@@ -5329,13 +5323,13 @@ static std::pair<X86::CondCode, unsigned> isUseDefConvertible(const MachineInstr
   case X86::BSR32rr:
   case X86::BSR64rr:
     return std::make_pair(X86::COND_E, 2U);
-  CASE_EVEX(BLSI32rr)
-  CASE_EVEX(BLSI64rr)
+    CASE_EVEX(BLSI32rr)
+    CASE_EVEX(BLSI64rr)
     return std::make_pair(X86::COND_AE, 1U);
-  CASE_EVEX(BLSR32rr)
-  CASE_EVEX(BLSR64rr)
-  CASE_EVEX(BLSMSK32rr)
-  CASE_EVEX(BLSMSK64rr)
+    CASE_EVEX(BLSR32rr)
+    CASE_EVEX(BLSR64rr)
+    CASE_EVEX(BLSMSK32rr)
+    CASE_EVEX(BLSMSK64rr)
     return std::make_pair(X86::COND_B, 1U);
     // TODO: TBM instructions.
   }
@@ -5445,51 +5439,53 @@ bool X86InstrInfo::optimizeCompareInstr(MachineInstr &CmpInstr, Register SrcReg,
   switch (CmpInstr.getOpcode()) {
   default:
     break;
-  CASE_ND(SUB64ri32)
-  CASE_ND(SUB32ri)
-  CASE_ND(SUB16ri)
-  CASE_ND(SUB8ri)
-  CASE_ND(SUB64rm)
-  CASE_ND(SUB32rm)
-  CASE_ND(SUB16rm)
-  CASE_ND(SUB8rm)
-  CASE_ND(SUB64rr)
-  CASE_ND(SUB32rr)
-  CASE_ND(SUB16rr)
-  CASE_ND(SUB8rr) {
-    if (!MRI->use_nodbg_empty(CmpInstr.getOperand(0).getReg()))
-      return false;
-    // There is no use of the destination register, we can replace SUB with CMP.
-    unsigned NewOpcode = 0;
+    CASE_ND(SUB64ri32)
+    CASE_ND(SUB32ri)
+    CASE_ND(SUB16ri)
+    CASE_ND(SUB8ri)
+    CASE_ND(SUB64rm)
+    CASE_ND(SUB32rm)
+    CASE_ND(SUB16rm)
+    CASE_ND(SUB8rm)
+    CASE_ND(SUB64rr)
+    CASE_ND(SUB32rr)
+    CASE_ND(SUB16rr)
+    CASE_ND(SUB8rr) {
+      if (!MRI->use_nodbg_empty(CmpInstr.getOperand(0).getReg()))
+        return false;
+      // There is no use of the destination register, we can replace SUB with
+      // CMP.
+      unsigned NewOpcode = 0;
 #define FROM_TO(A, B)                                                          \
   CASE_ND(A) NewOpcode = X86::B;                                               \
   break;
-    switch (CmpInstr.getOpcode()) {
-    default:
-      llvm_unreachable("Unreachable!");
-    FROM_TO(SUB64rm, CMP64rm)
-    FROM_TO(SUB32rm, CMP32rm)
-    FROM_TO(SUB16rm, CMP16rm)
-    FROM_TO(SUB8rm, CMP8rm)
-    FROM_TO(SUB64rr, CMP64rr)
-    FROM_TO(SUB32rr, CMP32rr)
-    FROM_TO(SUB16rr, CMP16rr)
-    FROM_TO(SUB8rr, CMP8rr)
-    FROM_TO(SUB64ri32, CMP64ri32)
-    FROM_TO(SUB32ri, CMP32ri)
-    FROM_TO(SUB16ri, CMP16ri)
-    FROM_TO(SUB8ri, CMP8ri)
-    }
+      switch (CmpInstr.getOpcode()) {
+      default:
+        llvm_unreachable("Unreachable!");
+        FROM_TO(SUB64rm, CMP64rm)
+        FROM_TO(SUB32rm, CMP32rm)
+        FROM_TO(SUB16rm, CMP16rm)
+        FROM_TO(SUB8rm, CMP8rm)
+        FROM_TO(SUB64rr, CMP64rr)
+        FROM_TO(SUB32rr, CMP32rr)
+        FROM_TO(SUB16rr, CMP16rr)
+        FROM_TO(SUB8rr, CMP8rr)
+        FROM_TO(SUB64ri32, CMP64ri32)
+        FROM_TO(SUB32ri, CMP32ri)
+        FROM_TO(SUB16ri, CMP16ri)
+        FROM_TO(SUB8ri, CMP8ri)
+      }
 #undef FROM_TO
-    CmpInstr.setDesc(get(NewOpcode));
-    CmpInstr.removeOperand(0);
-    // Mutating this instruction invalidates any debug data associated with it.
-    CmpInstr.dropDebugNumber();
-    // Fall through to optimize Cmp if Cmp is CMPrr or CMPri.
-    if (NewOpcode == X86::CMP64rm || NewOpcode == X86::CMP32rm ||
-        NewOpcode == X86::CMP16rm || NewOpcode == X86::CMP8rm)
-      return false;
-  }
+      CmpInstr.setDesc(get(NewOpcode));
+      CmpInstr.removeOperand(0);
+      // Mutating this instruction invalidates any debug data associated with
+      // it.
+      CmpInstr.dropDebugNumber();
+      // Fall through to optimize Cmp if Cmp is CMPrr or CMPri.
+      if (NewOpcode == X86::CMP64rm || NewOpcode == X86::CMP32rm ||
+          NewOpcode == X86::CMP16rm || NewOpcode == X86::CMP8rm)
+        return false;
+    }
   }
 
   // The following code tries to remove the comparison by re-using EFLAGS
@@ -5898,14 +5894,14 @@ static bool canConvert2Copy(unsigned Opc) {
   switch (Opc) {
   default:
     return false;
-  CASE_ND(ADD64ri32)
-  CASE_ND(SUB64ri32)
-  CASE_ND(OR64ri32)
-  CASE_ND(XOR64ri32)
-  CASE_ND(ADD32ri)
-  CASE_ND(SUB32ri)
-  CASE_ND(OR32ri)
-  CASE_ND(XOR32ri)
+    CASE_ND(ADD64ri32)
+    CASE_ND(SUB64ri32)
+    CASE_ND(OR64ri32)
+    CASE_ND(XOR64ri32)
+    CASE_ND(ADD32ri)
+    CASE_ND(SUB32ri)
+    CASE_ND(OR32ri)
+    CASE_ND(XOR32ri)
     return true;
   }
 }
@@ -10141,25 +10137,25 @@ bool X86InstrInfo::isAssociativeAndCommutative(const MachineInstr &Inst,
   if (Invert)
     return false;
   switch (Inst.getOpcode()) {
-  CASE_ND(ADD8rr)
-  CASE_ND(ADD16rr)
-  CASE_ND(ADD32rr)
-  CASE_ND(ADD64rr)
-  CASE_ND(AND8rr)
-  CASE_ND(AND16rr)
-  CASE_ND(AND32rr)
-  CASE_ND(AND64rr)
-  CASE_ND(OR8rr)
-  CASE_ND(OR16rr)
-  CASE_ND(OR32rr)
-  CASE_ND(OR64rr)
-  CASE_ND(XOR8rr)
-  CASE_ND(XOR16rr)
-  CASE_ND(XOR32rr)
-  CASE_ND(XOR64rr)
-  CASE_ND(IMUL16rr)
-  CASE_ND(IMUL32rr)
-  CASE_ND(IMUL64rr)
+    CASE_ND(ADD8rr)
+    CASE_ND(ADD16rr)
+    CASE_ND(ADD32rr)
+    CASE_ND(ADD64rr)
+    CASE_ND(AND8rr)
+    CASE_ND(AND16rr)
+    CASE_ND(AND32rr)
+    CASE_ND(AND64rr)
+    CASE_ND(OR8rr)
+    CASE_ND(OR16rr)
+    CASE_ND(OR32rr)
+    CASE_ND(OR64rr)
+    CASE_ND(XOR8rr)
+    CASE_ND(XOR16rr)
+    CASE_ND(XOR32rr)
+    CASE_ND(XOR64rr)
+    CASE_ND(IMUL16rr)
+    CASE_ND(IMUL32rr)
+    CASE_ND(IMUL64rr)
   case X86::PANDrr:
   case X86::PORrr:
   case X86::PXORrr:
@@ -10972,8 +10968,8 @@ bool X86InstrInfo::getMachineCombinerPatterns(
     break;
   }
   }
-  return TargetInstrInfo::getMachineCombinerPatterns(Root,
-                                                     Patterns, DoRegPressureReduce);
+  return TargetInstrInfo::getMachineCombinerPatterns(Root, Patterns,
+                                                     DoRegPressureReduce);
 }
 
 static void

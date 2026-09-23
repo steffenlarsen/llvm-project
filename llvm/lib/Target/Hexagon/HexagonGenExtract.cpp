@@ -24,8 +24,7 @@
 #include "llvm/IR/Value.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
+#include "llvm/Target/Hexagon/HexagonOptions.h"
 #include <algorithm>
 #include <cstdint>
 #include <iterator>
@@ -43,18 +42,18 @@ static unsigned ExtractCutoff = ~0U;
 static bool NoSR0 = true;
 
 static unsigned getExtractCutoff(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_ExtractCutoff>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_ExtractCutoff.value_or(
+      ~0U);
 }
 
 static bool getExtractCutoffWasSpecified(const Function &F) {
-  return clv2::wasOptSpecified<&clv2::HexagonOptsReg, &clv2::HEX_ExtractCutoff>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<HexagonOptions>()
+      .HEX_ExtractCutoff.has_value();
 }
 
 static bool getNoSR0(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_NoSR0>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_NoSR0;
 }
 
 namespace {

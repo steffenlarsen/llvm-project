@@ -10,7 +10,7 @@
 #include "llvm/BinaryFormat/DXContainer.h"
 #include "llvm/MC/MCAssembler.h"
 #include "llvm/MC/MCContext.h"
-#include "llvm/MC/MCOptionsOptInfos.h"
+#include "llvm/MC/MCOptions.h"
 #include "llvm/MC/MCSection.h"
 #include "llvm/MC/MCValue.h"
 #include "llvm/Support/Alignment.h"
@@ -156,9 +156,10 @@ ArrayRef<MCDXContainerPart> DXContainerObjectWriter::collectParts() {
 bool DXContainerObjectWriter::shouldSkipSection(StringRef SectionName,
                                                 size_t SectionSize) {
   if (SectionName == "ILDB") {
-    // Slim debug omits ILDB from all DXContainer outputs.
-    if (clv2::getOptValOr<&clv2::MCOptsReg, &clv2::MC_DXSlimDebug>(
-            getContext().getOptionsContext(), false))
+    // Slim debug omits ILDB from all DXContainer outputs.  MCContext has no
+    // getOptions<T>() template (unlike LLVMContext), so read the process-wide
+    // struct directly.
+    if (MCLibraryOptions::Current.MC_DXSlimDebug)
       return true;
     // Do not write ILDB part if we're not embedding it.  The disposition is
     // decided by the DXIL writer, which is the only place that knows whether

@@ -59,7 +59,7 @@
 #include "llvm/ADT/Twine.h"
 #include "llvm/ADT/iterator.h"
 #include "llvm/ADT/iterator_range.h"
-#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
+#include "llvm/Analysis/AnalysisOptions.h"
 #include "llvm/Analysis/BlockFrequencyInfo.h"
 #include "llvm/Analysis/BranchProbabilityInfo.h"
 #include "llvm/Analysis/CFG.h"
@@ -97,7 +97,7 @@
 #include "llvm/IR/Value.h"
 #include "llvm/ProfileData/InstrProf.h"
 #include "llvm/ProfileData/InstrProfReader.h"
-#include "llvm/ProfileData/ProfileDataOptionsOptInfos.h"
+#include "llvm/ProfileData/ProfileDataOptions.h"
 #include "llvm/Support/BranchProbability.h"
 #include "llvm/Support/CRC.h"
 #include "llvm/Support/Casting.h"
@@ -114,7 +114,7 @@
 #include "llvm/TargetParser/Triple.h"
 #include "llvm/Transforms/Instrumentation/BlockCoverageInference.h"
 #include "llvm/Transforms/Instrumentation/CFGMST.h"
-#include "llvm/Transforms/Instrumentation/InstrumentationOptionsOptInfos.h"
+#include "llvm/Transforms/Instrumentation/InstrumentationOptions.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Instrumentation.h"
 #include "llvm/Transforms/Utils/MisExpect.h"
@@ -165,8 +165,9 @@ STATISTIC(NumCoveredBlocks, "Number of basic blocks that were executed");
 // fallbacks.
 
 static unsigned getMaxNumVTableAnnotations(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AN_MaxNumVTableAnnotations>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<AnalysisOptions>()
+      .AN_MaxNumVTableAnnotations;
 }
 
 namespace llvm {
@@ -175,107 +176,95 @@ LLVM_ABI extern InstrProfCorrelator::ProfCorrelatorKind ProfileCorrelate;
 } // namespace llvm
 
 static PGOViewCountsType getPGOViewCounts(const Function &F) {
-  return clv2::getOptValIfSpecified<&clv2::AnalysisOptsReg,
-                                    &clv2::AN_PGOViewCounts>(
-      F.getContext().getOptionsContext(), PGOVCT_None);
+  return F.getContext().getOptions<AnalysisOptions>().AN_PGOViewCounts;
 }
 
 static std::string getViewBlockFreqFuncName(const Function &F) {
-  return clv2::getOptValIfSpecified<&clv2::AnalysisOptsReg,
-                                    &clv2::AN_ViewBlockFreqFuncName>(
-      F.getContext().getOptionsContext(), "");
+  return F.getContext()
+      .getOptions<AnalysisOptions>()
+      .AN_ViewBlockFreqFuncName;
 }
 
 static InstrProfCorrelator::ProfCorrelatorKind
 getProfileCorrelate(const Function &F) {
-  return clv2::getOptValIfSpecified<&clv2::InstrumentationOptsReg,
-                                    &clv2::INST_ProfileCorrelate>(
-      F.getContext().getOptionsContext(), ProfileCorrelate);
+  return F.getContext()
+      .getOptions<InstrumentationOptions>()
+      .INST_ProfileCorrelate.value_or(ProfileCorrelate);
 }
 
 static InstrProfCorrelator::ProfCorrelatorKind
 getProfileCorrelate(const Module &M) {
-  return clv2::getOptValIfSpecified<&clv2::InstrumentationOptsReg,
-                                    &clv2::INST_ProfileCorrelate>(
-      M.getContext().getOptionsContext(), ProfileCorrelate);
+  return M.getContext()
+      .getOptions<InstrumentationOptions>()
+      .INST_ProfileCorrelate.value_or(ProfileCorrelate);
 }
 
-static bool getEnableVTableValueProfiling(const Function &F,
-                                          const clv2::OptionsContext &Ctx) {
-  auto *O = clv2::getView<&clv2::ProfileDataOptsReg>(
-      F.getContext().getOptionsContext());
-  if (!O)
-    O = clv2::getView<&clv2::ProfileDataOptsReg>(Ctx);
-  if (O)
-    return O->get<&clv2::PD_EnableVTableValueProfiling>();
-  return false;
+static bool getEnableVTableValueProfiling(const Function &F) {
+  return F.getContext()
+      .getOptions<ProfileDataOptions>()
+      .PD_EnableVTableValueProfiling;
 }
 
-static bool getEnableVTableValueProfiling(const Module &M,
-                                          const clv2::OptionsContext &Ctx) {
-  auto *O = clv2::getView<&clv2::ProfileDataOptsReg>(
-      M.getContext().getOptionsContext());
-  if (!O)
-    O = clv2::getView<&clv2::ProfileDataOptsReg>(Ctx);
-  if (O)
-    return O->get<&clv2::PD_EnableVTableValueProfiling>();
-  return false;
+static bool getEnableVTableValueProfiling(const Module &M) {
+  return M.getContext()
+      .getOptions<ProfileDataOptions>()
+      .PD_EnableVTableValueProfiling;
 }
 
-static bool getEnableVTableProfileUse(const Module &M,
-                                      const clv2::OptionsContext &Ctx) {
-  auto *O = clv2::getView<&clv2::ProfileDataOptsReg>(
-      M.getContext().getOptionsContext());
-  if (!O)
-    O = clv2::getView<&clv2::ProfileDataOptsReg>(Ctx);
-  if (O)
-    return O->get<&clv2::PD_EnableVTableProfileUse>();
-  return false;
+static bool getEnableVTableProfileUse(const Module &M) {
+  return M.getContext()
+      .getOptions<ProfileDataOptions>()
+      .PD_EnableVTableProfileUse;
 }
 
-#define PGO_GETTER(FuncName, DescName, Default)                                \
-  [[maybe_unused]] static auto get##FuncName(const Function &F) {              \
-    if (auto *O = clv2::getView<&clv2::InstrumentationOptsReg>(                \
-            F.getContext().getOptionsContext()))                               \
-      if (O->specified<&clv2::DescName>())                                     \
-        return O->get<&clv2::DescName>();                                      \
-    return Default;                                                            \
-  }                                                                            \
-  [[maybe_unused]] static auto get##FuncName(const Module &M) {                \
-    if (auto *O = clv2::getView<&clv2::InstrumentationOptsReg>(                \
-            M.getContext().getOptionsContext()))                               \
-      if (O->specified<&clv2::DescName>())                                     \
-        return O->get<&clv2::DescName>();                                      \
-    return Default;                                                            \
+#define PGO_GETTER(FuncName, DescName, Default)                               \
+  [[maybe_unused]] static auto get##FuncName(const Function &F) {            \
+    return F.getContext().getOptions<InstrumentationOptions>().DescName;     \
+  }                                                                          \
+  [[maybe_unused]] static auto get##FuncName(const Module &M) {              \
+    return M.getContext().getOptions<InstrumentationOptions>().DescName;     \
   }
 
-PGO_GETTER(PGOTestProfileFile, INST_PGOTestProfileFile, std::string{})
-PGO_GETTER(PGOTestProfileRemappingFile, INST_PGOTestProfileRemappingFile,
-           std::string{})
+// Tristate options: unspecified reads as std::nullopt, so the literal
+// default is applied here instead of in the schema.
+#define PGO_OPTIONAL_GETTER(FuncName, DescName, Default)                     \
+  [[maybe_unused]] static auto get##FuncName(const Function &F) {            \
+    return F.getContext()                                                   \
+        .getOptions<InstrumentationOptions>()                               \
+        .DescName.value_or(Default);                                        \
+  }                                                                          \
+  [[maybe_unused]] static auto get##FuncName(const Module &M) {              \
+    return M.getContext()                                                   \
+        .getOptions<InstrumentationOptions>()                               \
+        .DescName.value_or(Default);                                        \
+  }
+
+PGO_OPTIONAL_GETTER(PGOTestProfileFile, INST_PGOTestProfileFile,
+                    std::string{})
+PGO_OPTIONAL_GETTER(PGOTestProfileRemappingFile,
+                    INST_PGOTestProfileRemappingFile, std::string{})
 PGO_GETTER(DisableValueProfiling, INST_DisableValueProfiling, false)
 PGO_GETTER(MaxNumAnnotations, INST_ICPMaxAnnotations, 3u)
 PGO_GETTER(MaxNumMemOPAnnotations, INST_MemopMaxAnnotations, 4u)
 PGO_GETTER(DoComdatRenaming, INST_DoComdatRenaming, false)
 static auto getPGOWarnMissing(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::INST_PGOWarnMissing>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<InstrumentationOptions>().INST_PGOWarnMissing;
 }
 
 static auto getNoPGOWarnMismatch(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::INST_NoPGOWarnMismatch>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<InstrumentationOptions>().INST_NoPGOWarnMismatch;
 }
 
 static auto getNoPGOWarnMismatchComdatWeak(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::INST_NoPGOWarnMismatchComdatWeak>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<InstrumentationOptions>().INST_NoPGOWarnMismatchComdatWeak;
 }
 PGO_GETTER(PGOInstrSelect, INST_PGOInstrSelect, true)
 PGO_GETTER(PGOViewRawCounts, INST_PGOViewRawCounts, PGOVCT_None)
 PGO_GETTER(PGOInstrMemOP, INST_PGOInstrMemOP, true)
 PGO_GETTER(EmitBranchProbability, INST_PGOEmitBranchProb, false)
-PGO_GETTER(PGOInstrumentEntry, INST_PGOInstrumentEntry, false)
-PGO_GETTER(PGOInstrumentLoopEntries, INST_PGOInstrumentLoopEntries, false)
+PGO_OPTIONAL_GETTER(PGOInstrumentEntry, INST_PGOInstrumentEntry, false)
+PGO_OPTIONAL_GETTER(PGOInstrumentLoopEntries, INST_PGOInstrumentLoopEntries,
+                    false)
 PGO_GETTER(PGOFunctionEntryCoverage, INST_PGOFunctionEntryCoverage, false)
 PGO_GETTER(PGOBlockCoverage, INST_PGOBlockCoverage, false)
 PGO_GETTER(PGOViewBlockCoverageGraph, INST_PGOViewBlockCoverageGraph, false)
@@ -294,37 +283,30 @@ PGO_GETTER(PGOColdInstrumentEntryThreshold,
 PGO_GETTER(PGOTreatUnknownAsCold, INST_PGOTreatUnknownAsCold, false)
 
 static auto getPGOInstrumentColdFunctionOnly(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::INST_PGOInstrumentColdFunctionOnly>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<InstrumentationOptions>().INST_PGOInstrumentColdFunctionOnly;
 }
 
 static bool isPGOInstrumentEntrySpecified(const Module &M) {
-  return clv2::wasOptSpecified<&clv2::InstrumentationOptsReg,
-                               &clv2::INST_PGOInstrumentEntry>(
-      M.getContext().getOptionsContext());
+  return M.getContext()
+      .getOptions<InstrumentationOptions>()
+      .INST_PGOInstrumentEntry.has_value();
 }
 
 static bool isPGOInstrumentLoopEntriesSpecified(const Module &M) {
-  return clv2::wasOptSpecified<&clv2::InstrumentationOptsReg,
-                               &clv2::INST_PGOInstrumentLoopEntries>(
-      M.getContext().getOptionsContext());
+  return M.getContext()
+      .getOptions<InstrumentationOptions>()
+      .INST_PGOInstrumentLoopEntries.has_value();
 }
 
 static const std::vector<std::string> &
 getCtxPGOSkipCallsiteInstrument(const Function &F) {
-  if (auto *O = clv2::getView<&clv2::InstrumentationOptsReg>(
-          F.getContext().getOptionsContext()))
-    if (O->specified<&clv2::INST_CtxPGOSkipCallsiteInstrument>()) {
-      static std::vector<std::string> cached;
-      const auto &v = O->get<&clv2::INST_CtxPGOSkipCallsiteInstrument>();
-      cached.assign(v.begin(), v.end());
-      return cached;
-    }
-  static const std::vector<std::string> Default;
-  return Default;
+  return F.getContext()
+      .getOptions<InstrumentationOptions>()
+      .INST_CtxPGOSkipCallsiteInstrument;
 }
 
 #undef PGO_GETTER
+#undef PGO_OPTIONAL_GETTER
 
 namespace {
 class FunctionInstrumenter final {
@@ -634,7 +616,7 @@ public:
       NumOfPGOMemIntrinsics += ValueSites[IPVK_MemOPSize].size();
       NumOfPGOBB += MST.bbInfoSize();
       ValueSites[IPVK_IndirectCallTarget] = VPC.get(IPVK_IndirectCallTarget);
-      if (getEnableVTableValueProfiling(F, F.getContext().getOptionsContext()))
+      if (getEnableVTableValueProfiling(F))
         ValueSites[IPVK_VTableTarget] = VPC.get(IPVK_VTableTarget);
     } else {
       NumOfCSPGOSelectInsts += SIVisitor.getNumOfSelectInsts();
@@ -1995,8 +1977,7 @@ static bool InstrumentAllFunctions(
 
   Triple TT(M.getTargetTriple());
   LLVMContext &Ctx = M.getContext();
-  if (!TT.isOSBinFormatELF() &&
-      getEnableVTableValueProfiling(M, M.getContext().getOptionsContext()))
+  if (!TT.isOSBinFormatELF() && getEnableVTableValueProfiling(M))
     Ctx.diagnose(DiagnosticInfoPGOProfile(
         M.getName().data(),
         Twine("VTable value profiling is presently not "
@@ -2224,7 +2205,7 @@ static bool annotateAllFunctions(
     return false;
   }
 
-  if (getEnableVTableProfileUse(M, M.getContext().getOptionsContext())) {
+  if (getEnableVTableProfileUse(M)) {
     for (GlobalVariable &G : M.globals()) {
       if (!G.hasName() || !G.hasMetadata(LLVMContext::MD_type))
         continue;
@@ -2402,19 +2383,10 @@ PGOInstrumentationUse::PGOInstrumentationUse(
 
 PreservedAnalyses PGOInstrumentationUse::run(Module &M,
                                              ModuleAnalysisManager &MAM) {
-  if (auto *O = clv2::getView<&clv2::InstrumentationOptsReg>(
-          M.getContext().getOptionsContext())) {
-    if (O->specified<&clv2::INST_PGOTestProfileFile>()) {
-      auto Val = O->get<&clv2::INST_PGOTestProfileFile>();
-      if (!Val.empty())
-        ProfileFileName = Val;
-    }
-    if (O->specified<&clv2::INST_PGOTestProfileRemappingFile>()) {
-      auto Val = O->get<&clv2::INST_PGOTestProfileRemappingFile>();
-      if (!Val.empty())
-        ProfileRemappingFileName = Val;
-    }
-  }
+  if (std::string Val = getPGOTestProfileFile(M); !Val.empty())
+    ProfileFileName = Val;
+  if (std::string Val = getPGOTestProfileRemappingFile(M); !Val.empty())
+    ProfileRemappingFileName = Val;
 
   auto &FAM = MAM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
   auto LookupTLI = [&FAM](Function &F) -> TargetLibraryInfo & {
@@ -2453,7 +2425,8 @@ void llvm::setProfMetadata(Instruction *TI, ArrayRef<uint64_t> EdgeCounts,
                            uint64_t MaxCount) {
   auto Weights = downscaleWeights(EdgeCounts, MaxCount);
 
-  LLVM_DEBUG(dbgs() << "Weight is: "; for (const auto &W : Weights) {
+  LLVM_DEBUG(dbgs() << "Weight is: "; for (const auto &W
+                                           : Weights) {
     dbgs() << W << " ";
   } dbgs() << "\n");
 

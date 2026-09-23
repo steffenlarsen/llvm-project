@@ -27,6 +27,8 @@ add_public_tablegen_target(LinkerWrapperOpts)
 if(NOT CLANG_BUILT_STANDALONE)
   set(tablegen_deps intrinsics_gen LinkerWrapperOpts)
 endif()
+list(APPEND tablegen_deps IROptParserTableGen IPOOptParserTableGen
+  ScalarOptParserTableGen)
 
 add_clang_tool(clang-linker-wrapper
   ClangLinkerWrapper.cpp

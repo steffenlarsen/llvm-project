@@ -28,9 +28,8 @@
 #include "llvm/IR/PseudoProbe.h"
 #include "llvm/ProfileData/SampleProf.h"
 #include "llvm/Support/CRC.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Target/TargetMachine.h"
-#include "llvm/Transforms/IPO/IPOOptionsOptInfos.h"
+#include "llvm/Transforms/IPO/IPOOptions.h"
 #include "llvm/Transforms/Utils/Instrumentation.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 #include <unordered_set>
@@ -44,17 +43,11 @@ STATISTIC(ArtificialDbgLine,
 
 static const std::vector<std::string> &
 getVerifyPseudoProbeFuncList(const Function &F) {
-  if (auto *O =
-          clv2::getView<&clv2::IPOOptsReg>(F.getContext().getOptionsContext()))
-    if (O->specified<&clv2::IPO_VerifyPseudoProbeFuncList>())
-      return O->get<&clv2::IPO_VerifyPseudoProbeFuncList>();
-  static const std::vector<std::string> Default;
-  return Default;
+  return F.getContext().getOptions<IPOOptions>().IPO_VerifyPseudoProbeFuncList;
 }
 
 static bool getUpdatePseudoProbe(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_UpdatePseudoProbe>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_UpdatePseudoProbe;
 }
 
 static uint64_t getCallStackHash(const DILocation *DIL) {
@@ -89,12 +82,12 @@ bool PseudoProbeVerifier::shouldVerifyFunction(const Function *F) {
   return VerifyFuncNames.empty() || VerifyFuncNames.count(F->getName().str());
 }
 
-static bool getVerifyPseudoProbeEnabled(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::IPO_VerifyPseudoProbe>(Ctx);
+static bool getVerifyPseudoProbeEnabled(const LLVMContext &Ctx) {
+  return Ctx.getOptions<IPOOptions>().IPO_VerifyPseudoProbe;
 }
 
 void PseudoProbeVerifier::registerCallbacks(PassInstrumentationCallbacks &PIC,
-                                            const clv2::OptionsContext &Ctx) {
+                                            const LLVMContext &Ctx) {
   if (getVerifyPseudoProbeEnabled(Ctx)) {
     PIC.registerAfterPassCallback(
         [this](StringRef P, IRUnitRef IR, const PreservedAnalyses &) {

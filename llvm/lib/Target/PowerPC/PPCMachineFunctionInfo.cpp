@@ -12,14 +12,12 @@
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/Function.h"
 #include "llvm/MC/MCContext.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/PowerPC/PowerPCOptionsOptInfos.h"
+#include "llvm/Target/PowerPC/PowerPCOptions.h"
 
 using namespace llvm;
 
 static bool getPPCDisableNonVolatileCR(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::PPC_DisableNonVolatileCR>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<PowerPCOptions>().PPC_DisableNonVolatileCR;
 }
 
 void PPCFunctionInfo::anchor() {}

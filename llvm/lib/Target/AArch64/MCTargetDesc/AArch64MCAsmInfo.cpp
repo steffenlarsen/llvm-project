@@ -17,22 +17,9 @@
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/MC/MCTargetOptions.h"
 #include "llvm/MC/MCValue.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/AArch64/AArch64OptionsOptInfos.h"
+#include "llvm/Target/AArch64/AArch64Options.h"
 #include "llvm/TargetParser/Triple.h"
 using namespace llvm;
-
-enum AsmWriterVariantTy {
-  Default = -1,
-  Generic = 0,
-  Apple = 1
-};
-
-static AsmWriterVariantTy getAsmWriterVariant(const clv2::OptionsContext &Ctx) {
-  return static_cast<AsmWriterVariantTy>(
-      clv2::getOptValOr<&clv2::AArch64OptsReg, &clv2::A64_AsmWriterVariant>(
-          Ctx, static_cast<int>(Default)));
-}
 
 constexpr EnumStringDef<MCAsmInfo::AtSpecifierKind> COFFAtSpecifierDefs[] = {
     {{"IMGREL"}, MCSymbolRefExpr::VK_COFF_IMGREL32},
@@ -150,9 +137,11 @@ AArch64MCAsmInfoDarwin::AArch64MCAsmInfoDarwin(bool IsILP32,
     : MCAsmInfoDarwin(Options) {
   // We prefer NEON instructions to be printed in the short, Apple-specific
   // form when targeting Darwin.
-  AssemblerDialect = getAsmWriterVariant(Options.getOptsCtx()) == Default
-                         ? Apple
-                         : getAsmWriterVariant(Options.getOptsCtx());
+  AssemblerDialect =
+      AArch64Options::Current.A64_AsmWriterVariant ==
+              A64AsmWriterVariantTy::Default
+          ? static_cast<unsigned>(A64AsmWriterVariantTy::Apple)
+          : static_cast<unsigned>(AArch64Options::Current.A64_AsmWriterVariant);
 
   InternalSymbolPrefix = "L";
   SeparatorString = "%%";
@@ -220,9 +209,11 @@ AArch64MCAsmInfoELF::AArch64MCAsmInfoELF(const Triple &T,
 
   // We prefer NEON instructions to be printed in the generic form when
   // targeting ELF.
-  AssemblerDialect = getAsmWriterVariant(Options.getOptsCtx()) == Default
-                         ? Generic
-                         : getAsmWriterVariant(Options.getOptsCtx());
+  AssemblerDialect =
+      AArch64Options::Current.A64_AsmWriterVariant ==
+              A64AsmWriterVariantTy::Default
+          ? static_cast<unsigned>(A64AsmWriterVariantTy::Generic)
+          : static_cast<unsigned>(AArch64Options::Current.A64_AsmWriterVariant);
 
   CodePointerSize = T.getEnvironment() == Triple::GNUILP32 ? 4 : 8;
 

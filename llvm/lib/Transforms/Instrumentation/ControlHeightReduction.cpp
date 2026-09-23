@@ -34,7 +34,7 @@
 #include "llvm/Support/BranchProbability.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/OptionsContext.h"
-#include "llvm/Transforms/Instrumentation/InstrumentationOptionsOptInfos.h"
+#include "llvm/Transforms/Instrumentation/InstrumentationOptions.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/ValueMapper.h"
@@ -52,38 +52,31 @@ using namespace llvm;
 static unsigned CHRMergeThreshold = 2;
 
 static bool getDisableCHR(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::INST_DisableCHR>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<InstrumentationOptions>().INST_DisableCHR;
 }
 
 static bool getForceCHR(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::INST_ForceCHR>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<InstrumentationOptions>().INST_ForceCHR;
 }
 
 static double getCHRBiasThresholdVal(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::INST_CHRBiasThreshold>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<InstrumentationOptions>().INST_CHRBiasThreshold;
 }
 
 static unsigned getCHRMergeThreshold(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::INST_CHRMergeThreshold>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<InstrumentationOptions>().INST_CHRMergeThreshold;
 }
 
 static std::string getCHRModuleList(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::INST_CHRModuleList>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<InstrumentationOptions>().INST_CHRModuleList;
 }
 
 static std::string getCHRFunctionList(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::INST_CHRFunctionList>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<InstrumentationOptions>().INST_CHRFunctionList;
 }
 
 static unsigned getCHRDupThreshsold(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::INST_CHRDupThreshold>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<InstrumentationOptions>().INST_CHRDupThreshold;
 }
 
 static StringSet<> CHRModules;

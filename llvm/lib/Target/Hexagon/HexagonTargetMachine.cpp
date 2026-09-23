@@ -30,7 +30,7 @@
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
+#include "llvm/Target/Hexagon/HexagonOptions.h"
 #include "llvm/Transforms/Scalar.h"
 #include <optional>
 
@@ -130,10 +130,7 @@ HexagonTargetMachine::HexagonTargetMachine(const Target &T, const Triple &TT,
           T, TT.computeDataLayout(), TT, CPU, FS, Options,
           getEffectiveRelocModel(RM),
           getEffectiveCodeModel(CM, CodeModel::Small),
-          (clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_NoOpt>(
-               Options.getOptsCtx(), false)
-               ? CodeGenOptLevel::None
-               : OL)),
+          (HexagonOptions::Current.HEX_NoOpt ? CodeGenOptLevel::None : OL)),
       TLOF(std::make_unique<HexagonTargetObjectFile>()),
       Subtarget(Triple(TT), CPU, FS, *this) {
   initAsmInfo();
@@ -261,8 +258,7 @@ void HexagonPassConfig::addIRPasses() {
     // alignment; apply full 8-byte alignment at -O3.
     addPass(createHexagonAlignGlobalArrays(getOptLevel() !=
                                            CodeGenOptLevel::Aggressive));
-    if (clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_EnableInstSimplify>(
-            TM->getOptionsContext(), true))
+    if (HexagonOptions::Current.HEX_EnableInstSimplify)
       addPass(createInstSimplifyLegacyPass());
     addPass(createDeadCodeEliminationPass());
   }
@@ -270,9 +266,7 @@ void HexagonPassConfig::addIRPasses() {
   addPass(createAtomicExpandLegacyPass());
 
   if (!NoOpt) {
-    if (clv2::getOptValOr<&clv2::HexagonOptsReg,
-                          &clv2::HEX_EnableInitialCFGCleanup>(
-            TM->getOptionsContext(), true))
+    if (HexagonOptions::Current.HEX_EnableInitialCFGCleanup)
       addPass(createCFGSimplificationPass(TM->getOptionsContext(),
                                           SimplifyCFGOptions()
                                               .forwardSwitchCondToPhi(true)
@@ -281,19 +275,14 @@ void HexagonPassConfig::addIRPasses() {
                                               .needCanonicalLoops(false)
                                               .hoistCommonInsts(true)
                                               .sinkCommonInsts(true)));
-    if (clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_EnableLoopPrefetch>(
-            TM->getOptionsContext(), false))
+    if (HexagonOptions::Current.HEX_EnableLoopPrefetch)
       addPass(createLoopDataPrefetchPass());
-    if (clv2::getOptValOr<&clv2::HexagonOptsReg,
-                          &clv2::HEX_EnableVectorCombine>(
-            TM->getOptionsContext(), true))
+    if (HexagonOptions::Current.HEX_EnableVectorCombine)
       addPass(createHexagonVectorCombineLegacyPass());
-    if (clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_EnableCommGEP>(
-            TM->getOptionsContext(), true))
+    if (HexagonOptions::Current.HEX_EnableCommGEP)
       addPass(createHexagonCommonGEP());
     // Replace certain combinations of shifts and ands with extracts.
-    if (clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_EnableGenExtract>(
-            TM->getOptionsContext(), true))
+    if (HexagonOptions::Current.HEX_EnableGenExtract)
       addPass(createHexagonGenExtract());
   }
 }
@@ -310,50 +299,40 @@ bool HexagonPassConfig::addInstSelector() {
   // Run the QFloat mode code generation pass only if v79 or greater.
   // Do not run this pass, if legacy mode is passed on command line.
   {
-    auto QFMode =
-        clv2::getOptValOrDefault<&clv2::HEX_QFloatMode>(TM.getOptionsContext());
+    auto QFMode = HexagonOptions::Current.HEX_QFloatMode;
     if (HST->useHVXV79Ops() && (QFMode != QFloatMode::Legacy))
       addPass(createHexagonXQFloatGenerator());
   }
 
   if (!NoOpt) {
-    if (clv2::getOptValOrDefault<&clv2::HEX_EnableVExtractOpt>(
-            TM.getOptionsContext()))
+    if (HexagonOptions::Current.HEX_EnableVExtractOpt)
       addPass(createHexagonVExtract());
     // Create logical operations on predicate registers.
-    if (clv2::getOptValOrDefault<&clv2::HEX_EnableGenPred>(
-            TM.getOptionsContext()))
+    if (HexagonOptions::Current.HEX_EnableGenPred)
       addPass(createHexagonGenPredicate());
     // Rotate loops to expose bit-simplification opportunities.
-    if (clv2::getOptValOrDefault<&clv2::HEX_EnableLoopResched>(
-            TM.getOptionsContext()))
+    if (HexagonOptions::Current.HEX_EnableLoopResched)
       addPass(createHexagonLoopRescheduling());
     // Split double registers.
-    if (!clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_DisableHSDR>(
-            TM.getOptionsContext(), false))
+    if (!HexagonOptions::Current.HEX_DisableHSDR)
       addPass(createHexagonSplitDoubleRegs());
     // Bit simplification.
-    if (clv2::getOptValOrDefault<&clv2::HEX_EnableBitSimplify>(
-            TM.getOptionsContext()))
+    if (HexagonOptions::Current.HEX_EnableBitSimplify)
       addPass(createHexagonBitSimplify());
     addPass(createHexagonPeephole());
     // Constant propagation.
-    if (!clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_DisableHCP>(
-            TM.getOptionsContext(), false)) {
+    if (!HexagonOptions::Current.HEX_DisableHCP) {
       addPass(createHexagonConstPropagationPass());
       addPass(&UnreachableMachineBlockElimID);
     }
-    if (clv2::getOptValOrDefault<&clv2::HEX_EnableGenInsert>(
-            TM.getOptionsContext()))
+    if (HexagonOptions::Current.HEX_EnableGenInsert)
       addPass(createHexagonGenInsert());
-    if (clv2::getOptValOrDefault<&clv2::HEX_EnableEarlyIf>(
-            TM.getOptionsContext()))
+    if (HexagonOptions::Current.HEX_EnableEarlyIf)
       addPass(createHexagonEarlyIfConversion());
     // For v75 or below, or if legacy mode is requested, run QFPOptizer pass
     // to preserve backward compatibility.
     {
-      auto QFMode2 = clv2::getOptValOrDefault<&clv2::HEX_QFloatMode>(
-          TM.getOptionsContext());
+      auto QFMode2 = HexagonOptions::Current.HEX_QFloatMode;
       if (!HST->useHVXV79Ops() || (QFMode2 == QFloatMode::Legacy))
         addPass(createHexagonQFPOptimizer());
     }
@@ -363,8 +342,7 @@ bool HexagonPassConfig::addInstSelector() {
 }
 
 bool HexagonPassConfig::addILPOpts() {
-  if (clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_EnableMCR>(
-          TM->getOptionsContext(), true))
+  if (HexagonOptions::Current.HEX_EnableMCR)
     addPass(&MachineCombinerID);
 
   return true;
@@ -372,33 +350,21 @@ bool HexagonPassConfig::addILPOpts() {
 
 void HexagonPassConfig::addPreRegAlloc() {
   if (getOptLevel() != CodeGenOptLevel::None) {
-    if (clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_EnableCExtOpt>(
-            TM->getOptionsContext(), true))
+    if (HexagonOptions::Current.HEX_EnableCExtOpt)
       addPass(createHexagonConstExtenders());
-    if (clv2::getOptValOr<&clv2::HexagonOptsReg,
-                          &clv2::HEX_EnableExpandCondsets>(
-            TM->getOptionsContext(), true))
+    if (HexagonOptions::Current.HEX_EnableExpandCondsets)
       insertPass(&RegisterCoalescerID, &HexagonExpandCondsetsID);
-    if (clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_EnableCopyHoist>(
-            TM->getOptionsContext(), true))
+    if (HexagonOptions::Current.HEX_EnableCopyHoist)
       insertPass(&RegisterCoalescerID, &HexagonCopyHoistingID);
-    if (clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_EnableTfrCleanup>(
-            TM->getOptionsContext(), true))
+    if (HexagonOptions::Current.HEX_EnableTfrCleanup)
       insertPass(&VirtRegRewriterID, &HexagonTfrCleanupID);
-    if (!clv2::getOptValOr<&clv2::HexagonOptsReg,
-                           &clv2::HEX_DisableStoreWidening>(
-            TM->getOptionsContext(), false))
+    if (!HexagonOptions::Current.HEX_DisableStoreWidening)
       addPass(createHexagonStoreWidening());
-    if (!clv2::getOptValOr<&clv2::HexagonOptsReg,
-                           &clv2::HEX_DisableLoadWidening>(
-            TM->getOptionsContext(), false))
+    if (!HexagonOptions::Current.HEX_DisableLoadWidening)
       addPass(createHexagonLoadWidening());
-    if (clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_EnableGenMemAbs>(
-            TM->getOptionsContext(), true))
+    if (HexagonOptions::Current.HEX_EnableGenMemAbs)
       addPass(createHexagonGenMemAbsolute());
-    if (!clv2::getOptValOr<&clv2::HexagonOptsReg,
-                           &clv2::HEX_DisableHardwareLoops>(
-            TM->getOptionsContext(), false))
+    if (!HexagonOptions::Current.HEX_DisableHardwareLoops)
       addPass(createHexagonHardwareLoops());
   }
   if (TM->getOptLevel() >= CodeGenOptLevel::Default)
@@ -410,21 +376,15 @@ void HexagonPassConfig::addPostRegAlloc() {
   HexagonTargetMachine &HTM = getHexagonTargetMachine();
   const HexagonSubtarget *HST = HTM.getHexagonSubtarget();
   // Run PostRAQFP on v79 and above.
-  if (clv2::getOptValOr<&clv2::HexagonOptsReg,
-                        &clv2::HEX_EnablePostRAHandleQFP>(
-          TM->getOptionsContext(), true) &&
-      HST->useHVXV79Ops())
+  if (HexagonOptions::Current.HEX_EnablePostRAHandleQFP && HST->useHVXV79Ops())
     addPass(createHexagonPostRAHandleQFP());
 
   if (getOptLevel() != CodeGenOptLevel::None) {
-    if (clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_EnableRDFOpt>(
-            TM->getOptionsContext(), true))
+    if (HexagonOptions::Current.HEX_EnableRDFOpt)
       addPass(createHexagonRDFOpt());
-    if (!clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_DisableCFGOpt>(
-            TM->getOptionsContext(), false))
+    if (!HexagonOptions::Current.HEX_DisableCFGOpt)
       addPass(createHexagonCFGOptimizer());
-    if (!clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_DisableAModeOpt>(
-            TM->getOptionsContext(), false))
+    if (!HexagonOptions::Current.HEX_DisableAModeOpt)
       addPass(createHexagonOptAddrMode());
   }
 }
@@ -435,14 +395,10 @@ void HexagonPassConfig::addPreSched2() {
   if (getOptLevel() != CodeGenOptLevel::None)
     addPass(&IfConverterID);
   addPass(createHexagonSplitConst32AndConst64());
-  if (!NoOpt &&
-      !clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_DisableMask>(
-          TM->getOptionsContext(), false))
+  if (!NoOpt && !HexagonOptions::Current.HEX_DisableMask)
     addPass(createHexagonMask());
 
-  if (!NoOpt &&
-      !clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_DisableLiveVars>(
-          TM->getOptionsContext(), false)) {
+  if (!NoOpt && !HexagonOptions::Current.HEX_DisableLiveVars) {
     addPass(&HexagonLiveVariablesID);
   }
 }
@@ -456,16 +412,12 @@ void HexagonPassConfig::addPreEmitPass() {
   addPass(createHexagonBranchRelaxation());
 
   if (!NoOpt) {
-    if (!clv2::getOptValOr<&clv2::HexagonOptsReg,
-                           &clv2::HEX_DisableHardwareLoops>(
-            TM->getOptionsContext(), false))
+    if (!HexagonOptions::Current.HEX_DisableHardwareLoops)
       addPass(createHexagonFixupHwLoops());
     // Generate MUX from pairs of conditional transfers.
-    if (clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_EnableGenMux>(
-            TM->getOptionsContext(), true))
+    if (HexagonOptions::Current.HEX_EnableGenMux)
       addPass(createHexagonGenMux());
-    if (!clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_DisableLiveVars>(
-            TM->getOptionsContext(), false))
+    if (!HexagonOptions::Current.HEX_DisableLiveVars)
       addPass(&HexagonLiveVariablesID);
   }
 
@@ -483,8 +435,7 @@ void HexagonPassConfig::addPreEmitPass() {
     addPass(createHexagonLoopAlign());
   }
 
-  if (clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_EnableVectorPrint>(
-          TM->getOptionsContext(), false))
+  if (HexagonOptions::Current.HEX_EnableVectorPrint)
     addPass(createHexagonVectorPrint());
 
   // Add CFI instructions if necessary.

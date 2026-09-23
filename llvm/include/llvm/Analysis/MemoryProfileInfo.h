@@ -13,6 +13,7 @@
 #ifndef LLVM_ANALYSIS_MEMORYPROFILEINFO_H
 #define LLVM_ANALYSIS_MEMORYPROFILEINFO_H
 
+#include "llvm/Analysis/AnalysisOptions.h"
 #include "llvm/IR/Metadata.h"
 #include "llvm/IR/ModuleSummaryIndex.h"
 #include "llvm/Support/Compiler.h"
@@ -26,17 +27,15 @@ namespace memprof {
 
 /// Whether the alloc memeprof metadata will include context size info for all
 /// MIBs.
-LLVM_ABI bool
-metadataIncludesAllContextSizeInfo(const clv2::OptionsContext &Ctx);
+LLVM_ABI bool metadataIncludesAllContextSizeInfo(const AnalysisOptions &Opts);
 
 /// Whether the alloc memprof metadata may include context size info for some
 /// MIBs (but possibly not all).
-LLVM_ABI bool
-metadataMayIncludeContextSizeInfo(const clv2::OptionsContext &Ctx);
+LLVM_ABI bool metadataMayIncludeContextSizeInfo(const AnalysisOptions &Opts);
 
 /// Whether we need to record the context size info in the alloc trie used to
 /// build metadata.
-LLVM_ABI bool recordContextSizeInfoForAnalysis(const clv2::OptionsContext &Ctx);
+LLVM_ABI bool recordContextSizeInfoForAnalysis(const AnalysisOptions &Opts);
 
 /// Build callstack metadata from the provided list of call stack ids. Returns
 /// the resulting metadata node.

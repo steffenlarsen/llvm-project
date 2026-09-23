@@ -37,17 +37,15 @@
 #include "llvm/IR/ProfDataUtils.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Target/TargetMachine.h"
-#include "llvm/Target/X86/X86OptionsOptInfos.h"
+#include "llvm/Target/X86/X86Options.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
 
 using namespace llvm;
 using namespace PatternMatch;
 
-namespace llvm {
-} // end namespace llvm
+namespace llvm {} // end namespace llvm
 
 #define DEBUG_TYPE "x86-lower-amx-intrinsics"
 
@@ -61,8 +59,7 @@ static bool isV256I32Ty(Type *Ty) {
 #endif
 
 static bool getX86ScalarizeAMX(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::X86_ScalarizeAMX>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<X86Options>().X86_ScalarizeAMX;
 }
 
 namespace {
@@ -123,8 +120,8 @@ BasicBlock *X86LowerAMXIntrinsics::createLoop(BasicBlock *Preheader,
   Type *I16Ty = Type::getInt16Ty(Ctx);
   UncondBrInst::Create(Body, Header);
   UncondBrInst::Create(Latch, Body);
-  PHINode *IV =
-      PHINode::Create(I16Ty, 2, Name + ".iv", Header->getTerminator()->getIterator());
+  PHINode *IV = PHINode::Create(I16Ty, 2, Name + ".iv",
+                                Header->getTerminator()->getIterator());
   IV->addIncoming(ConstantInt::get(I16Ty, 0), Preheader);
 
   B.SetInsertPoint(Latch);

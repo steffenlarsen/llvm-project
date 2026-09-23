@@ -17,7 +17,7 @@
 #include "llvm/ADT/SCCIterator.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/Statistic.h"
-#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
+#include "llvm/Analysis/AnalysisOptions.h"
 #include "llvm/Analysis/CallGraph.h"
 #include "llvm/Analysis/MemoryBuiltins.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
@@ -31,7 +31,6 @@
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/CommandLineCompat.h"
-#include "llvm/Support/OptionsContext.h"
 
 using namespace llvm;
 
@@ -39,7 +38,8 @@ using namespace llvm;
 
 STATISTIC(NumNonAddrTakenGlobalVars,
           "Number of global vars without address taken");
-STATISTIC(NumNonAddrTakenFunctions,"Number of functions without address taken");
+STATISTIC(NumNonAddrTakenFunctions,
+          "Number of functions without address taken");
 STATISTIC(NumNoMemFunctions, "Number of functions that do not access memory");
 STATISTIC(NumReadMemFunctions, "Number of functions that only read memory");
 STATISTIC(NumIndirectGlobalVars, "Number of indirect global objects");
@@ -58,9 +58,8 @@ STATISTIC(NumIndirectGlobalVars, "Number of indirect global objects");
 namespace llvm {} // namespace llvm
 
 static bool
-getEnableUnsafeGlobalsModRefAliasResults(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<
-      &clv2::AN_EnableUnsafeGlobalsModRefAliasResults>(Ctx);
+getEnableUnsafeGlobalsModRefAliasResults(const AnalysisOptions &Opts) {
+  return Opts.AN_EnableUnsafeGlobalsModRefAliasResults;
 }
 
 /// The mod/ref information collected for a particular function.
@@ -108,14 +107,11 @@ class GlobalsAAResult::FunctionInfo {
 
 public:
   FunctionInfo() = default;
-  ~FunctionInfo() {
-    delete Info.getPointer();
-  }
+  ~FunctionInfo() { delete Info.getPointer(); }
   // Spell out the copy ond move constructors and assignment operators to get
   // deep copy semantics and correct move semantics in the face of the
   // pointer-int pair.
-  FunctionInfo(const FunctionInfo &Arg)
-      : Info(nullptr, Arg.Info.getInt()) {
+  FunctionInfo(const FunctionInfo &Arg) : Info(nullptr, Arg.Info.getInt()) {
     if (const auto *ArgPtr = Arg.Info.getPointer())
       Info.setPointer(new AlignedMap(*ArgPtr));
   }
@@ -635,12 +631,11 @@ void GlobalsAAResult::AnalyzeCallGraph(CallGraph &CG, Module &M) {
   }
 }
 
-// GV is a non-escaping global. V is a pointer address that has been loaded from.
-// If we can prove that V must escape, we can conclude that a load from V cannot
-// alias GV.
+// GV is a non-escaping global. V is a pointer address that has been loaded
+// from. If we can prove that V must escape, we can conclude that a load from V
+// cannot alias GV.
 static bool isNonEscapingGlobalNoAliasWithLoad(const GlobalValue *GV,
-                                               const Value *V,
-                                               int &Depth,
+                                               const Value *V, int &Depth,
                                                const DataLayout &DL) {
   SmallPtrSet<const Value *, 8> Visited;
   SmallVector<const Value *, 8> Inputs;
@@ -649,8 +644,8 @@ static bool isNonEscapingGlobalNoAliasWithLoad(const GlobalValue *GV,
   do {
     const Value *Input = Inputs.pop_back_val();
 
-    if (isa<GlobalValue>(Input) || isa<Argument>(Input) || isa<CallInst>(Input) ||
-        isa<InvokeInst>(Input))
+    if (isa<GlobalValue>(Input) || isa<Argument>(Input) ||
+        isa<CallInst>(Input) || isa<InvokeInst>(Input))
       // Arguments to functions or returns from functions are inherently
       // escaping, so we can immediately classify those as not aliasing any
       // non-addr-taken globals.
@@ -753,9 +748,9 @@ bool GlobalsAAResult::isNonEscapingGlobalNoAlias(const GlobalValue *GV,
       // FIXME: The condition can be refined, but be conservative for now.
       auto *GVar = dyn_cast<GlobalVariable>(GV);
       auto *InputGVar = dyn_cast<GlobalVariable>(InputGV);
-      if (GVar && InputGVar &&
-          !GVar->isDeclaration() && !InputGVar->isDeclaration() &&
-          !GVar->isInterposable() && !InputGVar->isInterposable()) {
+      if (GVar && InputGVar && !GVar->isDeclaration() &&
+          !InputGVar->isDeclaration() && !GVar->isInterposable() &&
+          !InputGVar->isInterposable()) {
         Type *GVType = GVar->getInitializer()->getType();
         Type *InputGVType = InputGVar->getInitializer()->getType();
         if (GVType->isSized() && InputGVType->isSized() &&
@@ -871,7 +866,9 @@ AliasResult GlobalsAAResult::alias(const MemoryLocation &LocA,
     // this result if necessary for performance. This does not appear to be
     // a common problem in practice.
     if (CtxI ? getEnableUnsafeGlobalsModRefAliasResults(
-                   CtxI->getFunction()->getContext().getOptionsContext())
+                   CtxI->getFunction()
+                       ->getContext()
+                       .getOptions<AnalysisOptions>())
              : false)
       if ((GV1 || GV2) && GV1 != GV2)
         return AliasResult::NoAlias;
@@ -918,9 +915,10 @@ AliasResult GlobalsAAResult::alias(const MemoryLocation &LocA,
   // If one is based on an indirect global and the other isn't, it isn't
   // strictly safe but we can fake this result if necessary for performance.
   // This does not appear to be a common problem in practice.
-  if (CtxI ? getEnableUnsafeGlobalsModRefAliasResults(
-                 CtxI->getFunction()->getContext().getOptionsContext())
-           : false)
+  if (CtxI
+          ? getEnableUnsafeGlobalsModRefAliasResults(
+                CtxI->getFunction()->getContext().getOptions<AnalysisOptions>())
+          : false)
     if ((GV1 || GV2) && GV1 != GV2)
       return AliasResult::NoAlias;
 
@@ -938,7 +936,7 @@ ModRefInfo GlobalsAAResult::getModRefInfoForArgument(const CallBase *Call,
   // Iterate through all the arguments to the called function. If any argument
   // is based on GV, return the conservative result.
   for (const auto &A : Call->args()) {
-    SmallVector<const Value*, 4> Objects;
+    SmallVector<const Value *, 4> Objects;
     getUnderlyingObjects(A, Objects);
 
     // All objects must be identified.

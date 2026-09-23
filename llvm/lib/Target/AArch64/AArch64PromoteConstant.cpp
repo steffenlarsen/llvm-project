@@ -41,9 +41,8 @@
 #include "llvm/Pass.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/AArch64/AArch64OptionsOptInfos.h"
+#include "llvm/Target/AArch64/AArch64Options.h"
 #include <cassert>
 #include <utility>
 
@@ -52,9 +51,7 @@ using namespace llvm;
 #define DEBUG_TYPE "aarch64-promote-const"
 
 static bool getStressPromoteConst(const Function &F) {
-  return clv2::getOptValOr<&clv2::AArch64OptsReg,
-                           &clv2::A64_StressPromoteConst>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext().getOptions<AArch64Options>().A64_StressPromoteConst;
 }
 
 STATISTIC(NumPromoted, "Number of promoted constants");
@@ -384,8 +381,9 @@ Instruction *AArch64PromoteConstant::findInsertionPoint(Instruction &User,
 bool AArch64PromoteConstant::isDominated(Instruction *NewPt, Instruction *User,
                                          unsigned OpNo,
                                          InsertionPoints &InsertPts) {
-  DominatorTree &DT = getAnalysis<DominatorTreeWrapperPass>(
-      *NewPt->getParent()->getParent()).getDomTree();
+  DominatorTree &DT =
+      getAnalysis<DominatorTreeWrapperPass>(*NewPt->getParent()->getParent())
+          .getDomTree();
 
   // Traverse all the existing insertion points and check if one is dominating
   // NewPt. If it is, remember that.
@@ -410,8 +408,9 @@ bool AArch64PromoteConstant::isDominated(Instruction *NewPt, Instruction *User,
 bool AArch64PromoteConstant::tryAndMerge(Instruction *NewPt, Instruction *User,
                                          unsigned OpNo,
                                          InsertionPoints &InsertPts) {
-  DominatorTree &DT = getAnalysis<DominatorTreeWrapperPass>(
-      *NewPt->getParent()->getParent()).getDomTree();
+  DominatorTree &DT =
+      getAnalysis<DominatorTreeWrapperPass>(*NewPt->getParent()->getParent())
+          .getDomTree();
   BasicBlock *NewBB = NewPt->getParent();
 
   // Traverse all the existing insertion point and check if one is dominated by
@@ -458,8 +457,9 @@ bool AArch64PromoteConstant::tryAndMerge(Instruction *NewPt, Instruction *User,
   return false;
 }
 
-void AArch64PromoteConstant::computeInsertionPoint(
-    Instruction *User, unsigned OpNo, InsertionPoints &InsertPts) {
+void AArch64PromoteConstant::computeInsertionPoint(Instruction *User,
+                                                   unsigned OpNo,
+                                                   InsertionPoints &InsertPts) {
   LLVM_DEBUG(dbgs() << "Considered use, opidx " << OpNo << ":\n");
   LLVM_DEBUG(User->print(dbgs()));
   LLVM_DEBUG(dbgs() << '\n');
@@ -521,9 +521,9 @@ void AArch64PromoteConstant::insertDefinitions(Function &F,
     // Update the dominated uses.
     for (auto Use : IPI.second) {
 #ifndef NDEBUG
-      assert(DT.dominates(LoadedCst,
-                          findInsertionPoint(*Use.first, Use.second)) &&
-             "Inserted definition does not dominate all its uses!");
+      assert(
+          DT.dominates(LoadedCst, findInsertionPoint(*Use.first, Use.second)) &&
+          "Inserted definition does not dominate all its uses!");
 #endif
       LLVM_DEBUG({
         dbgs() << "Use to update " << Use.second << ":";

@@ -23,8 +23,7 @@
 #include "llvm/IR/Value.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/MD5.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/SPIRV/SPIRVOptionsOptInfos.h"
+#include "llvm/Target/SPIRV/SPIRVOptions.h"
 #include "llvm/Transforms/IPO/OpenMPOpt.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 
@@ -35,13 +34,11 @@ using namespace llvm;
 static bool CreateKernels = true;
 
 static std::string getGlobalStr(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::SPIRV_LowerGlobalCtorDtorId>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<SPIRVOptions>().SPIRV_LowerGlobalCtorDtorId;
 }
 
 static bool getCreateKernels(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::SPIRV_EmitInitFiniKernel>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<SPIRVOptions>().SPIRV_EmitInitFiniKernel;
 }
 
 namespace {

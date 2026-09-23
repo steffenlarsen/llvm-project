@@ -84,9 +84,8 @@
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
+#include "llvm/Target/Hexagon/HexagonOptions.h"
 #include <cassert>
 #include <iterator>
 
@@ -98,18 +97,15 @@ static bool EnableHexagonBP = true;
 static unsigned SizeLimit = 6;
 
 static bool getEnableHexagonBP(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_EnableHexagonBP>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_EnableHexagonBP;
 }
 
 static unsigned getSizeLimit(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_EIFSizeLimit>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_EIFSizeLimit;
 }
 
 static bool getSkipExitBranches(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_SkipExitBranches>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_SkipExitBranches;
 }
 
 namespace {

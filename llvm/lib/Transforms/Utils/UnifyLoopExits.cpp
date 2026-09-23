@@ -30,19 +30,19 @@
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/InitializePasses.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Transforms/Utils.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/ControlFlowUtils.h"
-#include "llvm/Transforms/Utils/UtilsOptionsOptInfos.h"
+#include "llvm/Transforms/Utils/UtilsOptions.h"
 
 #define DEBUG_TYPE "unify-loop-exits"
 
 using namespace llvm;
 
 static unsigned getMaxBooleansInControlFlowHub(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::TU_MaxBooleansInControlFlowHub>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<UtilsOptions>()
+      .TU_MaxBooleansInControlFlowHub;
 }
 
 namespace {
@@ -110,10 +110,8 @@ static void restoreSSA(const DominatorTree &DT, const Loop *L,
         if (L->contains(UserBlock))
           continue;
         LLVM_DEBUG(dbgs() << "added ext use for " << I.getName() << "("
-                          << BB->getName() << ")"
-                          << ": " << UserInst->getName() << "("
-                          << UserBlock->getName() << ")"
-                          << "\n");
+                          << BB->getName() << ")" << ": " << UserInst->getName()
+                          << "(" << UserBlock->getName() << ")" << "\n");
         ExternalUsers[&I].push_back(UserInst);
       }
     }

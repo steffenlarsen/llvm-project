@@ -46,8 +46,7 @@
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/MathExtras.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
+#include "llvm/Target/Hexagon/HexagonOptions.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 
@@ -75,8 +74,6 @@ static bool AllowDependentPullUp = true;
 
 static bool AllowBBPeelPullUp = true;
 
-static bool PreventCompoundSeparation = false;
-
 static bool PreventDuplexSeparation = true;
 
 static unsigned MainCandidateQueueSize = 8;
@@ -90,115 +87,99 @@ static bool SpeculateNonPredInsn = true;
 static bool DisableCheckBundles = true;
 
 static bool getDisablePullUp(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_DisablePullUp>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_DisablePullUp.value_or(
+      false);
 }
 
 static bool getDisablePullUpWasSpecified(const Function &F) {
-  return clv2::wasOptSpecified<&clv2::HexagonOptsReg, &clv2::HEX_DisablePullUp>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<HexagonOptions>()
+      .HEX_DisablePullUp.has_value();
 }
 
 static bool getEnableSpeculativePullUp(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_EnableSpeculativePullUp>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<HexagonOptions>()
+      .HEX_EnableSpeculativePullUp;
 }
 
 static bool getEnableLocalPullUp(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_EnableLocalPullUp>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_EnableLocalPullUp;
 }
 
 static bool getAllowSpeculateLoads(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_AllowSpeculateLoads>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_AllowSpeculateLoads;
 }
 
 static bool getAllowCmpBranchLoads(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_AllowCmpBranchLoads>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_AllowCmpBranchLoads;
 }
 
 static bool getAllowUnlikelyPath(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_AllowUnlikelyPath>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_AllowUnlikelyPath;
 }
 
 static bool getAllowDependentPullUp(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_AllowDependentPullUp>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_AllowDependentPullUp;
 }
 
+// Preserve compounds by default in functions optimized for size.
 static bool getPreventCompoundSeparation(const Function &F) {
-  return clv2::getOptValOr<&clv2::HexagonOptsReg,
-                           &clv2::HEX_PreventCompoundSeparation>(
-      F.getContext().getOptionsContext(), PreventCompoundSeparation);
-}
-
-static bool getPreventCompoundSeparationWasSpecified(const Function &F) {
-  return clv2::wasOptSpecified<&clv2::HexagonOptsReg,
-                               &clv2::HEX_PreventCompoundSeparation>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<HexagonOptions>()
+      .HEX_PreventCompoundSeparation.value_or(F.hasOptSize());
 }
 
 static bool getPreventDuplexSeparation(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_PreventDuplexSeparation>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<HexagonOptions>()
+      .HEX_PreventDuplexSeparation;
 }
 
 static unsigned getMainCandidateQueueSize(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_MainCandidateQueueSize>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_MainCandidateQueueSize;
 }
 
 static unsigned getSecondaryCandidateQueueSize(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_SecondaryCandidateQueueSize>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<HexagonOptions>()
+      .HEX_SecondaryCandidateQueueSize;
 }
 
 static bool getPostPullUpOpt(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_PostPullUpOpt>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_PostPullUpOpt;
 }
 
 static bool getSpeculateNonPredInsn(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_SpeculateNonPredInsn>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_SpeculateNonPredInsn;
 }
 
 static bool getOneFloatPerPacket(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_OneFloatPerPacket>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_OneFloatPerPacket;
 }
 
 static bool getOneComplexPerPacket(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_OneComplexPerPacket>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_OneComplexPerPacket;
 }
 
 static bool getPerformDualJumps(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_PerformDualJumps>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_PerformDualJumps;
 }
 
 static bool getAllowBBPeelPullUp(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_AllowBBPeelPullUp>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_AllowBBPeelPullUp;
 }
 
 static bool getDisableCheckBundles(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_DisableCheckBundles>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_DisableCheckBundles;
 }
 
 static bool getWarnOnBundleSize(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_WarnOnBundleSize>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_WarnOnBundleSize;
 }
 
 static bool getForceNoopHazards(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_ForceNoopHazards>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_ForceNoopHazards;
 }
 
 namespace llvm {
@@ -687,11 +668,6 @@ bool HexagonGlobalScheduler::runOnMachineFunction(MachineFunction &Fn) {
   const MachineBlockFrequencyInfo *MBFI =
       &getAnalysis<MachineBlockFrequencyInfoWrapperPass>().getMBFI();
   AliasAnalysis *AA = &getAnalysis<AAResultsWrapperPass>().getAAResults();
-
-  // Preserve comounds if Opt Size.
-  const Function &F = Fn.getFunction();
-  if (F.hasOptSize() && !getPreventCompoundSeparationWasSpecified(F))
-    PreventCompoundSeparation = true;
 
   // Instantiate the Scheduler.
   HexagonGlobalSchedulerImpl GlobalSchedulerState(Fn, MLI, MDT, AA, MBPI, MBFI,

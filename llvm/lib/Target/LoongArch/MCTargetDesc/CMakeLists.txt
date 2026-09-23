@@ -14,9 +14,13 @@ add_llvm_component_library(LLVMLoongArchDesc
   LINK_COMPONENTS
   MC
   LoongArchInfo
+  Option
   Support
   TargetParser
 
   ADD_TO_COMPONENT
   LoongArch
+
+  DEPENDS
+  LoongArchOptParserTableGen
   )

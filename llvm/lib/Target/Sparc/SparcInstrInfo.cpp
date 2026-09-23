@@ -21,13 +21,12 @@
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/IR/Function.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/OptionsContext.h"
 
 using namespace llvm;
 
 #define GET_INSTRINFO_CTOR_DTOR
 #include "SparcGenInstrInfo.inc"
-#include "llvm/Target/Sparc/SparcOptionsOptInfos.h"
+#include "llvm/Target/Sparc/SparcOptions.h"
 
 static unsigned BPccDisplacementBits = 19;
 
@@ -452,16 +451,14 @@ bool SparcInstrInfo::isBranchOffsetInRange(unsigned BranchOpc,
   case SP::BPFCCANT:
   case SP::FBCOND_V9:
   case SP::FBCONDA_V9:
-    return isIntN(clv2::getOptValOrDefault<&clv2::SPARC_BPccDisplacementBits>(
-                      Subtarget.getOptionsContext()),
+    return isIntN(SparcOptions::Current.SPARC_BPccDisplacementBits,
                   Offset >> 2);
 
   case SP::BPR:
   case SP::BPRA:
   case SP::BPRNT:
   case SP::BPRANT:
-    return isIntN(clv2::getOptValOrDefault<&clv2::SPARC_BPrDisplacementBits>(
-                      Subtarget.getOptionsContext()),
+    return isIntN(SparcOptions::Current.SPARC_BPrDisplacementBits,
                   Offset >> 2);
   }
 

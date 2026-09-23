@@ -18,8 +18,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Transforms/IPO/OpenMPOpt.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Transforms/IPO/IPOOptionsOptInfos.h"
+#include "llvm/Transforms/IPO/IPOOptions.h"
 
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/EnumeratedArray.h"
@@ -71,83 +70,62 @@ using namespace omp;
 #define DEBUG_TYPE "openmp-opt"
 
 static bool getDisableOpenMPOptimizations(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_DisableOpenMPOptimizations>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_DisableOpenMPOptimizations;
 }
 static bool getEnableParallelRegionMerging(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_EnableParallelRegionMerging>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_EnableParallelRegionMerging;
 }
 static bool getDisableInternalization(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_DisableInternalization>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_DisableInternalization;
 }
 static bool getDeduceICVValues(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_DeduceICVValues>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_DeduceICVValues;
 }
 static bool getPrintICVValues(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_PrintICVValues>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_PrintICVValues;
 }
 static bool getPrintOpenMPKernels(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_PrintOpenMPKernels>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_PrintOpenMPKernels;
 }
 static bool getHideMemoryTransferLatency(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_HideMemoryTransferLatency>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_HideMemoryTransferLatency;
 }
 static bool getDisableOpenMPOptDeglobalization(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_DisableOpenMPOptDeglobalization>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_DisableOpenMPOptDeglobalization;
 }
 static bool getDisableOpenMPOptSPMDization(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_DisableOpenMPOptSPMDization>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_DisableOpenMPOptSPMDization;
 }
 static bool getDisableOpenMPOptFolding(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_DisableOpenMPOptFolding>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_DisableOpenMPOptFolding;
 }
 static bool getDisableOpenMPOptStateMachineRewrite(const Module &M) {
-  return clv2::getOptValOrDefault<
-      &clv2::IPO_DisableOpenMPOptStateMachineRewrite>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_DisableOpenMPOptStateMachineRewrite;
 }
 static bool getDisableOpenMPOptBarrierElimination(const Module &M) {
-  return clv2::getOptValOrDefault<
-      &clv2::IPO_DisableOpenMPOptBarrierElimination>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_DisableOpenMPOptBarrierElimination;
 }
 static bool getPrintModuleAfterOptimizations(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_PrintModuleAfterOptimizations>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_PrintModuleAfterOptimizations;
 }
 static bool getPrintModuleBeforeOptimizations(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_PrintModuleBeforeOptimizations>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_PrintModuleBeforeOptimizations;
 }
 static bool getAlwaysInlineDeviceFunctions(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_AlwaysInlineDeviceFunctions>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_AlwaysInlineDeviceFunctions;
 }
 static bool getEnableVerboseRemarks(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_EnableVerboseRemarks>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_EnableVerboseRemarks;
 }
 static unsigned getOpenMPSetFixpointIterations(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_OpenMPSetFixpointIterations>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_OpenMPSetFixpointIterations;
 }
 static unsigned getSharedMemoryLimit(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_SharedMemoryLimit>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_SharedMemoryLimit;
 }
 
 static unsigned getMaxCalleesForSpecialization(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_MaxCalleesForSpecialization>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_MaxCalleesForSpecialization;
 }
 
 STATISTIC(NumOpenMPRuntimeCallsDeduplicated,

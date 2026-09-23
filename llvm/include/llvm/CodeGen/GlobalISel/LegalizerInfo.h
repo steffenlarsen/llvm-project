@@ -1326,13 +1326,11 @@ public:
   /// Check if there is no type index which is obviously not handled by the
   /// LegalizeRuleSet in any way at all.
   /// \pre Type indices of the opcode form a dense [0, \p NumTypeIdxs) set.
-  LLVM_ABI bool verifyTypeIdxsCoverage(unsigned NumTypeIdxs,
-                                       const clv2::OptionsContext &Ctx) const;
+  LLVM_ABI bool verifyTypeIdxsCoverage(unsigned NumTypeIdxs) const;
   /// Check if there is no imm index which is obviously not handled by the
   /// LegalizeRuleSet in any way at all.
   /// \pre Type indices of the opcode form a dense [0, \p NumTypeIdxs) set.
-  LLVM_ABI bool verifyImmIdxsCoverage(unsigned NumImmIdxs,
-                                      const clv2::OptionsContext &Ctx) const;
+  LLVM_ABI bool verifyImmIdxsCoverage(unsigned NumImmIdxs) const;
 
   /// Apply the ruleset to the given LegalityQuery.
   LLVM_ABI LegalizeActionStep apply(const LegalityQuery &Query) const;
@@ -1343,8 +1341,7 @@ public:
   virtual ~LegalizerInfo() = default;
 
   unsigned getOpcodeIdxForOpcode(unsigned Opcode) const;
-  unsigned getActionDefinitionsIdx(unsigned Opcode,
-                                   const clv2::OptionsContext &Ctx) const;
+  unsigned getActionDefinitionsIdx(unsigned Opcode) const;
 
   /// Perform simple self-diagnostic and assert if there is anything obviously
   /// wrong with the actions set up.

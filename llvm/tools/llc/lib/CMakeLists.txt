@@ -7,4 +7,29 @@ add_llvm_library(LLVMLlcDriver
 
   DEPENDS
   intrinsics_gen
+  AArch64OptParserTableGen
+  AMDGPUOptParserTableGen
+  BPFOptParserTableGen
+  CGDataOptParserTableGen
+  CodeGenAsmPrintOptParserTableGen
+  CodeGenCore1OptParserTableGen
+  CodeGenCore2OptParserTableGen
+  CodeGenGISelOptParserTableGen
+  CodeGenMachine1OptParserTableGen
+  CodeGenMachine2OptParserTableGen
+  CodeGenRegAllocOptParserTableGen
+  CodeGenSched1OptParserTableGen
+  CodeGenSched2OptParserTableGen
+  CodeGenSelDAGOptParserTableGen
+  HexagonOptParserTableGen
+  InstrumentationOptParserTableGen
+  IPOOptParserTableGen
+  ScalarOptParserTableGen
+  LTOOptParserTableGen
+  LoongArchOptParserTableGen
+  NVPTXOptParserTableGen
+  ProfileDataOptParserTableGen
+  SPIRVOptParserTableGen
+  UtilsOptParserTableGen
+  WebAssemblyOptParserTableGen
   )

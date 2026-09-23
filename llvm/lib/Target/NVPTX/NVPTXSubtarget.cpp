@@ -16,7 +16,7 @@
 #include "llvm/IR/Module.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FormatVariadic.h"
-#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/NVPTX/NVPTXOptions.h"
 
 using namespace llvm;
 
@@ -25,16 +25,13 @@ using namespace llvm;
 #define GET_SUBTARGETINFO_TARGET_DESC
 #define GET_SUBTARGETINFO_CTOR
 #include "NVPTXGenSubtargetInfo.inc"
-#include "llvm/Target/NVPTX/NVPTXOptionsOptInfos.h"
 
 [[maybe_unused]] static bool getNoF16Math(const Module &M) {
-  return clv2::getOptValOr<&clv2::NVPTXOptsReg, &llvm::clv2::NVPTX_NoF16Math>(
-      M.getContext().getOptionsContext(), false);
+  return M.getContext().getOptions<NVPTXOptions>().NVPTX_NoF16Math;
 }
 
 [[maybe_unused]] static bool getNoF32x2(const Module &M) {
-  return clv2::getOptValOr<&clv2::NVPTXOptsReg, &llvm::clv2::NVPTX_NoF32x2>(
-      M.getContext().getOptionsContext(), false);
+  return M.getContext().getOptions<NVPTXOptions>().NVPTX_NoF32x2;
 }
 
 // Pin the vtable to this file.
@@ -184,15 +181,11 @@ NVPTXSubtarget::NVPTXSubtarget(const Triple &TT, StringRef CPU, StringRef FS,
 NVPTXSubtarget::~NVPTXSubtarget() = default;
 
 bool NVPTXSubtarget::allowFP16Math() const {
-  return hasFP16Math() &&
-         !clv2::getOptValOr<&clv2::NVPTXOptsReg, &clv2::NVPTX_NoF16Math>(
-             getOptionsContext(), false);
+  return hasFP16Math() && !NVPTXOptions::Current.NVPTX_NoF16Math;
 }
 
 bool NVPTXSubtarget::hasF32x2Instructions() const {
-  return hasFeature(NVPTX::SM100) &&
-         !clv2::getOptValOr<&clv2::NVPTXOptsReg, &clv2::NVPTX_NoF32x2>(
-             getOptionsContext(), false);
+  return hasFeature(NVPTX::SM100) && !NVPTXOptions::Current.NVPTX_NoF32x2;
 }
 
 bool NVPTXSubtarget::hasNativeBF16Support(unsigned Opcode) const {

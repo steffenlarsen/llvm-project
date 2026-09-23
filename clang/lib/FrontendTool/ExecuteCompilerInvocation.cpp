@@ -31,17 +31,79 @@
 #include "clang/StaticAnalyzer/Core/AnalyzerOptions.h"
 #include "clang/StaticAnalyzer/Frontend/AnalyzerHelpFlags.h"
 #include "clang/StaticAnalyzer/Frontend/FrontendActions.h"
+#include "llvm/AsmParser/AsmParserOptions.h"
+#include "llvm/CGData/CGDataOptions.h"
+#include "llvm/CodeGen/CodeGenPassOptionsAsmPrint.h"
+#include "llvm/CodeGen/CodeGenPassOptionsCore1.h"
+#include "llvm/CodeGen/CodeGenPassOptionsCore2.h"
+#include "llvm/CodeGen/CodeGenPassOptionsGISel.h"
+#include "llvm/CodeGen/CodeGenPassOptionsMachine1.h"
+#include "llvm/CodeGen/CodeGenPassOptionsMachine2.h"
+#include "llvm/CodeGen/CodeGenPassOptionsRegAlloc.h"
+#include "llvm/CodeGen/CodeGenPassOptionsSched1.h"
+#include "llvm/CodeGen/CodeGenPassOptionsSched2.h"
+#include "llvm/CodeGen/CodeGenPassOptionsSelDAG.h"
 #include "llvm/CodeGen/SelectionDAGISel.h"
+#include "llvm/Config/Targets.h"
+#if LLVM_HAS_ARC_TARGET
+#include "llvm/Target/ARC/ARCOptions.h"
+#endif
+#if LLVM_HAS_CSKY_TARGET
+#include "llvm/Target/CSKY/CSKYOptions.h"
+#endif
+#if LLVM_HAS_LANAI_TARGET
+#include "llvm/Target/Lanai/LanaiOptions.h"
+#endif
+#if LLVM_HAS_M68K_TARGET
+#include "llvm/Target/M68k/M68kOptions.h"
+#endif
+#if LLVM_HAS_SYSTEMZ_TARGET
+#include "llvm/Target/SystemZ/SystemZOptions.h"
+#endif
+#include "llvm/Frontend/OpenMP/OpenMPOptions.h"
+#include "llvm/IR/IROptions.h"
+#include "llvm/LTO/LTOOptions.h"
+#include "llvm/MC/MCOptions.h"
+#include "llvm/Object/ObjectOptions.h"
+#include "llvm/Option/LibraryOptions.h"
 #include "llvm/Option/OptTable.h"
+#include "llvm/Passes/PassesOptions.h"
+#include "llvm/ProfileData/ProfileDataOptions.h"
+#include "llvm/Remarks/RemarksOptions.h"
 #include "llvm/Support/Allocator.h"
 #include "llvm/Support/BuryPointer.h"
+#include "llvm/Support/ColorOptions.h"
 #include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/DynamicLibrary.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/OptionsContext.h"
+#include "llvm/Support/PluginLoaderOptions.h"
 #include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/StringSaver.h"
+#include "llvm/Support/SupportOptions.h"
 #include "llvm/Support/TargetSelect.h"
+#include "llvm/Target/ARM/ARMOptions.h"
+#include "llvm/Target/BPF/BPFOptions.h"
+#include "llvm/Target/Hexagon/HexagonOptions.h"
+#include "llvm/Target/LoongArch/LoongArchOptions.h"
+#include "llvm/Target/MSP430/MSP430Options.h"
+#include "llvm/Target/Mips/MipsOptions.h"
+#include "llvm/Target/NVPTX/NVPTXOptions.h"
+#include "llvm/Target/PowerPC/PowerPCOptions.h"
+#include "llvm/Target/RISCV/RISCVOptions.h"
+#include "llvm/Target/SPIRV/SPIRVOptions.h"
+#include "llvm/Target/Sparc/SparcOptions.h"
+#include "llvm/Target/WebAssembly/WebAssemblyOptions.h"
+#include "llvm/Target/X86/X86Options.h"
+#include "llvm/Target/XCore/XCoreOptions.h"
+#include "llvm/Transforms/AggressiveInstCombine/AggressiveInstCombineOptions.h"
+#include "llvm/Transforms/Coroutines/CoroutinesOptions.h"
+#include "llvm/Transforms/InstCombine/InstCombineOptions.h"
+#include "llvm/Transforms/Instrumentation/InstrumentationOptions.h"
+#include "llvm/Transforms/IPO/IPOOptions.h"
+#include "llvm/Transforms/ObjCARC/ObjCARCOptions.h"
+#include "llvm/Transforms/Scalar/ScalarOptions.h"
+#include "llvm/Transforms/Utils/UtilsOptions.h"
 
 #if CLANG_ENABLE_CIR
 #include "mlir/IR/AsmState.h"
@@ -71,14 +133,20 @@ CreateFrontendBaseAction(CompilerInstance &CI) {
     llvm::report_fatal_error("-emit-cir and only valid when using -fclangir");
 
   switch (CI.getFrontendOpts().ProgramAction) {
-  case ASTDeclList:            return std::make_unique<ASTDeclListAction>();
-  case ASTDump:                return std::make_unique<ASTDumpAction>();
-  case ASTPrint:               return std::make_unique<ASTPrintAction>();
-  case ASTView:                return std::make_unique<ASTViewAction>();
+  case ASTDeclList:
+    return std::make_unique<ASTDeclListAction>();
+  case ASTDump:
+    return std::make_unique<ASTDumpAction>();
+  case ASTPrint:
+    return std::make_unique<ASTPrintAction>();
+  case ASTView:
+    return std::make_unique<ASTViewAction>();
   case DumpCompilerOptions:
     return std::make_unique<DumpCompilerOptionsAction>();
-  case DumpRawTokens:          return std::make_unique<DumpRawTokensAction>();
-  case DumpTokens:             return std::make_unique<DumpTokensAction>();
+  case DumpRawTokens:
+    return std::make_unique<DumpRawTokensAction>();
+  case DumpTokens:
+    return std::make_unique<DumpTokensAction>();
   case EmitAssembly:
 #if CLANG_ENABLE_CIR
     if (UseCIR)
@@ -98,7 +166,8 @@ CreateFrontendBaseAction(CompilerInstance &CI) {
     CI.getDiagnostics().Report(diag::err_fe_cir_not_built);
     return nullptr;
 #endif
-  case EmitHTML:               return std::make_unique<HTMLPrintAction>();
+  case EmitHTML:
+    return std::make_unique<HTMLPrintAction>();
   case EmitLLVM: {
 #if CLANG_ENABLE_CIR
     if (UseCIR)
@@ -106,8 +175,10 @@ CreateFrontendBaseAction(CompilerInstance &CI) {
 #endif
     return std::make_unique<EmitLLVMAction>();
   }
-  case EmitLLVMOnly:           return std::make_unique<EmitLLVMOnlyAction>();
-  case EmitCodeGenOnly:        return std::make_unique<EmitCodeGenOnlyAction>();
+  case EmitLLVMOnly:
+    return std::make_unique<EmitLLVMOnlyAction>();
+  case EmitCodeGenOnly:
+    return std::make_unique<EmitCodeGenOnlyAction>();
   case EmitObj:
 #if CLANG_ENABLE_CIR
     if (UseCIR)
@@ -116,7 +187,8 @@ CreateFrontendBaseAction(CompilerInstance &CI) {
     return std::make_unique<EmitObjAction>();
   case ExtractAPI:
     return std::make_unique<ExtractAPIAction>();
-  case FixIt:                  return std::make_unique<FixItAction>();
+  case FixIt:
+    return std::make_unique<FixItAction>();
   case GenerateModule:
     return std::make_unique<GenerateModuleFromModuleMapAction>();
   case GenerateModuleInterface:
@@ -125,12 +197,16 @@ CreateFrontendBaseAction(CompilerInstance &CI) {
     return std::make_unique<GenerateReducedModuleInterfaceAction>();
   case GenerateHeaderUnit:
     return std::make_unique<GenerateHeaderUnitAction>();
-  case GeneratePCH:            return std::make_unique<GeneratePCHAction>();
+  case GeneratePCH:
+    return std::make_unique<GeneratePCHAction>();
   case GenerateInterfaceStubs:
     return std::make_unique<GenerateInterfaceStubsAction>();
-  case InitOnly:               return std::make_unique<InitOnlyAction>();
-  case ParseSyntaxOnly:        return std::make_unique<SyntaxOnlyAction>();
-  case ModuleFileInfo:         return std::make_unique<DumpModuleInfoAction>();
+  case InitOnly:
+    return std::make_unique<InitOnlyAction>();
+  case ParseSyntaxOnly:
+    return std::make_unique<SyntaxOnlyAction>();
+  case ModuleFileInfo:
+    return std::make_unique<DumpModuleInfoAction>();
   case VerifyPCH:
     return std::make_unique<VerifyPCHAction>();
 
@@ -150,11 +226,12 @@ CreateFrontendBaseAction(CompilerInstance &CI) {
     }
 
     CI.getDiagnostics().Report(diag::err_fe_invalid_plugin_name)
-      << CI.getFrontendOpts().ActionName;
+        << CI.getFrontendOpts().ActionName;
     return nullptr;
   }
 
-  case PrintPreamble:          return std::make_unique<PrintPreambleAction>();
+  case PrintPreamble:
+    return std::make_unique<PrintPreambleAction>();
   case PrintPreprocessedInput: {
     if (CI.getPreprocessorOutputOpts().RewriteIncludes ||
         CI.getPreprocessorOutputOpts().RewriteImports)
@@ -162,19 +239,28 @@ CreateFrontendBaseAction(CompilerInstance &CI) {
     return std::make_unique<PrintPreprocessedAction>();
   }
 
-  case RewriteMacros:          return std::make_unique<RewriteMacrosAction>();
-  case RewriteTest:            return std::make_unique<RewriteTestAction>();
+  case RewriteMacros:
+    return std::make_unique<RewriteMacrosAction>();
+  case RewriteTest:
+    return std::make_unique<RewriteTestAction>();
 #if CLANG_ENABLE_OBJC_REWRITER
-  case RewriteObjC:            return std::make_unique<RewriteObjCAction>();
+  case RewriteObjC:
+    return std::make_unique<RewriteObjCAction>();
 #else
-  case RewriteObjC:            Action = "RewriteObjC"; break;
+  case RewriteObjC:
+    Action = "RewriteObjC";
+    break;
 #endif
 #if CLANG_ENABLE_STATIC_ANALYZER
-  case RunAnalysis:            return std::make_unique<ento::AnalysisAction>();
+  case RunAnalysis:
+    return std::make_unique<ento::AnalysisAction>();
 #else
-  case RunAnalysis:            Action = "RunAnalysis"; break;
+  case RunAnalysis:
+    Action = "RunAnalysis";
+    break;
 #endif
-  case RunPreprocessorOnly:    return std::make_unique<PreprocessOnlyAction>();
+  case RunPreprocessorOnly:
+    return std::make_unique<PreprocessOnlyAction>();
   case PrintDependencyDirectivesSourceMinimizerOutput:
     return std::make_unique<PrintDependencyDirectivesSourceMinimizerAction>();
   }
@@ -187,8 +273,7 @@ CreateFrontendBaseAction(CompilerInstance &CI) {
 #endif
 }
 
-std::unique_ptr<FrontendAction>
-CreateFrontendAction(CompilerInstance &CI) {
+std::unique_ptr<FrontendAction> CreateFrontendAction(CompilerInstance &CI) {
   // Create the underlying action.
   std::unique_ptr<FrontendAction> Act = CreateFrontendBaseAction(CI);
   if (!Act)
@@ -218,8 +303,8 @@ CreateFrontendAction(CompilerInstance &CI) {
   // If there are any AST files to merge, create a frontend action
   // adaptor to perform the merge.
   if (!FEOpts.ASTMergeFiles.empty())
-    Act = std::make_unique<ASTMergeAction>(std::move(Act),
-                                            FEOpts.ASTMergeFiles);
+    Act =
+        std::make_unique<ASTMergeAction>(std::move(Act), FEOpts.ASTMergeFiles);
 
   if (!CI.getSSAFOpts().TUSummaryFile.empty()) {
     Act = std::make_unique<ssaf::TUSummaryExtractorFrontendAction>(
@@ -282,7 +367,87 @@ bool ExecuteCompilerInvocation(CompilerInstance *Clang) {
       Argv.push_back(Saver.save("clang (LLVM option parsing)").data());
       for (llvm::StringRef A : ArgRefs)
         Argv.push_back(Saver.save(A).data());
-      Clang->setLLVMOptionsContext(P.parse(Argv.size(), Argv.data()));
+      std::vector<const char *> ArgsAfterPlugins =
+          llvm::loadPluginsAndStripArgs(static_cast<int>(Argv.size()),
+                                        Argv.data());
+
+      // The libraries below have migrated off clv2 onto the new per-library
+      // OptTable/hand-written struct design (see
+      // llvm/include/llvm/Option/LibraryOptions.h) and are no longer among
+      // the clv2::OptionParser registries RegisterAllLLVMOptions() populates
+      // above. Parse them out of the (plugin-stripped) -mllvm args first,
+      // forwarding whatever none of them recognizes to the legacy clv2
+      // parser unchanged -- mirroring the pattern established in
+      // llvm/tools/opt/optdriver.cpp.
+      llvm::SmallVector<const char *, 32> LibraryOptsRest;
+      {
+        std::string LibraryOptsErrs;
+        llvm::raw_string_ostream LibraryOptsErrsOS(LibraryOptsErrs);
+        if (llvm::Error Err = llvm::opt::parseLibraryOptionsChain<
+                llvm::SupportOptions, llvm::PassesOptions, llvm::ColorOptions,
+                llvm::CodeGenAsmPrintOptions, llvm::CodeGenGISelOptions,
+                llvm::CodeGenMachine1Options, llvm::CodeGenMachine2Options,
+                llvm::CodeGenRegAllocOptions, llvm::CodeGenSched1Options,
+                llvm::CodeGenSched2Options, llvm::CodeGenSelDAGOptions,
+                llvm::CodeGenCore2Options, llvm::CodeGenCore1Options,
+                llvm::ObjectOptions, llvm::RemarksOptions,
+                llvm::AsmParserOptions, llvm::XCoreOptions,
+                llvm::ObjCARCOptions, llvm::MSP430Options, llvm::SparcOptions,
+                llvm::SPIRVOptions, llvm::BPFOptions, llvm::LoongArchOptions,
+                llvm::MipsOptions, llvm::NVPTXOptions, llvm::WebAssemblyOptions,
+                llvm::ARMOptions, llvm::RISCVOptions, llvm::X86Options,
+                llvm::PowerPCOptions, llvm::HexagonOptions
+#if LLVM_HAS_ARC_TARGET
+                ,
+                llvm::ARCOptions
+#endif
+#if LLVM_HAS_CSKY_TARGET
+                ,
+                llvm::CSKYOptions
+#endif
+#if LLVM_HAS_LANAI_TARGET
+                ,
+                llvm::LanaiOptions
+#endif
+#if LLVM_HAS_M68K_TARGET
+                ,
+                llvm::M68kOptions
+#endif
+#if LLVM_HAS_SYSTEMZ_TARGET
+                ,
+                llvm::SystemZOptions
+#endif
+                ,
+                llvm::CoroutinesOptions, llvm::OpenMPOptions,
+                llvm::AggressiveInstCombineOptions, llvm::InstCombineCLOptions,
+                llvm::CGDataOptions, llvm::LTOOptions, llvm::ProfileDataOptions,
+                llvm::MCLibraryOptions, llvm::IROptions, llvm::UtilsOptions,
+                llvm::InstrumentationOptions, llvm::IPOOptions,
+                llvm::ScalarOptions>(
+                llvm::ArrayRef<const char *>(ArgsAfterPlugins.data() + 1,
+                                             ArgsAfterPlugins.data() +
+                                                 ArgsAfterPlugins.size()),
+                LibraryOptsRest, LibraryOptsErrsOS)) {
+          llvm::errs() << "clang (LLVM option parsing): "
+                       << llvm::toString(std::move(Err)) << "\n";
+          return false;
+        }
+        llvm::errs() << LibraryOptsErrs;
+      }
+      // IROptions has no automatic apply step (unlike the other libraries in
+      // the chain above, which are read on demand via Ctx.getOptions<T>());
+      // it must sync a couple of legacy globals (TimePassesIsEnabled/
+      // TimePassesPerRun and the OptBisect singleton) explicitly. See
+      // llvm/lib/IR/IROptions.cpp.
+      llvm::ir_opts::applyIROptions();
+      llvm::SmallVector<const char *, 32> ArgvAfterLibraryOpts;
+      ArgvAfterLibraryOpts.push_back(ArgsAfterPlugins[0]);
+      ArgvAfterLibraryOpts.append(LibraryOptsRest.begin(),
+                                  LibraryOptsRest.end());
+
+      Clang->setLLVMOptionsContext(
+          P.parse(static_cast<int>(ArgvAfterLibraryOpts.size()),
+                  ArgvAfterLibraryOpts.data()));
     }
   }
 

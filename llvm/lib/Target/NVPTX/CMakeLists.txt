@@ -53,8 +53,6 @@ set(NVPTXCodeGen_sources
   )
 
 add_llvm_target(NVPTXCodeGen
-  NVPTXOptionsGetters.cpp
-  NVPTXOptionsRegistration.cpp
   ${NVPTXCodeGen_sources}
 
   LINK_COMPONENTS
@@ -78,6 +76,9 @@ add_llvm_target(NVPTXCodeGen
 
   ADD_TO_COMPONENT
   NVPTX
+
+  DEPENDS
+  NVPTXOptParserTableGen
   )
 
 add_subdirectory(MCTargetDesc)

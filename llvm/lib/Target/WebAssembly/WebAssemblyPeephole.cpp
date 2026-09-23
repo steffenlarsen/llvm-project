@@ -26,17 +26,15 @@
 #include "llvm/IR/Analysis.h"
 #include "llvm/IR/Function.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/WebAssembly/WebAssemblyOptionsOptInfos.h"
+#include "llvm/Target/WebAssembly/WebAssemblyOptions.h"
 using namespace llvm;
 
 #define DEBUG_TYPE "wasm-peephole"
 
-static bool DisableWebAssemblyFallthroughReturnOpt = false;
-
 static bool getDisableFallthroughReturnOpt(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::WASM_DisableFallthroughReturnOpt>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<WebAssemblyOptions>()
+      .WASM_DisableFallthroughReturnOpt;
 }
 
 namespace {

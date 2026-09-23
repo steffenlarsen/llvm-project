@@ -276,8 +276,7 @@
 #include "llvm/IR/PassManager.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/CommandLineCompat.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/WebAssembly/WebAssemblyOptionsOptInfos.h"
+#include "llvm/Target/WebAssembly/WebAssemblyOptions.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/SSAUpdater.h"
@@ -288,15 +287,10 @@ using namespace llvm;
 
 #define DEBUG_TYPE "wasm-lower-em-ehsjlj"
 
-static SmallVector<std::string, 8> EHAllowlist;
-
 static SmallVector<std::string, 8> getEHAllowlist(const Module &M) {
-  if (auto *O = clv2::getView<&clv2::WebAssemblyOptsReg>(
-          M.getContext().getOptionsContext())) {
-    const auto &V = O->get<&clv2::WASM_EHAllowlist>();
-    return SmallVector<std::string, 8>(V.begin(), V.end());
-  }
-  return EHAllowlist;
+  const auto &V =
+      M.getContext().getOptions<WebAssemblyOptions>().WASM_EHAllowlist;
+  return SmallVector<std::string, 8>(V.begin(), V.end());
 }
 
 namespace {
@@ -930,10 +924,9 @@ static void nullifySetjmp(Function *F) {
 bool WebAssemblyLowerEmscriptenEHSjLjImpl::runOnModule(Module &M) {
   LLVM_DEBUG(dbgs() << "********** Lower Emscripten EH & SjLj **********\n");
 
-  auto &OptsCtx = M.getContext().getOptionsContext();
-  EnableEmEH = WebAssembly::getWasmEnableEmEH(OptsCtx);
-  EnableEmSjLj = WebAssembly::getWasmEnableEmSjLj(OptsCtx);
-  EnableWasmSjLj = WebAssembly::getWasmEnableSjLj(OptsCtx);
+  EnableEmEH = WebAssembly::getWasmEnableEmEH(M.getContext());
+  EnableEmSjLj = WebAssembly::getWasmEnableEmSjLj(M.getContext());
+  EnableWasmSjLj = WebAssembly::getWasmEnableSjLj(M.getContext());
   assert(!(EnableEmSjLj && EnableWasmSjLj) &&
          "Two SjLj modes cannot be turned on at the same time");
   assert(!(EnableEmEH && EnableWasmSjLj) &&

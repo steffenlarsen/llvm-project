@@ -11,6 +11,7 @@
 #include "llvm-c/Disassembler.h"
 #include "llvm-c/Target.h"
 #include "llvm/Support/CommandLineV2.h"
+#include "llvm/Support/PluginLoaderOptions.h"
 #include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/TargetParser/Host.h"
@@ -118,7 +119,11 @@ extern "C" LLVM_ATTRIBUTE_USED int LLVMFuzzerInitialize(int *argc,
   clv2::OptionParser P;
   P.add<&FuzzerToolReg>();
   RegisterAllLLVMOptions(P);
-  auto OptsCtx = P.parse(*argc, OriginalArgv, "llvm MC disassembler fuzzer\n");
+  std::vector<const char *> ArgsAfterPlugins =
+      loadPluginsAndStripArgs(*argc, OriginalArgv);
+  auto OptsCtx =
+      P.parse(static_cast<int>(ArgsAfterPlugins.size()),
+              ArgsAfterPlugins.data(), "llvm MC disassembler fuzzer\n");
   auto *Opts = OptsCtx->getViewPtr<&FuzzerToolReg>();
   TripleName = Opts->get<&TripleNameOpt>();
   MCPU = Opts->get<&MCPUOpt>();

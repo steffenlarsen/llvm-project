@@ -39,6 +39,7 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/Analysis/AliasAnalysis.h"
+#include "llvm/Analysis/AnalysisOptions.h"
 #include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/Analysis/BasicAliasAnalysis.h"
 #include "llvm/Analysis/ConstantFolding.h"
@@ -161,7 +162,7 @@ public:
   /// This calls the Message-only version so that the above is easier to set
   /// a breakpoint on.
   template <typename T1, typename... Ts>
-  void CheckFailed(const Twine &Message, const T1 &V1, const Ts &... Vs) {
+  void CheckFailed(const Twine &Message, const T1 &V1, const Ts &...Vs) {
     CheckFailed(Message);
     WriteValues({V1, Vs...});
   }
@@ -256,8 +257,8 @@ void Lint::visitCallBase(CallBase &I) {
         // Check that an sret argument points to valid memory.
         if (Formal->hasStructRetAttr() && Actual->getType()->isPointerTy()) {
           Type *Ty = Formal->getParamStructRetType();
-          MemoryLocation Loc(
-              Actual, LocationSize::precise(DL->getTypeStoreSize(Ty)));
+          MemoryLocation Loc(Actual,
+                             LocationSize::precise(DL->getTypeStoreSize(Ty)));
           visitMemoryReference(I, Loc, DL->getABITypeAlign(Ty), Ty,
                                MemRef::Read | MemRef::Write);
         }
@@ -677,7 +678,8 @@ Value *Lint::findValueImpl(Value *V, bool OffsetOk,
         break;
       if (Value *U = FindAvailableLoadedValue(
               L, BB, BBI,
-              getDefMaxInstsToScan(Mod->getContext().getOptionsContext()),
+              getDefMaxInstsToScan(
+                  Mod->getContext().getOptions<AnalysisOptions>()),
               &BatchAA))
         return findValueImpl(U, OffsetOk, Visited);
       if (BBI != BB->begin())

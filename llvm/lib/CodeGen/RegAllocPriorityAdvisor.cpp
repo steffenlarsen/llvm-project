@@ -12,27 +12,22 @@
 
 #include "llvm/CodeGen/RegAllocPriorityAdvisor.h"
 #include "RegAllocGreedy.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsRegAlloc.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/VirtRegMap.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/CommandLineV2.h"
-#include "llvm/Support/OptionsContext.h"
 
 using namespace llvm;
 
-static RegAllocPriorityAdvisorProvider::AdvisorMode Mode =
-    RegAllocPriorityAdvisorProvider::AdvisorMode::Default;
-
 static RegAllocPriorityAdvisorProvider::AdvisorMode
-getPriorityAdvisorMode(const clv2::OptionsContext &Ctx) {
+getPriorityAdvisorMode(const LLVMContext &Ctx) {
   return static_cast<RegAllocPriorityAdvisorProvider::AdvisorMode>(
-      clv2::getOptValOr<&clv2::CGPassRegAllocReg,
-                        &clv2::CGPASS_RegallocEnablePriorityAdvisor>(Ctx,
-                                                                     Mode));
+      Ctx.getOptions<CodeGenRegAllocOptions>()
+          .CGPASS_RegallocEnablePriorityAdvisor);
 }
 
 char RegAllocPriorityAdvisorAnalysisLegacy::ID = 0;
@@ -132,8 +127,8 @@ private:
 };
 
 /// Deferred priority advisor analysis that reads the mode from the Module's
-/// LLVMContext OptionsContext in doInitialization, rather than at
-/// construction time when no context is available.
+/// LLVMContext in doInitialization, rather than at construction time when no
+/// context is available.
 class DeferredPriorityAdvisorAnalysisLegacy final
     : public RegAllocPriorityAdvisorAnalysisLegacy {
 public:
@@ -154,7 +149,7 @@ private:
   bool doInitialization(Module &M) override {
     auto &Ctx = M.getContext();
     AdvisorMode Mode = static_cast<AdvisorMode>(
-        static_cast<int>(getPriorityAdvisorMode(Ctx.getOptionsContext())));
+        static_cast<int>(getPriorityAdvisorMode(Ctx)));
     switch (Mode) {
     case AdvisorMode::Default:
       Provider.reset(
@@ -190,7 +185,7 @@ private:
 void RegAllocPriorityAdvisorAnalysis::initializeProvider(LLVMContext &Ctx) {
   if (Provider)
     return;
-  switch (getPriorityAdvisorMode(Ctx.getOptionsContext())) {
+  switch (getPriorityAdvisorMode(Ctx)) {
   case RegAllocPriorityAdvisorProvider::AdvisorMode::Dummy:
     Provider.reset(new DummyPriorityAdvisorProvider());
     return;
@@ -232,7 +227,7 @@ RegAllocPriorityAdvisorAnalysis::run(MachineFunction &MF,
 template <>
 Pass *llvm::callDefaultCtor<RegAllocPriorityAdvisorAnalysisLegacy>() {
   // Defer mode selection to doInitialization where the Module's
-  // LLVMContext OptionsContext is available for reading CLI options.
+  // LLVMContext is available for reading CLI options.
   return new DeferredPriorityAdvisorAnalysisLegacy();
 }
 

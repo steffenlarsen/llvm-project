@@ -65,10 +65,9 @@
 #include "llvm/IR/PassManager.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/SampleProfileLoaderBaseUtil.h"
-#include "llvm/Transforms/Utils/UtilsOptionsOptInfos.h"
+#include "llvm/Transforms/Utils/UtilsOptions.h"
 #include <utility>
 
 using namespace llvm;
@@ -80,9 +79,7 @@ using namespace sampleprofutil;
 // presence of debug information. This is only needed when debugging
 // debug info generation issues.
 static bool getNoDiscriminators(const Function &F) {
-  return clv2::getOptValIfSpecified<&clv2::TransformUtilsOptsReg,
-                                    &clv2::TU_NoDiscriminators>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext().getOptions<UtilsOptions>().TU_NoDiscriminators;
 }
 
 static bool shouldHaveDiscriminator(const Instruction *I) {
@@ -197,8 +194,8 @@ static bool addDiscriminators(Function &F) {
       } else {
         I.setDebugLoc(*NewDIL);
         LLVM_DEBUG(dbgs() << DIL->getFilename() << ":" << DIL->getLine() << ":"
-                   << DIL->getColumn() << ":" << Discriminator << " " << I
-                   << "\n");
+                          << DIL->getColumn() << ":" << Discriminator << " "
+                          << I << "\n");
       }
       Changed = true;
     }
@@ -215,7 +212,7 @@ static bool addDiscriminators(Function &F) {
       //  1) We want to avoid a non-deterministic assignment of
       //     discriminators.
       //  2) We want to minimize the number of base discriminators used.
-      if (!isa<InvokeInst>(I) && (!isa<CallInst>(I) || isa<IntrinsicInst>(I)))  
+      if (!isa<InvokeInst>(I) && (!isa<CallInst>(I) || isa<IntrinsicInst>(I)))
         continue;
 
       DILocation *CurrentDIL = I.getDebugLoc();

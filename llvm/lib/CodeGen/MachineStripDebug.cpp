@@ -11,7 +11,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/CodeGen/MachineStripDebug.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsMachine2.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineFunctionAnalysis.h"
@@ -19,19 +19,18 @@
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/IR/Analysis.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/InitializePasses.h"
-#include "llvm/Support/CommandLineV2.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Transforms/Utils/Debugify.h"
 
 #define DEBUG_TYPE "mir-strip-debug"
 
 using namespace llvm;
 
-static bool getMirStripDebugifyOnly(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_MirStripDebugifyOnly>(Ctx);
+static bool getMirStripDebugifyOnly(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenMachine2Options>().CGPASS_MirStripDebugifyOnly;
 }
 
 namespace {
@@ -89,7 +88,7 @@ struct StripDebugMachineModule : public ModulePass {
     // Re-read the option with context now that we have a Module.
     bool Effective = OnlyDebugified;
     if (!OnlyDebugifiedExplicit)
-      Effective = getMirStripDebugifyOnly(M.getContext().getOptionsContext());
+      Effective = getMirStripDebugifyOnly(M.getContext());
     MachineModuleInfo &MMI =
         getAnalysis<MachineModuleInfoWrapperPass>().getMMI();
     return stripDebugMachineModuleImpl(
@@ -134,7 +133,7 @@ PreservedAnalyses StripDebugMachineModulePass::run(Module &M,
   FunctionAnalysisManager &FAM =
       AM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
   const bool Changed = stripDebugMachineModuleImpl(
-      M, getMirStripDebugifyOnly(M.getContext().getOptionsContext()),
+      M, getMirStripDebugifyOnly(M.getContext()),
       [&FAM](Function &F) -> MachineFunction * {
         return &FAM.getResult<MachineFunctionAnalysis>(F).getMF();
       });

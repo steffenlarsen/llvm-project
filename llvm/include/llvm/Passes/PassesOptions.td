@@ -1,4 +1,4 @@
-//===- PassesOptions.td - CLV2 option defs for Passes -------*- tablegen -*-===//
+//===- PassesOptions.td - Option defs for the Passes library -*- tablegen -*-===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -6,520 +6,234 @@
 //
 //===----------------------------------------------------------------------===//
 
-include "llvm/Support/CLV2Options.td"
+include "llvm/Option/OptParser.td"
 
-def PassesOptsReg : Registry<"llvm::passes"> {
-  // Getter bodies are compiled once, in PassesOptionsGetters.cpp.
-  let OutOfLineGetters = 1;
-}
+def PassesOptions : OptionsStruct<"llvm"> {}
 
 // =========================================================================
-// External enum: InliningAdvisorMode (from InlineAdvisor.h)
+// External enum: InliningAdvisorMode (from llvm/Analysis/InlineAdvisor.h)
 // =========================================================================
 
-def InliningAdvisorModeDefault : EnumValue<"default",
-    "Heuristics-based inliner version"> {
-  let CppName = "Default";
-}
-
-def InliningAdvisorModeDevelopment : EnumValue<"development",
-    "Use development mode (runtime-loadable model)"> {
-  let CppName = "Development";
-}
-
-def InliningAdvisorModeRelease : EnumValue<"release",
-    "Use release mode (AOT-compiled model)"> {
-  let CppName = "Release";
-}
-
-def InliningAdvisorModeEnum : EnumType<"InliningAdvisorMode",
-    [InliningAdvisorModeDefault, InliningAdvisorModeDevelopment,
-     InliningAdvisorModeRelease]> {
+def InliningAdvisorModeEnum : OptionEnum<"llvm::InliningAdvisorMode", [
+    EnumMember<"Default", "default">,
+    EnumMember<"Development", "development">,
+    EnumMember<"Release", "release">]> {
   let External = 1;
+  let Ident = "InliningAdvisorMode";
 }
 
 // =========================================================================
-// External enum: AttributorRunOption (from Attributor.h)
+// External enum: AttributorRunOption (from llvm/Transforms/IPO/Attributor.h)
 // =========================================================================
 
-def AttributorRunOptionFull : EnumValue<"full",
-    "enable all full attributor runs"> {
-  let CppName = "FULL";
-}
-
-def AttributorRunOptionLight : EnumValue<"light",
-    "enable all attributor-light runs"> {
-  let CppName = "LIGHT";
-}
-
-def AttributorRunOptionModule : EnumValue<"module",
-    "enable module-wide attributor runs"> {
-  let CppName = "MODULE";
-}
-
-def AttributorRunOptionModuleLight : EnumValue<"module-light",
-    "enable module-wide attributor-light runs"> {
-  let CppName = "MODULE_LIGHT";
-}
-
-def AttributorRunOptionCgscc : EnumValue<"cgscc",
-    "enable call graph SCC attributor runs"> {
-  let CppName = "CGSCC";
-}
-
-def AttributorRunOptionCgsccLight : EnumValue<"cgscc-light",
-    "enable call graph SCC attributor-light runs"> {
-  let CppName = "CGSCC_LIGHT";
-}
-
-def AttributorRunOptionNone : EnumValue<"none",
-    "disable attributor runs"> {
-  let CppName = "NONE";
-}
-
-def AttributorRunOptionEnum : EnumType<"AttributorRunOption",
-    [AttributorRunOptionFull, AttributorRunOptionLight,
-     AttributorRunOptionModule, AttributorRunOptionModuleLight,
-     AttributorRunOptionCgscc, AttributorRunOptionCgsccLight,
-     AttributorRunOptionNone]> {
+def AttributorRunOptionEnum : OptionEnum<"llvm::AttributorRunOption", [
+    EnumMember<"FULL", "full">,
+    EnumMember<"LIGHT", "light">,
+    EnumMember<"MODULE", "module">,
+    EnumMember<"MODULE_LIGHT", "module-light">,
+    EnumMember<"CGSCC", "cgscc">,
+    EnumMember<"CGSCC_LIGHT", "cgscc-light">,
+    EnumMember<"NONE", "none">]> {
   let External = 1;
+  let Ident = "AttributorRunOption";
+}
+
+// =========================================================================
+// External enum: cl::boolOrDefault (from llvm/Support/BoolOrDefault.h)
+// =========================================================================
+
+def BoolOrDefaultEnum : OptionEnum<"llvm::cl::boolOrDefault", [
+    EnumMember<"BOU_TRUE", "true">,
+    EnumMember<"BOU_FALSE", "false">]> {
+  let External = 1;
+  let Ident = "BoolOrDefault";
 }
 
 // =========================================================================
 // Options — PassBuilderPipelines.cpp
 // =========================================================================
 
-def PAS_UseInlineAdvisor : Option<
-    "enable-ml-inliner",
-    "Enable ML policy for inliner. Currently trained for -Oz only",
-    "InliningAdvisorMode"> {
-  let Registry = PassesOptsReg;
-  let Default = "default";
-  let Hidden = 1;
-}
+defm PAS_UseInlineAdvisor : EnumField<"enable-ml-inliner", InliningAdvisorModeEnum,
+    "llvm::InliningAdvisorMode::Default",
+    "Enable ML policy for inliner. Currently trained for -Oz only">;
 
-def PAS_EnablePGOInlineDeferral : Option<
-    "enable-npm-pgo-inline-deferral",
-    "Enable inline deferral during PGO",
-    "bool"> {
-  let Registry = PassesOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm PAS_EnablePGOInlineDeferral : BoolField<"enable-npm-pgo-inline-deferral",
+    "true", "Enable inline deferral during PGO">;
 
-def PAS_EnableModuleInliner : Option<
-    "enable-module-inliner",
-    "Enable module inliner",
-    "bool"> {
-  let Registry = PassesOptsReg;
-  let Hidden = 1;
-}
+defm PAS_EnableModuleInliner : BoolField<"enable-module-inliner",
+    "false", "Enable module inliner">;
 
-def PAS_PerformMandatoryInliningsFirst : Option<
-    "mandatory-inlining-first",
-    "Perform mandatory inlinings module-wide, before performing inlining",
-    "bool"> {
-  let Registry = PassesOptsReg;
-  let Hidden = 1;
-}
+defm PAS_PerformMandatoryInliningsFirst : BoolField<"mandatory-inlining-first",
+    "false",
+    "Perform mandatory inlinings module-wide, before performing inlining">;
 
-def PAS_EnableEagerlyInvalidateAnalyses : Option<
-    "eagerly-invalidate-analyses",
-    "Eagerly invalidate more analyses in default pipelines",
-    "bool"> {
-  let Registry = PassesOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm PAS_EnableEagerlyInvalidateAnalyses : BoolField<"eagerly-invalidate-analyses",
+    "true", "Eagerly invalidate more analyses in default pipelines">;
 
-def PAS_EnableMergeFunctions : Option<
-    "enable-merge-functions",
-    "Enable function merging as part of the optimization pipeline",
-    "bool"> {
-  let Registry = PassesOptsReg;
-  let Hidden = 1;
-}
+defm PAS_EnableMergeFunctions : BoolField<"enable-merge-functions",
+    "false", "Enable function merging as part of the optimization pipeline">;
 
-def PAS_EnablePostPGOLoopRotation : Option<
-    "enable-post-pgo-loop-rotation",
-    "Run the loop rotation transformation after PGO instrumentation",
-    "bool"> {
-  let Registry = PassesOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm PAS_EnablePostPGOLoopRotation : BoolField<"enable-post-pgo-loop-rotation",
+    "true", "Run the loop rotation transformation after PGO instrumentation">;
 
-def PAS_EnableGlobalAnalyses : Option<
-    "enable-global-analyses",
-    "Enable inter-procedural analyses",
-    "bool"> {
-  let Registry = PassesOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm PAS_EnableGlobalAnalyses : BoolField<"enable-global-analyses",
+    "true", "Enable inter-procedural analyses">;
 
-def PAS_RunPartialInlining : Option<
-    "enable-partial-inlining",
-    "Run Partial inlining pass",
-    "bool"> {
-  let Registry = PassesOptsReg;
-  let Hidden = 1;
-}
+defm PAS_RunPartialInlining : BoolField<"enable-partial-inlining",
+    "false", "Run Partial inlining pass">;
 
-def PAS_ExtraVectorizerPasses : Option<
-    "extra-vectorizer-passes",
-    "Run cleanup optimization passes after vectorization",
-    "bool"> {
-  let Registry = PassesOptsReg;
-  let Hidden = 1;
-}
+defm PAS_ExtraVectorizerPasses : BoolField<"extra-vectorizer-passes",
+    "false", "Run cleanup optimization passes after vectorization">;
 
-def PAS_RunNewGVN : Option<
-    "enable-newgvn",
-    "Run the NewGVN pass",
-    "bool"> {
-  let Registry = PassesOptsReg;
-  let Hidden = 1;
-}
+defm PAS_RunNewGVN : BoolField<"enable-newgvn",
+    "false", "Run the NewGVN pass">;
 
-def PAS_EnableLoopInterchange : Option<
-    "enable-loopinterchange",
-    "Enable the LoopInterchange Pass",
-    "bool"> {
-  let Registry = PassesOptsReg;
-  let Hidden = 1;
-}
+defm PAS_EnableLoopInterchange : BoolField<"enable-loopinterchange",
+    "true", "Enable the LoopInterchange Pass">;
 
-def PAS_EnableUnrollAndJam : Option<
-    "enable-unroll-and-jam",
-    "Enable Unroll And Jam Pass",
-    "bool"> {
-  let Registry = PassesOptsReg;
-  let Hidden = 1;
-}
+defm PAS_EnableUnrollAndJam : BoolField<"enable-unroll-and-jam",
+    "false", "Enable Unroll And Jam Pass">;
 
-def PAS_EnableLoopFlatten : Option<
-    "enable-loop-flatten",
-    "Enable the LoopFlatten Pass",
-    "bool"> {
-  let Registry = PassesOptsReg;
-  let Hidden = 1;
-}
+defm PAS_EnableLoopFlatten : BoolField<"enable-loop-flatten",
+    "false", "Enable the LoopFlatten Pass">;
 
-def PAS_EnableDFAJumpThreading : Option<
-    "enable-dfa-jump-thread",
-    "Enable DFA jump threading",
-    "bool"> {
-  let Registry = PassesOptsReg;
-  let Hidden = 1;
-}
+defm PAS_EnableDFAJumpThreading : BoolField<"enable-dfa-jump-thread",
+    "true", "Enable DFA jump threading">;
 
-def PAS_EnableHotColdSplit : Option<
-    "hot-cold-split",
-    "Enable hot-cold splitting pass",
-    "bool"> {
-  let Registry = PassesOptsReg;
-}
+defm PAS_EnableHotColdSplit : BoolField<"hot-cold-split",
+    "false", "Enable hot-cold splitting pass">;
 
-def PAS_DisablePreInliner : Option<
-    "disable-preinline",
-    "Disable pre-instrumentation inliner",
-    "bool"> {
-  let Registry = PassesOptsReg;
-  let Hidden = 1;
-}
+defm PAS_DisablePreInliner : BoolField<"disable-preinline",
+    "false", "Disable pre-instrumentation inliner">;
 
-def PAS_PreInlineThreshold : Option<
-    "preinline-threshold",
+defm PAS_PreInlineThreshold : ValueField<"preinline-threshold", "int", "75",
     "Control the amount of inlining in pre-instrumentation inliner "
-    "(default = 75)",
-    "int"> {
-  let Registry = PassesOptsReg;
-  let Default = "75";
-  let Hidden = 1;
-}
+    "(default = 75)">;
 
-def PAS_EnableGVNHoist : Option<
-    "enable-gvn-hoist",
-    "Enable the GVN hoisting pass (default = off)",
-    "bool"> {
-  let Registry = PassesOptsReg;
-}
+defm PAS_EnableGVNHoist : BoolField<"enable-gvn-hoist",
+    "false", "Enable the GVN hoisting pass (default = off)">;
 
-def PAS_EnableGVNSink : Option<
-    "enable-gvn-sink",
-    "Enable the GVN sinking pass (default = off)",
-    "bool"> {
-  let Registry = PassesOptsReg;
-}
+defm PAS_EnableGVNSink : BoolField<"enable-gvn-sink",
+    "false", "Enable the GVN sinking pass (default = off)">;
 
-def PAS_EnableJumpTableToSwitch : Option<
-    "enable-jump-table-to-switch",
-    "Enable JumpTableToSwitch pass (default = off)",
-    "bool"> {
-  let Registry = PassesOptsReg;
-}
+defm PAS_EnableJumpTableToSwitch : BoolField<"enable-jump-table-to-switch",
+    "true", "Enable JumpTableToSwitch pass (default = off)">;
 
-def PAS_EnableCHR : Option<
-    "enable-chr",
-    "Enable control height reduction optimization (CHR)",
-    "bool"> {
-  let Registry = PassesOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm PAS_EnableCHR : BoolField<"enable-chr",
+    "true", "Enable control height reduction optimization (CHR)">;
 
-def PAS_FlattenedProfileUsed : Option<
-    "flattened-profile-used",
+defm PAS_FlattenedProfileUsed : BoolField<"flattened-profile-used",
+    "false",
     "Indicate the sample profile being used is flattened, i.e., "
-    "no inline hierarchy exists in the profile",
-    "bool"> {
-  let Registry = PassesOptsReg;
-  let Hidden = 1;
-}
+    "no inline hierarchy exists in the profile">;
 
-def PAS_EnableMatrix : Option<
-    "enable-matrix",
-    "Enable lowering of the matrix intrinsics",
-    "bool"> {
-  let Registry = PassesOptsReg;
-  let Hidden = 1;
-}
+defm PAS_EnableMatrix : BoolField<"enable-matrix",
+    "false", "Enable lowering of the matrix intrinsics">;
 
-def PAS_EnableMergeICmps : Option<
-    "enable-mergeicmps",
-    "Enable MergeICmps pass in the optimization pipeline",
-    "bool"> {
-  let Registry = PassesOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm PAS_EnableMergeICmps : BoolField<"enable-mergeicmps",
+    "true", "Enable MergeICmps pass in the optimization pipeline">;
 
-def PAS_EnableConstraintElimination : Option<
-    "enable-constraint-elimination",
-    "Enable pass to eliminate conditions based on linear constraints",
-    "bool"> {
-  let Registry = PassesOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm PAS_EnableConstraintElimination : BoolField<"enable-constraint-elimination",
+    "true", "Enable pass to eliminate conditions based on linear constraints">;
 
-def PAS_AttributorRun : Option<
-    "attributor-enable",
-    "Enable the attributor inter-procedural deduction pass",
-    "AttributorRunOption"> {
-  let Registry = PassesOptsReg;
-  let Default = "none";
-  let Hidden = 1;
-}
+defm PAS_AttributorRun : EnumField<"attributor-enable", AttributorRunOptionEnum,
+    "llvm::AttributorRunOption::NONE",
+    "Enable the attributor inter-procedural deduction pass">;
 
-def PAS_EnableSampledInstr : Option<
-    "enable-sampled-instrumentation",
-    "Enable profile instrumentation sampling (default = off)",
-    "bool"> {
-  let Registry = PassesOptsReg;
-  let Hidden = 1;
-}
+defm PAS_EnableSampledInstr : BoolField<"enable-sampled-instrumentation",
+    "false", "Enable profile instrumentation sampling (default = off)">;
 
-def PAS_UseLoopVersioningLICM : Option<
-    "enable-loop-versioning-licm",
-    "Enable the experimental Loop Versioning LICM pass",
-    "bool"> {
-  let Registry = PassesOptsReg;
-  let Hidden = 1;
-}
+defm PAS_UseLoopVersioningLICM : BoolField<"enable-loop-versioning-licm",
+    "false", "Enable the experimental Loop Versioning LICM pass">;
 
-def PAS_InstrumentColdFuncOnlyPath : Option<
-    "instrument-cold-function-only-path",
+defm PAS_InstrumentColdFuncOnlyPath : ValueField<"instrument-cold-function-only-path",
+    "std::string", "\"\"",
     "File path for cold function only instrumentation(requires use "
-    "with --pgo-instrument-cold-function-only)",
-    "std::string"> {
-  let Registry = PassesOptsReg;
-  let Hidden = 1;
-}
+    "with --pgo-instrument-cold-function-only)">;
 
-def PAS_EnableDevirtualizeSpeculatively : Option<
-    "enable-devirtualize-speculatively",
-    "Enable speculative devirtualization optimization",
-    "bool"> {
-  let Registry = PassesOptsReg;
-}
+defm PAS_EnableDevirtualizeSpeculatively : BoolField<"enable-devirtualize-speculatively",
+    "false", "Enable speculative devirtualization optimization">;
 
-def PAS_OptPipelineTriggerCrash : Option<
-    "opt-pipeline-trigger-crash",
-    "Trigger crash in optimization pipeline",
-    "bool"> {
-  let Registry = PassesOptsReg;
-  let Hidden = 1;
-}
+defm PAS_OptPipelineTriggerCrash : BoolField<"opt-pipeline-trigger-crash",
+    "false", "Trigger crash in optimization pipeline">;
 
 // =========================================================================
 // Options — StandardInstrumentations.cpp
 // =========================================================================
 
-def PAS_VerifyAnalysisInvalidation : Option<
-    "verify-analysis-invalidation", "",
-    "bool"> {
-  let Registry = PassesOptsReg;
-  let Hidden = 1;
-}
+defm PAS_VerifyAnalysisInvalidation : BoolField<"verify-analysis-invalidation",
+    "false", "">;
 
-def PAS_PrintChangedBefore : Option<
-    "print-before-changed",
-    "Print before passes that change them",
-    "bool"> {
-  let Registry = PassesOptsReg;
-  let Hidden = 1;
-}
+defm PAS_PrintChangedBefore : BoolField<"print-before-changed",
+    "false", "Print before passes that change them">;
 
-def PAS_DotBinary : Option<
-    "print-changed-dot-path",
-    "system dot used by change reporters",
-    "std::string"> {
-  let Registry = PassesOptsReg;
-  let Default = "\"dot\"";
-  let Hidden = 1;
-}
+defm PAS_DotBinary : ValueField<"print-changed-dot-path", "std::string",
+    "\"dot\"", "system dot used by change reporters">;
 
-def PAS_BeforeColour : Option<
-    "dot-cfg-before-color",
-    "Color for dot-cfg before elements",
-    "std::string"> {
-  let Registry = PassesOptsReg;
-  let Default = "\"red\"";
-  let Hidden = 1;
-}
+defm PAS_BeforeColour : ValueField<"dot-cfg-before-color", "std::string",
+    "\"red\"", "Color for dot-cfg before elements">;
 
-def PAS_AfterColour : Option<
-    "dot-cfg-after-color",
-    "Color for dot-cfg after elements",
-    "std::string"> {
-  let Registry = PassesOptsReg;
-  let Default = "\"forestgreen\"";
-  let Hidden = 1;
-}
+defm PAS_AfterColour : ValueField<"dot-cfg-after-color", "std::string",
+    "\"forestgreen\"", "Color for dot-cfg after elements">;
 
-def PAS_CommonColour : Option<
-    "dot-cfg-common-color",
-    "Color for dot-cfg common elements",
-    "std::string"> {
-  let Registry = PassesOptsReg;
-  let Default = "\"black\"";
-  let Hidden = 1;
-}
+defm PAS_CommonColour : ValueField<"dot-cfg-common-color", "std::string",
+    "\"black\"", "Color for dot-cfg common elements">;
 
-def PAS_DotCfgDir : Option<
-    "dot-cfg-dir",
-    "Generate dot files into specified directory for changed IRs",
-    "std::string"> {
-  let Registry = PassesOptsReg;
-  let Default = "\"./\"";
-  let Hidden = 1;
-}
+defm PAS_DotCfgDir : ValueField<"dot-cfg-dir", "std::string", "\"./\"",
+    "Generate dot files into specified directory for changed IRs">;
 
-def PAS_PrintOnCrashPath : Option<
-    "print-on-crash-path",
-    "Print the last form of the IR before crash to a file",
-    "std::string"> {
-  let Registry = PassesOptsReg;
-  let Hidden = 1;
-}
+defm PAS_PrintOnCrashPath : ValueField<"print-on-crash-path", "std::string",
+    "\"\"", "Print the last form of the IR before crash to a file">;
 
-def PAS_PrintOnCrash : Option<
-    "print-on-crash",
+defm PAS_PrintOnCrash : BoolField<"print-on-crash",
+    "false",
     "Print the last form of the IR before crash "
-    "(use -print-on-crash-path to dump to a file)",
-    "bool"> {
-  let Registry = PassesOptsReg;
-  let Hidden = 1;
-}
+    "(use -print-on-crash-path to dump to a file)">;
 
-def PAS_OptBisectPrintIRPath : Option<
-    "opt-bisect-print-ir-path",
-    "Print IR to path when opt-bisect-limit is reached",
-    "std::string"> {
-  let Registry = PassesOptsReg;
-  let Hidden = 1;
-}
+defm PAS_OptBisectPrintIRPath : ValueField<"opt-bisect-print-ir-path",
+    "std::string", "\"\"",
+    "Print IR to path when opt-bisect-limit is reached">;
 
-def PAS_PrintPassNumbers : Option<
-    "print-pass-numbers",
-    "Print pass names and their ordinals",
-    "bool"> {
-  let Registry = PassesOptsReg;
-  let Hidden = 1;
-}
+defm PAS_PrintPassNumbers : BoolField<"print-pass-numbers",
+    "false", "Print pass names and their ordinals">;
 
-def PAS_PrintBeforePassNumber : ListOption<
-    "print-before-pass-number",
+defm PAS_PrintBeforePassNumber : ListField<"print-before-pass-number",
+    "unsigned",
     "Print IR before the passes with specified numbers as "
-    "reported by print-pass-numbers",
-    "unsigned"> {
-  let Registry = PassesOptsReg;
-  let Hidden = 1;
-  let CommaSeparated = 1;
-}
+    "reported by print-pass-numbers">;
 
-def PAS_PrintAfterPassNumber : ListOption<
-    "print-after-pass-number",
+defm PAS_PrintAfterPassNumber : ListField<"print-after-pass-number",
+    "unsigned",
     "Print IR after the passes with specified numbers as "
-    "reported by print-pass-numbers",
-    "unsigned"> {
-  let Registry = PassesOptsReg;
-  let Hidden = 1;
-  let CommaSeparated = 1;
-}
+    "reported by print-pass-numbers">;
 
-def PAS_IRDumpDirectory : Option<
-    "ir-dump-directory",
+defm PAS_IRDumpDirectory : ValueField<"ir-dump-directory", "std::string",
+    "\"\"",
     "If specified, IR printed using the "
     "-print-[before|after]{-all} options will be dumped into "
-    "files in this directory rather than written to stderr",
-    "std::string"> {
-  let Registry = PassesOptsReg;
-  let ValueDesc = "filename";
-  let Hidden = 1;
-}
+    "files in this directory rather than written to stderr">;
 
-def PAS_DroppedVarStats : Option<
-    "dropped-variable-stats",
-    "Dump dropped debug variables stats",
-    "bool"> {
-  let Registry = PassesOptsReg;
-  let Hidden = 1;
-}
+defm PAS_DroppedVarStats : BoolField<"dropped-variable-stats",
+    "false", "Dump dropped debug variables stats">;
 
-def PAS_TestChanged : Option<
-    "exec-on-ir-change",
-    "exe called with module IR after each pass that changes it",
-    "std::string"> {
-  let Registry = PassesOptsReg;
-  let Hidden = 1;
-}
+defm PAS_TestChanged : ValueField<"exec-on-ir-change", "std::string", "\"\"",
+    "exe called with module IR after each pass that changes it">;
 
 // =========================================================================
 // Options — PassBuilder.cpp
 // =========================================================================
 
-def PAS_PrintPipelinePasses : Option<
-    "print-pipeline-passes",
+defm PAS_PrintPipelinePasses : OptionalValueField<"print-pipeline-passes",
+    "std::string", "std::string()",
     "Print string describing the pipeline (best-effort only).\n"
     "  - =text\tPrint a '-passes' compatible string describing the pipeline.\n"
-    "  - =tree\tPrint a tree-like structure describing the pipeline.",
-    "std::string"> {
-  let Registry = PassesOptsReg;
-  let ValueOptional = 1;
-}
+    "  - =tree\tPrint a tree-like structure describing the pipeline.">;
 
 // =========================================================================
 // Options — RunCodeGen.cpp
 // =========================================================================
 
-def PAS_ForceNewPMCodeGen : Option<
-    "force-new-pm-codegen",
+defm PAS_ForceNewPMCodeGen : EnumField<"force-new-pm-codegen", BoolOrDefaultEnum,
+    "llvm::cl::boolOrDefault::BOU_UNSET",
     "Whether to force the NewPM on/off. Not setting the "
-    "option will default to what the target prefers.",
-    "cl::boolOrDefault"> {
-  let Default = "cl::boolOrDefault::BOU_UNSET";
-  let Registry = PassesOptsReg;
-}
+    "option will default to what the target prefers.">;

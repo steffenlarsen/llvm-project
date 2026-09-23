@@ -20,6 +20,7 @@
 #include <string>
 
 namespace llvm {
+class LLVMContext;
 namespace clv2 {
 class OptionsContext;
 }
@@ -103,8 +104,13 @@ struct CGPassBuilderOption {
   std::string StopAfter;
 };
 
+// Sched1Ctx supplies the CodeGenSched1Options (new TableGen schema) that
+// back the CGPASS_* options owned by the CGPassSched1Reg clv2 registry; pass
+// nullptr when no LLVMContext is reachable at the call site (the process-wide
+// default is used in that case -- see getSched1Options in TargetPassConfig.cpp).
 LLVM_ABI CGPassBuilderOption
-getCGPassBuilderOption(const clv2::OptionsContext &Ctx);
+getCGPassBuilderOption(const clv2::OptionsContext &Ctx,
+                        const LLVMContext *Sched1Ctx);
 
 } // namespace llvm
 

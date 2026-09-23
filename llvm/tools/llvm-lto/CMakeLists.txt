@@ -21,5 +21,19 @@ set(LLVM_LINK_COMPONENTS
 add_llvm_tool(llvm-lto
   llvm-lto.cpp
 
-  DEPENDS intrinsics_gen
+  DEPENDS
+  intrinsics_gen
+  AArch64OptParserTableGen
+  AMDGPUOptParserTableGen
+  BPFOptParserTableGen
+  BitcodeMemProfOptParserTableGen
+  CGDataOptParserTableGen
+  HexagonOptParserTableGen
+  IPOOptParserTableGen
+  InstrumentationOptParserTableGen
+  LTOOptParserTableGen
+  LoongArchOptParserTableGen
+  NVPTXOptParserTableGen
+  ScalarOptParserTableGen
+  UtilsOptParserTableGen
   )

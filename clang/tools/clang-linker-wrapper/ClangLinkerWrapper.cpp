@@ -23,6 +23,7 @@
 #include "llvm/Frontend/Offloading/OffloadWrapper.h"
 #include "llvm/Frontend/Offloading/Utility.h"
 #include "llvm/IR/DiagnosticPrinter.h"
+#include "llvm/IR/IROptions.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IRReader/IRReader.h"
 #include "llvm/LTO/LTO.h"
@@ -32,6 +33,7 @@
 #include "llvm/Object/ObjectFile.h"
 #include "llvm/Object/OffloadBinary.h"
 #include "llvm/Option/ArgList.h"
+#include "llvm/Option/LibraryOptions.h"
 #include "llvm/Option/OptTable.h"
 #include "llvm/Option/Option.h"
 #include "llvm/Plugins/PassPlugin.h"
@@ -43,6 +45,7 @@
 #include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/Parallel.h"
 #include "llvm/Support/Path.h"
+#include "llvm/Support/PluginLoaderOptions.h"
 #include "llvm/Support/Program.h"
 #include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/Signals.h"
@@ -54,6 +57,8 @@
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/TargetParser/Host.h"
+#include "llvm/Transforms/IPO/IPOOptions.h"
+#include "llvm/Transforms/Scalar/ScalarOptions.h"
 #include <optional>
 
 using namespace llvm;
@@ -1632,7 +1637,42 @@ int main(int Argc, char **Argv) {
     LLVMArgv.push_back(Argv[0]);
     for (StringRef Arg : LLVMArgs)
       LLVMArgv.push_back(LLVMSaver.save(Arg).data());
-    OptsCtx = P.parse(LLVMArgv.size(), LLVMArgv.data());
+    std::vector<const char *> ArgsAfterPlugins = loadPluginsAndStripArgs(
+        static_cast<int>(LLVMArgv.size()), LLVMArgv.data());
+
+    // llvm::IROptions, llvm::IPOOptions and llvm::ScalarOptions have migrated
+    // off clv2 onto the new per-library OptTable struct design (see
+    // llvm/include/llvm/Option/LibraryOptions.h) and are no longer among the
+    // clv2::OptionParser registries RegisterAllLLVMOptions() populates above.
+    // Parse them out of the '-mllvm'/'--offload-opt' args first (e.g.
+    // -pass-remarks=..., -force-import-all), forwarding whatever none of them
+    // recognizes to the legacy clv2 parser unchanged -- mirroring the
+    // pattern established in
+    // clang/lib/FrontendTool/ExecuteCompilerInvocation.cpp.
+    SmallVector<const char *, 32> IROptsRest;
+    {
+      std::string IROptsErrs;
+      raw_string_ostream IROptsErrsOS(IROptsErrs);
+      if (Error Err = opt::parseLibraryOptionsChain<IROptions, IPOOptions,
+                                                    ScalarOptions>(
+              ArrayRef<const char *>(ArgsAfterPlugins).drop_front(), IROptsRest,
+              IROptsErrsOS)) {
+        reportError(std::move(Err), LWOpts);
+      }
+      errs() << IROptsErrs;
+    }
+    // IROptions has no automatic apply step (unlike the other libraries in
+    // the chain above, which are read on demand via Ctx.getOptions<T>()); it
+    // must sync a couple of legacy globals (TimePassesIsEnabled/
+    // TimePassesPerRun and the OptBisect singleton) explicitly. See
+    // llvm/lib/IR/IROptions.cpp.
+    llvm::ir_opts::applyIROptions();
+    SmallVector<const char *, 32> ArgvAfterIROpts;
+    ArgvAfterIROpts.push_back(ArgsAfterPlugins[0]);
+    ArgvAfterIROpts.append(IROptsRest.begin(), IROptsRest.end());
+
+    OptsCtx = P.parse(static_cast<int>(ArgvAfterIROpts.size()),
+                      ArgvAfterIROpts.data());
   } else {
     const char *DefaultArgv[] = {Argv[0]};
     OptsCtx = P.parse(1, DefaultArgv);

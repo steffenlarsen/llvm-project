@@ -8,9 +8,13 @@ add_llvm_component_library(LLVMNVPTXDesc
   LINK_COMPONENTS
   MC
   NVPTXInfo
+  Option
   Support
   TargetParser
 
   ADD_TO_COMPONENT
   NVPTX
+
+  DEPENDS
+  NVPTXOptParserTableGen
   )

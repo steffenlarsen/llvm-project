@@ -46,8 +46,7 @@
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicsARM.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/ARM/ARMOptionsOptInfos.h"
+#include "llvm/Target/ARM/ARMOptions.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
@@ -58,20 +57,15 @@ using namespace llvm;
 #define DEBUG_TYPE "mve-tail-predication"
 #define DESC "Transform predicated vector loops to use MVE tail predication"
 
-static TailPredication::Mode EnableTailPredication = TailPredication::Enabled;
-
 static TailPredication::Mode getEnableTailPredication(const Function &F) {
-  if (auto *O =
-          clv2::getView<&clv2::ARMOptsReg>(F.getContext().getOptionsContext()))
-    return static_cast<TailPredication::Mode>(
-        O->get<&clv2::ARM_EnableTailPredication>());
-  return EnableTailPredication;
+  return static_cast<TailPredication::Mode>(
+      F.getContext().getOptions<ARMOptions>().ARM_EnableTailPredication);
 }
 
 namespace {
 
 class MVETailPredication : public LoopPass {
-  SmallVector<IntrinsicInst*, 4> MaskedInsts;
+  SmallVector<IntrinsicInst *, 4> MaskedInsts;
   Loop *L = nullptr;
   ScalarEvolution *SE = nullptr;
   TargetTransformInfo *TTI = nullptr;
@@ -80,7 +74,7 @@ class MVETailPredication : public LoopPass {
 public:
   static char ID;
 
-  MVETailPredication() : LoopPass(ID) { }
+  MVETailPredication() : LoopPass(ID) {}
 
   void getAnalysisUsage(AnalysisUsage &AU) const override {
     AU.addRequired<ScalarEvolutionWrapperPass>();
@@ -89,7 +83,7 @@ public:
     AU.setPreservesCFG();
   }
 
-  bool runOnLoop(Loop *L, LPPassManager&) override;
+  bool runOnLoop(Loop *L, LPPassManager &) override;
 
 private:
   /// Perform the relevant checks on the loop and convert active lane masks if
@@ -108,7 +102,7 @@ private:
 
 } // end namespace
 
-bool MVETailPredication::runOnLoop(Loop *L, LPPassManager&) {
+bool MVETailPredication::runOnLoop(Loop *L, LPPassManager &) {
   Function &F = *L->getHeader()->getParent();
   if (skipLoop(L) || !getEnableTailPredication(F))
     return false;
@@ -132,7 +126,7 @@ bool MVETailPredication::runOnLoop(Loop *L, LPPassManager&) {
   if (!Preheader)
     return false;
 
-  auto FindLoopIterations = [](BasicBlock *BB) -> IntrinsicInst* {
+  auto FindLoopIterations = [](BasicBlock *BB) -> IntrinsicInst * {
     for (auto &I : *BB) {
       auto *Call = dyn_cast<IntrinsicInst>(&I);
       if (!Call)
@@ -264,8 +258,8 @@ const SCEV *MVETailPredication::IsSafeActiveMask(IntrinsicInst *ActiveLaneMask,
     // and legalize this.
     if (TC1 != TC2) {
       LLVM_DEBUG(dbgs() << "ARM TP: inconsistent constant tripcount values: "
-                 << TC1 << " from set.loop.iterations, and "
-                 << TC2 << " from get.active.lane.mask\n");
+                        << TC1 << " from set.loop.iterations, and " << TC2
+                        << " from get.active.lane.mask\n");
       return nullptr;
     }
   } else if (!ForceTailPredication) {
@@ -386,10 +380,18 @@ void MVETailPredication::InsertVCTPIntrinsic(IntrinsicInst *ActiveLaneMask,
   switch (VectorWidth) {
   default:
     llvm_unreachable("unexpected number of lanes");
-  case 2:  VCTPID = Intrinsic::arm_mve_vctp64; break;
-  case 4:  VCTPID = Intrinsic::arm_mve_vctp32; break;
-  case 8:  VCTPID = Intrinsic::arm_mve_vctp16; break;
-  case 16: VCTPID = Intrinsic::arm_mve_vctp8; break;
+  case 2:
+    VCTPID = Intrinsic::arm_mve_vctp64;
+    break;
+  case 4:
+    VCTPID = Intrinsic::arm_mve_vctp32;
+    break;
+  case 8:
+    VCTPID = Intrinsic::arm_mve_vctp16;
+    break;
+  case 16:
+    VCTPID = Intrinsic::arm_mve_vctp8;
+    break;
   }
   Value *VCTPCall = Builder.CreateIntrinsic(VCTPID, Processed);
   ActiveLaneMask->replaceAllUsesWith(VCTPCall);
@@ -398,9 +400,9 @@ void MVETailPredication::InsertVCTPIntrinsic(IntrinsicInst *ActiveLaneMask,
   // TODO: This add likely already exists in the loop.
   Value *Remaining = Builder.CreateSub(Processed, Factor);
   Processed->addIncoming(Remaining, L->getLoopLatch());
-  LLVM_DEBUG(dbgs() << "ARM TP: Insert processed elements phi: "
-             << *Processed << "\n"
-             << "ARM TP: Inserted VCTP: " << *VCTPCall << "\n");
+  LLVM_DEBUG(dbgs() << "ARM TP: Insert processed elements phi: " << *Processed
+                    << "\n"
+                    << "ARM TP: Inserted VCTP: " << *VCTPCall << "\n");
 }
 
 bool MVETailPredication::TryConvertActiveLaneMask(Value *TripCount) {
@@ -417,8 +419,8 @@ bool MVETailPredication::TryConvertActiveLaneMask(Value *TripCount) {
   LLVM_DEBUG(dbgs() << "ARM TP: Found predicated vector loop.\n");
 
   for (auto *ActiveLaneMask : ActiveLaneMasks) {
-    LLVM_DEBUG(dbgs() << "ARM TP: Found active lane mask: "
-                      << *ActiveLaneMask << "\n");
+    LLVM_DEBUG(dbgs() << "ARM TP: Found active lane mask: " << *ActiveLaneMask
+                      << "\n");
 
     const SCEV *StartSCEV = IsSafeActiveMask(ActiveLaneMask, TripCount);
     if (!StartSCEV) {
@@ -442,9 +444,7 @@ bool MVETailPredication::TryConvertActiveLaneMask(Value *TripCount) {
   return true;
 }
 
-Pass *llvm::createMVETailPredicationPass() {
-  return new MVETailPredication();
-}
+Pass *llvm::createMVETailPredicationPass() { return new MVETailPredication(); }
 
 char MVETailPredication::ID = 0;
 

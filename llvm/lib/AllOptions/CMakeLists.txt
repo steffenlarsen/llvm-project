@@ -1,33 +1,5 @@
-# Experimental targets are not always in the build, so their registration TUs
-# are added conditionally and gated by a matching macro below.
-set(LLVMAllOptions_EXPERIMENTAL_SRCS "")
-foreach(t ARC CSKY M68k)
-  if (${t} IN_LIST LLVM_TARGETS_TO_BUILD)
-    list(APPEND LLVMAllOptions_EXPERIMENTAL_SRCS Targets/${t}.cpp)
-  endif()
-endforeach()
-
 add_llvm_component_library(LLVMAllOptions
   AllOptions.cpp
-  ${LLVMAllOptions_EXPERIMENTAL_SRCS}
-  Targets/AArch64.cpp
-  Targets/AMDGPU.cpp
-  Targets/ARM.cpp
-  Targets/BPF.cpp
-  Targets/Hexagon.cpp
-  Targets/Lanai.cpp
-  Targets/LoongArch.cpp
-  Targets/Mips.cpp
-  Targets/MSP430.cpp
-  Targets/NVPTX.cpp
-  Targets/PowerPC.cpp
-  Targets/RISCV.cpp
-  Targets/Sparc.cpp
-  Targets/SPIRV.cpp
-  Targets/SystemZ.cpp
-  Targets/WebAssembly.cpp
-  Targets/X86.cpp
-  Targets/XCore.cpp
 
   LINK_COMPONENTS
   AggressiveInstCombine

@@ -15,14 +15,12 @@
 #include "llvm/Support/CommandLineV2.h"
 #include "llvm/Transforms/Vectorize/SandboxVectorizer/Debug.h"
 #include "llvm/Transforms/Vectorize/SandboxVectorizer/InstrMaps.h"
-#include "llvm/Transforms/Vectorize/VectorizeOptionsOptInfos.h"
+#include "llvm/Transforms/Vectorize/VectorizeOptions.h"
 
 namespace llvm::sandboxir {
 
 static unsigned getMaxUsersToConsider(const llvm::Function &F) {
-  return llvm::clv2::getOptValOrDefault<
-      &llvm::clv2::VEC_SBVecMaxUsersToConsider>(
-      F.getContext().getOptionsContext());
+  return llvm::VectorizeOptions::Current.VEC_SBVecMaxUsersToConsider;
 }
 
 static SmallVector<unsigned, 2> getOperandIndicesInUser(User *U, Value *Op) {

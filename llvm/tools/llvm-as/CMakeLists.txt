@@ -11,6 +11,7 @@ add_llvm_tool(llvm-as
 
   DEPENDS
   intrinsics_gen
+  BitcodeMemProfOptParserTableGen
   )
 
 setup_host_tool(llvm-as LLVM_AS llvm_as_exe llvm_as_target)

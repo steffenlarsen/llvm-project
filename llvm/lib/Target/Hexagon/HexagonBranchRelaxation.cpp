@@ -21,9 +21,8 @@
 #include "llvm/IR/Function.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
+#include "llvm/Target/Hexagon/HexagonOptions.h"
 #include <cassert>
 #include <cstdint>
 #include <cstdlib>
@@ -37,8 +36,9 @@ using namespace llvm;
 // for jump target. This is measured in bytes.
 
 static uint32_t getBranchRelaxSafetyBuffer(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_BranchRelaxSafetyBuffer>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<HexagonOptions>()
+      .HEX_BranchRelaxSafetyBuffer;
 }
 
 namespace {

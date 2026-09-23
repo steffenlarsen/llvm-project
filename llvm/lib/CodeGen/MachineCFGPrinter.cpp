@@ -12,42 +12,38 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/CodeGen/MachineCFGPrinter.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsMachine1.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/LLVMContext.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
 #include "llvm/PassRegistry.h"
-#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/GraphWriter.h"
-#include "llvm/Support/OptionsContext.h"
 
 using namespace llvm;
 
 #define DEBUG_TYPE "dot-machine-cfg"
 
-static std::string getMcfgFuncName(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::CGPassMachine1Reg,
-                           &clv2::CGPASS_McfgFuncName>(Ctx, std::string{});
+static std::string getMcfgFuncName(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenMachine1Options>().CGPASS_McfgFuncName;
 }
 
-static std::string getMcfgDotFilenamePrefix(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::CGPassMachine1Reg,
-                           &clv2::CGPASS_McfgDotFilenamePrefix>(Ctx,
-                                                                std::string{});
+static std::string getMcfgDotFilenamePrefix(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenMachine1Options>()
+      .CGPASS_McfgDotFilenamePrefix;
 }
 
-static bool getDotMcfgOnly(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_DotMcfgOnly>(Ctx);
+static bool getDotMcfgOnly(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenMachine1Options>().CGPASS_DotMcfgOnly;
 }
 
 static void writeMCFGToDotFile(MachineFunction &MF) {
   std::string Filename =
-      (getMcfgDotFilenamePrefix(
-           MF.getFunction().getContext().getOptionsContext()) +
-       "." + MF.getName() + ".dot")
+      (getMcfgDotFilenamePrefix(MF.getFunction().getContext()) + "." +
+       MF.getName() + ".dot")
           .str();
   errs() << "Writing '" << Filename << "'...";
 
@@ -57,9 +53,8 @@ static void writeMCFGToDotFile(MachineFunction &MF) {
   DOTMachineFuncInfo MCFGInfo(&MF);
 
   if (!EC)
-    WriteGraph(
-        File, &MCFGInfo,
-        getDotMcfgOnly(MF.getFunction().getContext().getOptionsContext()));
+    WriteGraph(File, &MCFGInfo,
+               getDotMcfgOnly(MF.getFunction().getContext()));
   else
     errs() << "  error opening file for writing!";
   errs() << '\n';
@@ -94,10 +89,8 @@ INITIALIZE_PASS(MachineCFGPrinterLegacy, DEBUG_TYPE, "Machine CFG Printer Pass",
 MachineCFGPrinterLegacy::MachineCFGPrinterLegacy() : MachineFunctionPass(ID) {}
 
 bool MachineCFGPrinterLegacy::runOnMachineFunction(MachineFunction &MF) {
-  if (!getMcfgFuncName(MF.getFunction().getContext().getOptionsContext())
-           .empty() &&
-      !MF.getName().contains(
-          getMcfgFuncName(MF.getFunction().getContext().getOptionsContext())))
+  if (!getMcfgFuncName(MF.getFunction().getContext()).empty() &&
+      !MF.getName().contains(getMcfgFuncName(MF.getFunction().getContext())))
     return false;
   errs() << "Writing Machine CFG for function ";
   errs().write_escaped(MF.getName()) << '\n';
@@ -109,10 +102,8 @@ bool MachineCFGPrinterLegacy::runOnMachineFunction(MachineFunction &MF) {
 PreservedAnalyses
 MachineCFGPrinterPass::run(MachineFunction &MF,
                            MachineFunctionAnalysisManager &MFAM) {
-  if (!getMcfgFuncName(MF.getFunction().getContext().getOptionsContext())
-           .empty() &&
-      !MF.getName().contains(
-          getMcfgFuncName(MF.getFunction().getContext().getOptionsContext())))
+  if (!getMcfgFuncName(MF.getFunction().getContext()).empty() &&
+      !MF.getName().contains(getMcfgFuncName(MF.getFunction().getContext())))
     return PreservedAnalyses::all();
   errs() << "Writing Machine CFG for function ";
   errs().write_escaped(MF.getName()) << '\n';

@@ -1465,7 +1465,7 @@ template <class ELFT> void ObjFile<ELFT>::postParse() {
 //  tentative definitions (implementing behavior 2).
 static bool isBitcodeNonCommonDef(Ctx &ctx, MemoryBufferRef mb,
                                   StringRef symName, StringRef archiveName) {
-  IRSymtabFile symtabFile = check(readIRSymtab(mb, *ctx.llvmOptsCtx));
+  IRSymtabFile symtabFile = check(readIRSymtab(mb));
   for (const irsymtab::Reader::SymbolRef &sym :
        symtabFile.TheReader.symbols()) {
     if (sym.isGlobal() && sym.getName() == symName)
@@ -1907,7 +1907,7 @@ BitcodeFile::BitcodeFile(Ctx &ctx, MemoryBufferRef mb, StringRef archiveName,
 
   MemoryBufferRef mbref(mb.getBuffer(), name);
 
-  obj = CHECK2(lto::InputFile::create(mbref, *ctx.llvmOptsCtx), this);
+  obj = CHECK2(lto::InputFile::create(mbref), this);
   obj->setArchivePathAndName(archiveName, mb.getBufferIdentifier());
 
   Triple t(obj->getTargetTriple());

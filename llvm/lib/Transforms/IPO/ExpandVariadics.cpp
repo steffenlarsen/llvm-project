@@ -62,9 +62,8 @@
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/NVPTXAddrSpace.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/TargetParser/Triple.h"
-#include "llvm/Transforms/IPO/IPOOptionsOptInfos.h"
+#include "llvm/Transforms/IPO/IPOOptions.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 
 #define DEBUG_TYPE "expand-variadics"
@@ -74,9 +73,7 @@ using namespace llvm;
 namespace {
 
 static ExpandVariadicsMode getExpandVariadicsModeOption(const Module &M) {
-  return clv2::getOptValIfSpecified<&clv2::IPOOptsReg,
-                                    &clv2::IPO_ExpandVariadicsModeOption>(
-      M.getContext().getOptionsContext(), ExpandVariadicsMode::Unspecified);
+  return M.getContext().getOptions<IPOOptions>().IPO_ExpandVariadicsModeOption;
 }
 
 bool commandLineOverride(const Module &M) {

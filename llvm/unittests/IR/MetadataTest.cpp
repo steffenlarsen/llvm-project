@@ -15,7 +15,7 @@
 #include "llvm/IR/DebugInfo.h"
 #include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/IR/Function.h"
-#include "llvm/IR/IROptionsOptInfos.h"
+#include "llvm/IR/IROptions.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
@@ -1457,11 +1457,9 @@ TEST_F(DILocationTest, Merge) {
   {
     // If PickMergedSourceLocation is enabled, when one source location is null
     // we should return the valid location.
-    auto IROpts = clv2::IROptsReg.makeDefaults();
-    IROpts.get<&clv2::IR_PickMergedSourceLocations>() = true;
-    clv2::OptionsContext OptsCtx;
-    OptsCtx.addView<&clv2::IROptsReg>(IROpts);
-    Context.setOptionsContext(OptsCtx);
+    IROptions Opts;
+    Opts.IR_PickMergedSourceLocations = true;
+    Context.setOptions<IROptions>(Opts);
 
     auto *A = DILocation::get(Context, 2, 7, N);
     auto *M1 = DILocation::getMergedLocation(A, nullptr);
@@ -1476,7 +1474,7 @@ TEST_F(DILocationTest, Merge) {
     EXPECT_EQ(7u, M2->getColumn());
     EXPECT_EQ(N, M2->getScope());
 
-    Context.setOptionsContext(llvm::clv2::defaultOptionsContext());
+    Context.setOptions<IROptions>(IROptions());
   }
 
 #define EXPECT_ATOM(Loc, Group, Rank)                                          \

@@ -35,14 +35,13 @@
 #include "llvm/Support/CheckedArithmetic.h"
 #include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/LoopSimplify.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
 #include "llvm/Transforms/Utils/ScalarEvolutionExpander.h"
-#include "llvm/Transforms/Utils/UtilsOptionsOptInfos.h"
+#include "llvm/Transforms/Utils/UtilsOptions.h"
 #include "llvm/Transforms/Utils/ValueMapper.h"
 #include <algorithm>
 #include <cassert>
@@ -60,63 +59,58 @@ STATISTIC(NumPeeledEnd, "Number of loops peeled from end");
 
 namespace llvm {
 static unsigned getUnrollPeelCount(const Function &F) {
-  return clv2::getOptValIfSpecified<&clv2::TransformUtilsOptsReg,
-                                    &clv2::TU_UnrollPeelCount>(
-      F.getContext().getOptionsContext(), 0);
+  return F.getContext().getOptions<UtilsOptions>().TU_UnrollPeelCount.value_or(
+      0);
 }
 static bool isUnrollPeelCountSpecified(const Function &F) {
-  return clv2::wasOptSpecified<&clv2::TransformUtilsOptsReg,
-                               &clv2::TU_UnrollPeelCount>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<UtilsOptions>()
+      .TU_UnrollPeelCount.has_value();
 }
 
 static bool getUnrollAllowPeeling(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::TU_UnrollAllowPeeling>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<UtilsOptions>()
+      .TU_UnrollAllowPeeling.value_or(false);
 }
 static bool isUnrollAllowPeelingSpecified(const Function &F) {
-  return clv2::wasOptSpecified<&clv2::TransformUtilsOptsReg,
-                               &clv2::TU_UnrollAllowPeeling>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<UtilsOptions>()
+      .TU_UnrollAllowPeeling.has_value();
 }
 
 static bool getUnrollAllowLoopNestsPeeling(const Function &F) {
-  return clv2::getOptValIfSpecified<&clv2::TransformUtilsOptsReg,
-                                    &clv2::TU_UnrollAllowLoopNestsPeeling>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext()
+      .getOptions<UtilsOptions>()
+      .TU_UnrollAllowLoopNestsPeeling.value_or(false);
 }
 static bool isUnrollAllowLoopNestsPeelingSpecified(const Function &F) {
-  return clv2::wasOptSpecified<&clv2::TransformUtilsOptsReg,
-                               &clv2::TU_UnrollAllowLoopNestsPeeling>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<UtilsOptions>()
+      .TU_UnrollAllowLoopNestsPeeling.has_value();
 }
 
 static unsigned getUnrollPeelMaxCount(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::TU_UnrollPeelMaxCount>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<UtilsOptions>().TU_UnrollPeelMaxCount;
 }
 
 static unsigned getUnrollForcePeelCount(const Function &F) {
-  return clv2::getOptValIfSpecified<&clv2::TransformUtilsOptsReg,
-                                    &clv2::TU_UnrollForcePeelCount>(
-      F.getContext().getOptionsContext(), 0);
+  return F.getContext()
+      .getOptions<UtilsOptions>()
+      .TU_UnrollForcePeelCount.value_or(0);
 }
 static bool isUnrollForcePeelCountSpecified(const Function &F) {
-  return clv2::wasOptSpecified<&clv2::TransformUtilsOptsReg,
-                               &clv2::TU_UnrollForcePeelCount>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<UtilsOptions>()
+      .TU_UnrollForcePeelCount.has_value();
 }
 
 static bool getDisableAdvancedPeeling(const Function &F) {
-  return clv2::getOptValIfSpecified<&clv2::TransformUtilsOptsReg,
-                                    &clv2::TU_DisableAdvancedPeeling>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext().getOptions<UtilsOptions>().TU_DisableAdvancedPeeling;
 }
 
 static bool getEnablePeelingForIV(const Function &F) {
-  return clv2::getOptValIfSpecified<&clv2::TransformUtilsOptsReg,
-                                    &clv2::TU_EnablePeelingForIV>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext().getOptions<UtilsOptions>().TU_EnablePeelingForIV;
 }
 
 static const char *PeeledCountMetaData = "llvm.loop.peeled.count";
@@ -553,7 +547,7 @@ static bool shouldPeelLastIteration(Loop &L, CmpPredicate Pred,
       Expander.isHighCostExpansion(
           BTC, &L,
           getSCEVCheapExpansionBudget(
-              L.getHeader()->getParent()->getContext().getOptionsContext()),
+              &L.getHeader()->getParent()->getContext()),
           &TTI, L.getLoopPredecessor()->getTerminator()))
     return false;
 
@@ -685,7 +679,7 @@ countToEliminateCompares(Loop &L, unsigned MaxPeelCount, ScalarEvolution &SE,
         !SE.isKnownPredicate(Pred, IterVal, RightSCEV) &&
         SE.isKnownPredicate(Pred, NextIterVal, RightSCEV)) {
       if (NewPeelCount >= MaxPeelCount)
-        return; // Need to peel one more iteration, but can't. Give up.
+        return;       // Need to peel one more iteration, but can't. Give up.
       ++NewPeelCount; // Great!
     }
 
@@ -778,10 +772,9 @@ static bool violatesLegacyMultiExitLoopCheck(Loop *L) {
   SmallVector<BasicBlock *, 4> ExitBlocks;
   L->getUniqueNonLatchExitBlocks(ExitBlocks);
   return any_of(ExitBlocks, [](const BasicBlock *EB) {
-      return !EB->getTerminatingDeoptimizeCall();
-    });
+    return !EB->getTerminatingDeoptimizeCall();
+  });
 }
-
 
 // Return the number of iterations we want to peel off.
 void llvm::computePeelCount(Loop *L, unsigned LoopSize,

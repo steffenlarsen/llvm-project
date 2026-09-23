@@ -44,8 +44,7 @@
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/MathExtras.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/AMDGPU/AMDGPUOptionsOptInfos.h"
+#include "llvm/Target/AMDGPU/AMDGPUOptions.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Transforms/Utils/SSAUpdater.h"
 
@@ -54,45 +53,54 @@
 using namespace llvm;
 
 static bool getDisablePromoteAllocaToVector(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AMDGPU_DisablePromoteAllocaToVector>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<AMDGPUOptions>()
+      .AMDGPU_DisablePromoteAllocaToVector;
 }
 
 static bool getDisablePromoteAllocaToLDS(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AMDGPU_DisablePromoteAllocaToLDS>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<AMDGPUOptions>()
+      .AMDGPU_DisablePromoteAllocaToLDS;
 }
 
 static unsigned getPromoteAllocaToVectorLimit(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AMDGPU_PromoteAllocaToVectorLimit>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<AMDGPUOptions>()
+      .AMDGPU_PromoteAllocaToVectorLimit;
 }
 
 static unsigned getLoopUserWeight(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AMDGPU_LoopUserWeight>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<AMDGPUOptions>().AMDGPU_LoopUserWeight;
 }
 
+// Old internal default (32) is preserved here explicitly: the schema no
+// longer bakes a default into this OptionalField, so "unspecified" must be
+// resolved to the same literal value the old clv2 registry used to return.
 static unsigned getPromoteAllocaToVectorMaxRegs(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AMDGPU_PromoteAllocaToVectorMaxRegs>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<AMDGPUOptions>()
+      .AMDGPU_PromoteAllocaToVectorMaxRegs.value_or(32);
 }
 
 static bool getPromoteAllocaToVectorMaxRegsWasSpecified(const Function &F) {
-  return clv2::wasOptSpecified<&clv2::AMDGPUOptsReg,
-                               &clv2::AMDGPU_PromoteAllocaToVectorMaxRegs>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<AMDGPUOptions>()
+      .AMDGPU_PromoteAllocaToVectorMaxRegs.has_value();
 }
 
+// Old internal default (4) is preserved here explicitly for the same reason
+// as getPromoteAllocaToVectorMaxRegs above.
 static unsigned getPromoteAllocaToVectorVGPRRatio(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AMDGPU_PromoteAllocaToVectorVGPRRatio>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<AMDGPUOptions>()
+      .AMDGPU_PromoteAllocaToVectorVGPRRatio.value_or(4);
 }
 
 static bool getPromoteAllocaToVectorVGPRRatioWasSpecified(const Function &F) {
-  return clv2::wasOptSpecified<&clv2::AMDGPUOptsReg,
-                               &clv2::AMDGPU_PromoteAllocaToVectorVGPRRatio>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<AMDGPUOptions>()
+      .AMDGPU_PromoteAllocaToVectorVGPRRatio.has_value();
 }
 
 namespace {

@@ -10,7 +10,6 @@
 #include "llvm/IR/Function.h"
 #include "llvm/SandboxIR/Function.h"
 #include "llvm/Support/InstructionCost.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Transforms/Vectorize/SandboxVectorizer/Debug.h"
 #include "llvm/Transforms/Vectorize/SandboxVectorizer/RegionWithScore.h"
 #include "llvm/Transforms/Vectorize/VectorizeOptions.h"
@@ -19,8 +18,7 @@ namespace llvm {
 
 int CostThreshold = 0;
 static int getCostThreshold(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::VEC_CostThreshold>(
-      F.getContext().getOptionsContext());
+  return VectorizeOptions::Current.VEC_CostThreshold;
 }
 
 namespace sandboxir {

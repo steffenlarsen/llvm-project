@@ -1,5 +1,3 @@
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
 //===- LoopDistribute.cpp - Loop Distribution Pass ------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -57,6 +55,7 @@
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Transforms/Scalar/ScalarOptions.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/Local.h"
@@ -85,32 +84,29 @@ static const char *const LLVMLoopDistributeFollowupFallback =
 /// @}
 
 static bool getLDistVerify(const Function &F) {
-  return clv2::getOptValOr<&clv2::ScalarOptsReg,
-                           &clv2::SC_LoopDistributeVerify>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext().getOptions<ScalarOptions>().SC_LoopDistributeVerify;
 }
 
 static bool getDistributeNonIfConvertible(const Function &F) {
-  return clv2::getOptValOr<&clv2::ScalarOptsReg,
-                           &clv2::SC_LoopDistributeNonIfConvertible>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_LoopDistributeNonIfConvertible;
 }
 
 static unsigned getDistributeSCEVCheckThreshold(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_LoopDistributeSCEVCheckThreshold>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_LoopDistributeSCEVCheckThreshold;
 }
 
 static unsigned getPragmaDistributeSCEVCheckThreshold(const Function &F) {
-  return clv2::getOptValOrDefault<
-      &clv2::SC_LoopDistributeSCEVCheckThresholdWithPragma>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_LoopDistributeSCEVCheckThresholdWithPragma;
 }
 
 static bool getEnableLoopDistribute(const Function &F) {
-  return clv2::getOptValOr<&clv2::ScalarOptsReg,
-                           &clv2::SC_EnableLoopDistribute>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext().getOptions<ScalarOptions>().SC_EnableLoopDistribute;
 }
 
 static const char *DistributedMetaData = "llvm.loop.isdistributed";

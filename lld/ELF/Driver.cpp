@@ -61,6 +61,7 @@
 #include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/Parallel.h"
 #include "llvm/Support/Path.h"
+#include "llvm/Support/PluginLoaderOptions.h"
 #include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/SaveAndRestore.h"
 #include "llvm/Support/TarWriter.h"
@@ -1880,7 +1881,10 @@ static void readConfigs(Ctx &ctx, opt::InputArgList &args) {
     Argv.push_back(ctx.arg.progName.data());
     for (auto &A : LLVMOpts)
       Argv.push_back(A.data());
-    auto Parsed = P.parse(Argv.size(), Argv.data(), {}, &os);
+    std::vector<const char *> ArgsAfterPlugins = loadPluginsAndStripArgs(
+        static_cast<int>(Argv.size()), Argv.data());
+    auto Parsed = P.parse(static_cast<int>(ArgsAfterPlugins.size()),
+                           ArgsAfterPlugins.data(), {}, &os);
     if (Parsed)
       ctx.llvmOptsCtx = std::move(Parsed);
     else {

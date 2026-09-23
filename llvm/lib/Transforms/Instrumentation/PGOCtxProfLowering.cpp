@@ -24,31 +24,25 @@
 #include "llvm/ProfileData/CtxInstrContextNode.h"
 #include "llvm/ProfileData/InstrProf.h"
 #include "llvm/Support/OptionsContext.h"
-#include "llvm/Transforms/Instrumentation/InstrumentationOptionsOptInfos.h"
+#include "llvm/Transforms/Instrumentation/InstrumentationOptions.h"
 #include <utility>
 
 using namespace llvm;
 
 #define DEBUG_TYPE "ctx-instr-lower"
 
-static std::vector<std::string> ContextRoots;
-
-static std::vector<std::string> getContextRoots(const Module &M) {
-  return clv2::getOptValIfSpecified<&clv2::InstrumentationOptsReg,
-                                    &clv2::INST_ProfileContextRoot>(
-      M.getContext().getOptionsContext(), ContextRoots);
+static const std::vector<std::string> &getContextRoots(const Module &M) {
+  return M.getContext()
+      .getOptions<InstrumentationOptions>()
+      .INST_ProfileContextRoot;
 }
 
 bool PGOCtxProfLoweringPass::isCtxIRPGOInstrEnabled() {
-  return !ContextRoots.empty();
+  return !InstrumentationOptions::Current.INST_ProfileContextRoot.empty();
 }
 
 bool PGOCtxProfLoweringPass::isCtxIRPGOInstrEnabled(const Module &M) {
-  if (auto *O = clv2::getView<&clv2::InstrumentationOptsReg>(
-          M.getContext().getOptionsContext()))
-    if (O->specified<&clv2::INST_ProfileContextRoot>())
-      return !O->get<&clv2::INST_ProfileContextRoot>().empty();
-  return !ContextRoots.empty();
+  return !getContextRoots(M).empty();
 }
 
 // the names of symbols we expect in compiler-rt. Using a namespace for

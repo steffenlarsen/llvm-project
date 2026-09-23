@@ -19,9 +19,8 @@
 #include "llvm/IR/PassManager.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/MemoryBuffer.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Transforms/IPO.h"
-#include "llvm/Transforms/IPO/IPOOptionsOptInfos.h"
+#include "llvm/Transforms/IPO/IPOOptions.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/CodeExtractor.h"
 
@@ -32,18 +31,11 @@ using namespace llvm;
 STATISTIC(NumExtracted, "Number of basic blocks extracted");
 
 static const std::string &getBlockExtractorFile(const Module &M) {
-  if (auto *O =
-          clv2::getView<&clv2::IPOOptsReg>(M.getContext().getOptionsContext()))
-    if (O->specified<&clv2::IPO_BlockExtractorFile>())
-      return O->get<&clv2::IPO_BlockExtractorFile>();
-  static const std::string Default = "";
-  return Default;
+  return M.getContext().getOptions<IPOOptions>().IPO_BlockExtractorFile;
 }
 
 static bool getBlockExtractorEraseFuncs(const Module &M) {
-  return clv2::getOptValIfSpecified<&clv2::IPOOptsReg,
-                                    &clv2::IPO_BlockExtractorEraseFuncs>(
-      M.getContext().getOptionsContext(), false);
+  return M.getContext().getOptions<IPOOptions>().IPO_BlockExtractorEraseFuncs;
 }
 namespace {
 class BlockExtractor {

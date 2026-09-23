@@ -10,7 +10,7 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/CodeGen/AsmPrinter.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsCore2.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineInstr.h"
@@ -24,11 +24,9 @@
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCObjectFileInfo.h"
 #include "llvm/MC/MCStreamer.h"
-#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
 #include <algorithm>
@@ -41,8 +39,12 @@ using namespace llvm;
 
 #define DEBUG_TYPE "stackmaps"
 
-static int getStackmapVersion(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_StackmapVersion>(Ctx);
+// No Function/Module/MachineFunction is reachable at either call site below
+// (constructor and header emission only have an AsmPrinter/TargetMachine in
+// scope), so fall back to the process-wide default per the migration's
+// no-context routing rule.
+static int getStackmapVersion() {
+  return CodeGenCore2Options::Current.CGPASS_StackmapVersion;
 }
 
 const char *StackMaps::WSMP = "Stack Maps: ";
@@ -166,7 +168,7 @@ bool StatepointOpers::isFoldableReg(const MachineInstr *MI, Register Reg) {
 }
 
 StackMaps::StackMaps(AsmPrinter &AP) : AP(AP) {
-  if (getStackmapVersion(AP.TM.getOptionsContext()) != 3)
+  if (getStackmapVersion() != 3)
     llvm_unreachable("Unsupported stackmap version!");
 }
 
@@ -572,7 +574,7 @@ void StackMaps::recordStatepoint(const MCSymbol &L, const MachineInstr &MI) {
 /// uint32 : NumRecords
 void StackMaps::emitStackmapHeader(MCStreamer &OS) {
   // Header.
-  OS.emitIntValue(getStackmapVersion(AP.TM.getOptionsContext()), 1); // Version.
+  OS.emitIntValue(getStackmapVersion(), 1); // Version.
   OS.emitIntValue(0, 1);               // Reserved.
   OS.emitInt16(0);                     // Reserved.
 

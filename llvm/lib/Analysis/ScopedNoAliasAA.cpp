@@ -34,7 +34,7 @@
 #include "llvm/Analysis/ScopedNoAliasAA.h"
 #include "llvm/ADT/SetOperations.h"
 #include "llvm/ADT/SmallPtrSet.h"
-#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
+#include "llvm/Analysis/AnalysisOptions.h"
 #include "llvm/Analysis/MemoryLocation.h"
 #include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Instructions.h"
@@ -43,8 +43,6 @@
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLineCompat.h"
-#include "llvm/Support/OptionsContext.h"
 
 using namespace llvm;
 
@@ -52,8 +50,7 @@ using namespace llvm;
 // can also be achieved by stripping the associated metadata tags from IR, but
 // this option is sometimes more convenient.
 static bool getEnableScopedNoAlias(const LLVMContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::AN_EnableScopedNoAlias>(
-      Ctx.getOptionsContext());
+  return Ctx.getOptions<AnalysisOptions>().AN_EnableScopedNoAlias;
 }
 
 AliasResult ScopedNoAliasAAResult::alias(const MemoryLocation &LocA,

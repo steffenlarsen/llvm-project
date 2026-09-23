@@ -15,7 +15,7 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsSched1.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/ScheduleHazardRecognizer.h"
 #include "llvm/CodeGen/SelectionDAGNodes.h"
@@ -24,10 +24,9 @@
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/Config/llvm-config.h"
 #include "llvm/IR/Function.h"
-#include "llvm/Support/CommandLineV2.h"
+#include "llvm/IR/LLVMContext.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <cassert>
@@ -45,8 +44,8 @@ STATISTIC(NumTopoInits,
           "Number of times the topological order has been recomputed");
 
 #ifndef NDEBUG
-static bool getStressSched(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_StressSched>(Ctx);
+static bool getStressSched(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenSched1Options>().CGPASS_StressSched;
 }
 
 #endif
@@ -58,8 +57,7 @@ ScheduleDAG::ScheduleDAG(MachineFunction &mf)
       TRI(mf.getSubtarget().getRegisterInfo()), MF(mf),
       MRI(mf.getRegInfo()) {
 #ifndef NDEBUG
-  StressSched =
-      getStressSched(mf.getFunction().getContext().getOptionsContext());
+  StressSched = getStressSched(mf.getFunction().getContext());
 #endif
 }
 

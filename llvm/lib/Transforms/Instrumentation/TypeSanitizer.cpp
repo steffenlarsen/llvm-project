@@ -34,7 +34,7 @@
 #include "llvm/Support/MD5.h"
 #include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/Regex.h"
-#include "llvm/Transforms/Instrumentation/InstrumentationOptionsOptInfos.h"
+#include "llvm/Transforms/Instrumentation/InstrumentationOptions.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
@@ -59,21 +59,19 @@ static const char *const kTysanAppMemMask = "__tysan_app_memory_mask";
 static int ClOutlineInstrumentationOverride = -1;
 
 static bool getClWritesAlwaysSetType(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::INST_TysanWritesAlwaysSetType>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<InstrumentationOptions>().INST_TysanWritesAlwaysSetType;
 }
 
 static bool getClOutlineInstrumentation(const Module &M) {
   if (ClOutlineInstrumentationOverride >= 0)
     return ClOutlineInstrumentationOverride != 0;
-  return clv2::getOptValOrDefault<&clv2::INST_TysanOutlineInstrumentation>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<InstrumentationOptions>().INST_TysanOutlineInstrumentation;
 }
 
 static bool getClVerifyOutlinedInstrumentation(const Module &M) {
-  return clv2::getOptValOrDefault<
-      &clv2::INST_TysanVerifyOutlinedInstrumentation>(
-      M.getContext().getOptionsContext());
+  return M.getContext()
+      .getOptions<InstrumentationOptions>()
+      .INST_TysanVerifyOutlinedInstrumentation;
 }
 
 STATISTIC(NumInstrumentedAccesses, "Number of instrumented accesses");

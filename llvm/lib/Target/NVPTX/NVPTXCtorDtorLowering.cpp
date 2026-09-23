@@ -23,8 +23,7 @@
 #include "llvm/Pass.h"
 #include "llvm/Support/MD5.h"
 #include "llvm/Support/NVVMAttributes.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/NVPTX/NVPTXOptionsOptInfos.h"
+#include "llvm/Target/NVPTX/NVPTXOptions.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 
 using namespace llvm;
@@ -32,16 +31,11 @@ using namespace llvm;
 #define DEBUG_TYPE "nvptx-lower-ctor-dtor"
 
 static std::string getGlobalStr(const Module &M) {
-  if (auto *O = clv2::getView<&clv2::NVPTXOptsReg>(
-          M.getContext().getOptionsContext()))
-    return O->get<&clv2::NVPTX_LowerGlobalCtorDtorId>();
-  static const std::string Default;
-  return Default;
+  return M.getContext().getOptions<NVPTXOptions>().NVPTX_LowerGlobalCtorDtorId;
 }
 
 static bool getCreateKernels(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::NVPTX_EmitInitFiniKernel>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<NVPTXOptions>().NVPTX_EmitInitFiniKernel;
 }
 
 namespace {

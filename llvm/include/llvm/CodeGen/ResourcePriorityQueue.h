@@ -20,9 +20,7 @@
 
 namespace llvm {
 
-namespace clv2 {
-class OptionsContext;
-} // namespace clv2
+class LLVMContext;
   class DFAPacketizer;
   class InstrItineraryData;
   class ResourcePriorityQueue;
@@ -64,7 +62,7 @@ class OptionsContext;
     const TargetLowering *TLI;
     const TargetInstrInfo *TII;
     const InstrItineraryData* InstrItins;
-    const clv2::OptionsContext *Ctx;
+    const LLVMContext *Ctx;
     /// ResourcesModel - Represents VLIW state.
     /// Not limited to VLIW targets per say, but assumes
     /// definition of DFA by a target.

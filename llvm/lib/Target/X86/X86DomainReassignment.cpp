@@ -26,9 +26,8 @@
 #include "llvm/CodeGen/TargetRegisterInfo.h"
 #include "llvm/IR/Function.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/Printable.h"
-#include "llvm/Target/X86/X86OptionsOptInfos.h"
+#include "llvm/Target/X86/X86Options.h"
 #include <bitset>
 
 using namespace llvm;
@@ -39,12 +38,17 @@ STATISTIC(NumClosuresConverted, "Number of closures converted by the pass");
 STATISTIC(NumClosuresBuilt, "Number of closures built by the pass");
 
 static bool getDisableX86DomainReassignment(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::X86_DisableDomainReassignment>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<X86Options>().X86_DisableDomainReassignment;
 }
 
 namespace {
-enum RegDomain { NoDomain = -1, GPRDomain, MaskDomain, OtherDomain, NumDomains };
+enum RegDomain {
+  NoDomain = -1,
+  GPRDomain,
+  MaskDomain,
+  OtherDomain,
+  NumDomains
+};
 
 static bool isMask(const TargetRegisterClass *RC,
                    const TargetRegisterInfo *TRI) {
@@ -308,7 +312,8 @@ private:
   unsigned ID;
 
 public:
-  Closure(unsigned ID, std::initializer_list<RegDomain> LegalDstDomainList) : ID(ID) {
+  Closure(unsigned ID, std::initializer_list<RegDomain> LegalDstDomainList)
+      : ID(ID) {
     for (RegDomain D : LegalDstDomainList)
       LegalDstDomains.set(D);
   }
@@ -332,20 +337,17 @@ public:
   using const_edge_iterator = DenseSet<Register>::const_iterator;
   iterator_range<const_edge_iterator> edges() const { return Edges; }
 
-  void addInstruction(MachineInstr *I) {
-    Instrs.push_back(I);
-  }
+  void addInstruction(MachineInstr *I) { Instrs.push_back(I); }
 
-  ArrayRef<MachineInstr *> instructions() const {
-    return Instrs;
-  }
+  ArrayRef<MachineInstr *> instructions() const { return Instrs; }
 
   LLVM_DUMP_METHOD void dump(const MachineRegisterInfo *MRI) const {
     dbgs() << "Registers: ";
     ListSeparator LS;
     for (Register Reg : Edges)
       dbgs() << LS << printReg(Reg, MRI->getTargetRegisterInfo(), 0, MRI);
-    dbgs() << "\n" << "Instructions:";
+    dbgs() << "\n"
+           << "Instructions:";
     for (MachineInstr *MI : Instrs) {
       dbgs() << "\n  ";
       MI->print(dbgs());
@@ -353,10 +355,7 @@ public:
     dbgs() << "\n";
   }
 
-  unsigned getID() const {
-    return ID;
-  }
-
+  unsigned getID() const { return ID; }
 };
 
 class X86DomainReassignmentImpl {

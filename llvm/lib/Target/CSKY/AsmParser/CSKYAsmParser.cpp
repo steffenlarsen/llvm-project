@@ -32,8 +32,7 @@
 #include "llvm/Support/CSKYAttributes.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/CSKY/CSKYOptionsOptInfos.h"
+#include "llvm/Target/CSKY/CSKYOptions.h"
 #include "llvm/TargetParser/CSKYTargetParser.h"
 
 using namespace llvm;
@@ -47,14 +46,12 @@ using namespace llvm;
 STATISTIC(CSKYNumInstrsCompressed,
           "Number of C-SKY Compressed instructions emitted");
 
-static bool EnableCompressedInst = false;
-
-static bool getEnableCompressedInst(const clv2::OptionsContext &OCtx) {
-  return clv2::getOptValOrDefault<&clv2::CSKY_EnableCompressedInst>(OCtx);
+static bool getEnableCompressedInst() {
+  return CSKYOptions::Current.CSKY_EnableCompressedInst;
 }
 
-static bool getAddBuildAttributes(const clv2::OptionsContext &OCtx) {
-  return clv2::getOptValOrDefault<&clv2::CSKY_AddBuildAttributes>(OCtx);
+static bool getAddBuildAttributes() {
+  return CSKYOptions::Current.CSKY_AddBuildAttributes;
 }
 
 namespace {
@@ -143,7 +140,7 @@ public:
     MRI = getContext().getRegisterInfo();
 
     setAvailableFeatures(ComputeAvailableFeatures(STI.getFeatureBits()));
-    if (getAddBuildAttributes(getContext().getOptionsContext()))
+    if (getAddBuildAttributes())
       getTargetStreamer().emitTargetAttributes(STI, /*HardFloatABI=*/false);
   }
 };
@@ -1655,7 +1652,7 @@ unsigned CSKYAsmParser::validateTargetOperandClass(MCParsedAsmOperand &AsmOp,
 void CSKYAsmParser::emitToStreamer(MCStreamer &S, const MCInst &Inst) {
   MCInst CInst;
   bool Res = false;
-  if (getEnableCompressedInst(getContext().getOptionsContext()))
+  if (getEnableCompressedInst())
     Res = compressInst(CInst, Inst, getSTI());
   if (Res)
     ++CSKYNumInstrsCompressed;

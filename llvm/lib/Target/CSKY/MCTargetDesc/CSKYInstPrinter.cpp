@@ -25,8 +25,7 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FormattedStream.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/CSKY/CSKYOptionsOptInfos.h"
+#include "llvm/Target/CSKY/CSKYOptions.h"
 
 using namespace llvm;
 
@@ -40,18 +39,14 @@ static bool NoAliases = false;
 
 static bool ArchRegNames = false;
 
-static bool getNoAliases(const clv2::OptionsContext &Ctx) {
+static bool getNoAliases() {
   // NoAliases is the objdump -M override; honour it alongside the option, the
   // same way getArchRegNames does below.
-  if (auto *O = clv2::getView<&clv2::CSKYOptsReg>(Ctx))
-    return O->get<&clv2::CSKY_NoAliases>() || NoAliases;
-  return NoAliases;
+  return CSKYOptions::Current.CSKY_NoAliases || NoAliases;
 }
 
-static bool getArchRegNames(const clv2::OptionsContext &Ctx) {
-  if (auto *O = clv2::getView<&clv2::CSKYOptsReg>(Ctx))
-    return O->get<&clv2::CSKY_ArchRegNames>() || ArchRegNames;
-  return ArchRegNames;
+static bool getArchRegNames() {
+  return CSKYOptions::Current.CSKY_ArchRegNames || ArchRegNames;
 }
 
 // The command-line flags above are used by llvm-mc and llc. They can be used by
@@ -85,8 +80,7 @@ void CSKYInstPrinter::printInst(const MCInst *MI, uint64_t Address,
                                 raw_ostream &O) {
   const MCInst *NewMI = MI;
 
-  if (getNoAliases(getOptionsContext()) ||
-      !printAliasInstr(NewMI, Address, STI, O))
+  if (getNoAliases() || !printAliasInstr(NewMI, Address, STI, O))
     printInstruction(NewMI, Address, STI, O);
   printAnnotation(O, Annot);
 }
@@ -96,18 +90,16 @@ void CSKYInstPrinter::printRegName(raw_ostream &O, MCRegister Reg) {
     O << getRegisterName(Reg, ABIRegNames ? CSKY::ABIRegAltName
                                           : CSKY::NoRegAltName);
   else
-    O << getRegisterName(Reg, getArchRegNames(getOptionsContext())
-                                  ? CSKY::NoRegAltName
-                                  : CSKY::ABIRegAltName);
+    O << getRegisterName(Reg, getArchRegNames() ? CSKY::NoRegAltName
+                                                 : CSKY::ABIRegAltName);
 }
 
 void CSKYInstPrinter::printFPRRegName(raw_ostream &O, unsigned RegNo) const {
   if (PrintBranchImmAsAddress)
     O << getRegisterName(RegNo, CSKY::NoRegAltName);
   else
-    O << getRegisterName(RegNo, getArchRegNames(getOptionsContext())
-                                    ? CSKY::NoRegAltName
-                                    : CSKY::ABIRegAltName);
+    O << getRegisterName(RegNo, getArchRegNames() ? CSKY::NoRegAltName
+                                                   : CSKY::ABIRegAltName);
 }
 
 void CSKYInstPrinter::printOperand(const MCInst *MI, unsigned OpNo,
@@ -120,7 +112,7 @@ void CSKYInstPrinter::printOperand(const MCInst *MI, unsigned OpNo,
     if (PrintBranchImmAsAddress)
       useABIName = ABIRegNames;
     else
-      useABIName = !getArchRegNames(getOptionsContext());
+      useABIName = !getArchRegNames();
 
     if (Reg == CSKY::C)
       O << "";
@@ -272,8 +264,9 @@ void CSKYInstPrinter::printRegisterList(const MCInst *MI, unsigned OpNum,
 }
 
 const char *CSKYInstPrinter::getRegisterName(MCRegister Reg) {
-  // Static: no instance, so no OptionsContext.  Only the objdump -M override
-  // is reachable here; the in-class printers above consult the context.
+  // Static: no instance, so only the objdump -M override (ArchRegNames) is
+  // reachable here, unlike the in-class printers above which also consult
+  // CSKYOptions::Current.
   return getRegisterName(Reg, ArchRegNames ? CSKY::NoRegAltName
                                            : CSKY::ABIRegAltName);
 }

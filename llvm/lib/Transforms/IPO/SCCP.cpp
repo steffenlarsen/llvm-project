@@ -25,10 +25,9 @@
 #include "llvm/IR/DIBuilder.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/Support/ModRef.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Transforms/IPO.h"
 #include "llvm/Transforms/IPO/FunctionSpecialization.h"
-#include "llvm/Transforms/IPO/IPOOptionsOptInfos.h"
+#include "llvm/Transforms/IPO/IPOOptions.h"
 #include "llvm/Transforms/Scalar/SCCP.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/SCCPSolver.h"
@@ -45,8 +44,7 @@ STATISTIC(NumInstReplaced,
           "Number of instructions replaced with (simpler) instruction");
 
 static unsigned getFuncSpecMaxIters(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_FuncSpecMaxIters>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_FuncSpecMaxIters;
 }
 
 static void findReturnsToZap(Function &F,

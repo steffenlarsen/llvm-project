@@ -1,5 +1,3 @@
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
 //===- LoopLoadElimination.cpp - Loop Load Elimination Pass ---------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -51,6 +49,7 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Scalar/LoopLoadElimination.h"
+#include "llvm/Transforms/Scalar/ScalarOptions.h"
 #include "llvm/Transforms/Utils/LoopSimplify.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
 #include "llvm/Transforms/Utils/LoopVersioning.h"
@@ -68,14 +67,15 @@ using namespace llvm;
 #define DEBUG_TYPE LLE_OPTION
 
 static unsigned getCheckPerElim(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_RuntimeCheckPerLoopLoadElim>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_RuntimeCheckPerLoopLoadElim;
 }
 
 static unsigned getLoadElimSCEVCheckThreshold(const Function &F) {
-  return clv2::getOptValOrDefault<
-      &clv2::SC_LoopLoadEliminationSCEVCheckThreshold>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_LoopLoadEliminationSCEVCheckThreshold;
 }
 
 STATISTIC(NumLoopLoadEliminted, "Number of loads eliminated by LLE");

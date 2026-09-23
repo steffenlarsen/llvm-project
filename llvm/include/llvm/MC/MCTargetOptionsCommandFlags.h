@@ -92,12 +92,7 @@ LLVM_ABI bool getLargeEHEncoding(const clv2::OptionsContext &Ctx);
 } // namespace mc
 } // namespace llvm
 
-#include "llvm/MC/MCOptionsOptInfos.h"
-
 namespace llvm::mc {
-
-/// The parsed-options view type for the MC library registry.
-using ParsedOpts = decltype(clv2::MCOptsReg)::ParsedOptionsT;
 
 /// Create this object with static storage to register mc-related command
 /// line options.
@@ -107,8 +102,6 @@ struct RegisterMCTargetOptionsFlags {
 
 LLVM_ABI MCTargetOptions
 InitMCTargetOptionsFromFlags(const clv2::OptionsContext &OptsCtx);
-
-/// Self-register MCOptsReg for runtime option parsing.
 
 } // namespace llvm::mc
 

@@ -49,7 +49,7 @@
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Analysis/VectorUtils.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsCore2.h"
 #include "llvm/CodeGen/InterleavedAccess.h"
 #include "llvm/CodeGen/TargetLowering.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
@@ -79,8 +79,8 @@ using namespace llvm;
 
 #define DEBUG_TYPE "interleaved-access"
 
-static bool getLowerInterleavedAccesses(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_LowerInterleavedAccesses>(Ctx);
+static bool getLowerInterleavedAccesses(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore2Options>().CGPASS_LowerInterleavedAccesses;
 }
 
 namespace {
@@ -178,7 +178,7 @@ bool InterleavedAccess::runOnFunction(Function &F) {
     return false;
 
   auto *TPC = getAnalysisIfAvailable<TargetPassConfig>();
-  if (!TPC || !getLowerInterleavedAccesses(F.getContext().getOptionsContext()))
+  if (!TPC || !getLowerInterleavedAccesses(F.getContext()))
     return false;
 
   LLVM_DEBUG(dbgs() << "*** " << getPassName() << ": " << F.getName() << "\n");

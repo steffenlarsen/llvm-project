@@ -18,8 +18,7 @@
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineModuleInfo.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/AArch64/AArch64OptionsOptInfos.h"
+#include "llvm/Target/AArch64/AArch64Options.h"
 
 using namespace llvm;
 using namespace llvm::AArch64PAuth;
@@ -45,13 +44,13 @@ namespace {
 ///
 /// 1: https://github.com/ARM-software/abi-aa/pull/346
 /// 2: https://github.com/ARM-software/abi-aa/issues/327
-using SetRAStateMode = clv2::A64SetRAStateMode;
+using SetRAStateMode = llvm::A64SetRAStateMode;
 
 static SetRAStateMode getCFILLVMSetRASignStateMode(const MachineFunction &MF) {
-  return clv2::getOptValOr<&clv2::AArch64OptsReg,
-                           &clv2::A64_CfiLlvmSetRaSignState>(
-      MF.getFunction().getContext().getOptionsContext(),
-      SetRAStateMode::PAuthLR);
+  return MF.getFunction()
+      .getContext()
+      .getOptions<AArch64Options>()
+      .A64_CfiLlvmSetRaSignState;
 }
 
 class AArch64PointerAuthImpl {

@@ -6,10 +6,52 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Support/raw_ostream.h"
-#include "llvm/Transforms/Utils/UtilsOptionsOptInfos.h"
-#include <cstdlib>
+#include "llvm/Transforms/Utils/UtilsOptions.h"
+#include "llvm/Option/Arg.h"
+#include "llvm/Option/ArgList.h"
+#include "llvm/Option/LibraryOptions.h"
+#include "llvm/Option/OptTable.h"
+#include "llvm/Option/Option.h"
 
 using namespace llvm;
-using namespace llvm::clv2;
+using namespace llvm::opt;
+
+namespace {
+enum ID {
+  OPT_INVALID = 0,
+#define OPTION(...) LLVM_MAKE_OPT_ID(__VA_ARGS__),
+#include "llvm/Transforms/Utils/UtilsOptions.inc"
+#undef OPTION
+};
+
+#define OPTTABLE_STR_TABLE_CODE
+#include "llvm/Transforms/Utils/UtilsOptions.inc"
+#undef OPTTABLE_STR_TABLE_CODE
+
+#define OPTTABLE_PREFIXES_TABLE_CODE
+#include "llvm/Transforms/Utils/UtilsOptions.inc"
+#undef OPTTABLE_PREFIXES_TABLE_CODE
+
+static constexpr OptTable::Info InfoTable[] = {
+#define OPTION(...) LLVM_CONSTRUCT_OPT_INFO(__VA_ARGS__),
+#include "llvm/Transforms/Utils/UtilsOptions.inc"
+#undef OPTION
+};
+
+class UtilsOptTable : public opt::GenericOptTable {
+public:
+  UtilsOptTable()
+      : GenericOptTable(OptionStrTable, OptionPrefixesTable, InfoTable) {}
+};
+} // namespace
+
+opt::OptTable &llvm::UtilsOptions::table() {
+  static UtilsOptTable Table;
+  return Table;
+}
+
+#define OPTIONS_STRUCT_DEFS
+#include "llvm/Transforms/Utils/UtilsOptions.inc"
+#undef OPTIONS_STRUCT_DEFS
+
+static opt::RegisterLibraryOptions<llvm::UtilsOptions> Registration;

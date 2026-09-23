@@ -44,7 +44,7 @@
 #include "llvm/IR/Function.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/OptionsContext.h"
-#include "llvm/Transforms/Utils/UtilsOptionsOptInfos.h"
+#include "llvm/Transforms/Utils/UtilsOptions.h"
 
 #include <cmath>
 #include <set>
@@ -58,108 +58,98 @@ namespace llvm {
 bool EnableExtTspBlockPlacement = false;
 } // namespace llvm
 
-static double getForwardWeightCond(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValIfSpecified<&clv2::TransformUtilsOptsReg,
-                                    &clv2::TU_ForwardWeightCond>(Ctx, 0.1);
+// Each getter below reads the process-wide UtilsOptions::Current struct
+// directly rather than resolving fields through the passed
+// clv2::OptionsContext: CodeLayout.h's public functions (computeExtTspLayout,
+// calcExtTspScore, computeCacheDirectedLayout) are called not only from
+// LLVMContext-bearing code in this repo, but also from BOLT (which threads
+// its own BinaryContext-scoped clv2::OptionsContext) and lld (which threads
+// its own linker-scoped clv2::OptionsContext) -- neither has an LLVMContext
+// to resolve a per-context UtilsOptions from. The Ctx parameter is kept only
+// so these stable, LLVM_ABI-exported signatures don't change out from under
+// those external callers; this mirrors MCTargetOptionsCommandFlags.cpp's
+// established resolution for the same class of problem (see the comment at
+// the top of that file).
+static double getForwardWeightCond(const clv2::OptionsContext &) {
+  return UtilsOptions::Current.TU_ForwardWeightCond;
 }
 
-static double getForwardWeightUncond(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValIfSpecified<&clv2::TransformUtilsOptsReg,
-                                    &clv2::TU_ForwardWeightUncond>(Ctx, 0.1);
+static double getForwardWeightUncond(const clv2::OptionsContext &) {
+  return UtilsOptions::Current.TU_ForwardWeightUncond;
 }
 
-static double getBackwardWeightCond(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValIfSpecified<&clv2::TransformUtilsOptsReg,
-                                    &clv2::TU_BackwardWeightCond>(Ctx, 0.1);
+static double getBackwardWeightCond(const clv2::OptionsContext &) {
+  return UtilsOptions::Current.TU_BackwardWeightCond;
 }
 
-static double getBackwardWeightUncond(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValIfSpecified<&clv2::TransformUtilsOptsReg,
-                                    &clv2::TU_BackwardWeightUncond>(Ctx, 0.1);
+static double getBackwardWeightUncond(const clv2::OptionsContext &) {
+  return UtilsOptions::Current.TU_BackwardWeightUncond;
 }
 
-static double getFallthroughWeightCond(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValIfSpecified<&clv2::TransformUtilsOptsReg,
-                                    &clv2::TU_FallthroughWeightCond>(Ctx, 1.0);
+static double getFallthroughWeightCond(const clv2::OptionsContext &) {
+  return UtilsOptions::Current.TU_FallthroughWeightCond;
 }
 
-static double getFallthroughWeightUncond(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValIfSpecified<&clv2::TransformUtilsOptsReg,
-                                    &clv2::TU_FallthroughWeightUncond>(Ctx,
-                                                                       1.05);
+static double getFallthroughWeightUncond(const clv2::OptionsContext &) {
+  return UtilsOptions::Current.TU_FallthroughWeightUncond;
 }
 
-static unsigned getForwardDistance(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValIfSpecified<&clv2::TransformUtilsOptsReg,
-                                    &clv2::TU_ForwardDistance>(Ctx, 1024);
+static unsigned getForwardDistance(const clv2::OptionsContext &) {
+  return UtilsOptions::Current.TU_ForwardDistance;
 }
 
-static unsigned getBackwardDistance(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValIfSpecified<&clv2::TransformUtilsOptsReg,
-                                    &clv2::TU_BackwardDistance>(Ctx, 640);
+static unsigned getBackwardDistance(const clv2::OptionsContext &) {
+  return UtilsOptions::Current.TU_BackwardDistance;
 }
 
 // The maximum size of a chain created by the algorithm. The size is bounded
 // so that the algorithm can efficiently process extremely large instances.
-static unsigned getMaxChainSize(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValIfSpecified<&clv2::TransformUtilsOptsReg,
-                                    &clv2::TU_MaxChainSize>(Ctx, 512);
+static unsigned getMaxChainSize(const clv2::OptionsContext &) {
+  return UtilsOptions::Current.TU_MaxChainSize;
 }
 
-static unsigned getChainSplitThreshold(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValIfSpecified<&clv2::TransformUtilsOptsReg,
-                                    &clv2::TU_ChainSplitThreshold>(Ctx, 128);
+static unsigned getChainSplitThreshold(const clv2::OptionsContext &) {
+  return UtilsOptions::Current.TU_ChainSplitThreshold;
 }
 
-static double getMaxMergeDensityRatio(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValIfSpecified<&clv2::TransformUtilsOptsReg,
-                                    &clv2::TU_MaxMergeDensityRatio>(Ctx, 100.0);
+static double getMaxMergeDensityRatio(const clv2::OptionsContext &) {
+  return UtilsOptions::Current.TU_MaxMergeDensityRatio;
 }
 
 // Algorithm-specific options for CDSort.
-static unsigned getCacheEntries(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValIfSpecified<&clv2::TransformUtilsOptsReg,
-                                    &clv2::TU_CacheEntries>(Ctx, 0);
+static unsigned getCacheEntries(const clv2::OptionsContext &) {
+  return UtilsOptions::Current.TU_CacheEntries.value_or(0);
 }
-static bool isCacheEntriesSpecified(const clv2::OptionsContext &Ctx) {
-  return clv2::wasOptSpecified<&clv2::TransformUtilsOptsReg,
-                               &clv2::TU_CacheEntries>(Ctx);
+static bool isCacheEntriesSpecified(const clv2::OptionsContext &) {
+  return UtilsOptions::Current.TU_CacheEntries.has_value();
 }
 
-static unsigned getCacheSize(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValIfSpecified<&clv2::TransformUtilsOptsReg,
-                                    &clv2::TU_CacheSize>(Ctx, 0);
+static unsigned getCacheSize(const clv2::OptionsContext &) {
+  return UtilsOptions::Current.TU_CacheSize.value_or(0);
 }
-static bool isCacheSizeSpecified(const clv2::OptionsContext &Ctx) {
-  return clv2::wasOptSpecified<&clv2::TransformUtilsOptsReg,
-                               &clv2::TU_CacheSize>(Ctx);
+static bool isCacheSizeSpecified(const clv2::OptionsContext &) {
+  return UtilsOptions::Current.TU_CacheSize.has_value();
 }
 
-static unsigned getCDMaxChainSize(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValIfSpecified<&clv2::TransformUtilsOptsReg,
-                                    &clv2::TU_CDMaxChainSize>(Ctx, 0);
+static unsigned getCDMaxChainSize(const clv2::OptionsContext &) {
+  return UtilsOptions::Current.TU_CDMaxChainSize.value_or(0);
 }
-static bool isCDMaxChainSizeSpecified(const clv2::OptionsContext &Ctx) {
-  return clv2::wasOptSpecified<&clv2::TransformUtilsOptsReg,
-                               &clv2::TU_CDMaxChainSize>(Ctx);
+static bool isCDMaxChainSizeSpecified(const clv2::OptionsContext &) {
+  return UtilsOptions::Current.TU_CDMaxChainSize.has_value();
 }
 
-static double getDistancePower(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValIfSpecified<&clv2::TransformUtilsOptsReg,
-                                    &clv2::TU_DistancePower>(Ctx, 0.0);
+static double getDistancePower(const clv2::OptionsContext &) {
+  return UtilsOptions::Current.TU_DistancePower.value_or(0.0);
 }
-static bool isDistancePowerSpecified(const clv2::OptionsContext &Ctx) {
-  return clv2::wasOptSpecified<&clv2::TransformUtilsOptsReg,
-                               &clv2::TU_DistancePower>(Ctx);
+static bool isDistancePowerSpecified(const clv2::OptionsContext &) {
+  return UtilsOptions::Current.TU_DistancePower.has_value();
 }
 
-static double getFrequencyScale(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValIfSpecified<&clv2::TransformUtilsOptsReg,
-                                    &clv2::TU_FrequencyScale>(Ctx, 0.0);
+static double getFrequencyScale(const clv2::OptionsContext &) {
+  return UtilsOptions::Current.TU_FrequencyScale.value_or(0.0);
 }
-static bool isFrequencyScaleSpecified(const clv2::OptionsContext &Ctx) {
-  return clv2::wasOptSpecified<&clv2::TransformUtilsOptsReg,
-                               &clv2::TU_FrequencyScale>(Ctx);
+static bool isFrequencyScaleSpecified(const clv2::OptionsContext &) {
+  return UtilsOptions::Current.TU_FrequencyScale.has_value();
 }
 
 namespace {

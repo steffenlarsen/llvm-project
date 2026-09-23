@@ -369,11 +369,11 @@ void WebAssemblyDAGToDAGISel::Select(SDNode *Node) {
     case Intrinsic::wasm_catch: {
       int Tag = Node->getConstantOperandVal(2);
       SDValue SymNode = getTagSymNode(Tag, CurDAG);
-      auto &OptsCtx =
-          CurDAG->getMachineFunction().getTarget().getOptionsContext();
-      unsigned CatchOpcode = WebAssembly::getWasmUseLegacyEH(OptsCtx)
-                                 ? WebAssembly::CATCH_LEGACY
-                                 : WebAssembly::CATCH;
+      unsigned CatchOpcode =
+          WebAssembly::getWasmUseLegacyEH(
+              CurDAG->getMachineFunction().getFunction().getContext())
+              ? WebAssembly::CATCH_LEGACY
+              : WebAssembly::CATCH;
       MachineSDNode *Catch =
           CurDAG->getMachineNode(CatchOpcode, DL,
                                  {

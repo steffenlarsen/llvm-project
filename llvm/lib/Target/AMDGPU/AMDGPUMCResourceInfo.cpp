@@ -282,7 +282,8 @@ void MCResourceInfo::gatherResourceInfo(
 
   // When link-time object linking is enabled, set all resource symbols to
   // concrete local values.
-  if (AMDGPUTargetMachine::getEnableObjectLinking(TM.getOptionsContext())) {
+  if (AMDGPUTargetMachine::getEnableObjectLinking(
+          &MF.getFunction().getContext())) {
     LLVM_DEBUG(dbgs() << "MCResUse:   object linking enabled, no call-graph "
                          "propagation; emitting local resource values only\n");
     SetToLocal(FRI.NumVGPR, RIK_NumVGPR);

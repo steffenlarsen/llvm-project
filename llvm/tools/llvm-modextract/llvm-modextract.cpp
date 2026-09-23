@@ -18,6 +18,7 @@
 #include "llvm/Support/Error.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/PluginLoaderOptions.h"
 #include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/ToolOutputFile.h"
 #include "llvm/Support/WithColor.h"
@@ -51,7 +52,10 @@ int main(int argc, char **argv) {
   P.add<&ModextractToolReg>();
   RegisterAllLLVMOptions(P);
   P.hideUnrelatedOptions({&ModextractCategory, &getColorCategory()});
-  auto OptsCtx = P.parse(argc, argv, "Module extractor");
+  std::vector<const char *> ArgsAfterPlugins =
+      loadPluginsAndStripArgs(argc, argv);
+  auto OptsCtx = P.parse(static_cast<int>(ArgsAfterPlugins.size()),
+                          ArgsAfterPlugins.data(), "Module extractor");
   auto *Opts = OptsCtx->getViewPtr<&ModextractToolReg>();
 
   ExitOnError ExitOnErr("llvm-modextract: error: ");

@@ -55,10 +55,9 @@
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
-#include "llvm/Transforms/Utils/UtilsOptionsOptInfos.h"
+#include "llvm/Transforms/Utils/UtilsOptions.h"
 #include <cassert>
 #include <cstdint>
 #include <iterator>
@@ -75,8 +74,7 @@ using namespace llvm::PatternMatch;
 // extracted functions to pthread-based code, as only one argument (void*) can
 // be passed in to pthread_create().
 static bool getAggregateArgsOpt(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::TU_AggregateArgsOpt>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<UtilsOptions>().TU_AggregateArgsOpt;
 }
 
 /// Test whether a block is valid for extraction.
@@ -112,9 +110,9 @@ static bool isBlockValidForExtraction(const BasicBlock &BB,
   // verify that extraction is valid.
   for (BasicBlock::const_iterator I = BB.begin(), E = BB.end(); I != E; ++I) {
     if (isa<AllocaInst>(I)) {
-       if (!AllowAlloca)
-         return false;
-       continue;
+      if (!AllowAlloca)
+        return false;
+      continue;
     }
 
     if (const auto *II = dyn_cast<InvokeInst>(I)) {
@@ -133,7 +131,7 @@ static bool isBlockValidForExtraction(const BasicBlock &BB,
         if (!Result.count(UBB))
           return false;
       for (const auto *HBB : CSI->handlers())
-        if (!Result.count(const_cast<BasicBlock*>(HBB)))
+        if (!Result.count(const_cast<BasicBlock *>(HBB)))
           return false;
       continue;
     }
@@ -143,7 +141,7 @@ static bool isBlockValidForExtraction(const BasicBlock &BB,
     if (const auto *CPI = dyn_cast<CatchPadInst>(I)) {
       for (const auto *U : CPI->users())
         if (const auto *CRI = dyn_cast<CatchReturnInst>(U))
-          if (!Result.count(const_cast<BasicBlock*>(CRI->getParent())))
+          if (!Result.count(const_cast<BasicBlock *>(CRI->getParent())))
             return false;
       continue;
     }
@@ -154,7 +152,7 @@ static bool isBlockValidForExtraction(const BasicBlock &BB,
     if (const auto *CPI = dyn_cast<CleanupPadInst>(I)) {
       for (const auto *U : CPI->users())
         if (const auto *CRI = dyn_cast<CleanupReturnInst>(U))
-          if (!Result.count(const_cast<BasicBlock*>(CRI->getParent())))
+          if (!Result.count(const_cast<BasicBlock *>(CRI->getParent())))
             return false;
       continue;
     }
@@ -294,7 +292,8 @@ static bool definedInRegion(const SetVector<BasicBlock *> &Blocks, Value *V) {
 /// function being code extracted, but not in the region being extracted.
 /// These values must be passed in as live-ins to the function.
 static bool definedInCaller(const SetVector<BasicBlock *> &Blocks, Value *V) {
-  if (isa<Argument>(V)) return true;
+  if (isa<Argument>(V))
+    return true;
   if (Instruction *I = dyn_cast<Instruction>(V))
     if (!Blocks.count(I->getParent()))
       return true;
@@ -602,8 +601,8 @@ void CodeExtractor::findAllocas(const CodeExtractorAnalysisCache &CEAC,
       Module *M = AIFunc->getParent();
       LLVMContext &Ctx = M->getContext();
       auto *Int8PtrTy = PointerType::getUnqual(Ctx);
-      CastInst *CastI =
-          CastInst::CreatePointerCast(AI, Int8PtrTy, "lt.cast", I->getIterator());
+      CastInst *CastI = CastInst::CreatePointerCast(AI, Int8PtrTy, "lt.cast",
+                                                    I->getIterator());
       I->replaceUsesOfWith(I->getOperand(1), CastI);
     }
 
@@ -736,7 +735,8 @@ void CodeExtractor::severSplitPHINodesOfEntry(BasicBlock *&Header) {
 
   if (Header != &Header->getParent()->getEntryBlock()) {
     PHINode *PN = dyn_cast<PHINode>(Header->begin());
-    if (!PN) return;  // No PHI nodes.
+    if (!PN)
+      return; // No PHI nodes.
 
     // If the header node contains any PHI nodes, check to see if there is more
     // than one entry from outside the region.  If so, we need to sever the
@@ -749,7 +749,8 @@ void CodeExtractor::severSplitPHINodesOfEntry(BasicBlock *&Header) {
 
     // If there is one (or fewer) predecessor from outside the region, we don't
     // need to do anything special.
-    if (NumPredsOutsideRegion <= 1) return;
+    if (NumPredsOutsideRegion <= 1)
+      return;
   }
 
   // Otherwise, we need to split the header block into two pieces: one
@@ -777,8 +778,8 @@ void CodeExtractor::severSplitPHINodesOfEntry(BasicBlock *&Header) {
         TI->replaceUsesOfWith(OldPred, NewBB);
       }
 
-    // Okay, everything within the region is now branching to the right block, we
-    // just have to update the PHI nodes now, inserting PHI nodes into NewBB.
+    // Okay, everything within the region is now branching to the right block,
+    // we just have to update the PHI nodes now, inserting PHI nodes into NewBB.
     BasicBlock::iterator AfterPHIs;
     for (AfterPHIs = OldPred->begin(); isa<PHINode>(AfterPHIs); ++AfterPHIs) {
       PHINode *PN = cast<PHINode>(AfterPHIs);

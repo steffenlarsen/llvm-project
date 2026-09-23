@@ -11,13 +11,11 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/CodeGen/MachineBranchProbabilityInfo.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsMachine1.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/LLVMContext.h"
 #include "llvm/InitializePasses.h"
-#include "llvm/Support/CommandLineCompat.h"
-#include "llvm/Support/CommandLineV2.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 
 using namespace llvm;
@@ -25,8 +23,8 @@ using namespace llvm;
 INITIALIZE_PASS(MachineBranchProbabilityInfoWrapperPass, "machine-branch-prob",
                 "Machine Branch Probability Analysis", false, true)
 
-static unsigned getStaticLikelyProb(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_StaticLikelyProb>(Ctx);
+static unsigned getStaticLikelyProb(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenMachine1Options>().CGPASS_StaticLikelyProb;
 }
 
 MachineBranchProbabilityAnalysis::Result
@@ -82,9 +80,7 @@ BranchProbability MachineBranchProbabilityInfo::getEdgeProbability(
 bool MachineBranchProbabilityInfo::isEdgeHot(
     const MachineBasicBlock *Src, const MachineBasicBlock *Dst) const {
   BranchProbability HotProb(
-      getStaticLikelyProb(
-          Src->getParent()->getFunction().getContext().getOptionsContext()),
-      100);
+      getStaticLikelyProb(Src->getParent()->getFunction().getContext()), 100);
   return getEdgeProbability(Src, Dst) > HotProb;
 }
 

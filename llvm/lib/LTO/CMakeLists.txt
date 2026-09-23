@@ -1,6 +1,4 @@
 add_llvm_component_library(LLVMLTO
-  LTOOptionsGetters.cpp
-  LTOOptionsRegistration.cpp
   LTO.cpp
   LTOBackend.cpp
   LTOModule.cpp
@@ -14,6 +12,8 @@ add_llvm_component_library(LLVMLTO
   DEPENDS
   intrinsics_gen
   llvm_vcsrevision_h
+  IPOOptParserTableGen
+  LTOOptParserTableGen
 
   LINK_LIBS
   ${LLVM_PTHREAD_LIB}
@@ -37,6 +37,7 @@ add_llvm_component_library(LLVMLTO
   MC
   ObjCARC
   Object
+  Option
   Passes
   Plugins
   Remarks

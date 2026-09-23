@@ -145,7 +145,9 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *Data, size_t Size) {
   //
 
   PassBuilder PB(TM->getOptionsContext(), TM.get(),
-                 PipelineTuningOptions(TM->getOptionsContext()));
+                 PipelineTuningOptions(TM->getOptionsContext()),
+                 std::nullopt, nullptr, vfs::getRealFileSystem(),
+                 &M->getContext());
 
   LoopAnalysisManager LAM;
   FunctionAnalysisManager FAM;

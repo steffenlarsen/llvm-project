@@ -12,7 +12,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Analysis/ProfileSummaryInfo.h"
-#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
+#include "llvm/Analysis/AnalysisOptions.h"
 #include "llvm/Analysis/BlockFrequencyInfo.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Instructions.h"
@@ -20,31 +20,29 @@
 #include "llvm/IR/ProfileSummary.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/ProfileData/ProfileCommon.h"
-#include "llvm/ProfileData/ProfileDataOptionsOptInfos.h"
+#include "llvm/ProfileData/ProfileDataOptions.h"
 #include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/Compiler.h"
-#include "llvm/Support/OptionsContext.h"
 #include <optional>
 using namespace llvm;
 
 namespace llvm {
 
 static bool getPartialProfile(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::AN_PartialProfile>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<AnalysisOptions>().AN_PartialProfile;
 }
 
 static bool getScalePartialSampleProfileWorkingSetSize(const Module &M) {
-  return clv2::getOptValOrDefault<
-      &clv2::AN_ScalePartialSampleProfileWorkingSetSize>(
-      M.getContext().getOptionsContext());
+  return M.getContext()
+      .getOptions<AnalysisOptions>()
+      .AN_ScalePartialSampleProfileWorkingSetSize;
 }
 
 static double
 getPartialSampleProfileWorkingSetSizeScaleFactor(const Module &M) {
-  return clv2::getOptValOrDefault<
-      &clv2::AN_PartialSampleProfileWorkingSetSizeScaleFactor>(
-      M.getContext().getOptionsContext());
+  return M.getContext()
+      .getOptions<AnalysisOptions>()
+      .AN_PartialSampleProfileWorkingSetSizeScaleFactor;
 }
 
 } // end namespace llvm
@@ -73,7 +71,7 @@ void ProfileSummaryInfo::refresh(std::unique_ptr<ProfileSummary> &&Other) {
   }
   if (!hasProfileSummary())
     return;
-  computeThresholds(M->getContext().getOptionsContext());
+  computeThresholds();
 }
 
 std::optional<uint64_t>
@@ -119,31 +117,22 @@ bool ProfileSummaryInfo::isFunctionEntryCold(const Function *F) const {
 }
 
 /// Compute the hot and cold thresholds.
-void ProfileSummaryInfo::computeThresholds(const clv2::OptionsContext &Ctx) {
-  auto *PDOpts = M ? clv2::getView<&clv2::ProfileDataOptsReg>(
-                         M->getContext().getOptionsContext())
-                   : clv2::getView<&clv2::ProfileDataOptsReg>(Ctx);
-
-  int CutoffHot = 990000;
-  unsigned HugeWSSThreshold = 15000;
-  unsigned LargeWSSThreshold = 12500;
-  if (PDOpts) {
-    CutoffHot = PDOpts->get<&clv2::PD_ProfileSummaryCutoffHot>();
-    HugeWSSThreshold =
-        PDOpts->get<&clv2::PD_ProfileSummaryHugeWorkingSetSizeThreshold>();
-    LargeWSSThreshold =
-        PDOpts->get<&clv2::PD_ProfileSummaryLargeWorkingSetSizeThreshold>();
-  }
+void ProfileSummaryInfo::computeThresholds() {
+  const ProfileDataOptions &PDOpts =
+      M->getContext().getOptions<ProfileDataOptions>();
+  int CutoffHot = PDOpts.PD_ProfileSummaryCutoffHot;
+  unsigned HugeWSSThreshold =
+      PDOpts.PD_ProfileSummaryHugeWorkingSetSizeThreshold;
+  unsigned LargeWSSThreshold =
+      PDOpts.PD_ProfileSummaryLargeWorkingSetSizeThreshold;
 
   auto &DetailedSummary = Summary->getDetailedSummary();
   auto &HotEntry =
       ProfileSummaryBuilder::getEntryForPercentile(DetailedSummary, CutoffHot);
-  const clv2::OptionsContext &OptsCtx =
-      M ? M->getContext().getOptionsContext() : Ctx;
   HotCountThreshold =
-      ProfileSummaryBuilder::getHotCountThreshold(DetailedSummary, OptsCtx);
+      ProfileSummaryBuilder::getHotCountThreshold(DetailedSummary, PDOpts);
   ColdCountThreshold =
-      ProfileSummaryBuilder::getColdCountThreshold(DetailedSummary, OptsCtx);
+      ProfileSummaryBuilder::getColdCountThreshold(DetailedSummary, PDOpts);
   // When the hot and cold thresholds are identical, we would classify
   // a count value as both hot and cold since we are doing an inclusive check
   // (see ::is{Hot|Cold}Count(). To avoid this undesirable overlap, ensure the

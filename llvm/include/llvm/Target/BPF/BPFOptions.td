@@ -1,4 +1,4 @@
-//===- BPFOptions.td - CLV2 option defs for BPF -----------*- tablegen -*-===//
+//===- BPFOptions.td - BPF target options -*- tablegen -*-===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -6,168 +6,104 @@
 //
 //===----------------------------------------------------------------------===//
 
-include "llvm/Support/CLV2Options.td"
+include "llvm/Option/OptParser.td"
 
-def BPFOptsReg : Registry<"llvm::bpf_opts"> {
-  // Getter bodies are compiled once, in BPFOptionsGetters.cpp.
-  let OutOfLineGetters = 1;
-}
+def BPFOptions : OptionsStruct<"llvm"> {}
 
 // --- BPFAdjustOpt.cpp ---
 
-def BPF_DisableSerializeICMP : Option<
-    "bpf-disable-serialize-icmp",
+defm BPF_DisableSerializeICMP : BoolField<
+    "bpf-disable-serialize-icmp", "false",
     "BPF: Disable Serializing ICMP insns.",
-    "bool"> {
-  let Default = "false";
-  let Registry = BPFOptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def BPF_DisableAvoidSpeculation : Option<
-    "bpf-disable-avoid-speculation",
+defm BPF_DisableAvoidSpeculation : BoolField<
+    "bpf-disable-avoid-speculation", "false",
     "BPF: Disable Avoiding Speculative Code Motion.",
-    "bool"> {
-  let Default = "false";
-  let Registry = BPFOptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // --- BPFISelLowering.cpp ---
 
-def BPF_ExpandMemcpyInOrder : Option<
-    "bpf-expand-memcpy-in-order",
+defm BPF_ExpandMemcpyInOrder : BoolField<
+    "bpf-expand-memcpy-in-order", "false",
     "Expand memcpy into load/store pairs in order",
-    "bool"> {
-  let Registry = BPFOptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def BPF_MinimumJumpTableEntries : Option<
-    "bpf-min-jump-table-entries",
+defm BPF_MinimumJumpTableEntries : ValueField<
+    "bpf-min-jump-table-entries", "unsigned", "13",
     "Set minimum number of entries to use a jump table on BPF",
-    "unsigned"> {
-  let Registry = BPFOptsReg;
-  let Default = "13";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def BPF_AllowsLibcalls : Option<
-    "bpf-allows-libcalls",
+defm BPF_AllowsLibcalls : BoolField<
+    "bpf-allows-libcalls", "false",
     "Allow libcalls instead of rejecting unsupported built-in functions",
-    "bool"> {
-  let Registry = BPFOptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // --- BPFMIPeephole.cpp ---
 
-def BPF_GotolAbsLowBound : Option<
-    "gotol-abs-low-bound",
+defm BPF_GotolAbsLowBound : ValueField<
+    "gotol-abs-low-bound", "int", "16383",
     "Specify gotol lower bound",
-    "int"> {
-  let Registry = BPFOptsReg;
-  let Default = "16383";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // --- BPFMISimplifyPatchable.cpp ---
 
-def BPF_DisableCOREOptimization : Option<
-    "disable-bpf-core-optimization",
+defm BPF_DisableCOREOptimization : BoolField<
+    "disable-bpf-core-optimization", "false",
     "Disable CORE relocation optimization",
-    "bool"> {
-  let Default = "false";
-  let Registry = BPFOptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // --- BPFRegisterInfo.cpp ---
 
-def BPF_StackSize : Option<
-    "bpf-stack-size",
-    "Specify the BPF stack size limit",
-    "int"> {
-  let Registry = BPFOptsReg;
-  let Default = "512";
-}
+defm BPF_StackSize : ValueField<
+    "bpf-stack-size", "int", "512",
+    "Specify the BPF stack size limit">;
 
 // --- BPFSubtarget.cpp ---
 
-def BPF_DisableLdsx : Option<
-    "disable-ldsx", "Disable ldsx insns",
-    "bool"> {
-  let Registry = BPFOptsReg;
-  let Hidden = 1;
-}
+defm BPF_DisableLdsx : BoolField<
+    "disable-ldsx", "false", "Disable ldsx insns",
+    /*hidden=*/1>;
 
-def BPF_DisableMovsx : Option<
-    "disable-movsx", "Disable movsx insns",
-    "bool"> {
-  let Registry = BPFOptsReg;
-  let Hidden = 1;
-}
+defm BPF_DisableMovsx : BoolField<
+    "disable-movsx", "false", "Disable movsx insns",
+    /*hidden=*/1>;
 
-def BPF_DisableBswap : Option<
-    "disable-bswap", "Disable bswap insns",
-    "bool"> {
-  let Registry = BPFOptsReg;
-  let Hidden = 1;
-}
+defm BPF_DisableBswap : BoolField<
+    "disable-bswap", "false", "Disable bswap insns",
+    /*hidden=*/1>;
 
-def BPF_DisableSdivSmod : Option<
-    "disable-sdiv-smod", "Disable sdiv/smod insns",
-    "bool"> {
-  let Registry = BPFOptsReg;
-  let Hidden = 1;
-}
+defm BPF_DisableSdivSmod : BoolField<
+    "disable-sdiv-smod", "false", "Disable sdiv/smod insns",
+    /*hidden=*/1>;
 
-def BPF_DisableGotol : Option<
-    "disable-gotol", "Disable gotol insn",
-    "bool"> {
-  let Registry = BPFOptsReg;
-  let Hidden = 1;
-}
+defm BPF_DisableGotol : BoolField<
+    "disable-gotol", "false", "Disable gotol insn",
+    /*hidden=*/1>;
 
-def BPF_DisableStoreImm : Option<
-    "disable-storeimm", "Disable BPF_ST (immediate store) insn",
-    "bool"> {
-  let Registry = BPFOptsReg;
-  let Hidden = 1;
-}
+defm BPF_DisableStoreImm : BoolField<
+    "disable-storeimm", "false", "Disable BPF_ST (immediate store) insn",
+    /*hidden=*/1>;
 
-def BPF_DisableLoadAcqStoreRel : Option<
-    "disable-load-acq-store-rel",
+defm BPF_DisableLoadAcqStoreRel : BoolField<
+    "disable-load-acq-store-rel", "false",
     "Disable load-acquire and store-release insns",
-    "bool"> {
-  let Registry = BPFOptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def BPF_DisableGotox : Option<
-    "disable-gotox", "Disable gotox insn",
-    "bool"> {
-  let Registry = BPFOptsReg;
-  let Hidden = 1;
-}
+defm BPF_DisableGotox : BoolField<
+    "disable-gotox", "false", "Disable gotox insn",
+    /*hidden=*/1>;
 
 // --- BPFSelectionDAGInfo.cpp ---
 
-def BPF_MaxStoresPerMemFunc : Option<
-    "bpf-max-stores-per-memfunc",
+defm BPF_MaxStoresPerMemFunc : ValueField<
+    "bpf-max-stores-per-memfunc", "unsigned", "192",
     "Set the maximum number of stores for inlined BPF memory intrinsics",
-    "unsigned"> {
-  let Registry = BPFOptsReg;
-  let Default = "192";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // --- BPFTargetMachine.cpp ---
 
-def BPF_DisableTrapUnreachable : Option<
-    "bpf-disable-trap-unreachable",
+defm BPF_DisableTrapUnreachable : BoolField<
+    "bpf-disable-trap-unreachable", "false",
     "Disable Trap Unreachable for BPF",
-    "bool"> {
-  let Registry = BPFOptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;

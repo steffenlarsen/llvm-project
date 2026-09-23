@@ -27,21 +27,22 @@
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 
-#include "llvm/Support/CommandLineV2.h"
-#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
+#include "llvm/Target/Hexagon/HexagonOptions.h"
 
 using namespace llvm;
 
 #define DEBUG_TYPE "hexagon-global-array-alignment"
 
 static bool getDisableGlobalArrayAlignment(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::HEX_DisableGlobalArrayAlignment>(
-      M.getContext().getOptionsContext());
+  return M.getContext()
+      .getOptions<HexagonOptions>()
+      .HEX_DisableGlobalArrayAlignment;
 }
 
 static bool getDisableAlignOptByteHalf(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::HEX_DisableAlignOptByteHalf>(
-      M.getContext().getOptionsContext());
+  return M.getContext()
+      .getOptions<HexagonOptions>()
+      .HEX_DisableAlignOptByteHalf;
 }
 
 namespace {

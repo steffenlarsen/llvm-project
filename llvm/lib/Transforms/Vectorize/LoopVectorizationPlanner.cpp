@@ -14,6 +14,7 @@
 
 #include "LoopVectorizationPlanner.h"
 #include "VPlanUtils.h"
+#include "llvm/Analysis/AnalysisOptions.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/OptimizationRemarkEmitter.h"
 #include "llvm/Analysis/ScalarEvolution.h"
@@ -21,7 +22,6 @@
 #include "llvm/IR/Function.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/MathExtras.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Transforms/Vectorize/LoopVectorizationLegality.h"
 #include "llvm/Transforms/Vectorize/LoopVectorize.h"
 #include "llvm/Transforms/Vectorize/VectorizeOptions.h"
@@ -106,63 +106,47 @@ void reportVectorization(OptimizationRemarkEmitter *ORE, Loop *TheLoop,
 } // namespace llvm
 
 static bool isMaximizeBandwidthSpecified(const Function &F) {
-  return clv2::wasOptSpecified<&clv2::VectorizeOptsReg,
-                               &clv2::VEC_MaximizeBandwidth>(
-      F.getContext().getOptionsContext());
+  return VectorizeOptions::Current.VEC_MaximizeBandwidth.has_value();
 }
 static float getScalableEpilogueVFCostScaleFactor(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::VEC_ScalableEpilogueVFCostScaleFactor>(
-      F.getContext().getOptionsContext());
+  return VectorizeOptions::Current.VEC_ScalableEpilogueVFCostScaleFactor;
 }
 
 static bool getMaximizeBandwidth(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::VEC_MaximizeBandwidth>(
-      F.getContext().getOptionsContext());
+  return VectorizeOptions::Current.VEC_MaximizeBandwidth.value_or(false);
 }
 
 static bool getUseWiderVFIfCallVariantsPresent(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::VEC_UseWiderVFIfCallVariantsPresent>(
-      F.getContext().getOptionsContext());
+  return VectorizeOptions::Current.VEC_UseWiderVFIfCallVariantsPresent;
 }
 
 static bool isConsiderRegPressureSpecified(const Function &F) {
-  return clv2::wasOptSpecified<&clv2::VectorizeOptsReg,
-                               &clv2::VEC_ConsiderRegPressure>(
-      F.getContext().getOptionsContext());
+  return VectorizeOptions::Current.VEC_ConsiderRegPressure.has_value();
 }
 static bool getConsiderRegPressure(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::VEC_ConsiderRegPressure>(
-      F.getContext().getOptionsContext());
+  return VectorizeOptions::Current.VEC_ConsiderRegPressure.value_or(false);
 }
 
 static bool getForceTargetSupportsScalableVectors(const Function &F) {
-  return clv2::getOptValOrDefault<
-      &clv2::VEC_ForceTargetSupportsScalableVectors>(
-      F.getContext().getOptionsContext());
+  return VectorizeOptions::Current.VEC_ForceTargetSupportsScalableVectors;
 }
 
 static bool getPreferInLoopReductions(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::VEC_PreferInLoopReductions>(
-      F.getContext().getOptionsContext());
+  return VectorizeOptions::Current.VEC_PreferInLoopReductions;
 }
 
 static bool getVPlanBuildStressTest(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::VEC_VPlanBuildStressTest>(
-      F.getContext().getOptionsContext());
+  return VectorizeOptions::Current.VEC_VPlanBuildStressTest;
 }
 
 static bool getForceTargetSupportsGatherScatterOps(const Function &F) {
-  return clv2::getOptValOrDefault<
-      &clv2::VEC_ForceTargetSupportsGatherScatterOps>(
-      F.getContext().getOptionsContext());
+  return VectorizeOptions::Current.VEC_ForceTargetSupportsGatherScatterOps;
 }
 
 /// Note: This currently only applies to `llvm.masked.load` and
 /// `llvm.masked.store`. TODO: Extend this to cover other operations as needed.
 static bool getForceTargetSupportsMaskedMemoryOps(const Function &F) {
-  return clv2::getOptValOrDefault<
-      &clv2::VEC_ForceTargetSupportsMaskedMemoryOps>(
-      F.getContext().getOptionsContext());
+  return VectorizeOptions::Current.VEC_ForceTargetSupportsMaskedMemoryOps;
 }
 
 bool VFSelectionContext::isLegalMaskedLoadOrStore(bool IsLoad, Type *ScalarTy,
@@ -186,7 +170,7 @@ bool VFSelectionContext::supportsScalableVectors() const {
   return TTI.supportsScalableVectors() ||
          getForceTargetSupportsScalableVectors(F) ||
          VectorizerParams::getVectorizationFactor(
-             F.getContext().getOptionsContext())
+             F.getContext().getOptions<AnalysisOptions>())
              .isScalable();
 }
 
@@ -332,8 +316,8 @@ std::optional<unsigned> llvm::getMaxVScale(const Function &F) {
   return std::nullopt;
 }
 
-std::optional<uint64_t>
-llvm::getMaxRuntimeElementCount(ElementCount EC, const Function &F) {
+std::optional<uint64_t> llvm::getMaxRuntimeElementCount(ElementCount EC,
+                                                        const Function &F) {
   if (EC.isFixed())
     return EC.getFixedValue();
 

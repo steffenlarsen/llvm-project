@@ -41,6 +41,7 @@
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/Path.h"
+#include "llvm/Support/PluginLoaderOptions.h"
 #include "llvm/Support/Program.h"
 #include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/Signals.h"
@@ -472,7 +473,7 @@ Expected<std::unique_ptr<lto::LTO>> createLTO(const ArgList &Args) {
 
 Expected<bool> getSymbolsFromBitcode(MemoryBufferRef Buffer,
                                      StringMap<Symbol> &SymTab, bool IsLazy) {
-  Expected<IRSymtabFile> IRSymtabOrErr = readIRSymtab(Buffer, *NVLinkOptsCtx);
+  Expected<IRSymtabFile> IRSymtabOrErr = readIRSymtab(Buffer);
   if (!IRSymtabOrErr)
     return IRSymtabOrErr.takeError();
   bool Extracted = !IsLazy;
@@ -664,7 +665,7 @@ Expected<SmallVector<StringRef>> getInput(const ArgList &Args) {
     lto::LTO &LTOBackend = **LTOBackendOrErr;
     for (auto &BitcodeFile : BitcodeFiles) {
       Expected<std::unique_ptr<lto::InputFile>> BitcodeFileOrErr =
-          lto::InputFile::create(*BitcodeFile, *NVLinkOptsCtx);
+          lto::InputFile::create(*BitcodeFile);
       if (!BitcodeFileOrErr)
         return BitcodeFileOrErr.takeError();
 
@@ -857,7 +858,10 @@ int main(int argc, char **argv) {
     LLVMArgv.push_back(argv[0]);
     for (StringRef Arg : LLVMArgs)
       LLVMArgv.push_back(Saver.save(Arg).data());
-    NVLinkOptsCtx = P.parse(LLVMArgv.size(), LLVMArgv.data());
+    std::vector<const char *> ArgsAfterPlugins = loadPluginsAndStripArgs(
+        static_cast<int>(LLVMArgv.size()), LLVMArgv.data());
+    NVLinkOptsCtx = P.parse(static_cast<int>(ArgsAfterPlugins.size()),
+                             ArgsAfterPlugins.data());
   }
 
   // Get the input files to pass to 'nvlink'.

@@ -67,11 +67,10 @@
 #include "llvm/IR/Value.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Transforms/Utils/AssumeBundleBuilder.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/Local.h"
-#include "llvm/Transforms/Utils/UtilsOptionsOptInfos.h"
+#include "llvm/Transforms/Utils/UtilsOptions.h"
 #include "llvm/Transforms/Utils/ValueMapper.h"
 #include <algorithm>
 #include <cassert>
@@ -89,93 +88,88 @@ using namespace llvm;
 using namespace llvm::memprof;
 
 static bool getEnableNoAliasConversion(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::TU_EnableNoAliasConversion>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<UtilsOptions>().TU_EnableNoAliasConversion;
 }
 
 static bool getUseNoAliasIntrinsic(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::TU_UseNoAliasIntrinsic>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<UtilsOptions>().TU_UseNoAliasIntrinsic;
 }
 
 static bool getPreserveAlignmentAssumptions(const Function &F) {
-  return clv2::getOptValIfSpecified<&clv2::TransformUtilsOptsReg,
-                                    &clv2::TU_PreserveAlignmentAssumptions>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext()
+      .getOptions<UtilsOptions>()
+      .TU_PreserveAlignmentAssumptions;
 }
 
 static unsigned getInlinerAttributeWindow(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::TU_InlinerAttributeWindow>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<UtilsOptions>().TU_InlinerAttributeWindow;
 }
 
 namespace {
 
-  /// A class for recording information about inlining a landing pad.
-  class LandingPadInliningInfo {
-    /// Destination of the invoke's unwind.
-    BasicBlock *OuterResumeDest;
+/// A class for recording information about inlining a landing pad.
+class LandingPadInliningInfo {
+  /// Destination of the invoke's unwind.
+  BasicBlock *OuterResumeDest;
 
-    /// Destination for the callee's resume.
-    BasicBlock *InnerResumeDest = nullptr;
+  /// Destination for the callee's resume.
+  BasicBlock *InnerResumeDest = nullptr;
 
-    /// LandingPadInst associated with the invoke.
-    LandingPadInst *CallerLPad = nullptr;
+  /// LandingPadInst associated with the invoke.
+  LandingPadInst *CallerLPad = nullptr;
 
-    /// PHI for EH values from landingpad insts.
-    PHINode *InnerEHValuesPHI = nullptr;
+  /// PHI for EH values from landingpad insts.
+  PHINode *InnerEHValuesPHI = nullptr;
 
-    SmallVector<Value*, 8> UnwindDestPHIValues;
+  SmallVector<Value *, 8> UnwindDestPHIValues;
 
-  public:
-    LandingPadInliningInfo(InvokeInst *II)
-        : OuterResumeDest(II->getUnwindDest()) {
-      // If there are PHI nodes in the unwind destination block, we need to keep
-      // track of which values came into them from the invoke before removing
-      // the edge from this block.
-      BasicBlock *InvokeBB = II->getParent();
-      BasicBlock::iterator I = OuterResumeDest->begin();
-      for (; isa<PHINode>(I); ++I) {
-        // Save the value to use for this edge.
-        PHINode *PHI = cast<PHINode>(I);
-        UnwindDestPHIValues.push_back(PHI->getIncomingValueForBlock(InvokeBB));
-      }
-
-      CallerLPad = cast<LandingPadInst>(I);
+public:
+  LandingPadInliningInfo(InvokeInst *II)
+      : OuterResumeDest(II->getUnwindDest()) {
+    // If there are PHI nodes in the unwind destination block, we need to keep
+    // track of which values came into them from the invoke before removing
+    // the edge from this block.
+    BasicBlock *InvokeBB = II->getParent();
+    BasicBlock::iterator I = OuterResumeDest->begin();
+    for (; isa<PHINode>(I); ++I) {
+      // Save the value to use for this edge.
+      PHINode *PHI = cast<PHINode>(I);
+      UnwindDestPHIValues.push_back(PHI->getIncomingValueForBlock(InvokeBB));
     }
 
-    /// The outer unwind destination is the target of
-    /// unwind edges introduced for calls within the inlined function.
-    BasicBlock *getOuterResumeDest() const {
-      return OuterResumeDest;
+    CallerLPad = cast<LandingPadInst>(I);
+  }
+
+  /// The outer unwind destination is the target of
+  /// unwind edges introduced for calls within the inlined function.
+  BasicBlock *getOuterResumeDest() const { return OuterResumeDest; }
+
+  BasicBlock *getInnerResumeDest();
+
+  LandingPadInst *getLandingPadInst() const { return CallerLPad; }
+
+  /// Forward the 'resume' instruction to the caller's landing pad block.
+  /// When the landing pad block has only one predecessor, this is
+  /// a simple branch. When there is more than one predecessor, we need to
+  /// split the landing pad block after the landingpad instruction and jump
+  /// to there.
+  void forwardResume(ResumeInst *RI,
+                     SmallPtrSetImpl<LandingPadInst *> &InlinedLPads);
+
+  /// Add incoming-PHI values to the unwind destination block for the given
+  /// basic block, using the values for the original invoke's source block.
+  void addIncomingPHIValuesFor(BasicBlock *BB) const {
+    addIncomingPHIValuesForInto(BB, OuterResumeDest);
+  }
+
+  void addIncomingPHIValuesForInto(BasicBlock *src, BasicBlock *dest) const {
+    BasicBlock::iterator I = dest->begin();
+    for (unsigned i = 0, e = UnwindDestPHIValues.size(); i != e; ++i, ++I) {
+      PHINode *phi = cast<PHINode>(I);
+      phi->addIncoming(UnwindDestPHIValues[i], src);
     }
-
-    BasicBlock *getInnerResumeDest();
-
-    LandingPadInst *getLandingPadInst() const { return CallerLPad; }
-
-    /// Forward the 'resume' instruction to the caller's landing pad block.
-    /// When the landing pad block has only one predecessor, this is
-    /// a simple branch. When there is more than one predecessor, we need to
-    /// split the landing pad block after the landingpad instruction and jump
-    /// to there.
-    void forwardResume(ResumeInst *RI,
-                       SmallPtrSetImpl<LandingPadInst*> &InlinedLPads);
-
-    /// Add incoming-PHI values to the unwind destination block for the given
-    /// basic block, using the values for the original invoke's source block.
-    void addIncomingPHIValuesFor(BasicBlock *BB) const {
-      addIncomingPHIValuesForInto(BB, OuterResumeDest);
-    }
-
-    void addIncomingPHIValuesForInto(BasicBlock *src, BasicBlock *dest) const {
-      BasicBlock::iterator I = dest->begin();
-      for (unsigned i = 0, e = UnwindDestPHIValues.size(); i != e; ++i, ++I) {
-        PHINode *phi = cast<PHINode>(I);
-        phi->addIncoming(UnwindDestPHIValues[i], src);
-      }
-    }
-  };
+  }
+};
 } // end anonymous namespace
 
 static IntrinsicInst *getConvergenceEntry(BasicBlock &BB) {
@@ -193,13 +187,13 @@ static IntrinsicInst *getConvergenceEntry(BasicBlock &BB) {
 
 /// Get or create a target for the branch from ResumeInsts.
 BasicBlock *LandingPadInliningInfo::getInnerResumeDest() {
-  if (InnerResumeDest) return InnerResumeDest;
+  if (InnerResumeDest)
+    return InnerResumeDest;
 
   // Split the landing pad.
   BasicBlock::iterator SplitPoint = ++CallerLPad->getIterator();
-  InnerResumeDest =
-    OuterResumeDest->splitBasicBlock(SplitPoint,
-                                     OuterResumeDest->getName() + ".body");
+  InnerResumeDest = OuterResumeDest->splitBasicBlock(
+      SplitPoint, OuterResumeDest->getName() + ".body");
 
   // The number of incoming edges we expect to the inner landing pad.
   const unsigned PHICapacity = 2;
@@ -629,7 +623,7 @@ static void HandleInlinedLandingPad(InvokeInst *II, BasicBlock *FirstNewBlock,
   LandingPadInliningInfo Invoke(II);
 
   // Get all of the inlined landing pad instructions.
-  SmallPtrSet<LandingPadInst*, 16> InlinedLPads;
+  SmallPtrSet<LandingPadInst *, 16> InlinedLPads;
   for (Function::iterator I = FirstNewBlock->getIterator(), E = Caller->end();
        I != E; ++I)
     if (InvokeInst *II = dyn_cast<InvokeInst>(I->getTerminator()))
@@ -1018,16 +1012,21 @@ static void PropagateCallSiteMetadata(CallBase &CB, Function::iterator FStart,
       }
 
       if (AccessGroup)
-        I.setMetadata(LLVMContext::MD_access_group, uniteAccessGroups(
-            I.getMetadata(LLVMContext::MD_access_group), AccessGroup));
+        I.setMetadata(
+            LLVMContext::MD_access_group,
+            uniteAccessGroups(I.getMetadata(LLVMContext::MD_access_group),
+                              AccessGroup));
 
       if (AliasScope)
-        I.setMetadata(LLVMContext::MD_alias_scope, MDNode::concatenate(
-            I.getMetadata(LLVMContext::MD_alias_scope), AliasScope));
+        I.setMetadata(
+            LLVMContext::MD_alias_scope,
+            MDNode::concatenate(I.getMetadata(LLVMContext::MD_alias_scope),
+                                AliasScope));
 
       if (NoAlias)
-        I.setMetadata(LLVMContext::MD_noalias, MDNode::concatenate(
-            I.getMetadata(LLVMContext::MD_noalias), NoAlias));
+        I.setMetadata(LLVMContext::MD_noalias,
+                      MDNode::concatenate(
+                          I.getMetadata(LLVMContext::MD_noalias), NoAlias));
     }
   }
 }
@@ -1230,7 +1229,7 @@ static void AddAliasScopeMetadata(CallBase &CB, ValueToValueMapTy &VMap,
   // To do a good job, if a noalias variable is captured, we need to know if
   // the capture point dominates the particular use we're considering.
   DominatorTree DT;
-  DT.recalculate(const_cast<Function&>(*CalledFunc));
+  DT.recalculate(const_cast<Function &>(*CalledFunc));
 
   // noalias indicates that pointer values based on the argument do not alias
   // pointer values which are not based on it. So we add a new "scope" for each
@@ -1243,7 +1242,7 @@ static void AddAliasScopeMetadata(CallBase &CB, ValueToValueMapTy &VMap,
 
   // Create a new scope domain for this function.
   MDNode *NewDomain =
-    MDB.createAnonymousAliasScopeDomain(CalledFunc->getName());
+      MDB.createAnonymousAliasScopeDomain(CalledFunc->getName());
   for (unsigned i = 0, e = NoAliasArgs.size(); i != e; ++i) {
     const Argument *A = NoAliasArgs[i];
 
@@ -1914,8 +1913,10 @@ static bool hasLifetimeMarkers(AllocaInst *AI) {
 
   // Do a scan to find all the casts to i8*.
   for (User *U : AI->users()) {
-    if (U->getType() != Int8PtrTy) continue;
-    if (U->stripPointerCasts() != AI) continue;
+    if (U->getType() != Int8PtrTy)
+      continue;
+    if (U->stripPointerCasts() != AI)
+      continue;
     if (isUsedByLifetimeMarker(U))
       return true;
   }
@@ -1925,7 +1926,7 @@ static bool hasLifetimeMarkers(AllocaInst *AI) {
 /// Return the result of AI->isStaticAlloca() if AI were moved to the entry
 /// block. Allocas used in inalloca calls and allocas of dynamic array size
 /// cannot be static.
-static bool allocaWouldBeStaticInEntry(const AllocaInst *AI ) {
+static bool allocaWouldBeStaticInEntry(const AllocaInst *AI) {
   return isa<Constant>(AI->getArraySize()) && !AI->isUsedWithInAlloca();
 }
 
@@ -2080,8 +2081,7 @@ static at::StorageToVarsMap collectEscapedLocals(const DataLayout &DL,
   at::StorageToVarsMap EscapedLocals;
   SmallPtrSet<const Value *, 4> SeenBases;
 
-  LLVM_DEBUG(
-      errs() << "# Finding caller local variables escaped by callee\n");
+  LLVM_DEBUG(errs() << "# Finding caller local variables escaped by callee\n");
   for (const Value *Arg : CB.args()) {
     LLVM_DEBUG(errs() << "INSPECT: " << *Arg << "\n");
     if (!Arg->getType()->isPointerTy()) {
@@ -2769,7 +2769,7 @@ void llvm::InlineFunctionImpl(CallBase &CB, InlineFunctionInfo &IFI,
 
   // Make sure to capture all of the return instructions from the cloned
   // function.
-  SmallVector<ReturnInst*, 8> Returns;
+  SmallVector<ReturnInst *, 8> Returns;
   ClonedCodeInfo InlinedFunctionInfo;
   Function::iterator FirstNewBlock;
 
@@ -2825,7 +2825,8 @@ void llvm::InlineFunctionImpl(CallBase &CB, InlineFunctionInfo &IFI,
     auto AI = CB.arg_begin();
     unsigned ArgNo = 0;
     for (Function::arg_iterator I = CalledFunc->arg_begin(),
-         E = CalledFunc->arg_end(); I != E; ++I, ++AI, ++ArgNo) {
+                                E = CalledFunc->arg_end();
+         I != E; ++I, ++AI, ++ArgNo) {
       Value *ActualArg = *AI;
 
       // When byval arguments actually inlined, we need to make the copy implied
@@ -2865,7 +2866,8 @@ void llvm::InlineFunctionImpl(CallBase &CB, InlineFunctionInfo &IFI,
                               /*ModuleLevelChanges=*/false, Returns, ".i",
                               InlinedFunctionInfo);
     // Remember the first block that is newly cloned over.
-    FirstNewBlock = LastBlock; ++FirstNewBlock;
+    FirstNewBlock = LastBlock;
+    ++FirstNewBlock;
 
     // Insert retainRV/clainRV runtime calls.
     objcarc::ARCInstKind RVCallKind = objcarc::getAttachedARCFunctionKind(&CB);
@@ -3017,9 +3019,11 @@ void llvm::InlineFunctionImpl(CallBase &CB, InlineFunctionInfo &IFI,
   {
     BasicBlock::iterator InsertPoint = Caller->begin()->begin();
     for (BasicBlock::iterator I = FirstNewBlock->begin(),
-         E = FirstNewBlock->end(); I != E; ) {
+                              E = FirstNewBlock->end();
+         I != E;) {
       AllocaInst *AI = dyn_cast<AllocaInst>(I++);
-      if (!AI) continue;
+      if (!AI)
+        continue;
 
       // If the alloca is now dead, remove it.  This often occurs due to code
       // specialization.
@@ -3036,8 +3040,7 @@ void llvm::InlineFunctionImpl(CallBase &CB, InlineFunctionInfo &IFI,
 
       // Scan for the block of allocas that we can move over, and move them
       // all at once.
-      while (isa<AllocaInst>(I) &&
-             !cast<AllocaInst>(I)->use_empty() &&
+      while (isa<AllocaInst>(I) && !cast<AllocaInst>(I)->use_empty() &&
              allocaWouldBeStaticInEntry(cast<AllocaInst>(I))) {
         IFI.StaticAllocas.push_back(cast<AllocaInst>(I));
         ++I;
@@ -3056,7 +3059,7 @@ void llvm::InlineFunctionImpl(CallBase &CB, InlineFunctionInfo &IFI,
   // calls that we inline.
   bool MarkNoUnwind = CB.doesNotThrow();
 
-  SmallVector<Value*,4> VarArgsToForward;
+  SmallVector<Value *, 4> VarArgsToForward;
   SmallVector<AttributeSet, 4> VarArgsAttrs;
   for (unsigned i = CalledFunc->getFunctionType()->getNumParams();
        i < CB.arg_size(); i++) {
@@ -3103,8 +3106,9 @@ void llvm::InlineFunctionImpl(CallBase &CB, InlineFunctionInfo &IFI,
           // Add VarArgs to existing parameters.
           SmallVector<Value *, 6> Params(CI->args());
           Params.append(VarArgsToForward.begin(), VarArgsToForward.end());
-          CallInst *NewCI = CallInst::Create(
-              CI->getFunctionType(), CI->getCalledOperand(), Params, "", CI->getIterator());
+          CallInst *NewCI =
+              CallInst::Create(CI->getFunctionType(), CI->getCalledOperand(),
+                               Params, "", CI->getIterator());
           NewCI->setDebugLoc(CI->getDebugLoc());
           NewCI->setAttributes(Attrs);
           NewCI->setCallingConv(CI->getCallingConv());
@@ -3199,7 +3203,8 @@ void llvm::InlineFunctionImpl(CallBase &CB, InlineFunctionInfo &IFI,
       // call and a return.  The return will restore the stack pointer.
       if (InlinedMustTailCalls && RI->getParent()->getTerminatingMustTailCall())
         continue;
-      if (InlinedDeoptimizeCalls && RI->getParent()->getTerminatingDeoptimizeCall())
+      if (InlinedDeoptimizeCalls &&
+          RI->getParent()->getTerminatingDeoptimizeCall())
         continue;
       IRBuilder<>(RI).CreateStackRestore(SavedPtr);
     }
@@ -3556,7 +3561,7 @@ void llvm::InlineFunctionImpl(CallBase &CB, InlineFunctionInfo &IFI,
 
   // Splice the code entry block into calling block, right before the
   // unconditional branch.
-  CalleeEntry->replaceAllUsesWith(OrigBB);  // Update PHI nodes
+  CalleeEntry->replaceAllUsesWith(OrigBB); // Update PHI nodes
   OrigBB->splice(Br->getIterator(), CalleeEntry);
 
   // Remove the unconditional branch.

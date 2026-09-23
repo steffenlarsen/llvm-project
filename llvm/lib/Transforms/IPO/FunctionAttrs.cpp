@@ -56,10 +56,9 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/KnownFPClass.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/IPO.h"
-#include "llvm/Transforms/IPO/IPOOptionsOptInfos.h"
+#include "llvm/Transforms/IPO/IPOOptions.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include <cassert>
 #include <iterator>
@@ -97,26 +96,21 @@ STATISTIC(NumThinLinkNoUnwind,
           "Number of functions marked as nounwind during thinlink");
 
 static bool getEnablePoisonArgAttrPropagation(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::IPO_EnablePoisonArgAttrPropagation>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<IPOOptions>().IPO_EnablePoisonArgAttrPropagation;
 }
 static bool getDisableNoUnwindInference(const Function &F) {
-  return clv2::getOptValIfSpecified<&clv2::IPOOptsReg,
-                                    &clv2::IPO_DisableNoUnwindInference>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext().getOptions<IPOOptions>().IPO_DisableNoUnwindInference;
 }
 static bool getDisableNoFreeInference(const Function &F) {
-  return clv2::getOptValIfSpecified<&clv2::IPOOptsReg,
-                                    &clv2::IPO_DisableNoFreeInference>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext().getOptions<IPOOptions>().IPO_DisableNoFreeInference;
 }
-static bool getDisableThinLTOPropagation(const ipo_opts::ParsedOpts *O,
-                                         const clv2::OptionsContext &Ctx) {
-  if (!O)
-    O = clv2::getView<&clv2::IPOOptsReg>(Ctx);
-  if (O && O->specified<&clv2::IPO_DisableThinLTOPropagation>())
-    return O->get<&clv2::IPO_DisableThinLTOPropagation>();
-  return true;
+static bool
+getDisableThinLTOPropagation(const clv2::OptionsContext & /*Ctx*/) {
+  // No LLVMContext is reachable here (only a legacy clv2::OptionsContext,
+  // per the ThinLTO index-only callers of thinLTOPropagateFunctionAttrs), so
+  // read the process-wide default directly (same idiom used elsewhere for
+  // Ctx-only call sites, e.g. LTOOptions::Current in LTO.cpp).
+  return IPOOptions::Current.IPO_DisableThinLTOPropagation;
 }
 
 static void addCapturesStat(CaptureInfo CI) {
@@ -429,7 +423,7 @@ bool llvm::thinLTOPropagateFunctionAttrs(
     const clv2::OptionsContext &Ctx) {
   // TODO: implement addNoAliasAttrs once
   // there's more information about the return type in the summary
-  if (getDisableThinLTOPropagation(nullptr, Ctx))
+  if (getDisableThinLTOPropagation(Ctx))
     return false;
 
   DenseMap<ValueInfo, FunctionSummary *> CachedPrevailingSummary;

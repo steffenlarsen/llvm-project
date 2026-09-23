@@ -1,6 +1,4 @@
 add_llvm_component_library(LLVMVectorize
-  VectorizeOptionsRegistration.cpp
-  VectorizeOptionsGetters.cpp
   LoadStoreVectorizer.cpp
   LoopIdiomVectorize.cpp
   LoopVectorizationLegality.cpp
@@ -55,10 +53,12 @@ add_llvm_component_library(LLVMVectorize
 
   DEPENDS
   intrinsics_gen
+  VectorizeOptParserTableGen
 
   LINK_COMPONENTS
   Analysis
   Core
+  Option
   Support
   TransformUtils
   SandboxIR

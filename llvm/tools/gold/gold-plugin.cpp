@@ -13,6 +13,7 @@
 
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/Statistic.h"
+#include "llvm/Bitcode/BitcodeMemProfOptions.h"
 #include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/Bitcode/BitcodeWriter.h"
 #include "llvm/CodeGen/CommandFlags.h"
@@ -20,8 +21,10 @@
 #include "llvm/Config/llvm-config.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DiagnosticPrinter.h"
+#include "llvm/IR/IROptions.h"
 #include "llvm/LTO/LTO.h"
 #include "llvm/Object/Error.h"
+#include "llvm/Option/LibraryOptions.h"
 #include "llvm/Remarks/HotnessThresholdParser.h"
 #include "llvm/Support/CachePruning.h"
 #include "llvm/Support/Caching.h"
@@ -32,6 +35,7 @@
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/Path.h"
+#include "llvm/Support/PluginLoaderOptions.h"
 #include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/Threading.h"
@@ -570,8 +574,7 @@ static ld_plugin_status claim_file_hook(const ld_plugin_input_file *file,
 
   *claimed = 1;
 
-  Expected<std::unique_ptr<InputFile>> ObjOrErr =
-      InputFile::create(BufferRef, goldOptsCtx());
+  Expected<std::unique_ptr<InputFile>> ObjOrErr = InputFile::create(BufferRef);
   if (!ObjOrErr) {
     handleAllErrors(ObjOrErr.takeError(), [&](const ErrorInfoBase &EI) {
       std::error_code EC = EI.convertToErrorCode();
@@ -753,8 +756,7 @@ static void addModule(LTO &Lto, claimed_file &F, const void *View,
                       StringRef Filename) {
   MemoryBufferRef BufferRef(StringRef((const char *)View, F.filesize),
                             Filename);
-  Expected<std::unique_ptr<InputFile>> ObjOrErr =
-      InputFile::create(BufferRef, goldOptsCtx());
+  Expected<std::unique_ptr<InputFile>> ObjOrErr = InputFile::create(BufferRef);
 
   if (!ObjOrErr)
     message(LDPL_FATAL, "Could not read bitcode from file : %s",
@@ -1168,9 +1170,41 @@ static ld_plugin_status allSymbolsReadHook() {
       Argv.push_back("LLVMgold");
     else
       Argv.insert(Argv.end(), options::extra.begin(), options::extra.end());
+    std::vector<const char *> ArgsAfterPlugins =
+        loadPluginsAndStripArgs(static_cast<int>(Argv.size()), Argv.data());
+
+    // llvm::BitcodeMemProfOptions and llvm::IROptions have migrated off clv2
+    // onto the new per-library OptTable struct design (see
+    // llvm/include/llvm/Option/LibraryOptions.h) and are no longer among the
+    // clv2::OptionParser registries configured above. Parse them out of argv
+    // first, forwarding whatever neither recognizes to the legacy clv2
+    // parser unchanged.
+    SmallVector<const char *, 32> BitcodeMemProfOptsRest;
+    std::string BitcodeMemProfOptsErrs;
+    raw_string_ostream BitcodeMemProfOptsErrsOS(BitcodeMemProfOptsErrs);
+    if (llvm::Error Err =
+            opt::parseLibraryOptionsChain<BitcodeMemProfOptions, IROptions>(
+                ArrayRef<const char *>(ArgsAfterPlugins).drop_front(),
+                BitcodeMemProfOptsRest, BitcodeMemProfOptsErrsOS)) {
+      message(LDPL_FATAL, "-plugin-opt: %s", toString(std::move(Err)).c_str());
+    }
+    errs() << BitcodeMemProfOptsErrs;
+    // IROptions has no automatic apply step (unlike BitcodeMemProfOptions,
+    // which is read on demand via Ctx.getOptions<T>()); it must sync a
+    // couple of legacy globals (TimePassesIsEnabled/TimePassesPerRun and the
+    // OptBisect singleton) explicitly. See llvm/lib/IR/IROptions.cpp.
+    llvm::ir_opts::applyIROptions();
+    SmallVector<const char *, 32> ArgvAfterBitcodeMemProfOpts;
+    ArgvAfterBitcodeMemProfOpts.push_back(
+        ArgsAfterPlugins.empty() ? "LLVMgold" : ArgsAfterPlugins[0]);
+    ArgvAfterBitcodeMemProfOpts.append(BitcodeMemProfOptsRest.begin(),
+                                       BitcodeMemProfOptsRest.end());
+
     std::string Err;
     raw_string_ostream ErrOS(Err);
-    if (auto Parsed = P.parse(Argv.size(), Argv.data(), {}, &ErrOS))
+    if (auto Parsed =
+            P.parse(static_cast<int>(ArgvAfterBitcodeMemProfOpts.size()),
+                    ArgvAfterBitcodeMemProfOpts.data(), {}, &ErrOS))
       LLVMOptsCtx = std::move(Parsed);
     else
       message(LDPL_FATAL, "-plugin-opt: %s", Err.c_str());

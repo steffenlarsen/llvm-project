@@ -27,16 +27,16 @@
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/Object/COFF.h"
 #include "llvm/Support/CodeGen.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/AArch64/AArch64OptionsOptInfos.h"
+#include "llvm/Target/AArch64/AArch64Options.h"
 #include "llvm/Target/TargetLoweringObjectFile.h"
 #include "llvm/Target/TargetMachine.h"
 using namespace llvm;
 using namespace llvm::object;
 
 static bool getEnableAArch64ELFLocalDynamicTLSGeneration(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::A64_ELFLocalDynamicTLSGeneration>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<AArch64Options>()
+      .A64_ELFLocalDynamicTLSGeneration;
 }
 
 AArch64MCInstLower::AArch64MCInstLower(MCContext &ctx, AsmPrinter &printer)
@@ -97,10 +97,8 @@ MCSymbol *AArch64MCInstLower::GetGlobalValueSymbol(const GlobalValue *GV,
 
   SmallString<128> Name;
 
-  if ((TargetFlags & AArch64II::MO_DLLIMPORT) &&
-      TheTriple.isWindowsArm64EC() &&
-      !(TargetFlags & AArch64II::MO_ARM64EC_CALLMANGLE) &&
-      isa<Function>(GV)) {
+  if ((TargetFlags & AArch64II::MO_DLLIMPORT) && TheTriple.isWindowsArm64EC() &&
+      !(TargetFlags & AArch64II::MO_ARM64EC_CALLMANGLE) && isa<Function>(GV)) {
     // __imp_aux is specific to arm64EC; it represents the actual address of
     // an imported function without any thunks.
     //
@@ -132,8 +130,7 @@ MCSymbol *AArch64MCInstLower::GetGlobalValueSymbol(const GlobalValue *GV,
   if (TargetFlags & AArch64II::MO_COFFSTUB) {
     MachineModuleInfoCOFF &MMICOFF =
         Printer.MMI->getObjFileInfo<MachineModuleInfoCOFF>();
-    MachineModuleInfoImpl::StubValueTy &StubSym =
-        MMICOFF.getGVStubEntry(MCSym);
+    MachineModuleInfoImpl::StubValueTy &StubSym = MMICOFF.getGVStubEntry(MCSym);
 
     if (!StubSym.getPointer())
       StubSym = MachineModuleInfoImpl::StubValueTy(Printer.getSymbol(GV), true);

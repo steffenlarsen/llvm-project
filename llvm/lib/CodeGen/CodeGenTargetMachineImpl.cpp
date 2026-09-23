@@ -15,7 +15,7 @@
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/CodeGen/AsmPrinter.h"
 #include "llvm/CodeGen/BasicTTIImpl.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsCore1.h"
 #include "llvm/CodeGen/MachineModuleInfo.h"
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
@@ -32,20 +32,20 @@
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/MC/MCSubtargetInfo.h"
 #include "llvm/MC/TargetRegistry.h"
-#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/FormattedStream.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Target/RegisterTargetPassConfigCallback.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOptions.h"
 using namespace llvm;
 
-static bool getTrapUnreachable(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_TrapUnreachable>(Ctx);
+// No LLVMContext is reachable at TargetMachine construction time, so these
+// read the process-wide default rather than a context-specific override.
+static bool getTrapUnreachable() {
+  return CodeGenCore1Options::Current.CGPASS_TrapUnreachable;
 }
 
-static bool getNoTrapAfterNoreturn(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_NoTrapAfterNoreturn>(Ctx);
+static bool getNoTrapAfterNoreturn() {
+  return CodeGenCore1Options::Current.CGPASS_NoTrapAfterNoreturn;
 }
 
 void CodeGenTargetMachineImpl::initAsmInfo() {
@@ -102,9 +102,9 @@ CodeGenTargetMachineImpl::CodeGenTargetMachineImpl(
   this->CMModel = CM;
   this->OptLevel = OL;
 
-  if (getTrapUnreachable(Options.getOptsCtx()))
+  if (getTrapUnreachable())
     this->Options.TrapUnreachable = true;
-  if (getNoTrapAfterNoreturn(Options.getOptsCtx()))
+  if (getNoTrapAfterNoreturn())
     this->Options.NoTrapAfterNoreturn = true;
 }
 
@@ -241,7 +241,9 @@ bool CodeGenTargetMachineImpl::addPassesToEmitFile(
   if (!PassConfig)
     return true;
 
-  if (TargetPassConfig::willCompleteCodeGenPipeline(getOptionsContext())) {
+  // No Function/Module is reachable at pipeline-construction time; fall back
+  // to the process-wide default (see getSched2Options).
+  if (TargetPassConfig::willCompleteCodeGenPipeline(/*Ctx=*/nullptr)) {
     if (addAsmPrinter(PM, Out, DwoOut, FileType, MMIWP->getMMI().getContext()))
       return true;
   } else {
@@ -269,7 +271,9 @@ bool CodeGenTargetMachineImpl::addPassesToEmitMC(PassManagerBase &PM,
       addPassesToGenerateCode(*this, PM, DisableVerify, *MMIWP);
   if (!PassConfig)
     return true;
-  assert(TargetPassConfig::willCompleteCodeGenPipeline(getOptionsContext()) &&
+  // No Function/Module is reachable at pipeline-construction time; fall back
+  // to the process-wide default (see getSched2Options).
+  assert(TargetPassConfig::willCompleteCodeGenPipeline(/*Ctx=*/nullptr) &&
          "Cannot emit MC with limited codegen pipeline");
 
   Ctx = &MMIWP->getMMI().getContext();

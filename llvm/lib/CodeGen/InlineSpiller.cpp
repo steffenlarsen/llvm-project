@@ -21,7 +21,7 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsRegAlloc.h"
 #include "llvm/CodeGen/LiveInterval.h"
 #include "llvm/CodeGen/LiveIntervals.h"
 #include "llvm/CodeGen/LiveRangeEdit.h"
@@ -46,13 +46,12 @@
 #include "llvm/CodeGen/VirtRegMap.h"
 #include "llvm/Config/llvm-config.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/LLVMContext.h"
 #include "llvm/Support/BlockFrequency.h"
 #include "llvm/Support/BranchProbability.h"
-#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cassert>
 #include <iterator>
@@ -73,9 +72,8 @@ STATISTIC(NumFolded,          "Number of folded stack accesses");
 STATISTIC(NumFoldedLoads,     "Number of folded loads");
 STATISTIC(NumRemats,          "Number of rematerialized defs for spilling");
 
-static bool getRestrictStatepointRemat(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::CGPassRegAllocReg,
-                           &clv2::CGPASS_RestrictStatepointRemat>(Ctx, false);
+static bool getRestrictStatepointRemat(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenRegAllocOptions>().CGPASS_RestrictStatepointRemat;
 }
 
 namespace {
@@ -624,8 +622,7 @@ void InlineSpiller::markValueUsed(LiveInterval *LI, VNInfo *VNI) {
 
 bool InlineSpiller::canGuaranteeAssignmentAfterRemat(Register VReg,
                                                      MachineInstr &MI) {
-  if (!getRestrictStatepointRemat(
-          MF.getFunction().getContext().getOptionsContext()))
+  if (!getRestrictStatepointRemat(MF.getFunction().getContext()))
     return true;
   // Here's a quick explanation of the problem we're trying to handle here:
   // * There are some pseudo instructions with more vreg uses than there are

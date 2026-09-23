@@ -46,7 +46,7 @@
 #include "llvm/Analysis/MemoryLocation.h"
 #include "llvm/Analysis/OptimizationRemarkEmitter.h"
 #include "llvm/Analysis/ValueTracking.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsMachine2.h"
 #include "llvm/CodeGen/DFAPacketizer.h"
 #include "llvm/CodeGen/LiveIntervals.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
@@ -78,10 +78,8 @@
 #include "llvm/MC/MCInstrDesc.h"
 #include "llvm/MC/MCInstrItineraries.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <cassert>
@@ -115,81 +113,89 @@ STATISTIC(NumFailZeroStage, "Pipeliner abort due to zero stage");
 STATISTIC(NumFailLargeMaxStage, "Pipeliner abort due to too many stages");
 STATISTIC(NumFailTooManyStores, "Pipeliner abort due to too many stores");
 
-static WindowSchedulingFlag
-getWindowSchedulingOption(const clv2::OptionsContext &Ctx) {
-  return static_cast<WindowSchedulingFlag>(
-      clv2::getOptValOr<&clv2::CGPassMachine2Reg, &clv2::CGPASS_WindowSched>(
-          Ctx, WindowSchedulingFlag::WS_On));
+static WindowSchedulingFlag getWindowSchedulingOption(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenMachine2Options>().CGPASS_WindowSched;
 }
 
-static bool getEnablePipeliner(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_EnablePipeliner>(Ctx);
+static bool getEnablePipeliner(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenMachine2Options>().CGPASS_EnablePipeliner;
 }
 
-static int getPipelinerMaxMii(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_PipelinerMaxMii>(Ctx);
+// The old clv2 API only checked whether this option was explicitly
+// specified on the command line (regardless of its value) to decide
+// whether to override the -Os pipelining guard; preserve that behavior
+// with the tri-state field's has_value().
+static std::optional<bool> getEnablePipelinerOptSize(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenMachine2Options>().CGPASS_EnablePipelinerOptSize;
 }
 
-static int getPipelinerForceIi(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_PipelinerForceIi>(Ctx);
+static int getPipelinerMaxMii(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenMachine2Options>().CGPASS_PipelinerMaxMii;
 }
 
-static int getPipelinerMaxStages(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_PipelinerMaxStages>(Ctx);
+static int getPipelinerForceIi(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenMachine2Options>().CGPASS_PipelinerForceIi;
 }
 
-static bool getPipelinerPruneDeps(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_PipelinerPruneDeps>(Ctx);
+static int getPipelinerMaxStages(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenMachine2Options>().CGPASS_PipelinerMaxStages;
 }
 
-static bool getPipelinerPruneLoopCarried(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_PipelinerPruneLoopCarried>(Ctx);
+static bool getPipelinerPruneDeps(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenMachine2Options>().CGPASS_PipelinerPruneDeps;
 }
 
-static int getPipelinerMax(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_PipelinerMax>(Ctx);
+static bool getPipelinerPruneLoopCarried(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenMachine2Options>()
+      .CGPASS_PipelinerPruneLoopCarried;
 }
 
-static bool getPipelinerIgnoreRecmii(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_PipelinerIgnoreRecmii>(Ctx);
+static int getPipelinerMax(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenMachine2Options>().CGPASS_PipelinerMax;
 }
 
-static bool getPipelinerShowMask(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_PipelinerShowMask>(Ctx);
+static bool getPipelinerIgnoreRecmii(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenMachine2Options>().CGPASS_PipelinerIgnoreRecmii;
 }
 
-static bool getPipelinerDbgRes(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_PipelinerDbgRes>(Ctx);
+static bool getPipelinerShowMask(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenMachine2Options>().CGPASS_PipelinerShowMask;
 }
 
-static bool getPipelinerAnnotateForTesting(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_PipelinerAnnotateForTesting>(
-      Ctx);
+static bool getPipelinerDbgRes(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenMachine2Options>().CGPASS_PipelinerDbgRes;
 }
 
-static bool getPipelinerExperimentalCg(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_PipelinerExperimentalCg>(Ctx);
+static bool getPipelinerAnnotateForTesting(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenMachine2Options>()
+      .CGPASS_PipelinerAnnotateForTesting;
 }
 
-static int getPipelinerIiSearchRange(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_PipelinerIiSearchRange>(Ctx);
+static bool getPipelinerExperimentalCg(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenMachine2Options>()
+      .CGPASS_PipelinerExperimentalCg;
 }
 
-static bool getPipelinerRegisterPressure(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_PipelinerRegisterPressure>(Ctx);
+static int getPipelinerIiSearchRange(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenMachine2Options>().CGPASS_PipelinerIiSearchRange;
 }
 
-static int getPipelinerRegisterPressureMargin(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<
-      &clv2::CGPASS_PipelinerRegisterPressureMargin>(Ctx);
+static std::optional<bool> getPipelinerRegisterPressure(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenMachine2Options>()
+      .CGPASS_PipelinerRegisterPressure;
 }
 
-static bool getPipelinerMveCg(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_PipelinerMveCg>(Ctx);
+static int getPipelinerRegisterPressureMargin(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenMachine2Options>()
+      .CGPASS_PipelinerRegisterPressureMargin;
 }
 
-static unsigned getPipelinerMaxNumStores(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_PipelinerMaxNumStores>(Ctx);
+static bool getPipelinerMveCg(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenMachine2Options>().CGPASS_PipelinerMveCg;
+}
+
+static unsigned getPipelinerMaxNumStores(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenMachine2Options>().CGPASS_PipelinerMaxNumStores;
 }
 
 unsigned SwingSchedulerDAG::Circuits::MaxPaths = 5;
@@ -399,13 +405,11 @@ static bool runMachinePipeliner(
     function_ref<LiveIntervals &()> GetLIS, function_ref<AAResults &()> GetAA,
     function_ref<MachineOptimizationRemarkEmitter &()> GetORE,
     function_ref<RegisterClassInfo &()> GetRCI) {
-  if (!getEnablePipeliner(MF.getFunction().getContext().getOptionsContext()))
+  if (!getEnablePipeliner(MF.getFunction().getContext()))
     return false;
 
   if (MF.getFunction().getAttributes().hasFnAttr(Attribute::OptimizeForSize) &&
-      !clv2::wasOptSpecified<&clv2::CGPassMachine2Reg,
-                             &clv2::CGPASS_EnablePipelinerOptSize>(
-          MF.getFunction().getContext().getOptionsContext()))
+      !getEnablePipelinerOptSize(MF.getFunction().getContext()).has_value())
     return false;
 
   if (!MF.getSubtarget().enableMachinePipeliner())
@@ -487,10 +491,10 @@ bool MachinePipelinerImpl::scheduleLoop(MachineLoop &L) {
 #ifndef NDEBUG
   // Stop trying after reaching the limit (if any).
   int Limit =
-      getPipelinerMax(MF->getFunction().getContext().getOptionsContext());
+      getPipelinerMax(MF->getFunction().getContext());
   if (Limit >= 0) {
     if (NumTries >=
-        getPipelinerMax(MF->getFunction().getContext().getOptionsContext()))
+        getPipelinerMax(MF->getFunction().getContext()))
       return Changed;
     NumTries++;
   }
@@ -697,7 +701,7 @@ bool MachinePipelinerImpl::canPipelineLoop(MachineLoop &L) {
     if (MI.mayStore())
       ++NumStores;
   if (NumStores > getPipelinerMaxNumStores(
-                      MF->getFunction().getContext().getOptionsContext())) {
+                      MF->getFunction().getContext())) {
     LLVM_DEBUG(dbgs() << "Too many stores\n");
     NumFailTooManyStores++;
     ORE->emit([&]() {
@@ -707,7 +711,7 @@ bool MachinePipelinerImpl::canPipelineLoop(MachineLoop &L) {
              << ore::NV("NumStores", NumStores) << " > "
              << ore::NV("SwpMaxNumStores",
                         getPipelinerMaxNumStores(
-                            MF->getFunction().getContext().getOptionsContext()))
+                            MF->getFunction().getContext()))
              << ".";
     });
     return false;
@@ -806,7 +810,7 @@ bool MachinePipelinerImpl::runWindowScheduler(MachineLoop &L) {
 bool MachinePipelinerImpl::useSwingModuloScheduler() {
   // SwingModuloScheduler does not work when WindowScheduler is forced.
   return getWindowSchedulingOption(
-             MF->getFunction().getContext().getOptionsContext()) !=
+             MF->getFunction().getContext()) !=
          WindowSchedulingFlag::WS_Force;
 }
 
@@ -822,19 +826,19 @@ bool MachinePipelinerImpl::useWindowScheduler(bool Changed) {
   }
 
   return getWindowSchedulingOption(
-             MF->getFunction().getContext().getOptionsContext()) ==
+             MF->getFunction().getContext()) ==
              WindowSchedulingFlag::WS_Force ||
          (getWindowSchedulingOption(
-              MF->getFunction().getContext().getOptionsContext()) ==
+              MF->getFunction().getContext()) ==
               WindowSchedulingFlag::WS_On &&
           !Changed);
 }
 
 void SwingSchedulerDAG::setMII(unsigned ResMII, unsigned RecMII) {
-  if (getPipelinerForceIi(MF.getFunction().getContext().getOptionsContext()) >
+  if (getPipelinerForceIi(MF.getFunction().getContext()) >
       0)
     MII =
-        getPipelinerForceIi(MF.getFunction().getContext().getOptionsContext());
+        getPipelinerForceIi(MF.getFunction().getContext());
   else if (II_setByPragma > 0)
     MII = II_setByPragma;
   else
@@ -842,15 +846,15 @@ void SwingSchedulerDAG::setMII(unsigned ResMII, unsigned RecMII) {
 }
 
 void SwingSchedulerDAG::setMAX_II() {
-  if (getPipelinerForceIi(MF.getFunction().getContext().getOptionsContext()) >
+  if (getPipelinerForceIi(MF.getFunction().getContext()) >
       0)
     MAX_II =
-        getPipelinerForceIi(MF.getFunction().getContext().getOptionsContext());
+        getPipelinerForceIi(MF.getFunction().getContext());
   else if (II_setByPragma > 0)
     MAX_II = II_setByPragma;
   else
     MAX_II = MII + getPipelinerIiSearchRange(
-                       MF.getFunction().getContext().getOptionsContext());
+                       MF.getFunction().getContext());
 }
 
 /// We override the schedule function in ScheduleDAGInstrs to implement the
@@ -883,7 +887,7 @@ void SwingSchedulerDAG::schedule() {
 
   // This flag is used for testing and can cause correctness problems.
   if (getPipelinerIgnoreRecmii(
-          MF.getFunction().getContext().getOptionsContext()))
+          MF.getFunction().getContext()))
     RecMII = 0;
 
   setMII(ResMII, RecMII);
@@ -905,13 +909,13 @@ void SwingSchedulerDAG::schedule() {
   }
 
   // Don't pipeline large loops.
-  if (getPipelinerMaxMii(MF.getFunction().getContext().getOptionsContext()) !=
+  if (getPipelinerMaxMii(MF.getFunction().getContext()) !=
           -1 &&
       (int)MII > getPipelinerMaxMii(
-                     MF.getFunction().getContext().getOptionsContext())) {
+                     MF.getFunction().getContext())) {
     LLVM_DEBUG(dbgs() << "MII > "
                       << getPipelinerMaxMii(
-                             MF.getFunction().getContext().getOptionsContext())
+                             MF.getFunction().getContext())
                       << ", we don't pipeline large loops\n");
     NumFailLargeMaxMII++;
     ORE->emit([&]() {
@@ -921,7 +925,7 @@ void SwingSchedulerDAG::schedule() {
              << ore::NV("MII", (int)MII) << " > "
              << ore::NV("SwpMaxMii",
                         getPipelinerMaxMii(
-                            MF.getFunction().getContext().getOptionsContext()))
+                            MF.getFunction().getContext()))
              << "."
              << "Refer to -pipeliner-max-mii.";
     });
@@ -988,13 +992,13 @@ void SwingSchedulerDAG::schedule() {
     return;
   }
   // Check that the maximum stage count is less than user-defined limit.
-  if (getPipelinerMaxStages(MF.getFunction().getContext().getOptionsContext()) >
+  if (getPipelinerMaxStages(MF.getFunction().getContext()) >
           -1 &&
       (int)numStages > getPipelinerMaxStages(
-                           MF.getFunction().getContext().getOptionsContext())) {
+                           MF.getFunction().getContext())) {
     LLVM_DEBUG(dbgs() << "numStages:" << numStages << ">"
                       << getPipelinerMaxStages(
-                             MF.getFunction().getContext().getOptionsContext())
+                             MF.getFunction().getContext())
                       << " : too many stages, abort\n");
     NumFailLargeMaxStage++;
     ORE->emit([&]() {
@@ -1004,7 +1008,7 @@ void SwingSchedulerDAG::schedule() {
              << ore::NV("numStages", (int)numStages) << " > "
              << ore::NV("SwpMaxStages",
                         getPipelinerMaxStages(
-                            MF.getFunction().getContext().getOptionsContext()))
+                            MF.getFunction().getContext()))
              << ". Refer to -pipeliner-max-stages.";
     });
     return;
@@ -1037,7 +1041,7 @@ void SwingSchedulerDAG::schedule() {
   ModuloSchedule MS(MF, &Loop, std::move(OrderedInsts), std::move(Cycles),
                     std::move(Stages));
   if (getPipelinerAnnotateForTesting(
-          MF.getFunction().getContext().getOptionsContext())) {
+          MF.getFunction().getContext())) {
     assert(NewInstrChanges.empty() &&
            "Cannot serialize a schedule with InstrChanges!");
     ModuloScheduleTestAnnotater MSTI(MF, MS);
@@ -1046,12 +1050,12 @@ void SwingSchedulerDAG::schedule() {
   }
   // The experimental code generator can't work if there are InstChanges.
   if (getPipelinerExperimentalCg(
-          MF.getFunction().getContext().getOptionsContext()) &&
+          MF.getFunction().getContext()) &&
       NewInstrChanges.empty()) {
     PeelingModuloScheduleExpander MSE(MF, MS, &LIS);
     MSE.expand();
   } else if (getPipelinerMveCg(
-                 MF.getFunction().getContext().getOptionsContext()) &&
+                 MF.getFunction().getContext()) &&
              NewInstrChanges.empty() &&
              LoopPipelinerInfo->isMVEExpanderSupported() &&
              ModuloScheduleExpanderMVE::canApply(Loop)) {
@@ -1466,7 +1470,7 @@ void SwingSchedulerDAG::updatePhiDependences() {
     }
     // Remove order dependences from an unrelated Phi.
     if (!getPipelinerPruneDeps(
-            MF.getFunction().getContext().getOptionsContext()))
+            MF.getFunction().getContext()))
       continue;
     for (auto &PI : I.Preds) {
       MachineInstr *PMI = PI.getSUnit()->getInstr();
@@ -1991,9 +1995,9 @@ public:
   bool detect(const SwingSchedulerDAG *SSD, SMSchedule &Schedule,
               const unsigned MaxStage) const {
     assert(0 <= getPipelinerRegisterPressureMargin(
-                    SSD->MF.getFunction().getContext().getOptionsContext()) &&
+                    SSD->MF.getFunction().getContext()) &&
            getPipelinerRegisterPressureMargin(
-               SSD->MF.getFunction().getContext().getOptionsContext()) <= 100 &&
+               SSD->MF.getFunction().getContext()) <= 100 &&
            "the percentage of the margin must be between 0 to 100");
 
     OrderedInstsTy OrderedInsts;
@@ -2015,7 +2019,7 @@ public:
       unsigned Margin =
           Limit *
           getPipelinerRegisterPressureMargin(
-              SSD->MF.getFunction().getContext().getOptionsContext()) /
+              SSD->MF.getFunction().getContext()) /
           100;
       LLVM_DEBUG(dbgs() << "PSet=" << PSet << " Limit=" << Limit
                         << " Margin=" << Margin << "\n");
@@ -2886,11 +2890,9 @@ void SwingSchedulerDAG::initPolicy() {
   MF.getSubtarget().overridePipelinerPolicy(Policy);
 
   // After subtarget overrides, apply command line options.
-  const clv2::OptionsContext &Ctx =
-      MF.getFunction().getContext().getOptionsContext();
-  if (clv2::wasOptSpecified<&clv2::CGPassMachine2Reg,
-                            &clv2::CGPASS_PipelinerRegisterPressure>(Ctx))
-    Policy.ShouldLimitRegPressure = getPipelinerRegisterPressure(Ctx);
+  const LLVMContext &Ctx = MF.getFunction().getContext();
+  if (std::optional<bool> Opt = getPipelinerRegisterPressure(Ctx))
+    Policy.ShouldLimitRegPressure = *Opt;
 }
 
 /// Process the nodes in the computed order and create the pipelined schedule
@@ -2965,10 +2967,10 @@ bool SwingSchedulerDAG::schedulePipeline(SMSchedule &Schedule) {
       // allowable number of stages. We keep trying if this happens.
       if (scheduleFound)
         if (getPipelinerMaxStages(
-                MF.getFunction().getContext().getOptionsContext()) > -1 &&
+                MF.getFunction().getContext()) > -1 &&
             Schedule.getMaxStageCount() >
                 (unsigned)getPipelinerMaxStages(
-                    MF.getFunction().getContext().getOptionsContext()))
+                    MF.getFunction().getContext()))
           scheduleFound = false;
 
       LLVM_DEBUG({
@@ -4048,7 +4050,7 @@ void ResourceManager::initProcResourceVectors(
   }
   LLVM_DEBUG({
     if (getPipelinerShowMask(
-            DAG->MF.getFunction().getContext().getOptionsContext())) {
+            DAG->MF.getFunction().getContext())) {
       dbgs() << "ProcResourceDesc:\n";
       for (unsigned I = 1, E = SM.getNumProcResourceKinds(); I < E; ++I) {
         const MCProcResourceDesc *ProcResource = SM.getProcResource(I);
@@ -4064,7 +4066,7 @@ void ResourceManager::initProcResourceVectors(
 bool ResourceManager::canReserveResources(SUnit &SU, int Cycle) {
   LLVM_DEBUG({
     if (getPipelinerDbgRes(
-            DAG->MF.getFunction().getContext().getOptionsContext()))
+            DAG->MF.getFunction().getContext()))
       dbgs() << "canReserveResources:\n";
   });
   if (UseDFA)
@@ -4085,7 +4087,7 @@ bool ResourceManager::canReserveResources(SUnit &SU, int Cycle) {
   unreserveResources(SCDesc, Cycle);
 
   LLVM_DEBUG(if (getPipelinerDbgRes(
-                     DAG->MF.getFunction().getContext().getOptionsContext()))
+                     DAG->MF.getFunction().getContext()))
                  dbgs()
              << "return " << Result << "\n\n");
   return Result;
@@ -4094,7 +4096,7 @@ bool ResourceManager::canReserveResources(SUnit &SU, int Cycle) {
 void ResourceManager::reserveResources(SUnit &SU, int Cycle) {
   LLVM_DEBUG({
     if (getPipelinerDbgRes(
-            DAG->MF.getFunction().getContext().getOptionsContext()))
+            DAG->MF.getFunction().getContext()))
       dbgs() << "reserveResources:\n";
   });
   if (UseDFA)
@@ -4114,7 +4116,7 @@ void ResourceManager::reserveResources(SUnit &SU, int Cycle) {
 
   LLVM_DEBUG({
     if (getPipelinerDbgRes(
-            DAG->MF.getFunction().getContext().getOptionsContext())) {
+            DAG->MF.getFunction().getContext())) {
       dumpMRT();
       dbgs() << "reserveResources: done!\n\n";
     }
@@ -4209,7 +4211,7 @@ int ResourceManager::calculateResMIIDFA() const {
     for (unsigned C = ReservedCycles; C < NumCycles; ++C) {
       LLVM_DEBUG(
           if (getPipelinerDbgRes(
-                  DAG->MF.getFunction().getContext().getOptionsContext()))
+                  DAG->MF.getFunction().getContext()))
               dbgs()
           << "NewResource created to reserve resources"
           << "\n");
@@ -4244,7 +4246,7 @@ int ResourceManager::calculateResMII() const {
 
     LLVM_DEBUG({
       if (getPipelinerDbgRes(
-              DAG->MF.getFunction().getContext().getOptionsContext())) {
+              DAG->MF.getFunction().getContext())) {
         DAG->dumpNode(SU);
         dbgs() << "  #Mops: " << SCDesc->NumMicroOps << "\n"
                << "  WriteProcRes: ";
@@ -4256,7 +4258,7 @@ int ResourceManager::calculateResMII() const {
                     STI->getWriteProcResEnd(SCDesc))) {
       LLVM_DEBUG({
         if (getPipelinerDbgRes(
-                DAG->MF.getFunction().getContext().getOptionsContext())) {
+                DAG->MF.getFunction().getContext())) {
           const MCProcResourceDesc *Desc =
               SM.getProcResource(PRE.ProcResourceIdx);
           dbgs() << Desc->Name << ": " << PRE.ReleaseAtCycle << ", ";
@@ -4265,7 +4267,7 @@ int ResourceManager::calculateResMII() const {
       ResourceCount[PRE.ProcResourceIdx] += PRE.ReleaseAtCycle;
     }
     LLVM_DEBUG(if (getPipelinerDbgRes(
-                       DAG->MF.getFunction().getContext().getOptionsContext()))
+                       DAG->MF.getFunction().getContext()))
                    dbgs()
                << "\n");
   }
@@ -4273,7 +4275,7 @@ int ResourceManager::calculateResMII() const {
   int Result = (NumMops + IssueWidth - 1) / IssueWidth;
   LLVM_DEBUG({
     if (getPipelinerDbgRes(
-            DAG->MF.getFunction().getContext().getOptionsContext()))
+            DAG->MF.getFunction().getContext()))
       dbgs() << "#Mops: " << NumMops << ", "
              << "IssueWidth: " << IssueWidth << ", "
              << "Cycles: " << Result << "\n";
@@ -4281,7 +4283,7 @@ int ResourceManager::calculateResMII() const {
 
   LLVM_DEBUG({
     if (getPipelinerDbgRes(
-            DAG->MF.getFunction().getContext().getOptionsContext())) {
+            DAG->MF.getFunction().getContext())) {
       std::stringstream SS;
       SS << std::setw(2) << "ID" << std::setw(16) << "Name" << std::setw(10)
          << "Units" << std::setw(10) << "Consumed" << std::setw(10) << "Cycles"
@@ -4294,7 +4296,7 @@ int ResourceManager::calculateResMII() const {
     int Cycles = (ResourceCount[I] + Desc->NumUnits - 1) / Desc->NumUnits;
     LLVM_DEBUG({
       if (getPipelinerDbgRes(
-              DAG->MF.getFunction().getContext().getOptionsContext())) {
+              DAG->MF.getFunction().getContext())) {
         std::stringstream SS;
         SS << std::setw(2) << I << std::setw(16) << Desc->Name << std::setw(10)
            << Desc->NumUnits << std::setw(10) << ResourceCount[I]

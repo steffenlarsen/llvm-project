@@ -29,9 +29,8 @@
 #include "llvm/Pass.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
+#include "llvm/Target/Hexagon/HexagonOptions.h"
 #include <string>
 #include <vector>
 
@@ -40,8 +39,9 @@ using namespace llvm;
 #define DEBUG_TYPE "hexagon-vector-print"
 
 static bool getTraceHexVectorStoresOnly(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_TraceHexVectorStoresOnly>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<HexagonOptions>()
+      .HEX_TraceHexVectorStoresOnly;
 }
 
 namespace {

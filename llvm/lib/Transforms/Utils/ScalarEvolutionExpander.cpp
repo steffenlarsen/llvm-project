@@ -23,13 +23,13 @@
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/IntrinsicInst.h"
+#include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/PatternMatch.h"
 #include "llvm/Support/CommandLineCompat.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
-#include "llvm/Transforms/Utils/UtilsOptionsOptInfos.h"
+#include "llvm/Transforms/Utils/UtilsOptions.h"
 
 #if LLVM_ENABLE_ABI_BREAKING_CHECKS
 #define SCEV_DEBUG_WITH_TYPE(TYPE, X) DEBUG_WITH_TYPE(TYPE, X)
@@ -39,8 +39,9 @@
 
 using namespace llvm;
 
-unsigned llvm::getSCEVCheapExpansionBudget(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::TU_SCEVCheapExpansionBudget>(Ctx);
+unsigned llvm::getSCEVCheapExpansionBudget(const LLVMContext *Ctx) {
+  return (Ctx ? Ctx->getOptions<UtilsOptions>() : UtilsOptions::Current)
+      .TU_SCEVCheapExpansionBudget;
 }
 
 using namespace PatternMatch;
@@ -223,8 +224,7 @@ SCEVExpander::GetOptimalInsertionPointForCastOf(Value *V) const {
 /// the casts.
 Value *SCEVExpander::InsertNoopCastOfTo(Value *V, Type *Ty) {
   Instruction::CastOps Op = CastInst::getCastOpcode(V, false, Ty, false);
-  assert((Op == Instruction::BitCast ||
-          Op == Instruction::PtrToInt ||
+  assert((Op == Instruction::BitCast || Op == Instruction::PtrToInt ||
           Op == Instruction::IntToPtr) &&
          "InsertNoopCastOfTo cannot perform non-noop casts!");
   assert(SE.getTypeSizeInBits(V->getType()) == SE.getTypeSizeInBits(Ty) &&
@@ -256,13 +256,13 @@ Value *SCEVExpander::InsertNoopCastOfTo(Value *V, Type *Ty) {
       if ((CI->getOpcode() == Instruction::PtrToInt ||
            CI->getOpcode() == Instruction::IntToPtr) &&
           SE.getTypeSizeInBits(CI->getType()) ==
-          SE.getTypeSizeInBits(CI->getOperand(0)->getType()))
+              SE.getTypeSizeInBits(CI->getOperand(0)->getType()))
         return CI->getOperand(0);
     if (ConstantExpr *CE = dyn_cast<ConstantExpr>(V))
       if ((CE->getOpcode() == Instruction::PtrToInt ||
            CE->getOpcode() == Instruction::IntToPtr) &&
           SE.getTypeSizeInBits(CE->getType()) ==
-          SE.getTypeSizeInBits(CE->getOperand(0)->getType()))
+              SE.getTypeSizeInBits(CE->getOperand(0)->getType()))
         return CE->getOperand(0);
   }
 
@@ -277,9 +277,9 @@ Value *SCEVExpander::InsertNoopCastOfTo(Value *V, Type *Ty) {
 /// InsertBinop - Insert the specified binary operator, doing a small amount
 /// of work to avoid inserting an obviously redundant operation, and hoisting
 /// to an outer loop when the opportunity is there and it is safe.
-Value *SCEVExpander::InsertBinop(Instruction::BinaryOps Opcode,
-                                 Value *LHS, Value *RHS,
-                                 SCEV::NoWrapFlags Flags, bool IsSafeToHoist) {
+Value *SCEVExpander::InsertBinop(Instruction::BinaryOps Opcode, Value *LHS,
+                                 Value *RHS, SCEV::NoWrapFlags Flags,
+                                 bool IsSafeToHoist) {
   // Fold a binop with constant operands.
   if (Constant *CLHS = dyn_cast<Constant>(LHS))
     if (Constant *CRHS = dyn_cast<Constant>(RHS))
@@ -311,7 +311,8 @@ Value *SCEVExpander::InsertBinop(Instruction::BinaryOps Opcode,
       if (IP->getOpcode() == (unsigned)Opcode && IP->getOperand(0) == LHS &&
           IP->getOperand(1) == RHS && !canGenerateIncompatiblePoison(&*IP))
         return &*IP;
-      if (IP == BlockBegin) break;
+      if (IP == BlockBegin)
+        break;
     }
   }
 
@@ -322,9 +323,11 @@ Value *SCEVExpander::InsertBinop(Instruction::BinaryOps Opcode,
   if (IsSafeToHoist) {
     // Move the insertion point out of as many loops as we can.
     while (const Loop *L = SE.LI.getLoopFor(Builder.GetInsertBlock())) {
-      if (!L->isLoopInvariant(LHS) || !L->isLoopInvariant(RHS)) break;
+      if (!L->isLoopInvariant(LHS) || !L->isLoopInvariant(RHS))
+        break;
       BasicBlock *Preheader = L->getLoopPreheader();
-      if (!Preheader) break;
+      if (!Preheader)
+        break;
 
       // Ok, move up a level.
       Builder.SetInsertPoint(Preheader->getTerminator());
@@ -410,7 +413,8 @@ Value *SCEVExpander::expandAddToGEP(const SCEV *Offset, Value *V,
           return &*IP;
         }
       }
-      if (IP == BlockBegin) break;
+      if (IP == BlockBegin)
+        break;
     }
   }
 
@@ -419,9 +423,11 @@ Value *SCEVExpander::expandAddToGEP(const SCEV *Offset, Value *V,
 
   // Move the insertion point out of as many loops as we can.
   while (const Loop *L = SE.LI.getLoopFor(Builder.GetInsertBlock())) {
-    if (!L->isLoopInvariant(V) || !L->isLoopInvariant(Idx)) break;
+    if (!L->isLoopInvariant(V) || !L->isLoopInvariant(Idx))
+      break;
     BasicBlock *Preheader = L->getLoopPreheader();
-    if (!Preheader) break;
+    if (!Preheader)
+      break;
 
     // Ok, move up a level.
     Builder.SetInsertPoint(Preheader->getTerminator());
@@ -436,12 +442,18 @@ Value *SCEVExpander::expandAddToGEP(const SCEV *Offset, Value *V,
 /// neighboring, pick the later.
 static const Loop *PickMostRelevantLoop(const Loop *A, const Loop *B,
                                         DominatorTree &DT) {
-  if (!A) return B;
-  if (!B) return A;
-  if (A->contains(B)) return B;
-  if (B->contains(A)) return A;
-  if (DT.dominates(A->getHeader(), B->getHeader())) return B;
-  if (DT.dominates(B->getHeader(), A->getHeader())) return A;
+  if (!A)
+    return B;
+  if (!B)
+    return A;
+  if (A->contains(B))
+    return B;
+  if (B->contains(A))
+    return A;
+  if (DT.dominates(A->getHeader(), B->getHeader()))
+    return B;
+  if (DT.dominates(B->getHeader(), A->getHeader()))
+    return A;
   return A; // Arbitrarily break the tie.
 }
 
@@ -495,6 +507,7 @@ namespace {
 /// LoopCompare - Compare loops by PickMostRelevantLoop.
 class LoopCompare {
   DominatorTree &DT;
+
 public:
   explicit LoopCompare(DominatorTree &dt) : DT(dt) {}
 
@@ -523,7 +536,7 @@ public:
   }
 };
 
-}
+} // namespace
 
 Value *SCEVExpander::visitAddExpr(SCEVUseT<const SCEVAddExpr *> S) {
   // Recognize the canonical representation of an unsimplifed urem.
@@ -671,10 +684,10 @@ Value *SCEVExpander::visitMulExpr(SCEVUseT<const SCEVMulExpr *> S) {
       P = InsertBinop(Instruction::Mul, P, P, SCEV::FlagAnyWrap,
                       /*IsSafeToHoist*/ true);
       if (Exponent & BinExp)
-        Result = Result ? InsertBinop(Instruction::Mul, Result, P,
-                                      SCEV::FlagAnyWrap,
-                                      /*IsSafeToHoist*/ true)
-                        : P;
+        Result =
+            Result ? InsertBinop(Instruction::Mul, Result, P, SCEV::FlagAnyWrap,
+                                 /*IsSafeToHoist*/ true)
+                   : P;
     }
 
     I = E;
@@ -695,7 +708,8 @@ Value *SCEVExpander::visitMulExpr(SCEVUseT<const SCEVMulExpr *> S) {
       // A simple mul.
       Value *W = ExpandOpBinPowN();
       // Canonicalize a constant to the RHS.
-      if (isa<Constant>(Prod)) std::swap(Prod, W);
+      if (isa<Constant>(Prod))
+        std::swap(Prod, W);
       const APInt *RHS;
       if (match(W, m_Power2(RHS))) {
         // Canonicalize Prod*(1<<C) to Prod<<C.
@@ -878,9 +892,9 @@ bool SCEVExpander::hoistIVInc(Instruction *IncV, Instruction *InsertPos,
     return false;
 
   // Check that the chain of IV operands leading back to Phi can be hoisted.
-  SmallVector<Instruction*, 4> IVIncs;
-  for(;;) {
-    Instruction *Oper = getIVIncOperand(IncV, InsertPos, /*allowScale*/true);
+  SmallVector<Instruction *, 4> IVIncs;
+  for (;;) {
+    Instruction *Oper = getIVIncOperand(IncV, InsertPos, /*allowScale*/ true);
     if (!Oper)
       return false;
     // IncV is safe to hoist.
@@ -914,9 +928,9 @@ bool SCEVExpander::canReuseFlagsFromOriginalIVInc(PHINode *OrigPhi,
 /// expandAddtoGEP.
 bool SCEVExpander::isExpandedAddRecExprPHI(PHINode *PN, Instruction *IncV,
                                            const Loop *L) {
-  for(Instruction *IVOper = IncV;
-      (IVOper = getIVIncOperand(IVOper, L->getLoopPreheader()->getTerminator(),
-                                /*allowScale=*/false));) {
+  for (Instruction *IVOper = IncV;
+       (IVOper = getIVIncOperand(IVOper, L->getLoopPreheader()->getTerminator(),
+                                 /*allowScale=*/false));) {
     if (IVOper == PN)
       return true;
   }
@@ -934,9 +948,9 @@ Value *SCEVExpander::expandIVInc(PHINode *PN, Value *StepV, const Loop *L,
     // TODO: Change name to IVName.iv.next.
     IncV = Builder.CreatePtrAdd(PN, StepV, "scevgep");
   } else {
-    IncV = useSubtract ?
-      Builder.CreateSub(PN, StepV, Twine(IVName) + ".iv.next") :
-      Builder.CreateAdd(PN, StepV, Twine(IVName) + ".iv.next");
+    IncV = useSubtract
+               ? Builder.CreateSub(PN, StepV, Twine(IVName) + ".iv.next")
+               : Builder.CreateAdd(PN, StepV, Twine(IVName) + ".iv.next");
   }
   return IncV;
 }
@@ -986,7 +1000,7 @@ static bool IsIncrementNSW(ScalarEvolution &SE, const SCEVAddRecExpr *AR) {
   const SCEV *OpAfterExtend = SE.getAddExpr(SE.getSignExtendExpr(Step, WideTy),
                                             SE.getSignExtendExpr(AR, WideTy));
   const SCEV *ExtendAfterOp =
-    SE.getSignExtendExpr(SE.getAddExpr(AR, Step), WideTy);
+      SE.getSignExtendExpr(SE.getAddExpr(AR, Step), WideTy);
   return ExtendAfterOp == OpAfterExtend;
 }
 
@@ -1000,7 +1014,7 @@ static bool IsIncrementNUW(ScalarEvolution &SE, const SCEVAddRecExpr *AR) {
   const SCEV *OpAfterExtend = SE.getAddExpr(SE.getZeroExtendExpr(Step, WideTy),
                                             SE.getZeroExtendExpr(AR, WideTy));
   const SCEV *ExtendAfterOp =
-    SE.getZeroExtendExpr(SE.getAddExpr(AR, Step), WideTy);
+      SE.getZeroExtendExpr(SE.getAddExpr(AR, Step), WideTy);
   return ExtendAfterOp == OpAfterExtend;
 }
 
@@ -1049,7 +1063,7 @@ SCEVExpander::getAddRecExprPHILiterally(const SCEVAddRecExpr *Normalized,
       // expanded expression if the expanded expression's loop dominates the
       // loop we insert to. Check now, so we can bail out early.
       if (!IsMatchingSCEV && !TryNonMatchingSCEV)
-          continue;
+        continue;
 
       // TODO: this possibly can be reworked to avoid this cast at all.
       Instruction *TempIncV =
@@ -1161,8 +1175,8 @@ SCEVExpander::getAddRecExprPHILiterally(const SCEVAddRecExpr *Normalized,
     // Create a step value and add it to the PHI.
     // If IVIncInsertLoop is non-null and equal to the addrec's loop, insert the
     // instructions at IVIncInsertPos.
-    Instruction *InsertPos = L == IVIncInsertLoop ?
-      IVIncInsertPos : Pred->getTerminator();
+    Instruction *InsertPos =
+        L == IVIncInsertLoop ? IVIncInsertPos : Pred->getTerminator();
     Builder.SetInsertPoint(InsertPos);
     Value *IncV = expandIVInc(PN, StepV, L, useSubtract);
 
@@ -1427,9 +1441,9 @@ Value *SCEVExpander::visitAddRecExpr(SCEVUseT<const SCEVAddRecExpr *> S) {
       if (L->contains(HP)) {
         // Insert a unit add instruction right before the terminator
         // corresponding to the back-edge.
-        Instruction *Add = BinaryOperator::CreateAdd(CanonicalIV, One,
-                                                     "indvar.next",
-                                                     HP->getTerminator()->getIterator());
+        Instruction *Add =
+            BinaryOperator::CreateAdd(CanonicalIV, One, "indvar.next",
+                                      HP->getTerminator()->getIterator());
         Add->setDebugLoc(HP->getTerminator()->getDebugLoc());
         rememberInstruction(Add);
         CanonicalIV->addIncoming(Add, HP);
@@ -1450,19 +1464,18 @@ Value *SCEVExpander::visitAddRecExpr(SCEVUseT<const SCEVAddRecExpr *> S) {
   // {0,+,F} --> {0,+,1} * F
 
   // If this is a simple linear addrec, emit it now as a special case.
-  if (S->isAffine())    // {0,+,F} --> i*F
-    return
-      expand(SE.getTruncateOrNoop(
-        SE.getMulExpr(SE.getUnknown(CanonicalIV),
-                      SE.getNoopOrAnyExtend(S->getOperand(1),
-                                            CanonicalIV->getType())),
+  if (S->isAffine()) // {0,+,F} --> i*F
+    return expand(SE.getTruncateOrNoop(
+        SE.getMulExpr(
+            SE.getUnknown(CanonicalIV),
+            SE.getNoopOrAnyExtend(S->getOperand(1), CanonicalIV->getType())),
         Ty));
 
   // If this is a chain of recurrences, turn it into a closed form, using the
   // folders, then expandCodeFor the closed form.  This allows the folders to
   // simplify the expression without having to build a bunch of special code
   // into this folder.
-  const SCEV *IH = SE.getUnknown(CanonicalIV);   // Get I as a "symbolic" SCEV.
+  const SCEV *IH = SE.getUnknown(CanonicalIV); // Get I as a "symbolic" SCEV.
 
   // Promote S up to the canonical IV type, if the cast is foldable.
   const SCEV *NewS = S;
@@ -1696,24 +1709,25 @@ Value *SCEVExpander::expand(SCEVUse S) {
   // otherwise we are risky to move it over the check for zero denominator.
   auto SafeToHoist = [](const SCEV *S) {
     return !SCEVExprContains(S, [](const SCEV *S) {
-              if (const auto *D = dyn_cast<SCEVUDivExpr>(S)) {
-                if (const auto *SC = dyn_cast<SCEVConstant>(D->getRHS()))
-                  // Division by non-zero constants can be hoisted.
-                  return SC->getValue()->isZero();
-                // All other divisions should not be moved as they may be
-                // divisions by zero and should be kept within the
-                // conditions of the surrounding loops that guard their
-                // execution (see PR35406).
-                return true;
-              }
-              return false;
-            });
+      if (const auto *D = dyn_cast<SCEVUDivExpr>(S)) {
+        if (const auto *SC = dyn_cast<SCEVConstant>(D->getRHS()))
+          // Division by non-zero constants can be hoisted.
+          return SC->getValue()->isZero();
+        // All other divisions should not be moved as they may be
+        // divisions by zero and should be kept within the
+        // conditions of the surrounding loops that guard their
+        // execution (see PR35406).
+        return true;
+      }
+      return false;
+    });
   };
   if (SafeToHoist(S)) {
     for (Loop *L = SE.LI.getLoopFor(Builder.GetInsertBlock());;
          L = L->getParentLoop()) {
       if (SE.isLoopInvariant(S, L)) {
-        if (!L) break;
+        if (!L)
+          break;
         if (BasicBlock *Preheader = L->getLoopPreheader()) {
           InsertPt = Preheader->getTerminator()->getIterator();
         } else {
@@ -2003,8 +2017,7 @@ SCEVExpander::replaceCongruentIVs(Loop *L, const DominatorTree *DT,
 }
 
 bool SCEVExpander::hasRelatedExistingExpansion(const SCEV *S,
-                                               const Instruction *At,
-                                               Loop *L) {
+                                               const Instruction *At, Loop *L) {
   using namespace llvm::PatternMatch;
 
   SmallVector<BasicBlock *, 4> ExitingBlocks;
@@ -2035,17 +2048,19 @@ bool SCEVExpander::hasRelatedExistingExpansion(const SCEV *S,
   return FindValueInExprValueMap(S, At, DropPoisonGeneratingInsts) != nullptr;
 }
 
-template<typename T> static InstructionCost costAndCollectOperands(
-  const SCEVOperand &WorkItem, const TargetTransformInfo &TTI,
-  TargetTransformInfo::TargetCostKind CostKind,
-  SmallVectorImpl<SCEVOperand> &Worklist) {
+template <typename T>
+static InstructionCost
+costAndCollectOperands(const SCEVOperand &WorkItem,
+                       const TargetTransformInfo &TTI,
+                       TargetTransformInfo::TargetCostKind CostKind,
+                       SmallVectorImpl<SCEVOperand> &Worklist) {
 
   const T *S = cast<T>(WorkItem.S);
   InstructionCost Cost = 0;
   // Object to help map SCEV operands to expanded IR instructions.
   struct OperationIndices {
-    OperationIndices(unsigned Opc, size_t min, size_t max) :
-      Opcode(Opc), MinIdx(min), MaxIdx(max) { }
+    OperationIndices(unsigned Opc, size_t min, size_t max)
+        : Opcode(Opc), MinIdx(min), MaxIdx(max) {}
     unsigned Opcode;
     size_t MinIdx;
     size_t MaxIdx;
@@ -2068,7 +2083,7 @@ template<typename T> static InstructionCost costAndCollectOperands(
                        unsigned MaxIdx = 1) -> InstructionCost {
     Operations.emplace_back(Opcode, MinIdx, MaxIdx);
     return NumRequired *
-      TTI.getArithmeticInstrCost(Opcode, S->getType(), CostKind);
+           TTI.getArithmeticInstrCost(Opcode, S->getType(), CostKind);
   };
 
   auto CmpSelCost = [&](unsigned Opcode, unsigned NumRequired, unsigned MinIdx,
@@ -2219,8 +2234,8 @@ bool SCEVExpander::isHighCostExpansionHelper(
       return false;
     const APInt &Imm = cast<SCEVConstant>(S)->getAPInt();
     Type *Ty = S->getType();
-    Cost += TTI.getIntImmCostInst(
-        WorkItem.ParentOpcode, WorkItem.OperandIdx, Imm, Ty, CostKind);
+    Cost += TTI.getIntImmCostInst(WorkItem.ParentOpcode, WorkItem.OperandIdx,
+                                  Imm, Ty, CostKind);
     return Cost > Budget;
   }
   case scTruncate:
@@ -2266,8 +2281,8 @@ bool SCEVExpander::isHighCostExpansionHelper(
   case scAddRecExpr: {
     assert(cast<SCEVAddRecExpr>(S)->getNumOperands() >= 2 &&
            "Polynomial should be at least linear");
-    Cost += costAndCollectOperands<SCEVAddRecExpr>(
-        WorkItem, TTI, CostKind, Worklist);
+    Cost += costAndCollectOperands<SCEVAddRecExpr>(WorkItem, TTI, CostKind,
+                                                   Worklist);
     return Cost > Budget;
   }
   }

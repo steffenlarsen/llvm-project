@@ -24,4 +24,4 @@ add_llvm_component_library(LLVMHexagonDesc
   Hexagon
   )
 
-add_dependencies(LLVMHexagonDesc HexagonCommonTableGen)
+add_dependencies(LLVMHexagonDesc HexagonCommonTableGen HexagonOptParserTableGen)

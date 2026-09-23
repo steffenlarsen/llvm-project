@@ -180,8 +180,10 @@ LLVM_ABI void embedBitcodeInModule(Module &M, MemoryBufferRef Buf,
 
 /// When true, include allocation context in combined memprof summary records.
 /// Defaults to false in NDEBUG builds, true in debug builds.
-/// Prefers the OptionsContext value when \p Ctx is non-null; falls back to the
-/// value carried by the OptionsContext.
+/// This is called from summary-index-only writer paths with no Module or
+/// LLVMContext in scope, so it reads the process-wide
+/// BitcodeMemProfOptions::Current default rather than \p Ctx; the parameter
+/// is retained only because it is threaded through many existing callers.
 LLVM_ABI bool
 getCombinedIndexMemProfContextEnabled(const clv2::OptionsContext &Ctx);
 

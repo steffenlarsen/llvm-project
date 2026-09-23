@@ -45,9 +45,8 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/X86/X86OptionsOptInfos.h"
+#include "llvm/Target/X86/X86Options.h"
 #include <cassert>
 #include <cstdint>
 #include <iterator>
@@ -57,8 +56,7 @@ using namespace llvm;
 #define DEBUG_TYPE "x86-optimize-leas"
 
 static bool getDisableX86LEAOpt(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::X86_DisableLEAOpt>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<X86Options>().X86_DisableLEAOpt;
 }
 
 STATISTIC(NumSubstLEAs, "Number of LEA instruction substitutions");

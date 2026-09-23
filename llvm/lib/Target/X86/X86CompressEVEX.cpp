@@ -55,8 +55,7 @@
 #include "llvm/IR/Function.h"
 #include "llvm/MC/MCInstrDesc.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/X86/X86OptionsOptInfos.h"
+#include "llvm/Target/X86/X86Options.h"
 #include <atomic>
 #include <cassert>
 #include <cstdint>
@@ -69,9 +68,7 @@ using namespace llvm;
 #define DEBUG_TYPE COMP_EVEX_NAME
 
 static bool getX86EnableAPXForRelocation(const Function &F) {
-  return clv2::getOptValOr<&clv2::X86OptsReg,
-                           &clv2::X86_EnableAPXForRelocation>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext().getOptions<X86Options>().X86_EnableAPXForRelocation;
 }
 
 namespace {

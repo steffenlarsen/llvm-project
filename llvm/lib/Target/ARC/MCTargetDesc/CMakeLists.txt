@@ -6,9 +6,13 @@ add_llvm_component_library(LLVMARCDesc
 
   LINK_COMPONENTS
   MC
+  Option
   Support
   ARCInfo
 
   ADD_TO_COMPONENT
   ARC
+
+  DEPENDS
+  ARCOptParserTableGen
   )

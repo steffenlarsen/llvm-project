@@ -36,6 +36,7 @@
 #define LLVM_ANALYSIS_IR2VEC_H
 
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/Analysis/AnalysisOptions.h"
 #include "llvm/Analysis/IR2VecKind.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/PassManager.h"
@@ -47,10 +48,6 @@
 #include <array>
 #include <map>
 #include <optional>
-
-namespace llvm::clv2 {
-class OptionsContext;
-}
 
 namespace llvm {
 
@@ -78,11 +75,11 @@ namespace ir2vec {
 
 LLVM_ABI extern llvm::cl::OptionCategory IR2VecCategory;
 
-LLVM_ABI float getOpcWeight(const clv2::OptionsContext &Ctx);
-LLVM_ABI float getTypeWeight(const clv2::OptionsContext &Ctx);
-LLVM_ABI float getArgWeight(const clv2::OptionsContext &Ctx);
-LLVM_ABI IR2VecKind getIR2VecEmbeddingKind(const clv2::OptionsContext &Ctx);
-LLVM_ABI std::string getVocabFile(const clv2::OptionsContext &Ctx);
+LLVM_ABI float getOpcWeight(const AnalysisOptions &Opts);
+LLVM_ABI float getTypeWeight(const AnalysisOptions &Opts);
+LLVM_ABI float getArgWeight(const AnalysisOptions &Opts);
+LLVM_ABI IR2VecKind getIR2VecEmbeddingKind(const AnalysisOptions &Opts);
+LLVM_ABI std::string getVocabFile(const AnalysisOptions &Opts);
 
 /// Embedding is a datatype that wraps std::vector<double>. It provides
 /// additional functionality for arithmetic and comparison operations.
@@ -563,9 +560,12 @@ protected:
 
   Embedder(const Function &F, const Vocabulary &Vocab)
       : F(F), Vocab(Vocab), Dimension(Vocab.getDimension()),
-        OpcWeight(ir2vec::getOpcWeight(F.getContext().getOptionsContext())),
-        TypeWeight(ir2vec::getTypeWeight(F.getContext().getOptionsContext())),
-        ArgWeight(ir2vec::getArgWeight(F.getContext().getOptionsContext())) {}
+        OpcWeight(
+            ir2vec::getOpcWeight(F.getContext().getOptions<AnalysisOptions>())),
+        TypeWeight(ir2vec::getTypeWeight(
+            F.getContext().getOptions<AnalysisOptions>())),
+        ArgWeight(ir2vec::getArgWeight(
+            F.getContext().getOptions<AnalysisOptions>())) {}
 
   /// Function to compute embeddings.
   LLVM_ABI Embedding computeEmbeddings() const;

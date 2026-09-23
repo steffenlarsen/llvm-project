@@ -330,8 +330,8 @@ static Error addBitcodeInput(SmallVector<PendingInput> &Inputs,
   if (identify_magic(Buffer->getBuffer()) != file_magic::bitcode)
     return createStringError("unsupported file type: '" +
                              Buffer->getBufferIdentifier() + "'");
-  Expected<IRSymtabFile> SymtabOrErr = readIRSymtab(
-      Buffer->getMemBufferRef(), llvm::clv2::defaultOptionsContext());
+  Expected<IRSymtabFile> SymtabOrErr =
+      readIRSymtab(Buffer->getMemBufferRef());
   if (!SymtabOrErr)
     return SymtabOrErr.takeError();
   Inputs.push_back(

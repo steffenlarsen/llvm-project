@@ -19,8 +19,7 @@
 #include "GCNRegPressure.h"
 #include "SIMachineFunctionInfo.h"
 #include "llvm/InitializePasses.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/AMDGPU/AMDGPUOptionsOptInfos.h"
+#include "llvm/Target/AMDGPU/AMDGPUOptions.h"
 
 using namespace llvm;
 
@@ -29,8 +28,7 @@ using namespace llvm;
 // Clauses longer then 15 instructions would overflow one of the counters
 // and stall. They can stall even earlier if there are outstanding counters.
 static unsigned getMaxClause(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AMDGPU_MaxClause>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<AMDGPUOptions>().AMDGPU_MaxClause;
 }
 
 namespace {
@@ -68,9 +66,7 @@ public:
 
   bool runOnMachineFunction(MachineFunction &MF) override;
 
-  StringRef getPassName() const override {
-    return "SI Form memory clauses";
-  }
+  StringRef getPassName() const override { return "SI Form memory clauses"; }
 
   void getAnalysisUsage(AnalysisUsage &AU) const override {
     AU.addRequired<LiveIntervalsWrapperPass>();
@@ -121,7 +117,8 @@ static bool isValidClauseInst(const MachineInstr &MI, bool IsVMEMClause) {
     return false;
   if (!IsVMEMClause && !isSMEMClauseInst(MI))
     return false;
-  // If this is a load instruction where the result has been coalesced with an operand, then we cannot clause it.
+  // If this is a load instruction where the result has been coalesced with an
+  // operand, then we cannot clause it.
   for (const MachineOperand &ResMO : MI.defs()) {
     Register ResReg = ResMO.getReg();
     for (const MachineOperand &MO : MI.all_uses()) {
@@ -308,7 +305,7 @@ bool SIFormMemoryClausesImpl::run(MachineFunction &MF) {
 
       MachineBasicBlock::iterator LastClauseInst = Next;
       unsigned Length = 1;
-      for ( ; Next != E && Length < FuncMaxClause; ++Next) {
+      for (; Next != E && Length < FuncMaxClause; ++Next) {
         // Debug instructions should not change the kill insertion.
         if (Next->isMetaInstruction())
           continue;
@@ -386,8 +383,8 @@ bool SIFormMemoryClausesImpl::run(MachineFunction &MF) {
         //
         // It's possible all of the use registers were already live past the
         // bundle.
-        Kill = BuildMI(*MI.getParent(), std::next(LastClauseInst),
-                       DebugLoc(), TII->get(AMDGPU::KILL));
+        Kill = BuildMI(*MI.getParent(), std::next(LastClauseInst), DebugLoc(),
+                       TII->get(AMDGPU::KILL));
         for (auto &Op : KillOps)
           Kill.addUse(Reg, std::get<0>(Op), std::get<1>(Op));
         Ind->insertMachineInstrInMaps(*Kill);

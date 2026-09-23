@@ -23,17 +23,14 @@
 #include "llvm/MC/MCInstrDesc.h"
 #include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/MC/MCSubtargetInfo.h"
-#include "llvm/Support/CommandLineV2.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/SourceMgr.h"
-#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
+#include "llvm/Target/Hexagon/HexagonOptions.h"
 #include <cassert>
 
 using namespace llvm;
 
-static bool getRelaxNVChecks(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_RelaxNVChecks>(
-      Ctx, false);
+static bool getRelaxNVChecks() {
+  return HexagonOptions::Current.HEX_RelaxNVChecks;
 }
 
 const HexagonMCChecker::PredSense
@@ -440,7 +437,7 @@ bool HexagonMCChecker::checkNewValues() {
                   "New value register consumer has no producer");
       return false;
     }
-    if (!getRelaxNVChecks(Context.getOptionsContext())) {
+    if (!getRelaxNVChecks()) {
       // Checks that statically prove correct new value consumption
       if (ProducerPredInfo.isPredicated() &&
           (!ConsumerPredInfo.isPredicated() ||
@@ -571,7 +568,7 @@ HexagonMCChecker::registerProducer(
       for (auto K = MCRegAliasIterator(I.getOperand(J).getReg(), &RI, true);
            K.isValid(); ++K)
         if (*K == Register) {
-          if (getRelaxNVChecks(Context.getOptionsContext()) ||
+          if (getRelaxNVChecks() ||
               (ProducerPredicate.Register == ConsumerPredicate.Register &&
                (ProducerPredicate.Register == Hexagon::NoRegister ||
                 ProducerPredicate.PredicatedTrue ==

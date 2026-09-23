@@ -1,4 +1,4 @@
-//===- ARMOptions.td - CLV2 option defs for ARM ----------*- tablegen -*-===//
+//===- ARMOptions.td - OptTable option defs for ARM -------*- tablegen -*-===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -6,535 +6,267 @@
 //
 //===----------------------------------------------------------------------===//
 
-include "llvm/Support/CLV2Options.td"
+include "llvm/Option/OptParser.td"
 
-def ARMOptsReg : Registry<"llvm::arm_opts"> {
-  // Getter bodies are compiled once, in ARMOptionsGetters.cpp.
-  let OutOfLineGetters = 1;
-}
+def ARMOptions : OptionsStruct<"llvm"> {}
 
 // --- ARMCallLowering.cpp ---
 
-def ARM_EnableGISelBigEndian : Option<
-    "enable-arm-gisel-bigendian",
-    "Enable Global-ISel Big Endian Lowering",
-    "bool"> {
-  let Registry = ARMOptsReg;
-  let Hidden = 1;
-}
+defm ARM_EnableGISelBigEndian : BoolField<"enable-arm-gisel-bigendian",
+    "false", "Enable Global-ISel Big Endian Lowering", /*hidden=*/1>;
 
 // --- ARMConstantIslandPass.cpp ---
 
-def ARM_AdjustJumpTableBlocks : Option<
-    "arm-adjust-jump-tables",
-    "Adjust basic block layout to better use TB[BH]",
-    "bool"> {
-  let Registry = ARMOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm ARM_AdjustJumpTableBlocks : BoolField<"arm-adjust-jump-tables",
+    "true", "Adjust basic block layout to better use TB[BH]", /*hidden=*/1>;
 
-def ARM_CPMaxIteration : Option<
-    "arm-constant-island-max-iteration",
-    "The max number of iteration for converge",
-    "unsigned"> {
-  let Registry = ARMOptsReg;
-  let Default = "30";
-  let Hidden = 1;
-}
+defm ARM_CPMaxIteration : ValueField<"arm-constant-island-max-iteration",
+    "unsigned", "30", "The max number of iteration for converge",
+    /*hidden=*/1>;
 
 // --- ARMExpandPseudoInsts.cpp ---
 
-def ARM_VerifyARMPseudo : Option<
-    "verify-arm-pseudo-expand",
-    "Verify machine code after expanding ARM pseudos",
-    "bool"> {
-  let Registry = ARMOptsReg;
-  let Hidden = 1;
-}
+defm ARM_VerifyARMPseudo : BoolField<"verify-arm-pseudo-expand",
+    "false", "Verify machine code after expanding ARM pseudos",
+    /*hidden=*/1>;
 
 // --- ARMFrameLowering.cpp ---
 
-def ARM_SpillAlignedNEONRegs : Option<
-    "align-neon-spills",
-    "Align ARM NEON spills in prolog and epilog",
-    "bool"> {
-  let Registry = ARMOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm ARM_SpillAlignedNEONRegs : BoolField<"align-neon-spills",
+    "true", "Align ARM NEON spills in prolog and epilog", /*hidden=*/1>;
 
 // --- ARMHazardRecognizer.cpp ---
 
-def ARM_DataBankMask : Option<
-    "arm-data-bank-mask", "",
-    "int"> {
-  let Registry = ARMOptsReg;
-  let Default = "-1";
-  let Hidden = 1;
-}
+// Hand-authored (not ValueField) so the field is std::optional<int>: callers
+// need to distinguish "never specified" from any concrete value, including
+// the sentinel -1, which clv2's wasOptSpecified<> tracked separately from
+// the resolved value. Mirrors ValueField's own Joined+Separate expansion.
+def ARM_DataBankMask : Joined<["-", "--"], "arm-data-bank-mask=">,
+    Flags<[HelpHidden]>,
+    Field<"std::optional<int>", "ARM_DataBankMask", "std::nullopt">;
+def ARM_DataBankMask_sep : Separate<["-", "--"], "arm-data-bank-mask">,
+    Flags<[HelpHidden]>, Alias<ARM_DataBankMask>;
 
-def ARM_AssumeITCMConflict : Option<
-    "arm-assume-itcm-bankconflict", "",
-    "bool"> {
-  let Registry = ARMOptsReg;
-  let Hidden = 1;
-}
+// OptionalValueField gives a std::optional<bool> field: absent means the
+// flag was never specified (matching clv2's wasOptSpecified<> check), while
+// still accepting the exact same "-arm-assume-itcm-bankconflict" (bare) and
+// "-arm-assume-itcm-bankconflict=<bool>" spellings as before.
+defm ARM_AssumeITCMConflict : OptionalValueField<
+    "arm-assume-itcm-bankconflict", "bool", "true", "", /*hidden=*/1>;
 
 // --- ARMISelDAGToDAG.cpp ---
 
-def ARM_DisableShifterOp : Option<
-    "disable-shifter-op",
-    "Disable isel of shifter-op",
-    "bool"> {
-  let Registry = ARMOptsReg;
-  let Hidden = 1;
-}
+defm ARM_DisableShifterOp : BoolField<"disable-shifter-op",
+    "false", "Disable isel of shifter-op", /*hidden=*/1>;
 
 // --- ARMISelLowering.cpp ---
 
-def ARM_Interworking : Option<
-    "arm-interworking",
-    "Enable / disable ARM interworking (for debugging only)",
-    "bool"> {
-  let Registry = ARMOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm ARM_Interworking : BoolField<"arm-interworking",
+    "true", "Enable / disable ARM interworking (for debugging only)",
+    /*hidden=*/1>;
 
-def ARM_EnableConstpoolPromotion : Option<
-    "arm-promote-constant",
-    "Enable / disable promotion of unnamed_addr constants into "
-    "constant pools",
-    "bool"> {
-  let Registry = ARMOptsReg;
-  let Hidden = 1;
-}
+defm ARM_EnableConstpoolPromotion : BoolField<"arm-promote-constant",
+    "false", "Enable / disable promotion of unnamed_addr constants into "
+    "constant pools", /*hidden=*/1>;
 
-def ARM_ConstpoolPromotionMaxSize : Option<
-    "arm-promote-constant-max-size",
+defm ARM_ConstpoolPromotionMaxSize : ValueField<
+    "arm-promote-constant-max-size", "unsigned", "64",
     "Maximum size of constant to promote into a constant pool",
-    "unsigned"> {
-  let Registry = ARMOptsReg;
-  let Default = "64";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def ARM_ConstpoolPromotionMaxTotal : Option<
-    "arm-promote-constant-max-total",
+defm ARM_ConstpoolPromotionMaxTotal : ValueField<
+    "arm-promote-constant-max-total", "unsigned", "128",
     "Maximum size of ALL constants to promote into a constant pool",
-    "unsigned"> {
-  let Registry = ARMOptsReg;
-  let Default = "128";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def ARM_MVEMaxSupportedInterleaveFactor : Option<
-    "mve-max-interleave-factor",
-    "Maximum interleave factor for MVE VLDn to generate.",
-    "unsigned"> {
-  let Registry = ARMOptsReg;
-  let Default = "2";
-  let Hidden = 1;
-}
+defm ARM_MVEMaxSupportedInterleaveFactor : ValueField<
+    "mve-max-interleave-factor", "unsigned", "2",
+    "Maximum interleave factor for MVE VLDn to generate.", /*hidden=*/1>;
 
-def ARM_MaxBaseUpdatesToCheck : Option<
-    "arm-max-base-updates-to-check",
+defm ARM_MaxBaseUpdatesToCheck : ValueField<
+    "arm-max-base-updates-to-check", "unsigned", "64",
     "Maximum number of base-updates to check generating postindex.",
-    "unsigned"> {
-  let Registry = ARMOptsReg;
-  let Default = "64";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // --- ARMLoadStoreOptimizer.cpp ---
 
-def ARM_AssumeMisalignedLoadStores : Option<
-    "arm-assume-misaligned-load-store",
-    "Be more conservative in ARM load/store opt",
-    "bool"> {
-  let Registry = ARMOptsReg;
-  let Hidden = 1;
-}
+defm ARM_AssumeMisalignedLoadStores : BoolField<
+    "arm-assume-misaligned-load-store", "false",
+    "Be more conservative in ARM load/store opt", /*hidden=*/1>;
 
-def ARM_InstReorderLimit : Option<
-    "arm-prera-ldst-opt-reorder-limit", "",
-    "unsigned"> {
-  let Registry = ARMOptsReg;
-  let Default = "8";
-  let Hidden = 1;
-}
+defm ARM_InstReorderLimit : ValueField<
+    "arm-prera-ldst-opt-reorder-limit", "unsigned", "8", "", /*hidden=*/1>;
 
 // --- ARMLowOverheadLoops.cpp ---
 
-def ARM_DisableTailPredication : Option<
-    "arm-loloops-disable-tailpred",
-    "Disable tail-predication in the ARM LowOverheadLoop pass",
-    "bool"> {
-  let Registry = ARMOptsReg;
-  let Hidden = 1;
-}
+defm ARM_DisableTailPredication : BoolField<"arm-loloops-disable-tailpred",
+    "false", "Disable tail-predication in the ARM LowOverheadLoop pass",
+    /*hidden=*/1>;
 
-def ARM_DisableOmitDLS : Option<
-    "arm-disable-omit-dls",
-    "Disable omitting 'dls lr, lr' instructions",
-    "bool"> {
-  let Registry = ARMOptsReg;
-  let Hidden = 1;
-}
+defm ARM_DisableOmitDLS : BoolField<"arm-disable-omit-dls",
+    "false", "Disable omitting 'dls lr, lr' instructions", /*hidden=*/1>;
 
 // --- ARMParallelDSP.cpp ---
 
-def ARM_DisableParallelDSP : Option<
-    "disable-arm-parallel-dsp", "",
-    "bool"> {
-  let Registry = ARMOptsReg;
-  let Hidden = 1;
-}
+defm ARM_DisableParallelDSP : BoolField<"disable-arm-parallel-dsp",
+    "false", "", /*hidden=*/1>;
 
-def ARM_NumLoadLimit : Option<
-    "arm-parallel-dsp-load-limit",
-    "Limit the number of loads analysed",
-    "unsigned"> {
-  let Registry = ARMOptsReg;
-  let Default = "16";
-  let Hidden = 1;
-}
+defm ARM_NumLoadLimit : ValueField<"arm-parallel-dsp-load-limit",
+    "unsigned", "16", "Limit the number of loads analysed", /*hidden=*/1>;
 
 // --- ARMSelectionDAGInfo.cpp ---
 
-def ARMTPLoopMemTransferForceDisabled : EnumValue<"force-disabled",
-    "Don't convert memcpy to TP loop."> {
-  let CppName = "ForceDisabled";
-  let Value = 0;
-}
+def ARMTPLoopMemTransfer : OptionEnum<"ARMTPLoopMemTransfer", [
+    EnumMember<"ForceDisabled", "force-disabled">,
+    EnumMember<"ForceEnabled", "force-enabled">,
+    EnumMember<"Allow", "allow">]>;
 
-def ARMTPLoopMemTransferForceEnabled : EnumValue<"force-enabled",
-    "Always convert memcpy to TP loop."> {
-  let CppName = "ForceEnabled";
-}
-
-def ARMTPLoopMemTransferAllow : EnumValue<"allow",
-    "Allow (may be subject to certain conditions) "
-    "conversion of memcpy to TP loop."> {
-  let CppName = "Allow";
-}
-
-def ARMTPLoopMemTransferEnum : EnumType<"ARMTPLoopMemTransfer",
-    [ARMTPLoopMemTransferForceDisabled, ARMTPLoopMemTransferForceEnabled,
-     ARMTPLoopMemTransferAllow]>;
-
-def ARM_EnableMemtransferTPLoop : Option<
-    "arm-memtransfer-tploop",
-    "Control conversion of memcpy to "
-    "Tail predicated loops (WLSTP)",
-    "ARMTPLoopMemTransfer"> {
-  let Registry = ARMOptsReg;
-  let Default = "force-disabled";
-  let Hidden = 1;
-}
+defm ARM_EnableMemtransferTPLoop : EnumField<"arm-memtransfer-tploop",
+    ARMTPLoopMemTransfer, "ARMTPLoopMemTransfer::ForceDisabled",
+    "Control conversion of memcpy to Tail predicated loops (WLSTP)",
+    /*hidden=*/1>;
 
 // --- ARMSubtarget.cpp ---
 
-def ARM_UseFusedMulOps : Option<
-    "arm-use-mulops", "",
-    "bool"> {
-  let Registry = ARMOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm ARM_UseFusedMulOps : BoolField<"arm-use-mulops",
+    "true", "", /*hidden=*/1>;
 
-def ARM_ITDefaultIT : Option<
-    "arm-default-it", "Generate any type of IT block",
-    "bool"> {
-  let Registry = ARMOptsReg;
-  let ValueDisallowed = 1;
-  let Hidden = 1;
-}
+// ARM_ITDefaultIT and ARM_ITRestrictedIT share a single field: the two flags
+// are mutually exclusive and, when both are given, clv2 used whichever came
+// last on the command line. The generated apply() already processes Args in
+// encounter order (see OptionParserEmitter.cpp), so two Flags that Assign
+// into the same KeyPath naturally reproduce "last flag wins" without needing
+// any position/specified tracking of their own.
+def ARMITMode : OptionEnum<"ARMITMode", [
+    EnumMember<"DefaultIT", "default-it">,
+    EnumMember<"RestrictedIT", "restrict-it">]>;
 
-def ARM_ITRestrictedIT : Option<
-    "arm-restrict-it", "Disallow complex IT blocks",
-    "bool"> {
-  let Registry = ARMOptsReg;
-  let ValueDisallowed = 1;
-  let Hidden = 1;
-}
+def ARM_ITDefaultIT : Flag<["-", "--"], "arm-default-it">,
+    HelpText<"Generate any type of IT block">, Flags<[HelpHidden]>,
+    Field<"ARMITMode", "ARM_ITMode", "ARMITMode::DefaultIT">,
+    Assign<"ARM_ITMode", "ARMITMode::DefaultIT">;
+def ARM_ITRestrictedIT : Flag<["-", "--"], "arm-restrict-it">,
+    HelpText<"Disallow complex IT blocks">, Flags<[HelpHidden]>,
+    Assign<"ARM_ITMode", "ARMITMode::RestrictedIT">;
 
-def ARM_ForceFastISel : Option<
-    "arm-force-fast-isel", "",
-    "bool"> {
-  let Registry = ARMOptsReg;
-  let Hidden = 1;
-}
+defm ARM_ForceFastISel : BoolField<"arm-force-fast-isel",
+    "false", "", /*hidden=*/1>;
 
 // --- ARMTargetMachine.cpp ---
 
-def ARM_DisableA15SDOptimization : Option<
-    "disable-a15-sd-optimization",
-    "Inhibit optimization of S->D register accesses on A15",
-    "bool"> {
-  let Registry = ARMOptsReg;
-  let Hidden = 1;
-}
+defm ARM_DisableA15SDOptimization : BoolField<"disable-a15-sd-optimization",
+    "false", "Inhibit optimization of S->D register accesses on A15",
+    /*hidden=*/1>;
 
-def ARM_EnableAtomicTidy : Option<
-    "arm-atomic-cfg-tidy",
-    "Run SimplifyCFG after expanding atomic operations"
-    " to make use of cmpxchg flow-based information",
-    "bool"> {
-  let Registry = ARMOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm ARM_EnableAtomicTidy : BoolField<"arm-atomic-cfg-tidy",
+    "true", "Run SimplifyCFG after expanding atomic operations to make use "
+    "of cmpxchg flow-based information", /*hidden=*/1>;
 
-def ARM_EnableARMLoadStoreOpt : Option<
-    "arm-load-store-opt",
-    "Enable ARM load/store optimization pass",
-    "bool"> {
-  let Registry = ARMOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm ARM_EnableARMLoadStoreOpt : BoolField<"arm-load-store-opt",
+    "true", "Enable ARM load/store optimization pass", /*hidden=*/1>;
 
-def ARM_EnableGlobalMerge : Option<
-    "arm-global-merge",
-    "Enable the global merge pass",
-    "bool"> {
-  let Registry = ARMOptsReg;
-  let Hidden = 1;
-}
+// OptionalValueField gives a std::optional<bool> field so callers can tell
+// "-arm-global-merge was never given" (clv2's wasOptSpecified<> check) apart
+// from an explicit false; keeps the same bare and "=<bool>" spellings that
+// clang's driver and existing lit tests already rely on.
+defm ARM_EnableGlobalMerge : OptionalValueField<"arm-global-merge",
+    "bool", "true", "Enable the global merge pass", /*hidden=*/1>;
 
 // --- ARMTargetTransformInfo.cpp ---
 
-def ARM_EnableMaskedLoadStores : Option<
-    "enable-arm-maskedldst",
-    "Enable the generation of masked loads and stores",
-    "bool"> {
-  let Registry = ARMOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm ARM_EnableMaskedLoadStores : BoolField<"enable-arm-maskedldst",
+    "true", "Enable the generation of masked loads and stores",
+    /*hidden=*/1>;
 
-def ARM_DisableLowOverheadLoops : Option<
-    "disable-arm-loloops",
-    "Disable the generation of low-overhead loops",
-    "bool"> {
-  let Registry = ARMOptsReg;
-  let Hidden = 1;
-}
+defm ARM_DisableLowOverheadLoops : BoolField<"disable-arm-loloops",
+    "false", "Disable the generation of low-overhead loops", /*hidden=*/1>;
 
-def ARM_AllowWLSLoops : Option<
-    "allow-arm-wlsloops",
-    "Enable the generation of WLS loops",
-    "bool"> {
-  let Registry = ARMOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm ARM_AllowWLSLoops : BoolField<"allow-arm-wlsloops",
+    "true", "Enable the generation of WLS loops", /*hidden=*/1>;
 
-def ARM_UseWidenGlobalArrays : Option<
-    "widen-global-strings",
-    "Enable the widening of global strings to alignment boundaries",
-    "bool"> {
-  let Registry = ARMOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm ARM_UseWidenGlobalArrays : BoolField<"widen-global-strings",
+    "true", "Enable the widening of global strings to alignment boundaries",
+    /*hidden=*/1>;
 
-def ARM_ForceUnrollThreshold : Option<
-    "arm-force-unroll-threshold",
+defm ARM_ForceUnrollThreshold : ValueField<"arm-force-unroll-threshold",
+    "int", "12",
     "Threshold for forced unrolling of small loops in Arm architecture",
-    "int"> {
-  let Registry = ARMOptsReg;
-  let Default = "12";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // --- AsmParser/ARMAsmParser.cpp ---
 
-def ARMImplicitItModeAlways : EnumValue<"always",
-    "Accept in both ISAs, emit implicit ITs in Thumb"> {
-  let CppName = "Always";
-}
+def ARMImplicitItMode : OptionEnum<"ARMImplicitItMode", [
+    EnumMember<"Always", "always">,
+    EnumMember<"Never", "never">,
+    EnumMember<"ARMOnly", "arm">,
+    EnumMember<"ThumbOnly", "thumb">]>;
 
-def ARMImplicitItModeNever : EnumValue<"never",
-    "Warn in ARM, reject in Thumb"> {
-  let CppName = "Never";
-}
+defm ARM_ImplicitItMode : EnumField<"arm-implicit-it", ARMImplicitItMode,
+    "ARMImplicitItMode::ARMOnly",
+    "Allow conditional instructions outside of an IT block">;
 
-def ARMImplicitItModeARMOnly : EnumValue<"arm",
-    "Accept in ARM, reject in Thumb"> {
-  let CppName = "ARMOnly";
-}
-
-def ARMImplicitItModeThumbOnly : EnumValue<"thumb",
-    "Warn in ARM, emit implicit ITs in Thumb"> {
-  let CppName = "ThumbOnly";
-}
-
-def ARMImplicitItModeEnum : EnumType<"ARMImplicitItMode",
-    [ARMImplicitItModeAlways, ARMImplicitItModeNever,
-     ARMImplicitItModeARMOnly, ARMImplicitItModeThumbOnly]>;
-
-def ARM_ImplicitItMode : Option<
-    "arm-implicit-it",
-    "Allow conditional instructions outside of an IT block",
-    "ARMImplicitItMode"> {
-  let Registry = ARMOptsReg;
-  let Default = "arm";
-}
-
-def ARM_AddBuildAttributes : Option<
-    "arm-add-build-attributes", "",
-    "bool"> {
-  let Registry = ARMOptsReg;
-}
+defm ARM_AddBuildAttributes : BoolField<"arm-add-build-attributes",
+    "false", "">;
 
 // --- MLxExpansionPass.cpp ---
 
-def ARM_ForceExpand : Option<
-    "expand-all-fp-mlx", "",
-    "bool"> {
-  let Registry = ARMOptsReg;
-  let Hidden = 1;
-}
+defm ARM_ForceExpand : BoolField<"expand-all-fp-mlx", "false", "",
+    /*hidden=*/1>;
 
-def ARM_ExpandLimit : Option<
-    "expand-limit", "",
-    "unsigned"> {
-  let Registry = ARMOptsReg;
-  let Default = "4294967295";
-  let Hidden = 1;
-}
+defm ARM_ExpandLimit : ValueField<"expand-limit", "unsigned", "4294967295",
+    "", /*hidden=*/1>;
 
 // --- MVEGatherScatterLowering.cpp ---
 
-def ARM_EnableMaskedGatherScatters : Option<
-    "enable-arm-maskedgatscat",
-    "Enable the generation of masked gathers and scatters",
-    "bool"> {
-  let Registry = ARMOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm ARM_EnableMaskedGatherScatters : BoolField<"enable-arm-maskedgatscat",
+    "true", "Enable the generation of masked gathers and scatters",
+    /*hidden=*/1>;
 
 // --- MVELaneInterleavingPass.cpp ---
 
-def ARM_EnableInterleave : Option<
-    "enable-mve-interleave",
-    "Enable interleave MVE vector operation lowering",
-    "bool"> {
-  let Registry = ARMOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm ARM_EnableInterleave : BoolField<"enable-mve-interleave",
+    "true", "Enable interleave MVE vector operation lowering",
+    /*hidden=*/1>;
 
 // --- MVETailPredication.cpp ---
 
-def ARMTailPredicationModeDisabled : EnumValue<"disabled",
-    "Don't tail-predicate loops"> {
-  let CppName = "Disabled";
-  let Value = 0;
-}
+def ARMTailPredicationMode : OptionEnum<"ARMTailPredicationMode", [
+    EnumMember<"Disabled", "disabled">,
+    EnumMember<"EnabledNoReductions", "enabled-no-reductions">,
+    EnumMember<"Enabled", "enabled">,
+    EnumMember<"ForceEnabledNoReductions", "force-enabled-no-reductions">,
+    EnumMember<"ForceEnabled", "force-enabled">]>;
 
-def ARMTailPredicationModeEnabledNoReductions : EnumValue<
-    "enabled-no-reductions",
-    "Enable tail-predication, but not for reduction loops"> {
-  let CppName = "EnabledNoReductions";
-}
-
-def ARMTailPredicationModeEnabled : EnumValue<"enabled",
-    "Enable tail-predication, including reduction loops"> {
-  let CppName = "Enabled";
-}
-
-def ARMTailPredicationModeForceEnabledNoReductions : EnumValue<
-    "force-enabled-no-reductions",
-    "Enable tail-predication, but not for reduction loops, "
-    "and force this which might be unsafe"> {
-  let CppName = "ForceEnabledNoReductions";
-}
-
-def ARMTailPredicationModeForceEnabled : EnumValue<"force-enabled",
-    "Enable tail-predication, including reduction loops, "
-    "and force this which might be unsafe"> {
-  let CppName = "ForceEnabled";
-}
-
-def ARMTailPredicationModeEnum : EnumType<"ARMTailPredicationMode",
-    [ARMTailPredicationModeDisabled,
-     ARMTailPredicationModeEnabledNoReductions,
-     ARMTailPredicationModeEnabled,
-     ARMTailPredicationModeForceEnabledNoReductions,
-     ARMTailPredicationModeForceEnabled]>;
-
-def ARM_EnableTailPredication : Option<
-    "tail-predication", "MVE tail-predication pass options",
-    "ARMTailPredicationMode"> {
-  let Registry = ARMOptsReg;
-  let Default = "enabled";
-}
+defm ARM_EnableTailPredication : EnumField<"tail-predication",
+    ARMTailPredicationMode, "ARMTailPredicationMode::Enabled",
+    "MVE tail-predication pass options">;
 
 // --- MVETPAndVPTOptimisationsPass.cpp ---
 
-def ARM_MergeEndDec : Option<
-    "arm-enable-merge-loopenddec",
-    "Enable merging Loop End and Dec instructions.",
-    "bool"> {
-  let Registry = ARMOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm ARM_MergeEndDec : BoolField<"arm-enable-merge-loopenddec",
+    "true", "Enable merging Loop End and Dec instructions.", /*hidden=*/1>;
 
-def ARM_SetLRPredicate : Option<
-    "arm-set-lr-predicate",
-    "Enable setting lr as a predicate in tail predication regions.",
-    "bool"> {
-  let Registry = ARMOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm ARM_SetLRPredicate : BoolField<"arm-set-lr-predicate",
+    "true", "Enable setting lr as a predicate in tail predication regions.",
+    /*hidden=*/1>;
 
 // --- Thumb2InstrInfo.cpp ---
 
-def ARM_OldT2IfCvt : Option<
-    "old-thumb2-ifcvt",
-    "Use old-style Thumb2 if-conversion heuristics",
-    "bool"> {
-  let Registry = ARMOptsReg;
-  let Hidden = 1;
-}
+// Dead in the original clv2 registry too (no getter anywhere ever read it);
+// preserved as-is rather than silently dropped.
+defm ARM_OldT2IfCvt : BoolField<"old-thumb2-ifcvt",
+    "false", "Use old-style Thumb2 if-conversion heuristics", /*hidden=*/1>;
 
-def ARM_PreferNoCSEL : Option<
-    "prefer-no-csel",
-    "Prefer predicated Move to CSEL",
-    "bool"> {
-  let Registry = ARMOptsReg;
-  let Hidden = 1;
-}
+defm ARM_PreferNoCSEL : BoolField<"prefer-no-csel",
+    "false", "Prefer predicated Move to CSEL", /*hidden=*/1>;
 
 // --- Thumb2SizeReduction.cpp ---
 
-def ARM_ReduceLimit : Option<
-    "t2-reduce-limit", "",
-    "int"> {
-  let Registry = ARMOptsReg;
-  let Default = "-1";
-  let Hidden = 1;
-}
+defm ARM_ReduceLimit : ValueField<"t2-reduce-limit", "int", "-1", "",
+    /*hidden=*/1>;
 
-def ARM_ReduceLimit2Addr : Option<
-    "t2-reduce-limit2", "",
-    "int"> {
-  let Registry = ARMOptsReg;
-  let Default = "-1";
-  let Hidden = 1;
-}
+defm ARM_ReduceLimit2Addr : ValueField<"t2-reduce-limit2", "int", "-1", "",
+    /*hidden=*/1>;
 
-def ARM_ReduceLimitLdSt : Option<
-    "t2-reduce-limit3", "",
-    "int"> {
-  let Registry = ARMOptsReg;
-  let Default = "-1";
-  let Hidden = 1;
-}
+defm ARM_ReduceLimitLdSt : ValueField<"t2-reduce-limit3", "int", "-1", "",
+    /*hidden=*/1>;

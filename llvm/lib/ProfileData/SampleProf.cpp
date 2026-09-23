@@ -15,13 +15,11 @@
 #include "llvm/Config/llvm-config.h"
 #include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/IR/PseudoProbe.h"
-#include "llvm/ProfileData/ProfileDataOptionsOptInfos.h"
 #include "llvm/ProfileData/SampleProfReader.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/LEB128.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <cstdint>
@@ -30,14 +28,6 @@
 
 using namespace llvm;
 using namespace sampleprof;
-
-static uint64_t getProfileSymbolListCutOff(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::PD_ProfileSymbolListCutOff>(Ctx);
-}
-
-static bool getGenerateMergedBaseProfiles(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::PD_GenerateMergedBaseProfiles>(Ctx);
-}
 
 namespace llvm {
 namespace sampleprof {
@@ -392,21 +382,21 @@ LLVM_DUMP_METHOD void FunctionSamples::dump() const { print(dbgs(), 0); }
 #endif
 
 std::error_code ProfileSymbolList::read(const uint8_t *Data, uint64_t ListSize,
-                                        const clv2::OptionsContext &Ctx) {
+                                        const ProfileDataOptions &Opts) {
+  uint64_t CutOff = Opts.PD_ProfileSymbolListCutOff;
   // Scan forward to see how many elements we expect.
-  reserve(std::min<uint64_t>(getProfileSymbolListCutOff(Ctx),
-                             std::count(Data, Data + ListSize, 0)));
+  reserve(std::min<uint64_t>(CutOff, std::count(Data, Data + ListSize, 0)));
 
   const char *ListStart = reinterpret_cast<const char *>(Data);
   uint64_t Size = 0;
   uint64_t StrNum = 0;
-  while (Size < ListSize && StrNum < getProfileSymbolListCutOff(Ctx)) {
+  while (Size < ListSize && StrNum < CutOff) {
     StringRef Str(ListStart + Size);
     add(Str);
     Size += Str.size() + 1;
     StrNum++;
   }
-  if (Size != ListSize && StrNum != getProfileSymbolListCutOff(Ctx))
+  if (Size != ListSize && StrNum != CutOff)
     return sampleprof_error::malformed;
   return sampleprof_error::success;
 }
@@ -530,14 +520,14 @@ ProfileConverter::getOrCreateContextPath(const SampleContext &Context) {
 }
 
 void ProfileConverter::convertCSProfiles(ProfileConverter::FrameNode &Node,
-                                         const clv2::OptionsContext &Ctx) {
+                                         const ProfileDataOptions &Opts) {
   // Process each child profile. Add each child profile to callsite profile map
   // of the current node `Node` if `Node` comes with a profile. Otherwise
   // promote the child profile to a standalone profile.
   auto *NodeProfile = Node.FuncSamples;
   for (auto &It : Node.AllChildFrames) {
     auto &ChildNode = It.second;
-    convertCSProfiles(ChildNode, Ctx);
+    convertCSProfiles(ChildNode, Opts);
     auto *ChildProfile = ChildNode.FuncSamples;
     if (!ChildProfile)
       continue;
@@ -568,7 +558,7 @@ void ProfileConverter::convertCSProfiles(ProfileConverter::FrameNode &Node,
     if (!NodeProfile) {
       ProfileMap[ChildProfile->getContext()].merge(*ChildProfile);
       NewChildProfileHash = ChildProfile->getContext().getHashCode();
-    } else if (getGenerateMergedBaseProfiles(Ctx)) {
+    } else if (Opts.PD_GenerateMergedBaseProfiles) {
       ProfileMap[ChildProfile->getContext()].merge(*ChildProfile);
       NewChildProfileHash = ChildProfile->getContext().getHashCode();
       auto &SamplesMap = NodeProfile->functionSamplesAt(ChildNode.CallSiteLoc);
@@ -584,6 +574,6 @@ void ProfileConverter::convertCSProfiles(ProfileConverter::FrameNode &Node,
   }
 }
 
-void ProfileConverter::convertCSProfiles(const clv2::OptionsContext &Ctx) {
-  convertCSProfiles(RootFrame, Ctx);
+void ProfileConverter::convertCSProfiles(const ProfileDataOptions &Opts) {
+  convertCSProfiles(RootFrame, Opts);
 }

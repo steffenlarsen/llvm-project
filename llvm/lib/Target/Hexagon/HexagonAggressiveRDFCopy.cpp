@@ -55,11 +55,14 @@
 #include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/CodeGen/TargetOpcodes.h"
 #include "llvm/CodeGen/TargetRegisterInfo.h"
+#include "llvm/IR/Function.h"
+#include "llvm/IR/LLVMContext.h"
 #include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/Hexagon/HexagonOptions.h"
 
 #include <cassert>
 #include <cstdint>
@@ -69,7 +72,6 @@ using namespace llvm;
 using namespace rdf;
 
 #ifndef NDEBUG
-extern unsigned RDFCpLimit;
 static unsigned RDFCpCount = 0;
 #endif
 
@@ -293,7 +295,12 @@ bool AggressiveCopyPropagation::run() {
 
   bool Changed = false;
 #ifndef NDEBUG
-  bool HasLimit = RDFCpLimit != 0 > 0;
+  const std::optional<unsigned> &RDFCpLimit = DFG.getMF()
+                                                  .getFunction()
+                                                  .getContext()
+                                                  .getOptions<HexagonOptions>()
+                                                  .HEX_RDFCpLimit;
+  bool HasLimit = RDFCpLimit.has_value();
 #endif
 
   auto MinPhysReg = [this](RegisterRef RR) -> unsigned {
@@ -311,7 +318,7 @@ bool AggressiveCopyPropagation::run() {
   // copy
   for (auto P : ReplacableUses) {
 #ifndef NDEBUG
-    if (HasLimit && RDFCpCount >= RDFCpLimit)
+    if (HasLimit && RDFCpCount >= *RDFCpLimit)
       break;
 #endif
     NodeAddr<UseNode *> UA = P.first;
@@ -360,7 +367,7 @@ bool AggressiveCopyPropagation::run() {
 
     Changed = true;
 #ifndef NDEBUG
-    if (HasLimit && RDFCpCount >= RDFCpLimit)
+    if (HasLimit && RDFCpCount >= *RDFCpLimit)
       break;
     RDFCpCount++;
 #endif

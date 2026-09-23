@@ -21,6 +21,7 @@
 #include "llvm/Support/LineIterator.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/OptionsContext.h"
+#include "llvm/Support/PluginLoaderOptions.h"
 #include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/WithColor.h"
 #include "llvm/Support/raw_ostream.h"
@@ -145,7 +146,11 @@ int main(int argc, const char *argv[]) {
   P.add<&CXXMapToolReg>();
   RegisterAllLLVMOptions(P);
   P.hideUnrelatedOptions({&CXXMapCategory, &getColorCategory()});
-  auto OptsCtx = P.parse(argc, argv, "LLVM C++ mangled name remapper\n");
+  std::vector<const char *> ArgsAfterPlugins =
+      loadPluginsAndStripArgs(argc, argv);
+  auto OptsCtx =
+      P.parse(static_cast<int>(ArgsAfterPlugins.size()),
+              ArgsAfterPlugins.data(), "LLVM C++ mangled name remapper\n");
   auto *Opts = OptsCtx->getViewPtr<&CXXMapToolReg>();
 
   auto OldSymbolBufOrError = MemoryBuffer::getFileOrSTDIN(

@@ -6,44 +6,25 @@
 //
 //===----------------------------------------------------------------------===//
 
-include "llvm/Support/CLV2Options.td"
+include "llvm/Option/OptParser.td"
 
-def CSKYOptsReg : Registry<"llvm::csky_opts"> {
-  // Getter bodies are compiled once, in CSKYOptionsGetters.cpp.
-  let OutOfLineGetters = 1;
-}
+def CSKYOptions : OptionsStruct<"llvm"> {}
 
-def CSKY_EnableCompressedInst : Option<
-    "enable-csky-asm-compressed-inst",
+defm CSKY_EnableCompressedInst : BoolField<
+    "enable-csky-asm-compressed-inst", "false",
     "Enable C-SKY asm compressed instruction",
-    "bool"> {
-  let Registry = CSKYOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def CSKY_NoAliases : Option<
-    "csky-no-aliases",
+defm CSKY_NoAliases : BoolField<
+    "csky-no-aliases", "false",
     "Disable the emission of assembler pseudo instructions",
-    "bool"> {
-  let Registry = CSKYOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def CSKY_ArchRegNames : Option<
-    "csky-arch-reg-names",
+defm CSKY_ArchRegNames : BoolField<
+    "csky-arch-reg-names", "false",
     "Print architectural register names rather than the "
     "ABI names (such as r14 instead of sp)",
-    "bool"> {
-  let Registry = CSKYOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def CSKY_AddBuildAttributes : Option<
-    "csky-add-build-attributes", "",
-    "bool"> {
-  let Registry = CSKYOptsReg;
-  let Default = "true";
-}
+defm CSKY_AddBuildAttributes : BoolField<
+    "csky-add-build-attributes", "true", "">;

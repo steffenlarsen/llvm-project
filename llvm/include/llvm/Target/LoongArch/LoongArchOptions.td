@@ -1,4 +1,4 @@
-//===- LoongArchOptions.td - CLV2 option defs for LoongArch -*- tablegen -*-===//
+//===- LoongArchOptions.td - LoongArch target options -*- tablegen -*-===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -6,219 +6,123 @@
 //
 //===----------------------------------------------------------------------===//
 
-include "llvm/Support/CLV2Options.td"
+include "llvm/Option/OptParser.td"
 
-def LoongArchOptsReg : Registry<"llvm::la_opts"> {
-  // Getter bodies are compiled once, in LoongArchOptionsGetters.cpp.
-  let OutOfLineGetters = 1;
-}
+def LoongArchOptions : OptionsStruct<"llvm"> {}
 
 // --- LoongArchSubtarget.cpp ---
 
-def LA_UseAA : Option<
-    "loongarch-use-aa",
-    "Enable the use of AA during codegen.",
-    "bool"> {
-  let Registry = LoongArchOptsReg;
-  let Default = "1";
-}
+defm LA_UseAA : BoolField<
+    "loongarch-use-aa", "1",
+    "Enable the use of AA during codegen.">;
 
 // --- LoongArchAsmPrinter.cpp ---
 
-def LA_AnnotateTableJump : Option<
-    "loongarch-annotate-tablejump",
+defm LA_AnnotateTableJump : BoolField<
+    "loongarch-annotate-tablejump", "false",
     "Annotate table jump instruction to correlate it with the jump table.",
-    "bool"> {
-  let Registry = LoongArchOptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // --- LoongArchTargetMachine.cpp ---
 
-def LA_EnableDeadDefs : Option<
-    "loongarch-enable-dead-defs",
+defm LA_EnableDeadDefs : BoolField<
+    "loongarch-enable-dead-defs", "1",
     "Enable the pass that removes dead"
     " definitons and replaces stores to"
     " them with stores to r0",
-    "bool"> {
-  let Registry = LoongArchOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def LA_EnableLoopDataPrefetch : Option<
-    "loongarch-enable-loop-data-prefetch",
+defm LA_EnableLoopDataPrefetch : BoolField<
+    "loongarch-enable-loop-data-prefetch", "false",
     "Enable the loop data prefetch pass",
-    "bool"> {
-  let Registry = LoongArchOptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def LA_EnableMergeOffset : Option<
-    "loongarch-enable-merge-offset",
+defm LA_EnableMergeOffset : BoolField<
+    "loongarch-enable-merge-offset", "1",
     "Enable the merge base offset pass",
-    "bool"> {
-  let Registry = LoongArchOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def LA_EnableSinkFold : Option<
-    "loongarch-enable-sink-fold",
+defm LA_EnableSinkFold : BoolField<
+    "loongarch-enable-sink-fold", "1",
     "Enable sinking and folding of instruction copies",
-    "bool"> {
-  let Registry = LoongArchOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // --- LoongArchInstrInfo.cpp ---
 
-def LA_DisableRelocSched : Option<
-    "loongarch-disable-reloc-sched",
+defm LA_DisableRelocSched : BoolField<
+    "loongarch-disable-reloc-sched", "false",
     "Disable scheduling of instructions with target flags",
-    "bool"> {
-  let Default = "false";
-  let Registry = LoongArchOptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // --- LoongArchOptWInstrs.cpp ---
 
-def LA_DisableSExtWRemoval : Option<
-    "loongarch-disable-sextw-removal",
+defm LA_DisableSExtWRemoval : BoolField<
+    "loongarch-disable-sextw-removal", "false",
     "Disable removal of sign-extend insn",
-    "bool"> {
-  let Default = "false";
-  let Registry = LoongArchOptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def LA_DisableCvtToDSuffix : Option<
-    "loongarch-disable-cvt-to-d-suffix",
+defm LA_DisableCvtToDSuffix : BoolField<
+    "loongarch-disable-cvt-to-d-suffix", "false",
     "Disable convert to D suffix",
-    "bool"> {
-  let Default = "false";
-  let Registry = LoongArchOptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // --- MCTargetDesc/LoongArchInstPrinter.cpp ---
 
-def LA_NoAliases : Option<
-    "loongarch-no-aliases",
+defm LA_NoAliases : BoolField<
+    "loongarch-no-aliases", "false",
     "Disable the emission of assembler pseudo instructions",
-    "bool"> {
-  let Registry = LoongArchOptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def LA_NumericReg : Option<
-    "loongarch-numeric-reg",
+defm LA_NumericReg : BoolField<
+    "loongarch-numeric-reg", "false",
     "Print numeric register names rather than the ABI "
     "names (such as $r0 instead of $zero)",
-    "bool"> {
-  let Registry = LoongArchOptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // --- LoongArchISelLowering.cpp ---
 
-def LAMatFPImmNoMaterialize : EnumValue<"0", "Use constant pool"> {
-  let CppName = "NoMaterialize";
-  let Value = 0;
-}
+// The spellings below are the numeric instruction counts accepted on the
+// command line. There is deliberately no "1": the original clv2 schema never
+// defined a value for it either (a pre-existing gap, not a regression here).
+def LAMaterializeFPImm : OptionEnum<"LAMaterializeFPImm", [
+    EnumMember<"NoMaterialize", "0">,
+    EnumMember<"Materialize2Ins", "2">,
+    EnumMember<"Materialize3Ins", "3">,
+    EnumMember<"Materialize4Ins", "4">,
+    EnumMember<"Materialize5Ins", "5">,
+    EnumMember<"Materialize6Ins", "6">]>;
 
-def LAMatFPImmMaterialize2Ins : EnumValue<"2",
-    "Materialize FP immediate within 2 instructions"> {
-  let CppName = "Materialize2Ins";
-  let Value = 2;
-}
-
-def LAMatFPImmMaterialize3Ins : EnumValue<"3",
-    "Materialize FP immediate within 3 instructions"> {
-  let CppName = "Materialize3Ins";
-  let Value = 3;
-}
-
-def LAMatFPImmMaterialize4Ins : EnumValue<"4",
-    "Materialize FP immediate within 4 instructions"> {
-  let CppName = "Materialize4Ins";
-  let Value = 4;
-}
-
-def LAMatFPImmMaterialize5Ins : EnumValue<"5",
-    "Materialize FP immediate within 5 instructions"> {
-  let CppName = "Materialize5Ins";
-  let Value = 5;
-}
-
-def LAMatFPImmMaterialize6Ins : EnumValue<"6",
-    "Materialize FP immediate within 6 instructions "
-    "(behaves same as 5 on loongarch64)"> {
-  let CppName = "Materialize6Ins";
-  let Value = 6;
-}
-
-def LAMaterializeFPImm : EnumType<"LAMaterializeFPImm",
-    [LAMatFPImmNoMaterialize, LAMatFPImmMaterialize2Ins,
-     LAMatFPImmMaterialize3Ins, LAMatFPImmMaterialize4Ins,
-     LAMatFPImmMaterialize5Ins, LAMatFPImmMaterialize6Ins]>;
-
-def LA_MaterializeFPImmInsNum : Option<
-    "loongarch-materialize-float-imm",
+defm LA_MaterializeFPImmInsNum : EnumField<
+    "loongarch-materialize-float-imm", LAMaterializeFPImm,
+    "LAMaterializeFPImm::Materialize3Ins",
     "Maximum number of instructions used (including code sequence "
     "to generate the value and moving the value to FPR) when "
     "materializing floating-point immediates (default = 3)",
-    "LAMaterializeFPImm"> {
-  let Registry = LoongArchOptsReg;
-  let Default = "3";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def LA_ZeroDivCheck : Option<
-    "loongarch-check-zero-division",
+defm LA_ZeroDivCheck : BoolField<
+    "loongarch-check-zero-division", "false",
     "Trap on integer division by zero.",
-    "bool"> {
-  let Default = "false";
-  let Registry = LoongArchOptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // --- LoongArchMemoryBarrierOpt.cpp ---
 
-def LA_RequireNoPathBypass : Option<
-    "loongarch-require-no-path-bypass",
+defm LA_RequireNoPathBypass : BoolField<
+    "loongarch-require-no-path-bypass", "1",
     "Optimize only when no paths bypass either memory barrier",
-    "bool"> {
-  let Default = "1";
-  let Registry = LoongArchOptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def LA_MergeAMOWithMB : Option<
-    "loongarch-merge-amo-with-dbar",
+defm LA_MergeAMOWithMB : BoolField<
+    "loongarch-merge-amo-with-dbar", "1",
     "Merge AMOs with DBARs into AMO_DB during optimization",
-    "bool"> {
-  let Default = "1";
-  let Registry = LoongArchOptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def LA_DisableInlineAsmBarrierOpt : Option<
-    "loongarch-disable-inline-asm-barrier-opt",
+defm LA_DisableInlineAsmBarrierOpt : BoolField<
+    "loongarch-disable-inline-asm-barrier-opt", "false",
     "Disable optimization of memory barriers in InlineAsm",
-    "bool"> {
-  let Default = "false";
-  let Registry = LoongArchOptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def LA_ReplaceEliminatedDbarToNop : Option<
-    "loongarch-replace-eliminated-dbar-to-nop",
+defm LA_ReplaceEliminatedDbarToNop : BoolField<
+    "loongarch-replace-eliminated-dbar-to-nop", "false",
     "Replace eliminated DBARs with NOPs to preserve code layout",
-    "bool"> {
-  let Default = "false";
-  let Registry = LoongArchOptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;

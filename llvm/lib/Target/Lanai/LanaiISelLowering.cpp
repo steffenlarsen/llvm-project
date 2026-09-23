@@ -41,9 +41,8 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/KnownBits.h"
 #include "llvm/Support/MathExtras.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/Lanai/LanaiOptionsOptInfos.h"
+#include "llvm/Target/Lanai/LanaiOptions.h"
 #include "llvm/Target/TargetMachine.h"
 #include <cassert>
 #include <cmath>
@@ -63,11 +62,10 @@ using namespace llvm;
 // instructions (including the prologue and epilogue but excluding instructions
 // at call site). Until we can inline mulsi3, generating at most 14 instructions
 // will be faster than invoking mulsi3.
-static int LanaiLowerConstantMulThreshold = 14;
-
 static int getLanaiLowerConstantMulThreshold(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::LANAI_LowerConstantMulThreshold>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<LanaiOptions>()
+      .LANAI_LowerConstantMulThreshold;
 }
 
 LanaiTargetLowering::LanaiTargetLowering(const TargetMachine &TM,

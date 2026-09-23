@@ -31,9 +31,8 @@
 #include "llvm/IR/Type.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
+#include "llvm/Target/Hexagon/HexagonOptions.h"
 #include "llvm/Target/TargetOptions.h"
 
 #define GET_REGINFO_TARGET_DESC
@@ -46,13 +45,11 @@ static unsigned FrameIndexSearchRange = 32;
 static unsigned FrameIndexReuseLimit = ~0;
 
 static unsigned getFrameIndexSearchRange(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_FrameIndexSearchRange>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_FrameIndexSearchRange;
 }
 
 static unsigned getFrameIndexReuseLimit(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_FrameIndexReuseLimit>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_FrameIndexReuseLimit;
 }
 
 HexagonRegisterInfo::HexagonRegisterInfo(unsigned HwMode)

@@ -15,51 +15,52 @@
 #include "PerfReader.h"
 #include "ProfileGenerator.h"
 #include "ProfiledBinary.h"
-#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
-#include "llvm/AsmParser/AsmParserOptionsOptInfos.h"
-#include "llvm/Bitcode/BitcodeOptionsOptInfos.h"
+#include "llvm/AsmParser/AsmParserOptions.h"
+#include "llvm/Bitcode/BitcodeMemProfOptions.h"
 #include "llvm/DebugInfo/Symbolize/SymbolizableModule.h"
-#include "llvm/IR/IROptionsOptInfos.h"
-#include "llvm/LTO/LTOOptionsOptInfos.h"
-#include "llvm/MC/MCOptionsOptInfos.h"
-#include "llvm/Object/ObjectOptionsOptInfos.h"
-#include "llvm/Passes/PassesOptionsOptInfos.h"
-#include "llvm/ProfileData/ProfileDataOptionsOptInfos.h"
-#include "llvm/Remarks/RemarksOptionsOptInfos.h"
+#include "llvm/IR/IROptions.h"
+#include "llvm/LTO/LTOOptions.h"
+#include "llvm/MC/MCOptions.h"
+#include "llvm/Object/ObjectOptions.h"
+#include "llvm/Option/LibraryOptions.h"
+#include "llvm/Passes/PassesOptions.h"
+#include "llvm/ProfileData/ProfileDataOptions.h"
+#include "llvm/Remarks/RemarksOptions.h"
 #include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/SupportOptions.h"
+#include "llvm/Support/SupportOptionsOptInfos.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/VirtualFileSystem.h"
-#include "llvm/Target/AArch64/AArch64OptionsOptInfos.h"
-#include "llvm/Target/AMDGPU/AMDGPUOptionsOptInfos.h"
-#include "llvm/Target/ARM/ARMOptionsOptInfos.h"
-#include "llvm/Target/BPF/BPFOptionsOptInfos.h"
-#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
-#include "llvm/Target/Lanai/LanaiOptionsOptInfos.h"
-#include "llvm/Target/LoongArch/LoongArchOptionsOptInfos.h"
-#include "llvm/Target/MSP430/MSP430OptionsOptInfos.h"
-#include "llvm/Target/Mips/MipsOptionsOptInfos.h"
-#include "llvm/Target/NVPTX/NVPTXOptionsOptInfos.h"
-#include "llvm/Target/PowerPC/PowerPCOptionsOptInfos.h"
-#include "llvm/Target/RISCV/RISCVOptionsOptInfos.h"
-#include "llvm/Target/SPIRV/SPIRVOptionsOptInfos.h"
-#include "llvm/Target/Sparc/SparcOptionsOptInfos.h"
-#include "llvm/Target/SystemZ/SystemZOptionsOptInfos.h"
-#include "llvm/Target/WebAssembly/WebAssemblyOptionsOptInfos.h"
-#include "llvm/Target/X86/X86OptionsOptInfos.h"
-#include "llvm/Target/XCore/XCoreOptionsOptInfos.h"
-#include "llvm/Transforms/AggressiveInstCombine/AggressiveInstCombineOptionsOptInfos.h"
-#include "llvm/Transforms/Coroutines/CoroutinesOptionsOptInfos.h"
-#include "llvm/Transforms/IPO/IPOOptionsOptInfos.h"
-#include "llvm/Transforms/InstCombine/InstCombineOptionsOptInfos.h"
-#include "llvm/Transforms/Instrumentation/InstrumentationOptionsOptInfos.h"
-#include "llvm/Transforms/ObjCARC/ObjCARCOptionsOptInfos.h"
-#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
-#include "llvm/Transforms/Utils/UtilsOptionsOptInfos.h"
-#include "llvm/Transforms/Vectorize/VectorizeOptionsOptInfos.h"
+#include "llvm/Target/AArch64/AArch64Options.h"
+#include "llvm/Target/AMDGPU/AMDGPUOptions.h"
+#include "llvm/Target/ARM/ARMOptions.h"
+#include "llvm/Target/BPF/BPFOptions.h"
+#include "llvm/Target/Hexagon/HexagonOptions.h"
+#include "llvm/Target/Lanai/LanaiOptions.h"
+#include "llvm/Target/LoongArch/LoongArchOptions.h"
+#include "llvm/Target/MSP430/MSP430Options.h"
+#include "llvm/Target/Mips/MipsOptions.h"
+#include "llvm/Target/NVPTX/NVPTXOptions.h"
+#include "llvm/Target/PowerPC/PowerPCOptions.h"
+#include "llvm/Target/RISCV/RISCVOptions.h"
+#include "llvm/Target/SPIRV/SPIRVOptions.h"
+#include "llvm/Target/Sparc/SparcOptions.h"
+#include "llvm/Target/SystemZ/SystemZOptions.h"
+#include "llvm/Target/WebAssembly/WebAssemblyOptions.h"
+#include "llvm/Target/X86/X86Options.h"
+#include "llvm/Target/XCore/XCoreOptions.h"
+#include "llvm/Transforms/AggressiveInstCombine/AggressiveInstCombineOptions.h"
+#include "llvm/Transforms/Coroutines/CoroutinesOptions.h"
+#include "llvm/Transforms/IPO/IPOOptions.h"
+#include "llvm/Transforms/InstCombine/InstCombineOptions.h"
+#include "llvm/Transforms/Instrumentation/InstrumentationOptions.h"
+#include "llvm/Transforms/ObjCARC/ObjCARCOptions.h"
+#include "llvm/Transforms/Scalar/ScalarOptions.h"
+#include "llvm/Transforms/Utils/UtilsOptions.h"
+#include "llvm/Transforms/Vectorize/VectorizeOptions.h"
 
 using namespace llvm;
 using namespace sampleprof;
@@ -469,44 +470,6 @@ static constexpr llvm::clv2::OptionsRegistry<
 // Registries parsed by this tool, with their bridge functions.
 static void configureProfGenRegistries(llvm::clv2::OptionParser &P) {
   P.add<&ProfGenToolReg>();
-  P.add<&llvm::clv2::SupportOptsReg, llvm::support::applySupportOptions>();
-  P.add<&llvm::clv2::RemarksOptsReg>();
-  P.add<&llvm::clv2::ObjectOptsReg>();
-  P.add<&llvm::clv2::AsmParserOptsReg>();
-  P.add<&llvm::clv2::TransformUtilsOptsReg>();
-  P.add<&llvm::clv2::IPOOptsReg>();
-  P.add<&llvm::clv2::ScalarOptsReg>();
-  P.add<&llvm::clv2::AnalysisOptsReg>();
-  P.add<&llvm::clv2::VectorizeOptsReg>();
-  P.add<&llvm::clv2::InstrumentationOptsReg>();
-  P.add<&llvm::clv2::BitcodeOptsReg>();
-  P.add<&llvm::clv2::LTOOptsReg>();
-  P.add<&llvm::clv2::InstCombineOptsReg>();
-  P.add<&llvm::clv2::AggressiveInstCombineOptsReg>();
-  P.add<&llvm::clv2::CoroutinesOptsReg>();
-  P.add<&llvm::clv2::ObjCARCOptsReg>();
-  P.add<&llvm::clv2::IROptsReg>();
-  P.add<&llvm::clv2::MCOptsReg>();
-  P.add<&llvm::clv2::PassesOptsReg>();
-  P.add<&llvm::clv2::ProfileDataOptsReg>();
-  P.add<&llvm::clv2::X86OptsReg>();
-  P.add<&llvm::clv2::AArch64OptsReg>();
-  P.add<&llvm::clv2::AMDGPUOptsReg>();
-  P.add<&llvm::clv2::ARMOptsReg>();
-  P.add<&llvm::clv2::HexagonOptsReg>();
-  P.add<&llvm::clv2::RISCVOptsReg>();
-  P.add<&llvm::clv2::PowerPCOptsReg>();
-  P.add<&llvm::clv2::MipsOptsReg>();
-  P.add<&llvm::clv2::SystemZOptsReg>();
-  P.add<&llvm::clv2::SparcOptsReg>();
-  P.add<&llvm::clv2::WebAssemblyOptsReg>();
-  P.add<&llvm::clv2::LoongArchOptsReg>();
-  P.add<&llvm::clv2::NVPTXOptsReg>();
-  P.add<&llvm::clv2::LanaiOptsReg>();
-  P.add<&llvm::clv2::BPFOptsReg>();
-  P.add<&llvm::clv2::SPIRVOptsReg>();
-  P.add<&llvm::clv2::MSP430OptsReg>();
-  P.add<&llvm::clv2::XCoreOptsReg>();
 }
 
 int main(int argc, const char *argv[]) {
@@ -518,12 +481,50 @@ int main(int argc, const char *argv[]) {
   InitializeAllTargetInfos();
   InitializeAllTargetMCs();
   InitializeAllDisassemblers();
+  // llvm::PassesOptions, llvm::ObjectOptions, llvm::RemarksOptions,
+  // llvm::AsmParserOptions, llvm::XCoreOptions, llvm::ObjCARCOptions,
+  // llvm::LanaiOptions, llvm::SystemZOptions, llvm::MSP430Options,
+  // llvm::SparcOptions, llvm::BitcodeMemProfOptions,
+  // llvm::ProfileDataOptions, llvm::MCLibraryOptions, llvm::IROptions, and
+  // llvm::VectorizeOptions have migrated off clv2 onto the new per-library
+  // OptTable struct design (see llvm/include/llvm/Option/LibraryOptions.h)
+  // and are no longer among the clv2::OptionParser registries configured
+  // below. Parse their options out of argv first, forwarding whatever none
+  // of them recognizes to the legacy clv2 parser unchanged.
+  SmallVector<const char *, 32> PassesRest;
+  {
+    std::string PassesErrs;
+    raw_string_ostream PassesErrsOS(PassesErrs);
+    if (Error Err = opt::parseLibraryOptionsChain<
+            SupportOptions, PassesOptions, ObjectOptions, RemarksOptions,
+            AsmParserOptions, XCoreOptions, ObjCARCOptions, LanaiOptions,
+            SystemZOptions, MSP430Options, CoroutinesOptions,
+            AggressiveInstCombineOptions, InstCombineCLOptions, SparcOptions,
+            WebAssemblyOptions, SPIRVOptions, BitcodeMemProfOptions, BPFOptions,
+            LoongArchOptions, LTOOptions, MipsOptions, NVPTXOptions,
+            AArch64Options, ARMOptions, RISCVOptions, X86Options,
+            PowerPCOptions, HexagonOptions, ProfileDataOptions,
+            MCLibraryOptions, IROptions, UtilsOptions, VectorizeOptions,
+            AMDGPUOptions, InstrumentationOptions, IPOOptions, ScalarOptions>(
+            ArrayRef<const char *>(argv + 1, argv + argc), PassesRest,
+            PassesErrsOS)) {
+      errs() << "llvm-profgen: " << toString(std::move(Err)) << "\n";
+      return 1;
+    }
+    errs() << PassesErrs;
+  }
+  SmallVector<const char *, 32> ArgvAfterPasses;
+  ArgvAfterPasses.push_back(argv[0]);
+  ArgvAfterPasses.append(PassesRest.begin(), PassesRest.end());
+
   llvm::clv2::OptionParser P;
   configureProfGenRegistries(P);
   P.enableGlobalDynamicEntries();
   P.hideUnrelatedOptions({&ProfGenCat, &clv2::ColorOptionsCategory});
   auto OptsCtxOwner =
-      P.parse(argc, argv, "llvm SPGO profile generator\n", /*Errs=*/nullptr);
+      P.parse(static_cast<int>(ArgvAfterPasses.size()), ArgvAfterPasses.data(),
+              "llvm SPGO profile generator\n",
+              /*Errs=*/nullptr);
   const auto &OptsCtx = *OptsCtxOwner;
   const auto *Opts = OptsCtx.getViewPtr<&ProfGenToolReg>();
 

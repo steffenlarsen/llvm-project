@@ -6,84 +6,29 @@
 //
 //===----------------------------------------------------------------------===//
 
-include "llvm/Support/CLV2Options.td"
+include "llvm/Option/OptParser.td"
 
-def BitcodeOptsReg : Registry<"llvm::bc_opts"> {
-  // Getter bodies are compiled once, in BitcodeOptionsGetters.cpp.
-  let OutOfLineGetters = 1;
-  // Getter bodies are compiled once, in BitcodeOptionsGetters.cpp.
-  let OutOfLineGetters = 1;
-}
+def BitcodeOptions : OptionsStruct<"llvm"> {}
 
-def BC_MDIndexThreshold : Option<
-    "bitcode-mdindex-threshold",
+defm BC_MDIndexThreshold : OptionalValueField<"bitcode-mdindex-threshold",
+    "unsigned", "25",
     "Number of metadatas above which we emit an index to enable lazy-loading",
-    "unsigned"> {
-  let Registry = BitcodeOptsReg;
-  let Default = "25";
-  let Hidden = 1;
-}
+    1>;
 
-def BC_CombinedIndexMemProfContext : Option<
-    "combined-index-memprof-context",
-    "Include allocation context in combined memprof summary",
-    "bool"> {
-  let Registry = BitcodeOptsReg;
-  let Default = "llvm::bitcode::CombinedIndexMemProfContextDefault";
-  let Hidden = 1;
-}
+defm BC_PreserveBCUseListOrder : OptionalValueField<"preserve-bc-uselistorder",
+    "bool", "true", "Preserve use-list order when writing LLVM bitcode.", 1>;
 
-def BC_PreserveBCUseListOrder : Option<
-    "preserve-bc-uselistorder",
-    "Preserve use-list order when writing LLVM bitcode.",
-    "bool"> {
-  let Registry = BitcodeOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm BC_ImportFullTypeDefinitions : BoolField<"import-full-type-definitions",
+    "false", "Import full type definitions for ThinLTO.", 1>;
 
-def BC_ImportFullTypeDefinitions : Option<
-    "import-full-type-definitions",
-    "Import full type definitions for ThinLTO.",
-    "bool"> {
-  let Registry = BitcodeOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+defm BC_DisableLazyLoading : BoolField<"disable-ondemand-mds-loading",
+    "false",
+    "Force disable the lazy-loading on-demand of metadata when loading "
+    "bitcode for importing.",
+    1>;
 
-def BC_DisableLazyLoading : Option<
-    "disable-ondemand-mds-loading",
-    "Force disable the lazy-loading on-demand of metadata when loading bitcode "
-    "for importing.",
-    "bool"> {
-  let Registry = BitcodeOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+defm BC_ExpandConstantExprs : BoolField<"expand-constant-exprs", "false",
+    "Expand constant expressions to instructions for testing purposes", 1>;
 
-def BC_PrintSummaryGUIDs : Option<
-    "print-summary-global-ids",
-    "Print the global id for each value when reading the module summary",
-    "bool"> {
-  let Registry = BitcodeOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
-
-def BC_ExpandConstantExprs : Option<
-    "expand-constant-exprs",
-    "Expand constant expressions to instructions for testing purposes",
-    "bool"> {
-  let Registry = BitcodeOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
-
-def BC_FlushThreshold : Option<
-    "bitcode-flush-threshold",
-    "The threshold (unit M) for flushing LLVM bitcode.",
-    "unsigned"> {
-  let Registry = BitcodeOptsReg;
-  let Default = "512";
-  let Hidden = 1;
-}
+defm BC_FlushThreshold : ValueField<"bitcode-flush-threshold", "unsigned",
+    "512", "The threshold (unit M) for flushing LLVM bitcode.", 1>;

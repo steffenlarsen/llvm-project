@@ -7,13 +7,11 @@
 //===----------------------------------------------------------------------===//
 
 #include "SafeStackLayout.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsCore2.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Value.h"
-#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <cassert>
@@ -23,8 +21,8 @@ using namespace llvm::safestack;
 
 #define DEBUG_TYPE "safestacklayout"
 
-static bool getSafeStackLayout(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_SafeStackLayout>(Ctx);
+static bool getSafeStackLayout(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore2Options>().CGPASS_SafeStackLayout;
 }
 
 LLVM_DUMP_METHOD void StackLayout::print(raw_ostream &OS) {

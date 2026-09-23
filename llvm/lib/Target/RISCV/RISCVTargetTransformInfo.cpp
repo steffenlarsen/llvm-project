@@ -17,8 +17,7 @@
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicsRISCV.h"
 #include "llvm/IR/PatternMatch.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/RISCV/RISCVOptionsOptInfos.h"
+#include "llvm/Target/RISCV/RISCVOptions.h"
 #include "llvm/Transforms/InstCombine/InstCombiner.h"
 #include <cmath>
 #include <optional>
@@ -27,39 +26,20 @@ using namespace llvm::PatternMatch;
 
 #define DEBUG_TYPE "riscvtti"
 
-static unsigned RVVRegisterWidthLMUL = 2;
-
-static bool SLPMaxVFWasSpecified = false;
-
-static unsigned RVVMinTripCount = 5;
-
-static bool EnableOrLikeSelectOpt = true;
-
 static unsigned getRVVRegisterWidthLMUL(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::RV_RegisterWidthLMUL>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<RISCVOptions>().RV_RegisterWidthLMUL;
 }
 
-static unsigned getSLPMaxVF(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::RV_SLPMaxVF>(
-      F.getContext().getOptionsContext());
-}
-
-static bool getSLPMaxVFWasSpecified(const Function &F) {
-  if (auto *O = clv2::getView<&clv2::RISCVOptsReg>(
-          F.getContext().getOptionsContext()))
-    return O->specified<&clv2::RV_SLPMaxVF>();
-  return SLPMaxVFWasSpecified;
+static std::optional<unsigned> getSLPMaxVF(const Function &F) {
+  return F.getContext().getOptions<RISCVOptions>().RV_SLPMaxVF;
 }
 
 static unsigned getRVVMinTripCount(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::RV_MinTripCount>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<RISCVOptions>().RV_MinTripCount;
 }
 
 static bool getEnableOrLikeSelectOpt(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::RV_EnableOrLikeSelectOpt>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<RISCVOptions>().RV_EnableOrLikeSelectOpt;
 }
 
 InstructionCost
@@ -541,7 +521,8 @@ static bool isRepeatedConcatMask(ArrayRef<int> Mask, int &SubVectorSize) {
 static VectorType *getVRGatherIndexType(MVT DataVT, const RISCVSubtarget &ST,
                                         LLVMContext &C) {
   assert((DataVT.getScalarSizeInBits() != 8 ||
-          DataVT.getVectorNumElements() <= 256) && "unhandled case in lowering");
+          DataVT.getVectorNumElements() <= 256) &&
+         "unhandled case in lowering");
   MVT IndexVT = DataVT.changeTypeToInteger();
   if (IndexVT.getScalarType().bitsGT(ST.getXLenVT()))
     IndexVT = IndexVT.changeVectorElementType(MVT::i16);
@@ -1064,8 +1045,11 @@ RISCVTTIImpl::getShuffleCost(TTI::ShuffleKind Kind, VectorType *DstTy,
         ContainerVT.getVectorMinNumElements() / M1VT.getVectorMinNumElements();
     InstructionCost GatherCost =
         getRISCVInstructionCost({RISCV::VRGATHER_VV}, M1VT, CostKind) * Ratio;
-    InstructionCost SlideCost = !LT.second.isFixedLengthVector() ? 0 :
-      getRISCVInstructionCost({RISCV::VSLIDEDOWN_VX}, LT.second, CostKind);
+    InstructionCost SlideCost =
+        !LT.second.isFixedLengthVector()
+            ? 0
+            : getRISCVInstructionCost({RISCV::VSLIDEDOWN_VX}, LT.second,
+                                      CostKind);
     return FixedCost + LT.first * (GatherCost + SlideCost);
   }
   }
@@ -1885,11 +1869,10 @@ RISCVTTIImpl::getIntrinsicInstrCost(const IntrinsicCostAttributes &ICA,
   }
 
   if (ST->hasVInstructions() && RetTy->isVectorTy()) {
-    if (auto LT = getTypeLegalizationCost(RetTy);
-        LT.second.isVector()) {
+    if (auto LT = getTypeLegalizationCost(RetTy); LT.second.isVector()) {
       MVT EltTy = LT.second.getVectorElementType();
-      if (const auto *Entry = CostTableLookup(VectorIntrinsicCostTable,
-                                              ICA.getID(), EltTy))
+      if (const auto *Entry =
+              CostTableLookup(VectorIntrinsicCostTable, ICA.getID(), EltTy))
         return LT.first * Entry->Cost;
     }
   }
@@ -2395,8 +2378,8 @@ RISCVTTIImpl::getStoreImmCost(Type *Ty, TTI::OperandValueInfo OpInfo,
 
   if (OpInfo.isUniform())
     // vmv.v.i, vmv.v.x, or vfmv.v.f
-    // We ignore the cost of the scalar constant materialization to be consistent
-    // with how we treat scalar constants themselves just above.
+    // We ignore the cost of the scalar constant materialization to be
+    // consistent with how we treat scalar constants themselves just above.
     return 1;
 
   return getConstantPoolLoadCost(Ty, CostKind);
@@ -2434,7 +2417,7 @@ InstructionCost RISCVTTIImpl::getMemoryOpCost(unsigned Opcode, Type *Src,
     if (Src->isVectorTy() && LT.second.isVector() &&
         TypeSize::isKnownLT(DL.getTypeStoreSizeInBits(Src),
                             LT.second.getSizeInBits()))
-        return Cost;
+      return Cost;
 
     return BaseT::getMemoryOpCost(Opcode, Src, Alignment, AddressSpace,
                                   CostKind, OpInfo, I);
@@ -2667,27 +2650,23 @@ InstructionCost RISCVTTIImpl::getVectorInstrCost(
   // Mask vector extract/insert is expanded via e8.
   if (Val->getScalarSizeInBits() == 1) {
     VectorType *WideTy =
-      VectorType::get(IntegerType::get(Val->getContext(), 8),
-                      cast<VectorType>(Val)->getElementCount());
+        VectorType::get(IntegerType::get(Val->getContext(), 8),
+                        cast<VectorType>(Val)->getElementCount());
     if (Opcode == Instruction::ExtractElement) {
-      InstructionCost ExtendCost
-        = getCastInstrCost(Instruction::ZExt, WideTy, Val,
-                           TTI::CastContextHint::None, CostKind);
-      InstructionCost ExtractCost
-        = getVectorInstrCost(Opcode, WideTy, CostKind, Index, nullptr, nullptr);
+      InstructionCost ExtendCost = getCastInstrCost(
+          Instruction::ZExt, WideTy, Val, TTI::CastContextHint::None, CostKind);
+      InstructionCost ExtractCost =
+          getVectorInstrCost(Opcode, WideTy, CostKind, Index, nullptr, nullptr);
       return ExtendCost + ExtractCost;
     }
-    InstructionCost ExtendCost
-      = getCastInstrCost(Instruction::ZExt, WideTy, Val,
-                         TTI::CastContextHint::None, CostKind);
-    InstructionCost InsertCost
-      = getVectorInstrCost(Opcode, WideTy, CostKind, Index, nullptr, nullptr);
-    InstructionCost TruncCost
-      = getCastInstrCost(Instruction::Trunc, Val, WideTy,
-                         TTI::CastContextHint::None, CostKind);
+    InstructionCost ExtendCost = getCastInstrCost(
+        Instruction::ZExt, WideTy, Val, TTI::CastContextHint::None, CostKind);
+    InstructionCost InsertCost =
+        getVectorInstrCost(Opcode, WideTy, CostKind, Index, nullptr, nullptr);
+    InstructionCost TruncCost = getCastInstrCost(
+        Instruction::Trunc, Val, WideTy, TTI::CastContextHint::None, CostKind);
     return ExtendCost + InsertCost + TruncCost;
   }
-
 
   // In RVV, we could use vslidedown + vmv.x.s to extract element from vector
   // and vslideup + vmv.s.x to insert element to vector.
@@ -3029,7 +3008,6 @@ void RISCVTTIImpl::getUnrollingPreferences(
     OptimizationRemarkEmitter *ORE) const {
   // TODO: More tuning on benchmarks and metrics with changes as needed
   //       would apply to all settings below to enable performance.
-
 
   if (ST->enableDefaultUnroll())
     return BasicTTIImplBase::getUnrollingPreferences(L, SE, UP, ORE);
@@ -3426,8 +3404,8 @@ unsigned RISCVTTIImpl::getRegUsageForType(Type *Ty) const {
 }
 
 unsigned RISCVTTIImpl::getMaximumVF(unsigned ElemWidth, unsigned Opcode) const {
-  if (getSLPMaxVFWasSpecified(F))
-    return getSLPMaxVF(F);
+  if (std::optional<unsigned> Val = getSLPMaxVF(F))
+    return *Val;
 
   // Return how many elements can fit in getRegisterBitwidth.  This is the
   // same routine as used in LoopVectorizer.  We should probably be
@@ -3435,7 +3413,7 @@ unsigned RISCVTTIImpl::getMaximumVF(unsigned ElemWidth, unsigned Opcode) const {
   // lane type, but we don't have enough information to do that without
   // some additional plumbing which hasn't been justified yet.
   TypeSize RegWidth =
-    getRegisterBitWidth(TargetTransformInfo::RGK_FixedWidthVector);
+      getRegisterBitWidth(TargetTransformInfo::RGK_FixedWidthVector);
   // If no vector registers, or absurd element widths, disable
   // vectorization by returning 1.
   return std::max<unsigned>(1U, RegWidth.getFixedValue() / ElemWidth);
@@ -3465,12 +3443,10 @@ bool RISCVTTIImpl::isLSRCostLess(const TargetTransformInfo::LSRCost &C1,
   // we need at least one extra temporary register.
   unsigned C1NumRegs = C1.NumRegs + (C1.NumBaseAdds != 0);
   unsigned C2NumRegs = C2.NumRegs + (C2.NumBaseAdds != 0);
-  return std::tie(C1.Insns, C1NumRegs, C1.AddRecCost,
-                  C1.NumIVMuls, C1.NumBaseAdds,
-                  C1.ScaleCost, C1.ImmCost, C1.SetupCost) <
-         std::tie(C2.Insns, C2NumRegs, C2.AddRecCost,
-                  C2.NumIVMuls, C2.NumBaseAdds,
-                  C2.ScaleCost, C2.ImmCost, C2.SetupCost);
+  return std::tie(C1.Insns, C1NumRegs, C1.AddRecCost, C1.NumIVMuls,
+                  C1.NumBaseAdds, C1.ScaleCost, C1.ImmCost, C1.SetupCost) <
+         std::tie(C2.Insns, C2NumRegs, C2.AddRecCost, C2.NumIVMuls,
+                  C2.NumBaseAdds, C2.ScaleCost, C2.ImmCost, C2.SetupCost);
 }
 
 bool RISCVTTIImpl::isLegalMaskedExpandLoad(Type *DataTy,

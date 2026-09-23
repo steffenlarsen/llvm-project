@@ -15,10 +15,14 @@ add_llvm_component_library(LLVMPowerPCDesc
   BinaryFormat
   CodeGenTypes
   MC
+  Option
   PowerPCInfo
   Support
   TargetParser
 
   ADD_TO_COMPONENT
   PowerPC
+
+  DEPENDS
+  PowerPCOptParserTableGen
   )

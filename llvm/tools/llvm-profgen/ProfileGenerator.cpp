@@ -966,16 +966,14 @@ void CSProfileGenerator::populateBoundarySamplesForFunction(
         CallerNode->getFunctionSamples()->addCalledTargetSamples(
             LeafLoc->Location.LineOffset,
             getBaseDiscriminator(LeafLoc->Location.Discriminator),
-            FunctionId(CalleeName),
-            Count);
+            FunctionId(CalleeName), Count);
         // Record head sample for called target(callee)
         CalleeCallSite = LeafLoc->Location;
       }
     }
 
-    ContextTrieNode *CalleeNode =
-        CallerNode->getOrCreateChildContext(CalleeCallSite,
-                                            FunctionId(CalleeName));
+    ContextTrieNode *CalleeNode = CallerNode->getOrCreateChildContext(
+        CalleeCallSite, FunctionId(CalleeName));
     FunctionSamples *CalleeProfile = getOrCreateFunctionSamples(CalleeNode);
     CalleeProfile->addHeadSamples(Count);
   }
@@ -1082,7 +1080,11 @@ void CSProfileGenerator::postProcessProfiles() {
 
   if (Config.GenCSNestedProfile) {
     ProfileConverter CSConverter(ProfileMap);
-    CSConverter.convertCSProfiles(*Config.OptsCtx);
+    // ProfileGeneratorBase has no Module/LLVMContext in scope to bridge to
+    // the new per-type options system, so read the process-wide default,
+    // which parseLibraryOptionsChain<ProfileDataOptions> (see main() in
+    // llvm-profgen.cpp) keeps up to date from argv.
+    CSConverter.convertCSProfiles(ProfileDataOptions::Current);
     FunctionSamples::ProfileIsCS = false;
   }
   filterAmbiguousProfile(ProfileMap);
@@ -1094,11 +1096,14 @@ void CSProfileGenerator::postProcessProfiles() {
 void ProfileGeneratorBase::computeSummaryAndThreshold(
     SampleProfileMap &Profiles) {
   SampleProfileSummaryBuilder Builder(ProfileSummaryBuilder::DefaultCutoffs);
-  Summary = Builder.computeSummaryForProfiles(Profiles, *Config.OptsCtx);
+  // See the convertCSProfiles() call above for why ProfileDataOptions::Current
+  // is used here instead of Config.OptsCtx.
+  Summary =
+      Builder.computeSummaryForProfiles(Profiles, ProfileDataOptions::Current);
   HotCountThreshold = ProfileSummaryBuilder::getHotCountThreshold(
-      (Summary->getDetailedSummary()), *Config.OptsCtx);
+      (Summary->getDetailedSummary()), ProfileDataOptions::Current);
   ColdCountThreshold = ProfileSummaryBuilder::getColdCountThreshold(
-      (Summary->getDetailedSummary()), *Config.OptsCtx);
+      (Summary->getDetailedSummary()), ProfileDataOptions::Current);
 }
 
 void CSProfileGenerator::computeSummaryAndThreshold() {
@@ -1227,7 +1232,8 @@ void CSProfileGenerator::populateBodySamplesWithProbes(
         // context id to infer caller's context id to ensure they share the
         // same context prefix.
         uint64_t CallerIndex = ContextNode->getCallSiteLoc().LineOffset;
-        uint64_t CallerDiscriminator = ContextNode->getCallSiteLoc().Discriminator;
+        uint64_t CallerDiscriminator =
+            ContextNode->getCallSiteLoc().Discriminator;
         assert(CallerIndex &&
                "Inferred caller's location index shouldn't be zero!");
         assert(!CallerDiscriminator &&

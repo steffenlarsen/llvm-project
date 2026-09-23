@@ -11,9 +11,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Transforms/IPO/Attributor.h"
-#include "llvm/Transforms/IPO/IPOOptionsOptInfos.h"
+#include "llvm/Transforms/IPO/IPOOptions.h"
 
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/ArrayRef.h"
@@ -89,18 +88,15 @@ unsigned llvm::PotentialConstantIntValuesState::MaxPotentialValues = 7;
 template <> unsigned llvm::PotentialLLVMValuesState::MaxPotentialValues = -1;
 
 static bool getManifestInternal(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_ManifestInternal>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_ManifestInternal;
 }
 
 static int getMaxHeapToStackSize(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_MaxHeapToStackSize>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_MaxHeapToStackSize;
 }
 
 static int getMaxPotentialValuesIterations(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_MaxPotentialValuesIterations>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_MaxPotentialValuesIterations;
 }
 
 STATISTIC(NumAAs, "Number of abstract attributes created");

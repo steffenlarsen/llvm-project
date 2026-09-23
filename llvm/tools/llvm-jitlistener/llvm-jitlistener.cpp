@@ -24,6 +24,7 @@
 #include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/OptionsContext.h"
+#include "llvm/Support/PluginLoaderOptions.h"
 #include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/TargetSelect.h"
@@ -225,7 +226,11 @@ int main(int argc, char **argv) {
   clv2::OptionParser P;
   P.add<&JitListenerReg>();
   RegisterAllLLVMOptions(P);
-  auto OptsCtx = P.parse(argc, argv, "llvm jit event listener test utility\n");
+  std::vector<const char *> ArgsAfterPlugins =
+      loadPluginsAndStripArgs(argc, argv);
+  auto OptsCtx = P.parse(static_cast<int>(ArgsAfterPlugins.size()),
+                          ArgsAfterPlugins.data(),
+                          "llvm jit event listener test utility\n");
   auto *Opts = OptsCtx->getViewPtr<&JitListenerReg>();
 
   JitEventListenerTest Test;

@@ -14,7 +14,7 @@
 #include "llvm/Analysis/CtxProfAnalysis.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
+#include "llvm/Analysis/AnalysisOptions.h"
 #include "llvm/Analysis/CFG.h"
 #include "llvm/IR/Analysis.h"
 #include "llvm/IR/Dominators.h"
@@ -24,10 +24,7 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/ProfileData/PGOCtxProfReader.h"
-#include "llvm/Support/CommandLineCompat.h"
-#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/MemoryBuffer.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/Path.h"
 #include <deque>
 #include <memory>
@@ -36,32 +33,23 @@
 
 using namespace llvm;
 
-#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
-#include "llvm/Support/CommandLineCompat.h"
-using namespace llvm::clv2;
-
 namespace llvm {
 
-std::string getUseCtxProfile(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValIfSpecified<&AnalysisOptsReg, &AN_UseCtxProfile>(
-      Ctx, std::string{});
+std::string getUseCtxProfile(const AnalysisOptions &Opts) {
+  return Opts.AN_UseCtxProfile;
 }
 
 static CtxProfAnalysisPrinterPass::PrintMode
-getCtxProfilePrintLevel(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValIfSpecified<&AnalysisOptsReg,
-                                    &AN_CtxProfilePrinterLevel>(
-      Ctx, CtxProfAnalysisPrinterPass::PrintMode::YAML);
+getCtxProfilePrintLevel(const AnalysisOptions &Opts) {
+  return Opts.AN_CtxProfilePrinterLevel;
 }
 
-bool getForceIsInSpecializedModule(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::AN_ForceIsInSpecializedModule>(Ctx);
+bool getForceIsInSpecializedModule(const AnalysisOptions &Opts) {
+  return Opts.AN_ForceIsInSpecializedModule.value_or(false);
 }
 
-bool getForceIsInSpecializedModuleWasSpecified(
-    const clv2::OptionsContext &Ctx) {
-  return clv2::wasOptSpecified<&AnalysisOptsReg,
-                               &AN_ForceIsInSpecializedModule>(Ctx);
+bool getForceIsInSpecializedModuleWasSpecified(const AnalysisOptions &Opts) {
+  return Opts.AN_ForceIsInSpecializedModule.has_value();
 }
 
 class ProfileAnnotatorImpl final {
@@ -446,7 +434,8 @@ PGOContextualProfile CtxProfAnalysis::run(Module &M,
   // Defer this to run() where the Module context is available.
   std::optional<std::string> EffectiveProfile = Profile;
   if (!EffectiveProfile) {
-    auto CtxProfile = getUseCtxProfile(M.getContext().getOptionsContext());
+    auto CtxProfile =
+        getUseCtxProfile(M.getContext().getOptions<AnalysisOptions>());
     if (CtxProfile.empty())
       return {};
     EffectiveProfile = CtxProfile;
@@ -486,7 +475,7 @@ PGOContextualProfile CtxProfAnalysis::run(Module &M,
   };
   const auto ProfileRootsInModule = DetermineRootsInModule();
   PGOContextualProfile Result;
-  Result.OptsCtx = &M.getContext().getOptionsContext();
+  Result.Opts = &M.getContext().getOptions<AnalysisOptions>();
 
   // the logic from here on allows for modules that contain - by design - more
   // than one root. We currently don't support that, because the determination
@@ -546,7 +535,7 @@ CtxProfAnalysisPrinterPass::CtxProfAnalysisPrinterPass(raw_ostream &OS)
 PreservedAnalyses CtxProfAnalysisPrinterPass::run(Module &M,
                                                   ModuleAnalysisManager &MAM) {
   auto EffectiveMode =
-      getCtxProfilePrintLevel(M.getContext().getOptionsContext());
+      getCtxProfilePrintLevel(M.getContext().getOptions<AnalysisOptions>());
   CtxProfAnalysis::Result &C = MAM.getResult<CtxProfAnalysis>(M);
   if (C.contexts().empty()) {
     OS << "No contextual profile was provided.\n";
@@ -652,8 +641,8 @@ void PGOContextualProfile::initIndex() {
 bool PGOContextualProfile::isInSpecializedModule() const {
   // ForceIsInSpecializedModule is only meaningful when explicitly specified
   // via the command line.
-  return getForceIsInSpecializedModuleWasSpecified(*OptsCtx)
-             ? getForceIsInSpecializedModule(*OptsCtx)
+  return getForceIsInSpecializedModuleWasSpecified(*Opts)
+             ? getForceIsInSpecializedModule(*Opts)
              : IsInSpecializedModule;
 }
 

@@ -13,7 +13,7 @@
 #include "llvm/ADT/Statistic.h"
 #include "llvm/DebugInfo/Symbolize/SymbolizableModule.h"
 #include "llvm/Support/OptionsContext.h"
-#include "llvm/Transforms/IPO/IPOOptionsOptInfos.h"
+#include "llvm/Transforms/IPO/IPOOptions.h"
 #include "llvm/Transforms/IPO/SampleProfile.h"
 #include <cstdint>
 #include <queue>
@@ -25,40 +25,37 @@
 using namespace llvm;
 using namespace sampleprof;
 
-static int getPreInlinerHotCallSiteThreshold(const clv2::OptionsContext &Ctx) {
-  if (auto *O = clv2::getView<&clv2::IPOOptsReg>(Ctx))
-    if (O->specified<&clv2::IPO_SampleHotCallSiteThreshold>())
-      return O->get<&clv2::IPO_SampleHotCallSiteThreshold>();
-  return 1500;
-}
-
-static int getPreInlinerColdCallSiteThreshold(const clv2::OptionsContext &Ctx) {
-  if (auto *O = clv2::getView<&clv2::IPOOptsReg>(Ctx))
-    if (O->specified<&clv2::IPO_SampleColdCallSiteThreshold>())
-      return O->get<&clv2::IPO_SampleColdCallSiteThreshold>();
-  return 0;
-}
-
-static int getPreInlinerProfileInlineLimitMax(const clv2::OptionsContext &Ctx) {
-  if (auto *O = clv2::getView<&clv2::IPOOptsReg>(Ctx))
-    if (O->specified<&clv2::IPO_ProfileInlineLimitMax>())
-      return O->get<&clv2::IPO_ProfileInlineLimitMax>();
-  return 50000;
+// The getPreInliner*() helpers below have no Module/LLVMContext in scope
+// (only a legacy clv2::OptionsContext, unrelated to IPOOptions' per-context
+// storage), so they read the process-wide IPOOptions::Current default
+// directly, the same no-context fallback used below for
+// ProfileDataOptions::Current. Each falls back to CSPreInliner's own
+// long-standing default, which intentionally differs from
+// SampleProfileLoader's default for the same CLI flag (e.g. 1500 vs 3000 for
+// the hot callsite threshold).
+static int
+getPreInlinerHotCallSiteThreshold(const clv2::OptionsContext & /*Ctx*/) {
+  return IPOOptions::Current.IPO_SampleHotCallSiteThreshold.value_or(1500);
 }
 
 static int
-getPreInlinerProfileInlineGrowthLimit(const clv2::OptionsContext &Ctx) {
-  if (auto *O = clv2::getView<&clv2::IPOOptsReg>(Ctx))
-    if (O->specified<&clv2::IPO_ProfileInlineGrowthLimit>())
-      return O->get<&clv2::IPO_ProfileInlineGrowthLimit>();
-  return 12;
+getPreInlinerColdCallSiteThreshold(const clv2::OptionsContext & /*Ctx*/) {
+  return IPOOptions::Current.IPO_SampleColdCallSiteThreshold.value_or(0);
 }
 
-static int getPreInlinerProfileInlineLimitMin(const clv2::OptionsContext &Ctx) {
-  if (auto *O = clv2::getView<&clv2::IPOOptsReg>(Ctx))
-    if (O->specified<&clv2::IPO_ProfileInlineLimitMin>())
-      return O->get<&clv2::IPO_ProfileInlineLimitMin>();
-  return 100;
+static int
+getPreInlinerProfileInlineLimitMax(const clv2::OptionsContext & /*Ctx*/) {
+  return IPOOptions::Current.IPO_ProfileInlineLimitMax.value_or(50000);
+}
+
+static int
+getPreInlinerProfileInlineGrowthLimit(const clv2::OptionsContext & /*Ctx*/) {
+  return IPOOptions::Current.IPO_ProfileInlineGrowthLimit;
+}
+
+static int
+getPreInlinerProfileInlineLimitMin(const clv2::OptionsContext & /*Ctx*/) {
+  return IPOOptions::Current.IPO_ProfileInlineLimitMin.value_or(100);
 }
 
 STATISTIC(PreInlNumCSInlined,
@@ -94,8 +91,11 @@ std::vector<FunctionId> CSPreInliner::buildTopDownOrder() {
   // Trim cold edges to get a more stable call graph. This allows for a more
   // stable top-down order which in turns helps the stablity of the generated
   // profile from run to run.
+  // CSPreInliner has no Module/LLVMContext in scope to bridge to the new
+  // per-type options system, so read the process-wide default (matches the
+  // pattern used in ProfileGenerator.cpp for the same reason).
   uint64_t ColdCountThreshold = ProfileSummaryBuilder::getColdCountThreshold(
-      (Summary->getDetailedSummary()), *Config.OptsCtx);
+      (Summary->getDetailedSummary()), ProfileDataOptions::Current);
   ProfiledCallGraph ProfiledCG(ContextTracker, ColdCountThreshold);
 
   // Now that we have a profiled call graph, construct top-down order
@@ -176,8 +176,10 @@ bool CSPreInliner::shouldInline(ProfiledInlineCandidate &Candidate) {
 
   unsigned int SampleThreshold =
       getPreInlinerColdCallSiteThreshold(*Config.OptsCtx);
+  // See the comment in buildTopDownOrder() above for why
+  // ProfileDataOptions::Current is used here instead of Config.OptsCtx.
   uint64_t ColdCountThreshold = ProfileSummaryBuilder::getColdCountThreshold(
-      (Summary->getDetailedSummary()), *Config.OptsCtx);
+      (Summary->getDetailedSummary()), ProfileDataOptions::Current);
 
   if (Candidate.CallsiteCount <= ColdCountThreshold)
     SampleThreshold = getPreInlinerColdCallSiteThreshold(*Config.OptsCtx);

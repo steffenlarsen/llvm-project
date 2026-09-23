@@ -21,9 +21,7 @@
 
 namespace llvm {
 
-namespace clv2 {
-class OptionsContext;
-} // namespace clv2
+struct AnalysisOptions;
 
 class BatchAAResults;
 class AssumptionCache;
@@ -130,7 +128,7 @@ LLVM_ABI bool mustSuppressSpeculation(const LoadInst &LI);
 
 /// The default number of maximum instructions to scan in the block, used by
 /// FindAvailableLoadedValue().
-LLVM_ABI unsigned getDefMaxInstsToScan(const clv2::OptionsContext &Ctx);
+LLVM_ABI unsigned getDefMaxInstsToScan(const AnalysisOptions &Opts);
 
 /// Scan backwards to see if we have the value of the given load available
 /// locally within a small number of instructions.
@@ -230,6 +228,6 @@ struct LinearExpression {
 /// multiple GEPs.
 LLVM_ABI LinearExpression decomposeLinearExpression(const DataLayout &DL,
                                                     Value *Ptr);
-}
+} // namespace llvm
 
 #endif

@@ -59,8 +59,7 @@
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachinePostDominators.h"
 #include "llvm/CodeGen/RegisterClassInfo.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/AMDGPU/AMDGPUOptionsOptInfos.h"
+#include "llvm/Target/AMDGPU/AMDGPUOptions.h"
 #include "llvm/Target/TargetMachine.h"
 
 using namespace llvm;
@@ -68,8 +67,7 @@ using namespace llvm;
 #define DEBUG_TYPE "si-lower-control-flow"
 
 static bool getRemoveRedundantEndcf(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AMDGPU_RemoveRedundantEndcf>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<AMDGPUOptions>().AMDGPU_RemoveRedundantEndcf;
 }
 
 namespace {
@@ -83,7 +81,7 @@ private:
   MachineDominatorTree *MDT = nullptr;
   MachinePostDominatorTree *PDT = nullptr;
   MachineRegisterInfo *MRI = nullptr;
-  SetVector<MachineInstr*> LoweredEndCf;
+  SetVector<MachineInstr *> LoweredEndCf;
   DenseSet<Register> LoweredIf;
   SmallPtrSet<MachineBasicBlock *, 4> KillBlocks;
   SmallSet<Register, 8> RecomputeRegs;
@@ -187,7 +185,7 @@ char &llvm::SILowerControlFlowLegacyID = SILowerControlFlowLegacy::ID;
 
 bool SILowerControlFlow::hasKill(const MachineBasicBlock *Begin,
                                  const MachineBasicBlock *End) {
-  DenseSet<const MachineBasicBlock*> Visited;
+  DenseSet<const MachineBasicBlock *> Visited;
   SmallVector<MachineBasicBlock *, 4> Worklist(Begin->successors());
 
   while (!Worklist.empty()) {
@@ -221,7 +219,7 @@ void SILowerControlFlow::emitIf(MachineInstr &MI) {
   const DebugLoc &DL = MI.getDebugLoc();
   MachineBasicBlock::iterator I(&MI);
   Register SaveExecReg = MI.getOperand(0).getReg();
-  MachineOperand& Cond = MI.getOperand(1);
+  MachineOperand &Cond = MI.getOperand(1);
   assert(Cond.getSubReg() == AMDGPU::NoSubRegister);
 
   MachineOperand &ImpDefSCC = MI.getOperand(4);
@@ -241,8 +239,8 @@ void SILowerControlFlow::emitIf(MachineInstr &MI) {
 
   // Add an implicit def of exec to discourage scheduling VALU after this which
   // will interfere with trying to form s_and_saveexec_b64 later.
-  Register CopyReg = SimpleIf ? SaveExecReg
-                       : MRI->createVirtualRegister(BoolRC);
+  Register CopyReg =
+      SimpleIf ? SaveExecReg : MRI->createVirtualRegister(BoolRC);
   MachineInstr *CopyExec = BuildMI(MBB, I, DL, TII->get(AMDGPU::COPY), CopyReg)
                                .addReg(LMC.ExecReg)
                                .addReg(LMC.ExecReg, RegState::ImplicitDefine);
@@ -448,9 +446,8 @@ void SILowerControlFlow::emitLoop(MachineInstr &MI) {
   MI.eraseFromParent();
 }
 
-MachineBasicBlock::iterator
-SILowerControlFlow::skipIgnoreExecInstsTrivialSucc(
-  MachineBasicBlock &MBB, MachineBasicBlock::iterator It) const {
+MachineBasicBlock::iterator SILowerControlFlow::skipIgnoreExecInstsTrivialSucc(
+    MachineBasicBlock &MBB, MachineBasicBlock::iterator It) const {
 
   SmallPtrSet<const MachineBasicBlock *, 4> Visited;
   MachineBasicBlock *B = &MBB;
@@ -459,7 +456,7 @@ SILowerControlFlow::skipIgnoreExecInstsTrivialSucc(
       return MBB.end();
 
     auto E = B->end();
-    for ( ; It != E; ++It) {
+    for (; It != E; ++It) {
       if (TII->mayReadEXEC(*MRI, *It))
         break;
     }
@@ -489,8 +486,8 @@ MachineBasicBlock *SILowerControlFlow::emitEndCf(MachineInstr &MI) {
   // FIXME: We should unconditionally split the block here.
   bool NeedBlockSplit = false;
   Register DataReg = MI.getOperand(0).getReg();
-  for (MachineBasicBlock::iterator I = InsPt, E = MI.getIterator();
-       I != E; ++I) {
+  for (MachineBasicBlock::iterator I = InsPt, E = MI.getIterator(); I != E;
+       ++I) {
     if (I->modifiesRegister(DataReg, TRI)) {
       NeedBlockSplit = true;
       break;
@@ -500,7 +497,7 @@ MachineBasicBlock *SILowerControlFlow::emitEndCf(MachineInstr &MI) {
   unsigned Opcode = LMC.OrOpc;
   MachineBasicBlock *SplitBB = &MBB;
   if (NeedBlockSplit) {
-    SplitBB = MBB.splitAt(MI, /*UpdateLiveIns*/true, LIS);
+    SplitBB = MBB.splitAt(MI, /*UpdateLiveIns*/ true, LIS);
     if (SplitBB != &MBB && (MDT || PDT)) {
       using DomTreeT = DomTreeBase<MachineBasicBlock>;
       SmallVector<DomTreeT::UpdateType, 16> DTUpdates;
@@ -652,13 +649,13 @@ void SILowerControlFlow::optimizeEndCf() {
   for (MachineInstr *MI : reverse(LoweredEndCf)) {
     MachineBasicBlock &MBB = *MI->getParent();
     auto Next =
-      skipIgnoreExecInstsTrivialSucc(MBB, std::next(MI->getIterator()));
+        skipIgnoreExecInstsTrivialSucc(MBB, std::next(MI->getIterator()));
     if (Next == MBB.end() || !LoweredEndCf.count(&*Next))
       continue;
     // Only skip inner END_CF if outer ENDCF belongs to SI_IF.
     // If that belongs to SI_ELSE then saved mask has an inverted value.
-    Register SavedExec
-      = TII->getNamedOperand(*Next, AMDGPU::OpName::src1)->getReg();
+    Register SavedExec =
+        TII->getNamedOperand(*Next, AMDGPU::OpName::src1)->getReg();
     assert(SavedExec.isVirtual() && "Expected saved exec to be src1!");
 
     const MachineInstr *Def = MRI->getUniqueVRegDef(SavedExec);
@@ -777,9 +774,10 @@ bool SILowerControlFlow::removeMBBifRedundant(MachineBasicBlock &MBB) {
   if (FallThrough && !FallThrough->isLayoutSuccessor(Succ)) {
     // Note: we cannot update block layout and preserve live intervals;
     // hence we must insert a branch.
-    MachineInstr *BranchMI = BuildMI(*FallThrough, FallThrough->end(),
-            FallThrough->findBranchDebugLoc(), TII->get(AMDGPU::S_BRANCH))
-        .addMBB(Succ);
+    MachineInstr *BranchMI =
+        BuildMI(*FallThrough, FallThrough->end(),
+                FallThrough->findBranchDebugLoc(), TII->get(AMDGPU::S_BRANCH))
+            .addMBB(Succ);
     if (LIS)
       LIS->InsertMachineInstrInMaps(*BranchMI);
   }
@@ -821,8 +819,7 @@ bool SILowerControlFlow::run(MachineFunction &MF) {
 
   bool Changed = false;
   MachineFunction::iterator NextBB;
-  for (MachineFunction::iterator BI = MF.begin();
-       BI != MF.end(); BI = NextBB) {
+  for (MachineFunction::iterator BI = MF.begin(); BI != MF.end(); BI = NextBB) {
     NextBB = std::next(BI);
     MachineBasicBlock *MBB = &*BI;
 

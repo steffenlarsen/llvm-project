@@ -25,18 +25,14 @@
 #include "llvm/IR/Analysis.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/MathExtras.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/MSP430/MSP430OptionsOptInfos.h"
+#include "llvm/Target/MSP430/MSP430Options.h"
 #include "llvm/Target/TargetMachine.h"
 using namespace llvm;
 
 #define DEBUG_TYPE "msp430-branch-select"
 
-static bool BranchSelectEnabled = true;
-
 static bool getBranchSelectEnabled(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::MSP430_BranchSelectEnabled>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<MSP430Options>().MSP430_BranchSelectEnabled;
 }
 
 STATISTIC(NumSplit, "Number of machine basic blocks split");

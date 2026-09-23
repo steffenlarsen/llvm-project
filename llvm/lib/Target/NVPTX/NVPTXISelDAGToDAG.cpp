@@ -37,8 +37,7 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/MathExtras.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/NVPTX/NVPTXOptionsOptInfos.h"
+#include "llvm/Target/NVPTX/NVPTXOptions.h"
 #include "llvm/TargetParser/AtomicScope.h"
 #include <optional>
 
@@ -48,13 +47,11 @@ using namespace llvm;
 #define PASS_NAME "NVPTX DAG->DAG Pattern Instruction Selection"
 
 static bool getEnableRsqrtOpt(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::NVPTX_EnableRsqrtOpt>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<NVPTXOptions>().NVPTX_EnableRsqrtOpt;
 }
 
 static bool getEnableMADWide(const Function &F) {
-  return clv2::getOptValOr<&clv2::NVPTXOptsReg, &clv2::NVPTX_EnableMADWide>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext().getOptions<NVPTXOptions>().NVPTX_EnableMADWide;
 }
 
 namespace {
@@ -1961,7 +1958,6 @@ bool NVPTXDAGToDAGISel::tryBFE(SDNode *N) {
     return false;
   }
 
-
   unsigned Opc;
   // For the BFE operations we form here from "and" and "srl", always use the
   // unsigned variants.
@@ -1982,9 +1978,7 @@ bool NVPTXDAGToDAGISel::tryBFE(SDNode *N) {
     return false;
   }
 
-  SDValue Ops[] = {
-    Val, Start, Len
-  };
+  SDValue Ops[] = {Val, Start, Len};
 
   ReplaceNode(N, CurDAG->getMachineNode(Opc, DL, N->getVTList(), Ops));
   return true;
@@ -2102,7 +2096,8 @@ void NVPTXDAGToDAGISel::SelectV2I64toI128(SDNode *N) {
   NewOps[2] = SDValue(Mov, 0);
   if (N->getNumOperands() == 5)
     NewOps[3] = N->getOperand(4);
-  SDValue NewValue = CurDAG->getNode(ISD::CopyToReg, DL, SmallVector<EVT>(N->values()), NewOps);
+  SDValue NewValue = CurDAG->getNode(ISD::CopyToReg, DL,
+                                     SmallVector<EVT>(N->values()), NewOps);
 
   ReplaceNode(N, NewValue.getNode());
 }

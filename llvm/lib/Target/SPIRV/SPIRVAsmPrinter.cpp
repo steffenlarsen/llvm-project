@@ -43,11 +43,9 @@
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/MC/MCSymbol.h"
 #include "llvm/MC/TargetRegistry.h"
-#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Compiler.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/SPIRV/SPIRVOptionsOptInfos.h"
+#include "llvm/Target/SPIRV/SPIRVOptions.h"
 
 using namespace llvm;
 
@@ -655,12 +653,12 @@ void SPIRVAsmPrinter::outputExecutionMode(const Module &M) {
     }
     // --spirv-fp-contract=off forces to emit ContractionOff for this kernel
     // entry point, --spirv-fp-contract=fast suppresses it.
-    auto FPContract = clv2::getOptValOrDefault<&clv2::SPIRV_FPContract>(
-        M.getContext().getOptionsContext());
+    auto FPContract =
+        M.getContext().getOptions<SPIRVOptions>().SPIRV_FPContract;
     bool EmitContractionOff =
         ST->isKernel() && !M.getNamedMetadata("spirv.ExecutionMode") &&
-        FPContract != clv2::SPIRVFPContractMode::Fast &&
-        (FPContract == clv2::SPIRVFPContractMode::Off ||
+        FPContract != SPIRVFPContractMode::Fast &&
+        (FPContract == SPIRVFPContractMode::Off ||
          !M.getNamedMetadata("opencl.enable.FP_CONTRACT"));
     if (EmitContractionOff) {
       if (ST->canUseExtension(SPIRV::Extension::SPV_KHR_float_controls2)) {

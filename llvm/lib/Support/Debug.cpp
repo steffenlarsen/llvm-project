@@ -120,14 +120,15 @@ void setCurrentDebugTypes(const char **Types, unsigned Count) {
 // All Debug.h functionality is a no-op in NDEBUG mode.
 #ifndef NDEBUG
 
-// DebugFlag and debug types are set by applySupportOptions().
+// DebugFlag and debug types are set by SupportOptions::parse() (or the clv2
+// bridge, applySupportOptions()).
 
 #include "llvm/Support/SupportOptions.h"
 
 static unsigned getDebugBufferSize() { return support::DebugBufferSizeVal; }
 
 void llvm::initDebugOptions() {
-  // No-op — debug options now handled by clv2::SupportOptsReg.
+  // No-op — debug options are now handled by llvm::SupportOptions.
 }
 
 // Signal handlers - dump debug output on termination.

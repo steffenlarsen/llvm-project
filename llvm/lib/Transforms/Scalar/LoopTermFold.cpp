@@ -108,9 +108,8 @@ canFoldTermCondOfLoop(Loop *L, ScalarEvolution &SE, DominatorTree &DT,
   // Inserting instructions in the preheader has a runtime cost, scale
   // the allowed cost with the loops trip count as best we can.
   const unsigned ExpansionBudget = [&]() {
-    unsigned Budget =
-        2 * getSCEVCheapExpansionBudget(
-                L->getHeader()->getParent()->getContext().getOptionsContext());
+    unsigned Budget = 2 * getSCEVCheapExpansionBudget(
+                              &L->getHeader()->getParent()->getContext());
     if (unsigned SmallTC = SE.getSmallConstantMaxTripCount(L))
       return std::min(Budget, SmallTC);
     if (std::optional<unsigned> SmallTC = getLoopEstimatedTripCount(L))

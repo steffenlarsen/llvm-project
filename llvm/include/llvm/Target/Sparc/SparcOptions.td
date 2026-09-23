@@ -6,63 +6,36 @@
 //
 //===----------------------------------------------------------------------===//
 
-include "llvm/Support/CLV2Options.td"
+include "llvm/Option/OptParser.td"
 
-def SparcOptsReg : Registry<"llvm::sparc_opts"> {
-  // Getter bodies are compiled once, in SparcOptionsGetters.cpp.
-  let OutOfLineGetters = 1;
-}
+def SparcOptions : OptionsStruct<"llvm"> {}
 
-def SPARC_BranchRelaxation : Option<
-    "sparc-enable-branch-relax",
+defm SPARC_BranchRelaxation : BoolField<
+    "sparc-enable-branch-relax", "true",
     "Relax out of range conditional branches",
-    "bool"> {
-  let Registry = SparcOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def SPARC_DisableLeafProc : Option<
-    "disable-sparc-leaf-proc",
+defm SPARC_DisableLeafProc : BoolField<
+    "disable-sparc-leaf-proc", "false",
     "Disable Sparc leaf procedure optimization.",
-    "bool"> {
-  let Registry = SparcOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def SPARC_DisableDelaySlotFiller : Option<
-    "disable-sparc-delay-filler",
+defm SPARC_DisableDelaySlotFiller : BoolField<
+    "disable-sparc-delay-filler", "false",
     "Disable the Sparc delay slot filler.",
-    "bool"> {
-  let Registry = SparcOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def SPARC_ReserveAppRegisters : Option<
-    "sparc-reserve-app-registers",
+defm SPARC_ReserveAppRegisters : BoolField<
+    "sparc-reserve-app-registers", "false",
     "Reserve application registers (%g2-%g4)",
-    "bool"> {
-  let Registry = SparcOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def SPARC_BPccDisplacementBits : Option<
-    "sparc-bpcc-offset-bits",
+defm SPARC_BPccDisplacementBits : ValueField<
+    "sparc-bpcc-offset-bits", "unsigned", "19u",
     "Restrict range of BPcc/FBPfcc instructions (DEBUG)",
-    "unsigned"> {
-  let Registry = SparcOptsReg;
-  let Default = "19";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def SPARC_BPrDisplacementBits : Option<
-    "sparc-bpr-offset-bits",
+defm SPARC_BPrDisplacementBits : ValueField<
+    "sparc-bpr-offset-bits", "unsigned", "16u",
     "Restrict range of BPr instructions (DEBUG)",
-    "unsigned"> {
-  let Registry = SparcOptsReg;
-  let Default = "16";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;

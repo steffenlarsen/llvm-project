@@ -20,7 +20,7 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
-#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
+#include "llvm/Analysis/AnalysisOptions.h"
 #include "llvm/Analysis/BlockFrequencyInfo.h"
 #include "llvm/Analysis/BranchProbabilityInfo.h"
 #include "llvm/Analysis/ConstantFolding.h"
@@ -53,10 +53,8 @@
 #include "llvm/Object/SymbolicFile.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/FileSystem.h"
-#include "llvm/Support/OptionsContext.h"
 #include <cassert>
 #include <cstdint>
 #include <vector>
@@ -77,31 +75,30 @@ unsigned MaxSummaryIndirectEdges = 0;
 } // namespace llvm
 
 static bool getScalePartialSampleProfileWorkingSetSize(const Module &M) {
-  return clv2::getOptValOrDefault<
-      &clv2::AN_ScalePartialSampleProfileWorkingSetSize>(
-      M.getContext().getOptionsContext());
+  return M.getContext()
+      .getOptions<AnalysisOptions>()
+      .AN_ScalePartialSampleProfileWorkingSetSize;
 }
 
 static FunctionSummary::ForceSummaryHotnessType
 getForceSummaryEdgesCold(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AN_ForceSummaryEdgesCold>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<AnalysisOptions>().AN_ForceSummaryEdgesCold;
 }
 
 static unsigned getMaxSummaryIndirectEdges(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AN_MaxSummaryIndirectEdges>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<AnalysisOptions>()
+      .AN_MaxSummaryIndirectEdges;
 }
 
-static bool
-getEnableMemProfIndirectCallSupport(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::AN_EnableMemProfIndirectCallSupport>(
-      Ctx);
+static bool getEnableMemProfIndirectCallSupport(const AnalysisOptions &Opts) {
+  return Opts.AN_EnableMemProfIndirectCallSupport;
 }
 
 static unsigned getMaxNumVTableAnnotations(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AN_MaxNumVTableAnnotations>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<AnalysisOptions>()
+      .AN_MaxNumVTableAnnotations;
 }
 
 // Walk through the operands of a given User via worklist iteration and populate
@@ -536,7 +533,7 @@ static void computeFunctionSummary(
 
       // Skip indirect calls if we haven't enabled memprof ICP.
       if (!CalledFunction && !getEnableMemProfIndirectCallSupport(
-                                 F.getContext().getOptionsContext()))
+                                 F.getContext().getOptions<AnalysisOptions>()))
         continue;
 
       // Ensure we keep this analysis in sync with the handling in the ThinLTO
@@ -577,7 +574,7 @@ static void computeFunctionSummary(
           // the summary.
           assert(MIBMD->getNumOperands() > 2 ||
                  !metadataIncludesAllContextSizeInfo(
-                     M.getContext().getOptionsContext()));
+                     M.getContext().getOptions<AnalysisOptions>()));
           if (MIBMD->getNumOperands() > 2) {
             std::vector<ContextTotalSize> ContextSizes;
             for (unsigned I = 2; I < MIBMD->getNumOperands(); I++) {
@@ -611,7 +608,7 @@ static void computeFunctionSummary(
         Allocs.push_back(AllocInfo(std::move(MIBs)));
         assert(HasNonZeroContextSizeInfos ||
                !metadataIncludesAllContextSizeInfo(
-                   M.getContext().getOptionsContext()));
+                   M.getContext().getOptions<AnalysisOptions>()));
         // We eagerly build the ContextSizeInfos array, but it will be filled
         // with sub arrays of pairs of 0s if no MIBs on this alloc actually
         // contained context size info metadata. Only save it if any MIBs had
@@ -634,7 +631,7 @@ static void computeFunctionSummary(
           Callsites.push_back({CalleeValueInfo, StackIdIndices});
         } else {
           assert(getEnableMemProfIndirectCallSupport(
-              F.getContext().getOptionsContext()));
+              F.getContext().getOptions<AnalysisOptions>()));
           // For indirect callsites, create multiple Callsites, one per target.
           // This enables having a different set of clone versions per target,
           // and we will apply the cloning decisions while speculatively
@@ -1299,7 +1296,7 @@ bool llvm::mayHaveMemprofSummary(const CallBase *CB) {
   } else {
     // Skip indirect calls if we haven't enabled memprof ICP.
     if (!getEnableMemProfIndirectCallSupport(
-            CB->getFunction()->getContext().getOptionsContext()))
+            CB->getFunction()->getContext().getOptions<AnalysisOptions>()))
       return false;
     // Skip inline assembly calls.
     if (CI && CI->isInlineAsm())

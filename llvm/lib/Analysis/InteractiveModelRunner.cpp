@@ -9,25 +9,19 @@
 // A runner that communicates with an external agent via 2 file descriptors.
 //===----------------------------------------------------------------------===//
 #include "llvm/Analysis/InteractiveModelRunner.h"
-#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
+#include "llvm/Analysis/AnalysisOptions.h"
 #include "llvm/Analysis/MLModelRunner.h"
 #include "llvm/Analysis/TensorSpec.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/LLVMContext.h"
-#include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FileSystem.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 
 using namespace llvm;
 
-#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
-#include "llvm/Support/CommandLineCompat.h"
-using namespace llvm::clv2;
-
-static bool getDebugReply(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::AN_DebugReply>(Ctx);
+static bool getDebugReply(const LLVMContext &Ctx) {
+  return Ctx.getOptions<AnalysisOptions>().AN_DebugReply;
 }
 
 InteractiveModelRunner::InteractiveModelRunner(
@@ -82,7 +76,7 @@ void *InteractiveModelRunner::evaluateUntyped() {
     }
     InsPoint += *ReadOrErr;
   }
-  if (getDebugReply(Ctx.getOptionsContext()))
+  if (getDebugReply(Ctx))
     dbgs() << OutputSpec.name() << ": "
            << tensorValueToString(OutputBuffer.data(), OutputSpec) << "\n";
   return OutputBuffer.data();

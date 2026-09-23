@@ -64,8 +64,7 @@
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/ARM/ARMOptionsOptInfos.h"
+#include "llvm/Target/ARM/ARMOptions.h"
 #include <cassert>
 
 using namespace llvm;
@@ -73,8 +72,7 @@ using namespace llvm;
 #define DEBUG_TYPE "mve-laneinterleave"
 
 static bool getEnableInterleave(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::ARM_EnableInterleave>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<ARMOptions>().ARM_EnableInterleave;
 }
 
 namespace {
@@ -361,9 +359,9 @@ static bool tryInterleave(Instruction *Start,
     Value *Shuffle = Builder.CreateShuffleVector(I->getOperand(0), LeafMask);
     bool FPext = isa<FPExtInst>(I);
     bool Sext = isa<SExtInst>(I);
-    Value *Ext = FPext ? Builder.CreateFPExt(Shuffle, I->getType())
-                       : Sext ? Builder.CreateSExt(Shuffle, I->getType())
-                              : Builder.CreateZExt(Shuffle, I->getType());
+    Value *Ext = FPext  ? Builder.CreateFPExt(Shuffle, I->getType())
+                 : Sext ? Builder.CreateSExt(Shuffle, I->getType())
+                        : Builder.CreateZExt(Shuffle, I->getType());
     I->replaceAllUsesWith(Ext);
     LLVM_DEBUG(dbgs() << "  with " << *Shuffle << "\n");
   }

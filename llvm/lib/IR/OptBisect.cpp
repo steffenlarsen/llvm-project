@@ -14,7 +14,7 @@
 
 #include "llvm/IR/OptBisect.h"
 #include "llvm/ADT/StringExtras.h"
-#include "llvm/IR/IROptionsOptInfos.h"
+#include "llvm/IR/IROptions.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/IntegerInclusiveInterval.h"
 #include "llvm/Support/raw_ostream.h"
@@ -59,15 +59,19 @@ bool OptBisect::shouldRunPass(StringRef PassName,
 
 OptPassGate &llvm::getGlobalPassGate() { return getOptBisector(); }
 
-void llvm::initOptBisectFromOptions(const ir_opts::ParsedOpts &Opts) {
-  getOptBisector().setVerbose(Opts.get<&clv2::IR_OptBisectVerbose>());
+void llvm::initOptBisectFromOptions() {
+  getOptBisector().setVerbose(IROptions::Current.IR_OptBisectVerbose);
 
   // Handle -opt-bisect-limit=N (legacy single-limit form).
   // -1 means run all passes but still enable verbose output.
   // 0 means run no passes (but still enable verbose output).
   // N>0 means run passes 1..N.
-  if (Opts.specified<&clv2::IR_OptBisectLimit>()) {
-    int Limit = Opts.get<&clv2::IR_OptBisectLimit>();
+  // IR_OptBisectLimit is std::optional<int> (see IROptions.td) so that an
+  // unspecified flag -- whose struct default would otherwise read as the
+  // meaningful value -1 -- leaves bisection disabled, matching pre-migration
+  // behavior.
+  if (IROptions::Current.IR_OptBisectLimit) {
+    int Limit = *IROptions::Current.IR_OptBisectLimit;
     std::string RangeStr;
     if (Limit == -1) {
       // Run all passes — use a very large upper bound so isEnabled() is true.
@@ -89,8 +93,10 @@ void llvm::initOptBisectFromOptions(const ir_opts::ParsedOpts &Opts) {
 
   // Handle -opt-bisect=<intervals> (e.g. "1-10,20-30,45").
   // Special values: -1 means run all passes, 0 means run no passes.
-  if (Opts.specified<&clv2::IR_OptBisectIntervals>()) {
-    std::string IntervalsStr = Opts.get<&clv2::IR_OptBisectIntervals>();
+  // IR_OptBisectIntervals is likewise std::optional<std::string>; see the
+  // IR_OptBisectLimit comment above for why.
+  if (IROptions::Current.IR_OptBisectIntervals) {
+    const std::string &IntervalsStr = *IROptions::Current.IR_OptBisectIntervals;
     if (!IntervalsStr.empty()) {
       if (IntervalsStr == "-1") {
         // Run all passes — use a very large upper bound.
@@ -112,9 +118,8 @@ void llvm::initOptBisectFromOptions(const ir_opts::ParsedOpts &Opts) {
     }
   }
 
-  // Handle -opt-disable=pass1,pass2,...
-  if (Opts.specified<&clv2::IR_OptDisablePasses>()) {
-    for (const auto &PassName : Opts.get<&clv2::IR_OptDisablePasses>())
-      getOptBisector().setDisabled(PassName);
-  }
+  // Handle -opt-disable=pass1,pass2,... An empty list already means
+  // "unspecified" for a ListField, so no optional wrapper is needed here.
+  for (const auto &PassName : IROptions::Current.IR_OptDisablePasses)
+    getOptBisector().setDisabled(PassName);
 }

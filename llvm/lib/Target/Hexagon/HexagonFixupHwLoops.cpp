@@ -22,16 +22,14 @@
 #include "llvm/IR/Function.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/MathExtras.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
+#include "llvm/Target/Hexagon/HexagonOptions.h"
 
 using namespace llvm;
 
 static unsigned MaxLoopRange = 200;
 
 static unsigned getMaxLoopRange(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_MaxLoopRange>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_MaxLoopRange;
 }
 
 namespace {

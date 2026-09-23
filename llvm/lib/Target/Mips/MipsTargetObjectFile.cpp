@@ -16,32 +16,27 @@
 #include "llvm/IR/Module.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCSectionELF.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/Mips/MipsOptionsOptInfos.h"
+#include "llvm/Target/Mips/MipsOptions.h"
 #include "llvm/Target/TargetMachine.h"
 using namespace llvm;
 
 static unsigned getSSThreshold(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::MIPS_SSThreshold>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<MipsOptions>().MIPS_SSThreshold;
 }
 
 static bool getLocalSData(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::MIPS_LocalSData>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<MipsOptions>().MIPS_LocalSData;
 }
 
 static bool getExternSData(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::MIPS_ExternSData>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<MipsOptions>().MIPS_ExternSData;
 }
 
 static bool getEmbeddedData(const Module &M) {
-  return clv2::getOptValOr<&clv2::MipsOptsReg, &clv2::MIPS_EmbeddedData>(
-      M.getContext().getOptionsContext(), false);
+  return M.getContext().getOptions<MipsOptions>().MIPS_EmbeddedData;
 }
 
-void MipsTargetObjectFile::Initialize(MCContext &Ctx, const TargetMachine &TM){
+void MipsTargetObjectFile::Initialize(MCContext &Ctx, const TargetMachine &TM) {
   TargetLoweringObjectFileELF::Initialize(Ctx, TM);
 
   SmallDataSection = getContext().getELFSection(
@@ -76,9 +71,9 @@ bool MipsTargetObjectFile::IsGlobalInSmallSection(
 
 /// Return true if this global address should be placed into small data/bss
 /// section.
-bool MipsTargetObjectFile::
-IsGlobalInSmallSection(const GlobalObject *GO, const TargetMachine &TM,
-                       SectionKind Kind) const {
+bool MipsTargetObjectFile::IsGlobalInSmallSection(const GlobalObject *GO,
+                                                  const TargetMachine &TM,
+                                                  SectionKind Kind) const {
   return IsGlobalInSmallSectionImpl(GO, TM) &&
          (Kind.isData() || Kind.isBSS() || Kind.isCommon() ||
           Kind.isReadOnly());
@@ -87,9 +82,8 @@ IsGlobalInSmallSection(const GlobalObject *GO, const TargetMachine &TM,
 /// Return true if this global address should be placed into small data/bss
 /// section. This method does all the work, except for checking the section
 /// kind.
-bool MipsTargetObjectFile::
-IsGlobalInSmallSectionImpl(const GlobalObject *GO,
-                           const TargetMachine &TM) const {
+bool MipsTargetObjectFile::IsGlobalInSmallSectionImpl(
+    const GlobalObject *GO, const TargetMachine &TM) const {
   const MipsSubtarget &Subtarget =
       *static_cast<const MipsTargetMachine &>(TM).getSubtargetImpl();
 
@@ -179,14 +173,9 @@ bool MipsTargetObjectFile::IsConstantInSmallSection(const DataLayout &DL,
   }
 
   // No Function context available; fall back to global override.
-  if (auto *O = clv2::getView<&clv2::MipsOptsReg>(
-          CN->getContext().getOptionsContext()))
-    return O->get<&clv2::MIPS_LocalSData>() &&
-           DL.getTypeAllocSize(CN->getType()) > 0 &&
-           DL.getTypeAllocSize(CN->getType()) <=
-               O->get<&clv2::MIPS_SSThreshold>();
-  return DL.getTypeAllocSize(CN->getType()) > 0 &&
-         DL.getTypeAllocSize(CN->getType()) <= 8;
+  const MipsOptions &Opts = CN->getContext().getOptions<MipsOptions>();
+  return Opts.MIPS_LocalSData && DL.getTypeAllocSize(CN->getType()) > 0 &&
+         DL.getTypeAllocSize(CN->getType()) <= Opts.MIPS_SSThreshold;
 }
 
 /// Return true if this constant should be placed into small data section.

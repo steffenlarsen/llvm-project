@@ -1,5 +1,3 @@
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
 //===- SeparateConstOffsetFromGEP.cpp -------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -165,6 +163,7 @@
 #include "llvm/Support/KnownBits.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Scalar.h"
+#include "llvm/Transforms/Scalar/ScalarOptions.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include <cassert>
 #include <cstdint>
@@ -174,18 +173,18 @@ using namespace llvm;
 using namespace llvm::PatternMatch;
 
 static bool getDisableSeparateConstOffsetFromGEP(const Function &F) {
-  return clv2::getOptValOr<&clv2::ScalarOptsReg,
-                           &clv2::SC_DisableSeparateConstOffsetFromGep>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_DisableSeparateConstOffsetFromGep;
 }
 
 // Setting this flag may emit false positives when the input module already
 // contains dead instructions. Therefore, we set it only in unit tests that are
 // free of dead code.
 static bool getVerifyNoDeadCode(const Function &F) {
-  return clv2::getOptValOr<&clv2::ScalarOptsReg,
-                           &clv2::SC_ReassociateGepsVerifyNoDeadCode>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_ReassociateGepsVerifyNoDeadCode;
 }
 
 namespace {

@@ -192,7 +192,9 @@ bool DirectXTargetMachine::addPassesToEmitFile(
     PM.add(createDXILPrettyPrinterLegacyPass(Out));
     break;
   case CodeGenFileType::ObjectFile:
-    if (TargetPassConfig::willCompleteCodeGenPipeline(getOptionsContext())) {
+    // No Function/Module is reachable at pipeline-construction time; fall
+    // back to the process-wide default (see getSched2Options).
+    if (TargetPassConfig::willCompleteCodeGenPipeline(/*Ctx=*/nullptr)) {
       MCContext &MCtx = MMIWP->getMMI().getContext();
 
       PM.add(createDXILEmbedderPass(MCtx));

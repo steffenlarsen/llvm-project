@@ -19,6 +19,7 @@
 #include "llvm/ADT/StringTable.h"
 #include "llvm/Analysis/AliasAnalysisEvaluator.h"
 #include "llvm/Analysis/AliasSetTracker.h"
+#include "llvm/Analysis/AnalysisOptions.h"
 #include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/Analysis/BasicAliasAnalysis.h"
 #include "llvm/Analysis/BlockFrequencyInfo.h"
@@ -210,6 +211,7 @@
 #include "llvm/CodeGen/XRayInstrumentation.h"
 #include "llvm/IR/DebugInfo.h"
 #include "llvm/IR/Dominators.h"
+#include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/IR/SafepointIRVerifier.h"
 #include "llvm/IR/Verifier.h"
@@ -560,16 +562,21 @@ static Expected<OptimizationLevel> parseOptLevelParam(StringRef S) {
       inconvertibleErrorCode());
 }
 
+static const AnalysisOptions &getAnalysisOptions(const LLVMContext *Ctx) {
+  return Ctx ? Ctx->getOptions<AnalysisOptions>() : AnalysisOptions::Current;
+}
+
 PassBuilder::PassBuilder(const clv2::OptionsContext &OptsCtxIn,
                          TargetMachine *TM, PipelineTuningOptions PTO,
                          std::optional<PGOOptions> PGOOpt,
                          PassInstrumentationCallbacks *PIC,
-                         IntrusiveRefCntPtr<vfs::FileSystem> FS)
+                         IntrusiveRefCntPtr<vfs::FileSystem> FS,
+                         LLVMContext *Ctx)
     : TM(TM), OptsCtx(&OptsCtxIn != &clv2::defaultOptionsContext()
                           ? &OptsCtxIn
                           : (TM ? &TM->getOptionsContext()
                                 : &clv2::defaultOptionsContext())),
-      PTO(PTO), PGOOpt(PGOOpt), PIC(PIC), FS(std::move(FS)) {
+      PTO(PTO), PGOOpt(PGOOpt), PIC(PIC), FS(std::move(FS)), Ctx(Ctx) {
   if (TM)
     TM->registerPassBuilderCallbacks(*this);
   if (PIC) {

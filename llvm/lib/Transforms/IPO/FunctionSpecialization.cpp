@@ -16,8 +16,7 @@
 #include "llvm/Analysis/ValueLattice.h"
 #include "llvm/Analysis/ValueLatticeUtils.h"
 #include "llvm/Analysis/ValueTracking.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Transforms/IPO/IPOOptionsOptInfos.h"
+#include "llvm/Transforms/IPO/IPOOptions.h"
 #include "llvm/Transforms/Scalar/SCCP.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/SCCPSolver.h"
@@ -30,52 +29,40 @@ using namespace llvm;
 STATISTIC(NumSpecsCreated, "Number of specializations created");
 
 static bool getForceSpecialization(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_ForceSpecialization>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_ForceSpecialization;
 }
 static unsigned getMaxClones(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_MaxClones>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_MaxClones;
 }
 static unsigned getMaxDiscoveryIterations(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_MaxDiscoveryIterations>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_MaxDiscoveryIterations;
 }
 static unsigned getMaxIncomingPhiValues(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_MaxIncomingPhiValues>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_MaxIncomingPhiValues;
 }
 static unsigned getMaxBlockPredecessors(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_MaxBlockPredecessors>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_MaxBlockPredecessors;
 }
 static unsigned getMinFunctionSize(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_MinFunctionSize>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_MinFunctionSize;
 }
 static unsigned getMaxCodeSizeGrowth(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_MaxCodeSizeGrowth>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_MaxCodeSizeGrowth;
 }
 static unsigned getMinCodeSizeSavings(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_MinCodeSizeSavings>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_MinCodeSizeSavings;
 }
 static unsigned getMinLatencySavings(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_MinLatencySavings>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_MinLatencySavings;
 }
 static unsigned getMinInliningBonus(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_MinInliningBonus>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_MinInliningBonus;
 }
 static bool getSpecializeOnAddress(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_SpecializeOnAddress>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_SpecializeOnAddress;
 }
 static bool getSpecializeLiteralConstant(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_SpecializeLiteralConstant>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_SpecializeLiteralConstant;
 }
 
 bool InstCostVisitor::canEliminateSuccessor(BasicBlock *BB,
@@ -1110,8 +1097,8 @@ unsigned FunctionSpecializer::getInliningBonus(Argument *A, Constant *C) {
     //
     // We apply a boost for performing indirect call promotion by increasing
     // the default threshold by the threshold for indirect calls.
-    auto Params =
-        getInlineParams(CalledFunction->getContext().getOptionsContext());
+    auto Params = getInlineParams(
+        CalledFunction->getContext().getOptions<AnalysisOptions>());
     Params.DefaultThreshold += InlineConstants::IndirectCallThreshold;
     InlineCost IC =
         getInlineCost(*CS, CalledFunction, Params, CalleeTTI, GetAC, GetTLI);

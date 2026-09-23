@@ -37,9 +37,8 @@
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/DebugCounter.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Transforms/InstCombine/InstCombineOptionsOptInfos.h"
+#include "llvm/Transforms/InstCombine/InstCombineOptions.h"
 #include "llvm/Transforms/InstCombine/InstCombiner.h"
 #include <cassert>
 #include <cstdint>
@@ -81,14 +80,11 @@ DEBUG_COUNTER(NegatorCounter, "instcombine-negator",
               "Controls Negator transformations in InstCombine pass");
 
 static bool getNegatorEnabled(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::IC_NegatorEnabled>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<InstCombineCLOptions>().IC_NegatorEnabled;
 }
 
 static unsigned getNegatorMaxDepth(const Function &F) {
-  return clv2::getOptValOr<&clv2::InstCombineOptsReg,
-                           &clv2::IC_NegatorMaxDepth>(
-      F.getContext().getOptionsContext(), NegatorDefaultMaxDepth);
+  return F.getContext().getOptions<InstCombineCLOptions>().IC_NegatorMaxDepth;
 }
 
 Negator::Negator(LLVMContext &C, const DataLayout &DL, const DominatorTree &DT_,

@@ -32,16 +32,17 @@
 #include "llvm/Pass.h"
 #include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
+#include "llvm/Target/Hexagon/HexagonOptions.h"
 
 using namespace llvm;
 
 #define DEBUG_TYPE "hexagon-hvx-save"
 
 static unsigned getHVXSaveThreshold(const MachineFunction &MF) {
-  return clv2::getOptValOrDefault<&clv2::HEX_HVXSaveThreshold>(
-      MF.getFunction().getContext().getOptionsContext());
+  return MF.getFunction()
+      .getContext()
+      .getOptions<HexagonOptions>()
+      .HEX_HVXSaveThreshold;
 }
 
 namespace {

@@ -16,6 +16,7 @@
 #include "clang/Tooling/Tooling.h"
 #include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/CommandLineV2.h"
+#include "llvm/Support/PluginLoaderOptions.h"
 #include "llvm/Support/RegisterLLVMOptions.h"
 
 using namespace llvm;
@@ -497,7 +498,9 @@ int main(int argc, const char **argv) {
   }
   RegisterAllLLVMOptions(P);
   P.hideUnrelatedOptions({&ClangDiffCategory});
-  P.parse(argc, argv);
+  std::vector<const char *> ArgsAfterPlugins =
+      loadPluginsAndStripArgs(argc, argv);
+  P.parse(static_cast<int>(ArgsAfterPlugins.size()), ArgsAfterPlugins.data());
 
   addExtraArgs(CommonCompilations, DiffOpts.ArgsBefore, DiffOpts.ArgsAfter);
 

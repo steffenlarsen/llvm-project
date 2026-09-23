@@ -10,7 +10,6 @@
 #define _AMDGPU_LIBFUNC_H_
 
 #include "llvm/ADT/StringRef.h"
-#include "llvm/Support/OptionsContext.h"
 #include <memory>
 
 namespace llvm {
@@ -18,6 +17,7 @@ namespace llvm {
 class FunctionCallee;
 class FunctionType;
 class Function;
+class LLVMContext;
 class Module;
 class Type;
 
@@ -250,30 +250,26 @@ public:
     EX_INTRINSICS_COUNT
   };
 
-  enum ENamePrefix {
-    NOPFX,
-    NATIVE,
-    HALF
-  };
+  enum ENamePrefix { NOPFX, NATIVE, HALF };
 
   enum EType {
-    B8  = 1,
+    B8 = 1,
     B16 = 2,
     B32 = 3,
     B64 = 4,
     SIZE_MASK = 7,
     FLOAT = 0x10,
-    INT   = 0x20,
-    UINT  = 0x30,
+    INT = 0x20,
+    UINT = 0x30,
     BASE_TYPE_MASK = 0x30,
-    U8  =  UINT | B8,
-    U16 =  UINT | B16,
-    U32 =  UINT | B32,
-    U64 =  UINT | B64,
-    I8  =   INT | B8,
-    I16 =   INT | B16,
-    I32 =   INT | B32,
-    I64 =   INT | B64,
+    U8 = UINT | B8,
+    U16 = UINT | B16,
+    U32 = UINT | B32,
+    U64 = UINT | B64,
+    I8 = INT | B8,
+    I16 = INT | B16,
+    I32 = INT | B32,
+    I64 = INT | B64,
     F16 = FLOAT | B16,
     F32 = FLOAT | B32,
     F64 = FLOAT | B64,
@@ -291,8 +287,8 @@ public:
   enum EPtrKind {
     BYVALUE = 0,
     ADDR_SPACE = 0xF, // Address space takes value 0x1 ~ 0xF.
-    CONST      = 0x10,
-    VOLATILE   = 0x20
+    CONST = 0x10,
+    VOLATILE = 0x20
   };
 
   struct Param {
@@ -314,8 +310,7 @@ public:
 
     static Param getFromTy(Type *Ty, bool Signed);
 
-    template <typename Stream>
-    void mangleItanium(Stream& os);
+    template <typename Stream> void mangleItanium(Stream &os);
   };
   static bool isMangled(EFuncId Id) {
     return static_cast<unsigned>(Id) <= static_cast<unsigned>(EI_LAST_MANGLED);
@@ -352,7 +347,7 @@ public:
 
   /// \return The mangled function name for mangled library functions
   /// and unmangled function name for unmangled library functions.
-  virtual std::string mangle(const clv2::OptionsContext &Ctx) const = 0;
+  virtual std::string mangle(const LLVMContext &Ctx) const = 0;
 
   void setName(StringRef N) { Name = std::string(N); }
   void setPrefix(ENamePrefix pfx) { FKind = pfx; }
@@ -415,9 +410,7 @@ public:
 
   /// \return The mangled function name for mangled library functions
   /// and unmangled function name for unmangled library functions.
-  std::string mangle(const clv2::OptionsContext &Ctx) const {
-    return Impl->mangle(Ctx);
-  }
+  std::string mangle(const LLVMContext &Ctx) const { return Impl->mangle(Ctx); }
 
   void setName(StringRef N) { Impl->setName(N); }
   void setPrefix(ENamePrefix PFX) { Impl->setPrefix(PFX); }
@@ -457,10 +450,10 @@ public:
   // Methods for support type inquiry through isa, cast, and dyn_cast:
   static bool classof(const AMDGPULibFuncImpl *F) { return F->isMangled(); }
 
-  std::string mangle(const clv2::OptionsContext &Ctx) const override;
+  std::string mangle(const LLVMContext &Ctx) const override;
 
 private:
-  std::string mangleNameItanium(const clv2::OptionsContext &Ctx) const;
+  std::string mangleNameItanium(const LLVMContext &Ctx) const;
 
   std::string mangleName(StringRef Name) const;
   bool parseUnmangledName(StringRef MangledName);
@@ -488,11 +481,9 @@ public:
   // Methods for support type inquiry through isa, cast, and dyn_cast:
   static bool classof(const AMDGPULibFuncImpl *F) { return !F->isMangled(); }
 
-  std::string mangle(const clv2::OptionsContext &) const override {
-    return Name;
-  }
+  std::string mangle(const LLVMContext &) const override { return Name; }
 
   void setFunctionType(FunctionType *FT) { FuncTy = FT; }
 };
-}
+} // namespace llvm
 #endif // _AMDGPU_LIBFUNC_H_

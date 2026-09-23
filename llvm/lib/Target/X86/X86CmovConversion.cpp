@@ -67,10 +67,9 @@
 #include "llvm/MC/MCSchedule.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/CGPassBuilderOption.h"
-#include "llvm/Target/X86/X86OptionsOptInfos.h"
+#include "llvm/Target/X86/X86Options.h"
 #include <algorithm>
 #include <cassert>
 #include <iterator>
@@ -85,31 +84,22 @@ STATISTIC(NumOfCmovGroupCandidate, "Number of CMOV-group candidates");
 STATISTIC(NumOfLoopCandidate, "Number of CMOV-conversion profitable loops");
 STATISTIC(NumOfOptimizedCmovGroups, "Number of optimized CMOV-groups");
 
-// This internal switch can be used to turn off the cmov/branch optimization.
-static bool EnableCmovConverter = true;
-
-static unsigned GainCycleThreshold = 4;
-
-static bool ForceMemOperand = true;
-
 static bool getEnableCmovConverter(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::X86_CmovConverter>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<X86Options>().X86_CmovConverter;
 }
 
 static unsigned getGainCycleThreshold(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::X86_CmovConverterThreshold>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<X86Options>().X86_CmovConverterThreshold;
 }
 
 static bool getForceMemOperand(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::X86_CmovConverterForceMemOperand>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<X86Options>()
+      .X86_CmovConverterForceMemOperand;
 }
 
 static bool getForceAll(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::X86_CmovConverterForceAll>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<X86Options>().X86_CmovConverterForceAll;
 }
 
 namespace {
@@ -185,7 +175,8 @@ bool X86CmovConversionImpl::runOnMachineFunction(MachineFunction &MF) {
     return false;
 
   // If the SelectOptimize pass is enabled, cmovs have already been optimized.
-  if (!getCGPassBuilderOption(MF.getTarget().getOptionsContext())
+  if (!getCGPassBuilderOption(MF.getTarget().getOptionsContext(),
+                              &MF.getFunction().getContext())
            .DisableSelectOptimize)
     return false;
 
@@ -401,9 +392,8 @@ static unsigned getDepthOfOptCmov(unsigned TrueOpDepth, unsigned FalseOpDepth) {
   // TrueOpDepth * TrueOpProbability + FalseOpDepth * FalseOpProbability.
   // As we have no info about branch weight, we assume 75% for one and 25% for
   // the other, and pick the result with the largest resulting depth.
-  return std::max(
-      divideCeil(TrueOpDepth * 3 + FalseOpDepth, 4),
-      divideCeil(FalseOpDepth * 3 + TrueOpDepth, 4));
+  return std::max(divideCeil(TrueOpDepth * 3 + FalseOpDepth, 4),
+                  divideCeil(FalseOpDepth * 3 + TrueOpDepth, 4));
 }
 
 bool X86CmovConversionImpl::checkForProfitableCmovCandidates(
@@ -815,7 +805,8 @@ void X86CmovConversionImpl::convertCmovInstsToBranches(
     for (auto *NewMI : NewMIs) {
       LLVM_DEBUG(dbgs() << "\tRewritten load instr: "; NewMI->dump());
       FalseMBB->insert(FalseInsertionPoint, NewMI);
-      // Re-map any operands that are from other cmovs to the inputs for this block.
+      // Re-map any operands that are from other cmovs to the inputs for this
+      // block.
       for (auto &MOp : NewMI->uses()) {
         if (!MOp.isReg())
           continue;

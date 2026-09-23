@@ -17,17 +17,13 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DepthFirstIterator.h"
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/Support/OptionsContext.h"
 #include <type_traits>
 
 namespace llvm {
 
 class Function;
+class LLVMContext;
 class MachineFunction;
-
-namespace clv2 {
-class OptionsContext;
-}
 
 struct FlowJump;
 
@@ -122,8 +118,9 @@ struct ProfiParams {
 };
 
 LLVM_ABI void applyFlowInference(const ProfiParams &Params, FlowFunction &Func);
-LLVM_ABI void applyFlowInference(FlowFunction &Func,
-                                 const clv2::OptionsContext &Ctx);
+/// \p Ctx is the LLVMContext to read the options from, or nullptr if none is
+/// available (in which case process-wide defaults are used).
+LLVM_ABI void applyFlowInference(FlowFunction &Func, const LLVMContext *Ctx);
 
 /// Sample profile inference pass.
 template <typename FT> class SampleProfileInference {
@@ -228,13 +225,13 @@ void SampleProfileInference<BT>::apply(BlockWeightMap &BlockWeights,
   FlowFunction Func = createFlowFunction(BasicBlocks, BlockIndex);
 
   // Create and apply the inference network model.
-  // Obtain OptionsContext for the function if available.
-  const clv2::OptionsContext *OptsCtx = &clv2::defaultOptionsContext();
+  // Obtain the LLVMContext for the function if available.
+  const LLVMContext *Ctx = nullptr;
   if constexpr (std::is_same_v<FunctionT, Function>)
-    OptsCtx = &F.getContext().getOptionsContext();
+    Ctx = &F.getContext();
   else if constexpr (std::is_same_v<FunctionT, MachineFunction>)
-    OptsCtx = &F.getFunction().getContext().getOptionsContext();
-  applyFlowInference(Func, *OptsCtx);
+    Ctx = &F.getFunction().getContext();
+  applyFlowInference(Func, Ctx);
 
   // Extract the resulting weights from the control flow
   // All weights are increased by one to avoid propagation errors introduced by

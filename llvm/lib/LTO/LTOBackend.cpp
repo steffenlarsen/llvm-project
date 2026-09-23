@@ -28,11 +28,11 @@
 #include "llvm/IR/PassManager.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/LTO/LTO.h"
-#include "llvm/LTO/LTOOptionsOptInfos.h"
+#include "llvm/LTO/LTOOptions.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Object/ModuleSymbolTable.h"
 #include "llvm/Passes/PassBuilder.h"
-#include "llvm/Passes/PassesOptionsOptInfos.h"
+#include "llvm/Passes/PassesOptions.h"
 #include "llvm/Passes/StandardInstrumentations.h"
 #include "llvm/Plugins/PassPlugin.h"
 #include "llvm/Support/Error.h"
@@ -56,29 +56,28 @@ using namespace lto;
 
 #define DEBUG_TYPE "lto-backend"
 
-using LTOBitcodeEmbedding = clv2::LTOBitcodeEmbedding;
+using LTOBitcodeEmbedding = llvm::LTOBitcodeEmbedding;
 
 static LTOBitcodeEmbedding getEmbedBitcode(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::LTO_EmbedBitcode>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<LTOOptions>().LTO_EmbedBitcode;
 }
 
 static bool getThinLTOAssumeMerged(const Module &M) {
-  return clv2::getOptValIfSpecified<&clv2::LTOOptsReg,
-                                    &clv2::LTO_ThinLTOAssumeMerged>(
-      M.getContext().getOptionsContext(), false);
+  return M.getContext().getOptions<LTOOptions>().LTO_ThinLTOAssumeMerged;
 }
 
-// Overload for contexts without IR Module. Reads from OptionsContext.
-static bool getThinLTOAssumeMerged(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValIfSpecified<&clv2::LTOOptsReg,
-                                    &clv2::LTO_ThinLTOAssumeMerged>(Ctx, false);
+// Overload for contexts without IR Module. No LLVMContext is reachable here
+// (only a clv2::OptionsContext, which is unrelated to the new-system
+// per-context storage LTOOptions relies on), so this reads the process-wide
+// LTOOptions::Current default directly instead, the same no-context
+// fallback used by e.g. CGDataOptions/BitcodeMemProfOptions.
+static bool getThinLTOAssumeMerged(const clv2::OptionsContext &) {
+  return LTOOptions::Current.LTO_ThinLTOAssumeMerged;
 }
 
 static std::vector<std::string>
-getSaveModulesList(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::LTO_FilterSaveModules>(
-      Ctx, std::vector<std::string>{});
+getSaveModulesList(const clv2::OptionsContext &) {
+  return LTOOptions::Current.LTO_FilterSaveModules;
 }
 
 [[noreturn]] static void reportOpenError(StringRef Path, Twine Msg) {
@@ -301,7 +300,8 @@ static void runNewPMPasses(const Config &Conf, Module &Mod, TargetMachine *TM,
   StandardInstrumentations SI(Mod.getContext(), Conf.DebugPassManager,
                               Conf.VerifyEach);
   SI.registerCallbacks(PIC, &MAM);
-  PassBuilder PB(*Conf.OptsCtx, TM, Conf.PTO, PGOOpt, &PIC, /*FS=*/nullptr);
+  PassBuilder PB(*Conf.OptsCtx, TM, Conf.PTO, PGOOpt, &PIC, /*FS=*/nullptr,
+                 &Mod.getContext());
 
   RegisterPassPlugins(Conf, PB);
 
@@ -383,9 +383,9 @@ static void runNewPMPasses(const Config &Conf, Module &Mod, TargetMachine *TM,
     MPM.addPass(VerifierPass());
 
   {
-    bool DoPrint = false;
-    if (auto *O = clv2::getView<&clv2::PassesOptsReg>(*Conf.OptsCtx))
-      DoPrint = O->specified<&clv2::PAS_PrintPipelinePasses>();
+    const PassesOptions &PassesOpts =
+        Mod.getContext().getOptions<PassesOptions>();
+    bool DoPrint = PassesOpts.PAS_PrintPipelinePasses.has_value();
     if (DoPrint) {
       std::string PipelineStr;
       raw_string_ostream OS(PipelineStr);

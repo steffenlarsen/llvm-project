@@ -14,7 +14,6 @@
 #include "llvm/CodeGen/MIR2Vec.h"
 #include "llvm/ADT/DepthFirstIterator.h"
 #include "llvm/ADT/Statistic.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/IR/Module.h"
 #include "llvm/InitializePasses.h"
@@ -39,6 +38,9 @@ namespace llvm {
 namespace mir2vec {
 cl::OptionCategory MIR2VecCategory("MIR2Vec Options");
 } // namespace mir2vec
+namespace clv2 {
+const OptionCategory MIR2VecCategory("MIR2Vec Options");
+} // namespace clv2
 } // namespace llvm
 
 // Forward declarations — defined after OptionInfo declarations below.

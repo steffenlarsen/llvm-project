@@ -8,7 +8,7 @@
 
 #include "llvm/Transforms/Instrumentation/LowerAllowCheckPass.h"
 #include "llvm/Support/OptionsContext.h"
-#include "llvm/Transforms/Instrumentation/InstrumentationOptionsOptInfos.h"
+#include "llvm/Transforms/Instrumentation/InstrumentationOptions.h"
 
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
@@ -36,28 +36,27 @@ using namespace llvm;
 #define DEBUG_TYPE "lower-allow-check"
 
 static bool isHotPercentileCutoffSpecified(const Function &F) {
-  return clv2::wasOptSpecified<&clv2::InstrumentationOptsReg,
-                               &clv2::INST_LowerAllowCheckPercentileCutoffHot>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<InstrumentationOptions>()
+      .INST_LowerAllowCheckPercentileCutoffHot.has_value();
 }
 
 static int getHotPercentileCutoff(const Function &F) {
-  return clv2::getOptValIfSpecified<
-      &clv2::InstrumentationOptsReg,
-      &clv2::INST_LowerAllowCheckPercentileCutoffHot>(
-      F.getContext().getOptionsContext(), 0);
+  return F.getContext()
+      .getOptions<InstrumentationOptions>()
+      .INST_LowerAllowCheckPercentileCutoffHot.value_or(0);
 }
 
 static bool isRandomRateSpecified(const Function &F) {
-  return clv2::wasOptSpecified<&clv2::InstrumentationOptsReg,
-                               &clv2::INST_LowerAllowCheckRandomRate>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<InstrumentationOptions>()
+      .INST_LowerAllowCheckRandomRate.has_value();
 }
 
 static float getRandomRate(const Function &F) {
-  return clv2::getOptValIfSpecified<&clv2::InstrumentationOptsReg,
-                                    &clv2::INST_LowerAllowCheckRandomRate>(
-      F.getContext().getOptionsContext(), 0.0f);
+  return F.getContext()
+      .getOptions<InstrumentationOptions>()
+      .INST_LowerAllowCheckRandomRate.value_or(0.0f);
 }
 
 STATISTIC(NumChecksTotal, "Number of checks");
@@ -219,30 +218,24 @@ PreservedAnalyses LowerAllowCheckPass::run(Function &F,
              : PreservedAnalyses::all();
 }
 
-bool LowerAllowCheckPass::IsRequested(const clv2::OptionsContext &Ctx) {
-  auto *O = clv2::getView<&clv2::InstrumentationOptsReg>(Ctx);
-  if (O) {
-    if (O->specified<&clv2::INST_LowerAllowCheckRandomRate>())
-      return true;
-    if (O->specified<&clv2::INST_LowerAllowCheckPercentileCutoffHot>())
-      return true;
-  }
-  return false;
+// The clv2::OptionsContext parameter is retained for API compatibility with
+// callers that only have a bare OptionsContext (no Module/LLVMContext yet).
+// The new schema's per-job overrides are attached to an LLVMContext rather
+// than to a bare OptionsContext, so this reads the process-wide default
+// (InstrumentationOptions::Current), matching the getOptions<T>() fallback
+// (see llvm::VectorizeOptions consumers for the same idiom).
+bool LowerAllowCheckPass::IsRequested(const clv2::OptionsContext &) {
+  return InstrumentationOptions::Current.INST_LowerAllowCheckRandomRate
+             .has_value() ||
+         InstrumentationOptions::Current
+             .INST_LowerAllowCheckPercentileCutoffHot.has_value();
 }
 
 bool LowerAllowCheckPass::IsRequested(const Module &M,
-                                      const clv2::OptionsContext &Ctx) {
-  auto *O = clv2::getView<&clv2::InstrumentationOptsReg>(
-      M.getContext().getOptionsContext());
-  if (!O)
-    O = clv2::getView<&clv2::InstrumentationOptsReg>(Ctx);
-  if (O) {
-    if (O->specified<&clv2::INST_LowerAllowCheckRandomRate>())
-      return true;
-    if (O->specified<&clv2::INST_LowerAllowCheckPercentileCutoffHot>())
-      return true;
-  }
-  return false;
+                                      const clv2::OptionsContext &) {
+  const auto &Opts = M.getContext().getOptions<InstrumentationOptions>();
+  return Opts.INST_LowerAllowCheckRandomRate.has_value() ||
+         Opts.INST_LowerAllowCheckPercentileCutoffHot.has_value();
 }
 
 void LowerAllowCheckPass::printPipeline(

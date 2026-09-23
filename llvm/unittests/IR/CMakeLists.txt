@@ -60,6 +60,7 @@ add_llvm_unittest(IRTests
   VFABIDemanglerTest.cpp
   VPIntrinsicTest.cpp
   CoreBindings.cpp
-  )
+
+  DEPENDS IROptParserTableGen)
 
 target_link_libraries(IRTests PRIVATE LLVMTestingSupport)

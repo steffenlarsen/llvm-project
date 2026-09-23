@@ -36,7 +36,6 @@
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Format.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
@@ -47,13 +46,10 @@ using namespace llvm;
 using namespace llvm::VPlanPatternMatch;
 
 static unsigned getForceTargetInstructionCost(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::VEC_ForceTargetInstructionCost>(
-      F.getContext().getOptionsContext());
+  return VectorizeOptions::Current.VEC_ForceTargetInstructionCost.value_or(0);
 }
 static bool isForceTargetInstructionCostSpecified(const Function &F) {
-  return clv2::wasOptSpecified<&clv2::VectorizeOptsReg,
-                               &clv2::VEC_ForceTargetInstructionCost>(
-      F.getContext().getOptionsContext());
+  return VectorizeOptions::Current.VEC_ForceTargetInstructionCost.has_value();
 }
 
 #define LV_NAME "loop-vectorize"
@@ -65,8 +61,7 @@ static bool isForceTargetInstructionCostSpecified(const Function &F) {
 // that wasn't present in the original scalar IR.
 
 static bool getVPlanPrintMetadata(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::VEC_VPlanPrintMetadata>(
-      M.getContext().getOptionsContext());
+  return VectorizeOptions::Current.VEC_VPlanPrintMetadata;
 }
 #endif
 

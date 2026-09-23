@@ -21,23 +21,18 @@
 namespace llvm {
 using namespace sampleprof;
 
-namespace clv2 {
-class OptionsContext;
-}
-
 class Function;
+class LLVMContext;
 class ProfileSummaryInfo;
 class Module;
 
-LLVM_ABI bool getNoWarnSampleUnused(const clv2::OptionsContext &Ctx);
+LLVM_ABI bool getNoWarnSampleUnused(const LLVMContext &Ctx);
 
-LLVM_ABI bool getSampleProfileUseProfi(const clv2::OptionsContext &Ctx);
+LLVM_ABI bool getSampleProfileUseProfi(const LLVMContext &Ctx);
 LLVM_ABI unsigned
-getSampleProfileMaxPropagateIterations(const clv2::OptionsContext &Ctx);
-LLVM_ABI unsigned
-getSampleProfileRecordCoverage(const clv2::OptionsContext &Ctx);
-LLVM_ABI unsigned
-getSampleProfileSampleCoverage(const clv2::OptionsContext &Ctx);
+getSampleProfileMaxPropagateIterations(const LLVMContext &Ctx);
+LLVM_ABI unsigned getSampleProfileRecordCoverage(const LLVMContext &Ctx);
+LLVM_ABI unsigned getSampleProfileSampleCoverage(const LLVMContext &Ctx);
 
 namespace sampleprofutil {
 

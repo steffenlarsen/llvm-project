@@ -28,23 +28,23 @@
 
 namespace llvm {
 
-namespace clv2 {
-class OptionsContext;
-}
+class LLVMContext;
 
-LLVM_ABI unsigned getSCEVCheapExpansionBudget(const clv2::OptionsContext &Ctx);
+/// \p Ctx is the LLVMContext to read the option from, or nullptr if none is
+/// available (in which case the process-wide default is used).
+LLVM_ABI unsigned getSCEVCheapExpansionBudget(const LLVMContext *Ctx);
 
 /// struct for holding enough information to help calculate the cost of the
 /// given SCEV when expanded into IR.
 struct SCEVOperand {
-  explicit SCEVOperand(unsigned Opc, int Idx, const SCEV *S) :
-    ParentOpcode(Opc), OperandIdx(Idx), S(S) { }
+  explicit SCEVOperand(unsigned Opc, int Idx, const SCEV *S)
+      : ParentOpcode(Opc), OperandIdx(Idx), S(S) {}
   /// LLVM instruction opcode that uses the operand.
   unsigned ParentOpcode;
   /// The use index of an expanded instruction.
   int OperandIdx;
   /// The SCEV operand to be costed.
-  const SCEV* S;
+  const SCEV *S;
 };
 
 struct PoisonFlags {

@@ -1,6 +1,4 @@
 add_llvm_component_library(LLVMipo
-  IPOOptionsRegistration.cpp
-  IPOOptionsGetters.cpp
   AlwaysInliner.cpp
   Annotation2Metadata.cpp
   ArgumentPromotion.cpp
@@ -57,6 +55,9 @@ add_llvm_component_library(LLVMipo
   DEPENDS
   intrinsics_gen
   omp_gen
+  IPOOptParserTableGen
+  ProfileDataOptParserTableGen
+  UtilsOptParserTableGen
 
   COMPONENT_NAME
   IPO

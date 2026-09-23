@@ -49,8 +49,7 @@
 #include "llvm/Support/AMDGPUAddrSpace.h"
 #include "llvm/Support/KnownBits.h"
 #include "llvm/Support/ModRef.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/AMDGPU/AMDGPUOptionsOptInfos.h"
+#include "llvm/Target/AMDGPU/AMDGPUOptions.h"
 #include "llvm/TargetParser/AtomicScope.h"
 #include "llvm/Transforms/Utils/LowerAtomic.h"
 #include <optional>
@@ -63,13 +62,13 @@ using namespace llvm::SDPatternMatch;
 STATISTIC(NumTailCalls, "Number of tail calls");
 
 static bool getDisableLoopAlignment(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AMDGPU_DisableLoopAlignment>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<AMDGPUOptions>().AMDGPU_DisableLoopAlignment;
 }
 
 static bool getUseDivergentRegisterIndexing(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AMDGPU_UseDivergentRegisterIndexing>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<AMDGPUOptions>()
+      .AMDGPU_UseDivergentRegisterIndexing;
 }
 
 static DenormalFPEnv getDenormalFPEnv(const MachineFunction &MF) {
@@ -6585,7 +6584,7 @@ static MachineBasicBlock *lowerWaveReduce(MachineInstr &MI,
           else
             ClampInstr.addReg(CarryOutReg, RegState::Define); // carry-out reg
         }
-        ClampInstr.addReg(Src0);              // src0
+        ClampInstr.addReg(Src0); // src0
         if (isFPOp)
           ClampInstr.addImm(SISrcMods::NONE); // src1 mod
         ClampInstr.addReg(Src1);              // src1
@@ -8671,8 +8670,7 @@ bool SITargetLowering::shouldUseLDSConstAddress(const GlobalValue *GV) const {
 
   // With object linking, external LDS declarations need relocations so the
   // linker can assign their offsets.
-  if (AMDGPUTargetMachine::getEnableObjectLinking(
-          getTargetMachine().getOptionsContext())) {
+  if (AMDGPUTargetMachine::getEnableObjectLinking(&GV->getContext())) {
     if (const auto *GVar = dyn_cast<GlobalVariable>(GV)) {
       if (GVar->getAddressSpace() == AMDGPUAS::LOCAL_ADDRESS ||
           GVar->getAddressSpace() == AMDGPUAS::BARRIER) {
@@ -12903,18 +12901,18 @@ SDValue SITargetLowering::LowerINTRINSIC_VOID(SDValue Op,
     case 12:
       if (!Subtarget->hasLDSLoadB96_B128())
         return SDValue();
-      Opc = HasVIndex ? HasVOffset ? AMDGPU::BUFFER_LOAD_DWORDX3_LDS_BOTHEN
-                                   : AMDGPU::BUFFER_LOAD_DWORDX3_LDS_IDXEN
-                      : HasVOffset ? AMDGPU::BUFFER_LOAD_DWORDX3_LDS_OFFEN
-                                   : AMDGPU::BUFFER_LOAD_DWORDX3_LDS_OFFSET;
+      Opc = HasVIndex    ? HasVOffset ? AMDGPU::BUFFER_LOAD_DWORDX3_LDS_BOTHEN
+                                      : AMDGPU::BUFFER_LOAD_DWORDX3_LDS_IDXEN
+            : HasVOffset ? AMDGPU::BUFFER_LOAD_DWORDX3_LDS_OFFEN
+                         : AMDGPU::BUFFER_LOAD_DWORDX3_LDS_OFFSET;
       break;
     case 16:
       if (!Subtarget->hasLDSLoadB96_B128())
         return SDValue();
-      Opc = HasVIndex ? HasVOffset ? AMDGPU::BUFFER_LOAD_DWORDX4_LDS_BOTHEN
-                                   : AMDGPU::BUFFER_LOAD_DWORDX4_LDS_IDXEN
-                      : HasVOffset ? AMDGPU::BUFFER_LOAD_DWORDX4_LDS_OFFEN
-                                   : AMDGPU::BUFFER_LOAD_DWORDX4_LDS_OFFSET;
+      Opc = HasVIndex    ? HasVOffset ? AMDGPU::BUFFER_LOAD_DWORDX4_LDS_BOTHEN
+                                      : AMDGPU::BUFFER_LOAD_DWORDX4_LDS_IDXEN
+            : HasVOffset ? AMDGPU::BUFFER_LOAD_DWORDX4_LDS_OFFEN
+                         : AMDGPU::BUFFER_LOAD_DWORDX4_LDS_OFFSET;
       break;
     }
 
@@ -12944,11 +12942,11 @@ SDValue SITargetLowering::LowerINTRINSIC_VOID(SDValue Op,
         Aux & (IsGFX12Plus ? AMDGPU::CPol::SWZ : AMDGPU::CPol::SWZ_pregfx12)
             ? 1
             : 0,
-        DL, MVT::i8));                                           // swz
+        DL, MVT::i8)); // swz
     Ops.push_back(
         DAG.getTargetConstant(isAsyncLDSDMA(IntrinsicID), DL, MVT::i8));
-    Ops.push_back(M0Val.getValue(0));                            // Chain
-    Ops.push_back(M0Val.getValue(1));                            // Glue
+    Ops.push_back(M0Val.getValue(0)); // Chain
+    Ops.push_back(M0Val.getValue(1)); // Glue
 
     auto *M = cast<MemSDNode>(Op);
     auto *Load = DAG.getMachineNode(Opc, DL, M->getVTList(), Ops);
@@ -13026,7 +13024,7 @@ SDValue SITargetLowering::LowerINTRINSIC_VOID(SDValue Op,
       Ops.push_back(VOffset);
     }
 
-    Ops.push_back(Op.getOperand(5));  // Offset
+    Ops.push_back(Op.getOperand(5)); // Offset
 
     unsigned Aux = Op.getConstantOperandVal(6);
     Ops.push_back(DAG.getTargetConstant(Aux & ~AMDGPU::CPol::VIRTUAL_BITS, DL,
@@ -17000,12 +16998,8 @@ bool SITargetLowering::shouldExpandVectorDynExt(unsigned EltSize,
                                                 bool IsDivergentIdx,
                                                 const GCNSubtarget *Subtarget) {
   if (Subtarget) {
-    auto &Ctx =
-        Subtarget->getTargetLowering()->getTargetMachine().getOptionsContext();
-    if (auto *O = clv2::getView<&clv2::AMDGPUOptsReg>(Ctx)) {
-      if (O->get<&clv2::AMDGPU_UseDivergentRegisterIndexing>())
-        return false;
-    }
+    if (AMDGPUOptions::Current.AMDGPU_UseDivergentRegisterIndexing)
+      return false;
   }
 
   unsigned VecSize = EltSize * NumElem;

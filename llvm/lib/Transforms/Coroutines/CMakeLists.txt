@@ -1,6 +1,4 @@
 add_llvm_component_library(LLVMCoroutines
-  CoroutinesOptionsGetters.cpp
-  CoroutinesOptionsRegistration.cpp
   Coroutines.cpp
   CoroutinesOptions.cpp
   CoroAnnotationElide.cpp
@@ -20,11 +18,13 @@ add_llvm_component_library(LLVMCoroutines
   DEPENDS
   intrinsics_gen
   LLVMAnalysis
+  CoroutinesOptParserTableGen
 
   LINK_COMPONENTS
   Analysis
   Core
   IPO
+  Option
   Scalar
   Support
   TransformUtils

@@ -30,7 +30,7 @@
 #include "llvm/CodeGen/TargetPassConfig.h"
 #include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/SPIRV/SPIRVOptionsOptInfos.h"
+#include "llvm/Target/SPIRV/SPIRVOptions.h"
 
 using namespace llvm;
 
@@ -62,8 +62,7 @@ static const int RegisterAvoidCaps = [] {
 }();
 
 static bool getDumpDeps(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::SPIRV_DumpDeps>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<SPIRVOptions>().SPIRV_DumpDeps;
 }
 
 struct AvoidCapabilitiesSet {

@@ -15,6 +15,7 @@
 
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/STLFunctionalExtras.h"
+#include "llvm/Analysis/AnalysisOptions.h"
 #include "llvm/Analysis/InlineModelFeatureMaps.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/Support/Compiler.h"
@@ -46,7 +47,7 @@ const int OptMinSizeThreshold = 5;
 const int OptAggressiveThreshold = 250;
 
 // Various magic constants used to adjust heuristics.
-LLVM_ABI int getInstrCost(const clv2::OptionsContext &Ctx);
+LLVM_ABI int getInstrCost(const AnalysisOptions &Opts);
 const int IndirectCallThreshold = 100;
 const int LoopPenalty = 25;
 const int ColdccPenalty = 2000;
@@ -249,13 +250,13 @@ LLVM_ABI std::optional<int> getStringFnAttrAsInt(CallBase &CB,
 
 /// Generate the parameters to tune the inline cost analysis based only on the
 /// commandline options.
-LLVM_ABI InlineParams getInlineParams(const clv2::OptionsContext &Ctx);
+LLVM_ABI InlineParams getInlineParams(const AnalysisOptions &Opts);
 
 /// Generate the parameters to tune the inline cost analysis based on command
 /// line options. If -inline-threshold option is not explicitly passed,
 /// \p Threshold is used as the default threshold.
 LLVM_ABI InlineParams getInlineParams(int Threshold,
-                                      const clv2::OptionsContext &Ctx);
+                                      const AnalysisOptions &Opts);
 
 /// Generate the parameters to tune the inline cost analysis based on command
 /// line options. If -inline-threshold option is not explicitly passed,
@@ -264,7 +265,7 @@ LLVM_ABI InlineParams getInlineParams(int Threshold,
 /// Optimization for size is handled via separate thresholds for
 /// optsize/minsize, rather than changes to the default threshold.
 LLVM_ABI InlineParams
-getInlineParamsFromOptLevel(unsigned OptLevel, const clv2::OptionsContext &Ctx);
+getInlineParamsFromOptLevel(unsigned OptLevel, const AnalysisOptions &Opts);
 
 /// Return the cost associated with a callsite, including parameter passing
 /// and the call/return instruction.

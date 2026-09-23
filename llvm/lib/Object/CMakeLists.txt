@@ -1,6 +1,5 @@
 add_llvm_component_library(LLVMObject
-  ObjectOptionsGetters.cpp
-  ObjectOptionsRegistration.cpp
+  ObjectOptions.cpp
   Archive.cpp
   ArchiveWriter.cpp
   BBAddrMap.cpp
@@ -45,6 +44,7 @@ add_llvm_component_library(LLVMObject
   DEPENDS
   intrinsics_gen
   llvm_vcsrevision_h
+  ObjectOptParserTableGen
 
   LINK_COMPONENTS
   BitReader
@@ -53,6 +53,7 @@ add_llvm_component_library(LLVMObject
   IRReader
   BinaryFormat
   MCParser
+  Option
   Support
   TargetParser
   TextAPI

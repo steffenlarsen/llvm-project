@@ -47,7 +47,8 @@
 #include "llvm/Transforms/Utils.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
 #include "llvm/Transforms/Utils/SSAUpdater.h"
-#include "llvm/Transforms/Utils/UtilsOptionsOptInfos.h"
+#include "llvm/Transforms/Utils/UtilsOptions.h"
+#include <optional>
 using namespace llvm;
 
 #define DEBUG_TYPE "lcssa"
@@ -167,8 +168,8 @@ formLCSSAForInstructionsImpl(SmallVectorImpl<Instruction *> &Worklist,
 
     // Insert the LCSSA phi's into all of the exit blocks dominated by the
     // value, and add them to the Phi's map.
-    bool HasSCEV = SE && SE->isSCEVable(I->getType()) &&
-                   SE->getExistingSCEV(I) != nullptr;
+    bool HasSCEV =
+        SE && SE->isSCEVable(I->getType()) && SE->getExistingSCEV(I) != nullptr;
     for (BasicBlock *ExitBB : ExitBlocks) {
       if (!DT.dominates(DomNode, DT.getNode(ExitBB)))
         continue;
@@ -187,8 +188,8 @@ formLCSSAForInstructionsImpl(SmallVectorImpl<Instruction *> &Worklist,
       // Add inputs from inside the loop for this PHI. This is valid
       // because `I` dominates `ExitBB` (checked above).  This implies
       // that every incoming block/edge is dominated by `I` as well,
-      // i.e. we can add uses of `I` to those incoming edges/append to the incoming
-      // blocks without violating the SSA dominance property.
+      // i.e. we can add uses of `I` to those incoming edges/append to the
+      // incoming blocks without violating the SSA dominance property.
       for (BasicBlock *Pred : PredCache.get(ExitBB)) {
         PN->addIncoming(I, Pred);
 
@@ -382,7 +383,7 @@ static bool formLCSSAImpl(Loop &L, const DominatorTree &DT, const LoopInfo *LI,
 
 #ifdef EXPENSIVE_CHECKS
   // Verify all sub-loops are in LCSSA form already.
-  for (Loop *SubLoop: L) {
+  for (Loop *SubLoop : L) {
     (void)SubLoop; // Silence unused variable warning.
     assert(SubLoop->isRecursivelyLCSSAForm(DT, *LI) && "Subloop not in LCSSA!");
   }
@@ -416,9 +417,8 @@ static bool formLCSSAImpl(Loop &L, const DominatorTree &DT, const LoopInfo *LI,
     for (Instruction &I : *BB) {
       // Reject two common cases fast: instructions with no uses (like stores)
       // and instructions with one use that is in the same block as this.
-      if (I.use_empty() ||
-          (I.hasOneUse() && I.user_back()->getParent() == BB &&
-           !isa<PHINode>(I.user_back())))
+      if (I.use_empty() || (I.hasOneUse() && I.user_back()->getParent() == BB &&
+                            !isa<PHINode>(I.user_back())))
         continue;
 
       // Token-like values cannot be used in PHI nodes, so we skip over them.
@@ -496,16 +496,15 @@ struct LCSSAWrapperPass : public FunctionPass {
     // up to 10x slowdown. Currently it's disabled by default. LPPassManager
     // always does limited form of the LCSSA verification. Similar reasoning
     // was used for the LoopInfo verifier.
-    const clv2::OptionsContext &OptsCtx = LI->empty()
-                                              ? clv2::defaultOptionsContext()
-                                              : (*LI->begin())
-                                                    ->getHeader()
-                                                    ->getParent()
-                                                    ->getContext()
-                                                    .getOptionsContext();
-    if (clv2::getOptValOr<&clv2::TransformUtilsOptsReg,
-                          &clv2::TU_VerifyLoopLCSSAFlag>(
-            OptsCtx, VerifyLoopLCSSADefault)) {
+    const std::optional<bool> VerifyFlag = LI->empty()
+                                               ? std::nullopt
+                                               : (*LI->begin())
+                                                     ->getHeader()
+                                                     ->getParent()
+                                                     ->getContext()
+                                                     .getOptions<UtilsOptions>()
+                                                     .TU_VerifyLoopLCSSAFlag;
+    if (VerifyFlag.value_or(VerifyLoopLCSSADefault)) {
       assert(all_of(*LI,
                     [&](Loop *L) {
                       return L->isRecursivelyLCSSAForm(*DT, *LI);
@@ -535,7 +534,7 @@ struct LCSSAWrapperPass : public FunctionPass {
     AU.addPreserved<LCSSAVerificationPass>();
   }
 };
-}
+} // namespace
 
 char LCSSAWrapperPass::ID = 0;
 INITIALIZE_PASS_BEGIN(LCSSAWrapperPass, "lcssa", "Loop-Closed SSA Form Pass",

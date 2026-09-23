@@ -8,7 +8,7 @@
 
 #include "LiveDebugValues.h"
 
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsGISel.h"
 #include "llvm/CodeGen/LiveDebugValuesPass.h"
 #include "llvm/CodeGen/MachineDominators.h"
 #include "llvm/CodeGen/MachineFunction.h"
@@ -16,13 +16,12 @@
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/LLVMContext.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
 #include "llvm/PassRegistry.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/CommandLineCompat.h"
-#include "llvm/Support/CommandLineV2.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/TargetParser/Triple.h"
 
@@ -46,28 +45,28 @@ using namespace llvm;
 // Options to prevent pathological compile-time behavior. If InputBBLimit and
 // InputDbgValueLimit are both exceeded, range extension is disabled.
 
-static bool getForceInstrRefLivedebugvalues(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_ForceInstrRefLivedebugvalues>(
-      Ctx);
+static bool getForceInstrRefLivedebugvalues(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenGISelOptions>()
+      .CGPASS_ForceInstrRefLivedebugvalues;
 }
 
-static unsigned
-getLivedebugvaluesInputBbLimit(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_LivedebugvaluesInputBbLimit>(
-      Ctx);
+static unsigned getLivedebugvaluesInputBbLimit(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenGISelOptions>()
+      .CGPASS_LivedebugvaluesInputBbLimit;
 }
 
-static unsigned
-getLivedebugvaluesInputDbgValueLimit(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<
-      &clv2::CGPASS_LivedebugvaluesInputDbgValueLimit>(Ctx);
+static unsigned getLivedebugvaluesInputDbgValueLimit(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenGISelOptions>()
+      .CGPASS_LivedebugvaluesInputDbgValueLimit;
 }
 
 static cl::boolOrDefault
-getExperimentalDebugVariableLocations(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::CGPassGISelReg,
-                           &clv2::CGPASS_ExperimentalDebugVariableLocations>(
-      Ctx, cl::boolOrDefault::BOU_UNSET);
+getExperimentalDebugVariableLocations(const LLVMContext &Ctx) {
+  std::optional<bool> V = Ctx.getOptions<CodeGenGISelOptions>()
+                              .CGPASS_ExperimentalDebugVariableLocations;
+  if (!V)
+    return cl::boolOrDefault::BOU_UNSET;
+  return *V ? cl::boolOrDefault::BOU_TRUE : cl::boolOrDefault::BOU_FALSE;
 }
 
 namespace {
@@ -146,8 +145,8 @@ bool LiveDebugValues::run(MachineFunction &MF,
                           bool ShouldEmitDebugEntryValues) {
   bool InstrRefBased = MF.useDebugInstrRef();
   // Allow the user to force selection of InstrRef LDV.
-  InstrRefBased |= getForceInstrRefLivedebugvalues(
-      MF.getFunction().getContext().getOptionsContext());
+  InstrRefBased |=
+      getForceInstrRefLivedebugvalues(MF.getFunction().getContext());
 
   LDVImpl *TheImpl = &*VarLocImpl;
 
@@ -160,14 +159,12 @@ bool LiveDebugValues::run(MachineFunction &MF,
 
   return TheImpl->ExtendRanges(
       MF, DomTree, ShouldEmitDebugEntryValues,
-      getLivedebugvaluesInputBbLimit(
-          MF.getFunction().getContext().getOptionsContext()),
-      getLivedebugvaluesInputDbgValueLimit(
-          MF.getFunction().getContext().getOptionsContext()));
+      getLivedebugvaluesInputBbLimit(MF.getFunction().getContext()),
+      getLivedebugvaluesInputDbgValueLimit(MF.getFunction().getContext()));
 }
 
 bool llvm::debuginfoShouldUseDebugInstrRef(const Triple &T,
-                                           const clv2::OptionsContext &Ctx) {
+                                           const LLVMContext &Ctx) {
   // Enable by default on x86_64, disable if explicitly turned off on cmdline.
   if (T.getArch() == llvm::Triple::x86_64 &&
       getExperimentalDebugVariableLocations(Ctx) !=

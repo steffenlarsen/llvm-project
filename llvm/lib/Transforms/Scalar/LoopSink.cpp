@@ -1,5 +1,3 @@
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
 //===-- LoopSink.cpp - Loop Sink Pass -------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -44,7 +42,9 @@
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/Support/BranchProbability.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Transforms/Scalar.h"
+#include "llvm/Transforms/Scalar/ScalarOptions.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
 using namespace llvm;
@@ -55,13 +55,11 @@ STATISTIC(NumLoopSunk, "Number of instructions sunk into loop");
 STATISTIC(NumLoopSunkCloned, "Number of cloned instructions sunk into loop");
 
 static unsigned getSinkFrequencyPercentThreshold(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_SinkFreqPercentThreshold>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<ScalarOptions>().SC_SinkFreqPercentThreshold;
 }
 
 static unsigned getMaxNumberOfUseBBsForSinking(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_MaxUsesForSinking>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<ScalarOptions>().SC_MaxUsesForSinking;
 }
 
 /// Return adjusted total frequency of \p BBs.

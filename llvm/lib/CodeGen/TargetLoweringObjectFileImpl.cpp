@@ -23,7 +23,7 @@
 #include "llvm/BinaryFormat/MachO.h"
 #include "llvm/BinaryFormat/Wasm.h"
 #include "llvm/CodeGen/BasicBlockSectionUtils.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsSched1.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineJumpTableInfo.h"
@@ -40,6 +40,7 @@
 #include "llvm/IR/GlobalObject.h"
 #include "llvm/IR/GlobalValue.h"
 #include "llvm/IR/GlobalVariable.h"
+#include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Mangler.h"
 #include "llvm/IR/Metadata.h"
 #include "llvm/IR/Module.h"
@@ -65,10 +66,8 @@
 #include "llvm/Support/Base64.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/CodeGen.h"
-#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/Format.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
@@ -79,9 +78,9 @@
 using namespace llvm;
 using namespace dwarf;
 
-static bool getJumptableInFunctionSection(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_JumptableInFunctionSection>(
-      Ctx);
+static bool getJumptableInFunctionSection(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenSched1Options>()
+      .CGPASS_JumptableInFunctionSection;
 }
 
 static void GetObjCImageInfo(Module &M, unsigned &Version, unsigned &Flags,
@@ -1923,7 +1922,7 @@ MCSection *TargetLoweringObjectFileCOFF::getSectionForJumpTable(
 bool TargetLoweringObjectFileCOFF::shouldPutJumpTableInFunctionSection(
     bool UsesLabelDifference, const Function &F) const {
   if (TM->getTargetTriple().getArch() == Triple::x86_64) {
-    if (!getJumptableInFunctionSection(F.getContext().getOptionsContext())) {
+    if (!getJumptableInFunctionSection(F.getContext())) {
       // We can always create relative relocations, so use another section
       // that can be marked non-executable.
       return false;

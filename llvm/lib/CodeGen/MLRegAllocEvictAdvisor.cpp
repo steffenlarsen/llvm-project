@@ -24,7 +24,7 @@
 #include "llvm/Analysis/ReleaseModeModelRunner.h"
 #include "llvm/Analysis/Utils/MLGOUtils.h"
 #include "llvm/CodeGen/CalcSpillWeights.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsCore2.h"
 #include "llvm/CodeGen/LiveRegMatrix.h"
 #include "llvm/CodeGen/MachineBlockFrequencyInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
@@ -41,7 +41,6 @@
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/OptionsContext.h"
 
 #include <array>
 #include <bitset>
@@ -130,27 +129,24 @@ createMLGORegAllocModelRunner(LLVMContext &, const std::vector<TensorSpec> &) {
 #include "RegAllocScore.h"
 #include "llvm/Analysis/Utils/TFUtils.h"
 
-static std::string TrainingLog;
-
-static std::string getRegallocTrainingLog(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::CGPassCore2Reg,
-                           &clv2::CGPASS_RegallocTrainingLog>(Ctx, TrainingLog);
+static std::string getRegallocTrainingLog(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore2Options>().CGPASS_RegallocTrainingLog;
 }
 
-static std::string getRegallocModel(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_RegallocModel>(Ctx);
+static std::string getRegallocModel(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore2Options>().CGPASS_RegallocModel;
 }
 #endif // #ifdef LLVM_HAVE_TFLITE
 
 static std::string
-getRegallocEvictInteractiveChannelBase(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<
-      &clv2::CGPASS_RegallocEvictInteractiveChannelBase>(Ctx);
+getRegallocEvictInteractiveChannelBase(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore2Options>()
+      .CGPASS_RegallocEvictInteractiveChannelBase;
 }
 
-static unsigned getMlregallocMaxEvictionCount(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_MlregallocMaxEvictionCount>(
-      Ctx);
+static unsigned getMlregallocMaxEvictionCount(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore2Options>()
+      .CGPASS_MlregallocMaxEvictionCount;
 }
 
 /// The score injection pass.
@@ -439,8 +435,7 @@ public:
       Runner = createReleaseModeModelRunner<CompiledModelType,
                                             HaveMLIRLoweringRegAlloc>(
           MF.getFunction().getContext(), InputFeatures, DecisionName,
-          getRegallocEvictInteractiveChannelBase(
-              MF.getFunction().getContext().getOptionsContext()),
+          getRegallocEvictInteractiveChannelBase(MF.getFunction().getContext()),
           DecisionSpec, createMLGORegAllocModelRunner);
     }
     assert(MBFI && Loops &&
@@ -524,26 +519,26 @@ public:
             TensorSpec::createSpec<float>("action_discount", {1}),
         TensorSpec::createSpec<int32_t>("action_step_type", {1}),
         TensorSpec::createSpec<float>("action_reward", {1})};
-    if (getRegallocModel().empty() && getRegallocTrainingLog().empty()) {
+    if (getRegallocModel(Ctx).empty() && getRegallocTrainingLog(Ctx).empty()) {
       Ctx.emitError("Regalloc development mode should be requested with at "
                     "least logging enabled and/or a training model");
       return;
     }
-    if (getRegallocModel().empty())
+    if (getRegallocModel(Ctx).empty())
       Runner = std::make_unique<NoInferenceModelRunner>(Ctx, InputFeatures);
     else
       Runner = ModelUnderTrainingRunner::createAndEnsureValid(
-          Ctx, getRegallocModel(), DecisionName, TrainingInputFeatures);
+          Ctx, getRegallocModel(Ctx), DecisionName, TrainingInputFeatures);
     if (!Runner) {
       Ctx.emitError("Regalloc: could not set up the model runner");
       return;
     }
-    if (getRegallocTrainingLog().empty())
+    if (getRegallocTrainingLog(Ctx).empty())
       return;
     std::error_code EC;
-    auto OS = std::make_unique<raw_fd_ostream>(getRegallocTrainingLog(), EC);
+    auto OS = std::make_unique<raw_fd_ostream>(getRegallocTrainingLog(Ctx), EC);
     if (EC) {
-      Ctx.emitError(EC.message() + ":" + getRegallocTrainingLog());
+      Ctx.emitError(EC.message() + ":" + getRegallocTrainingLog(Ctx));
       return;
     }
     std::vector<TensorSpec> LFS = InputFeatures;
@@ -727,8 +722,7 @@ bool MLEvictAdvisor::loadInterferenceFeatures(
       // range through if it is urgent as we are required to produce an
       // eviction if the candidate is not spillable.
       if (getEvictionCount(Intf->reg()) >
-              getMlregallocMaxEvictionCount(
-                  MF.getFunction().getContext().getOptionsContext()) &&
+              getMlregallocMaxEvictionCount(MF.getFunction().getContext()) &&
           !Urgent)
         return false;
 
@@ -1038,8 +1032,7 @@ int64_t DevelopmentModeEvictAdvisor::tryFindEvictionCandidatePosition(
         if (*I == PhysReg)
           break;
   }
-  if (getRegallocTrainingLog(MF.getFunction().getContext().getOptionsContext())
-          .empty())
+  if (getRegallocTrainingLog(MF.getFunction().getContext()).empty())
     return Ret;
   // TODO(mtrofin): when we support optional rewards, this can go away. In the
   // meantime, we log the "pretend" reward (0) for the previous observation
@@ -1089,7 +1082,7 @@ bool RegAllocScoring::runOnMachineFunction(MachineFunction &MF) {
 RegAllocEvictionAdvisorProvider *
 llvm::createReleaseModeAdvisorProvider(LLVMContext &Ctx) {
   return isReleaseModelValid<CompiledModelType>(
-             getRegallocEvictInteractiveChannelBase(Ctx.getOptionsContext()),
+             getRegallocEvictInteractiveChannelBase(Ctx),
              getSelectedMLGORegAllocModel())
              ? new ReleaseModeEvictionAdvisorProvider(Ctx)
              : nullptr;
@@ -1105,11 +1098,12 @@ llvm::createDevelopmentModeAdvisorProvider(LLVMContext &Ctx) {
 
 RegAllocEvictionAdvisorAnalysisLegacy *
 llvm::createReleaseModeAdvisorAnalysisLegacy() {
-  // The legacy factory runs before any module is available, so the option is
-  // read from the process-wide default context.
+  // The legacy factory runs before any module is available, so no
+  // LLVMContext is reachable here; fall back to the process-wide default
+  // per the migration's no-context routing rule.
   return isReleaseModelValid<CompiledModelType>(
-             getRegallocEvictInteractiveChannelBase(
-                 clv2::defaultOptionsContext()),
+             CodeGenCore2Options::Current
+                 .CGPASS_RegallocEvictInteractiveChannelBase,
              getSelectedMLGORegAllocModel())
              ? new ReleaseModeEvictionAdvisorAnalysisLegacy()
              : nullptr;

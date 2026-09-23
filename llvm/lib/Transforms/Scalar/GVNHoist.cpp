@@ -1,5 +1,3 @@
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
 //===- GVNHoist.cpp - Hoist scalar and load expressions -------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -65,8 +63,10 @@
 #include "llvm/IR/Value.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Scalar/GVN.h"
+#include "llvm/Transforms/Scalar/ScalarOptions.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include <algorithm>
 #include <cassert>
@@ -88,23 +88,19 @@ STATISTIC(NumCallsHoisted, "Number of calls hoisted");
 STATISTIC(NumCallsRemoved, "Number of calls removed");
 
 static int getMaxHoistedThreshold(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_GvnMaxHoisted>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<ScalarOptions>().SC_GvnMaxHoisted;
 }
 
 static int getMaxNumberOfBBSInPath(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_GvnHoistMaxBbs>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<ScalarOptions>().SC_GvnHoistMaxBbs;
 }
 
 static int getMaxDepthInBB(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_GvnHoistMaxDepth>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<ScalarOptions>().SC_GvnHoistMaxDepth;
 }
 
 static int getMaxChainLength(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_GvnHoistMaxChainLength>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<ScalarOptions>().SC_GvnHoistMaxChainLength;
 }
 
 namespace llvm {

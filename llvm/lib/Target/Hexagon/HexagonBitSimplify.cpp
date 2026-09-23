@@ -29,9 +29,8 @@
 #include "llvm/MC/MCInstrDesc.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
+#include "llvm/Target/Hexagon/HexagonOptions.h"
 
 #define DEBUG_TYPE "hexbit"
 
@@ -46,46 +45,40 @@ static unsigned CountExtract = 0;
 static unsigned MaxBitSplit = std::numeric_limits<unsigned>::max();
 static unsigned CountBitSplit = 0;
 
-static unsigned RegisterSetLimit = 1000;
-
 static bool getPreserveTiedOps(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_PreserveTiedOps>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_PreserveTiedOps;
 }
 
 static bool getGenExtract(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_GenExtractBit>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_GenExtractBit;
 }
 
 static bool getGenBitSplit(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_GenBitSplit>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_GenBitSplit;
 }
 
 static unsigned getRegisterSetLimit(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_RegisterSetLimit>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_RegisterSetLimit;
 }
 
 static unsigned getMaxExtract(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_MaxExtract>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_MaxExtract.value_or(
+      ~0U);
 }
 
 static bool getMaxExtractWasSpecified(const Function &F) {
-  return clv2::wasOptSpecified<&clv2::HexagonOptsReg, &clv2::HEX_MaxExtract>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_MaxExtract.has_value();
 }
 
 static unsigned getMaxBitSplit(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_MaxBitSplit>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_MaxBitSplit.value_or(
+      ~0U);
 }
 
 static bool getMaxBitSplitWasSpecified(const Function &F) {
-  return clv2::wasOptSpecified<&clv2::HexagonOptsReg, &clv2::HEX_MaxBitSplit>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<HexagonOptions>()
+      .HEX_MaxBitSplit.has_value();
 }
 
 namespace {
@@ -128,7 +121,8 @@ namespace {
       Bits.set(Idx);
       if (!Exists) {
         LRU.push_back(Idx);
-        unsigned Limit = Fn ? getRegisterSetLimit(*Fn) : RegisterSetLimit;
+        unsigned Limit = Fn ? getRegisterSetLimit(*Fn)
+                            : HexagonOptions::Current.HEX_RegisterSetLimit;
         if (LRU.size() > Limit) {
           unsigned T = LRU.front();
           Bits.reset(T);

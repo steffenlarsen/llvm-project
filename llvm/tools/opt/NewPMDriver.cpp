@@ -30,7 +30,7 @@
 #include "llvm/IR/Verifier.h"
 #include "llvm/IRPrinter/IRPrintingPasses.h"
 #include "llvm/Passes/PassBuilder.h"
-#include "llvm/Passes/PassesOptionsOptInfos.h"
+#include "llvm/Passes/PassesOptions.h"
 #include "llvm/Passes/StandardInstrumentations.h"
 #include "llvm/Plugins/PassPlugin.h"
 #include "llvm/Support/CommandLineCompat.h"
@@ -353,7 +353,8 @@ bool llvm::runPassPipeline(
   PTO.LoopUnrolling = !NPMOpts.DisableLoopUnrolling;
   PTO.UnifiedLTO = UnifiedLTO;
   PTO.LoopFusion = NPMOpts.EnableLoopFusion;
-  PassBuilder PB(OptsCtx, TM, PTO, P, &PIC, vfs::getRealFileSystem());
+  PassBuilder PB(OptsCtx, TM, PTO, P, &PIC, vfs::getRealFileSystem(),
+                 &M.getContext());
   registerEPCallbacks(PB, NPMOpts);
 
   // For any loaded plugins, let them register pass builder callbacks.
@@ -449,14 +450,11 @@ bool llvm::runPassPipeline(
   // requested.
   bool DoPrintPipeline = false;
   PrintPipelinePassesFormat PipelineFormat = PrintPipelinePassesFormat::Text;
-  if (auto *O = clv2::getView<&clv2::PassesOptsReg>(OptsCtx)) {
-    DoPrintPipeline = O->specified<&clv2::PAS_PrintPipelinePasses>();
-    if (DoPrintPipeline) {
-      StringRef FormatStr = O->get<&clv2::PAS_PrintPipelinePasses>();
-      if (FormatStr == "tree")
-        PipelineFormat = PrintPipelinePassesFormat::Tree;
-    }
-  }
+  const std::optional<std::string> &PrintPipelinePassesOpt =
+      M.getContext().getOptions<PassesOptions>().PAS_PrintPipelinePasses;
+  DoPrintPipeline = PrintPipelinePassesOpt.has_value();
+  if (DoPrintPipeline && *PrintPipelinePassesOpt == "tree")
+    PipelineFormat = PrintPipelinePassesFormat::Tree;
   if (DoPrintPipeline) {
     std::string Pipeline;
     raw_string_ostream SOS(Pipeline);

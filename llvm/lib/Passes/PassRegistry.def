@@ -96,12 +96,14 @@ MODULE_PASS("hipstdpar-select-accelerator-code",
 MODULE_PASS("hotcoldsplit", HotColdSplittingPass())
 MODULE_PASS("inferattrs", InferFunctionAttrsPass())
 MODULE_PASS("inliner-ml-advisor-release",
-            ModuleInlinerWrapperPass(*OptsCtx, getInlineParams(*OptsCtx), true,
-                                     {}, InliningAdvisorMode::Release))
+            ModuleInlinerWrapperPass(*OptsCtx,
+                                     getInlineParams(getAnalysisOptions(Ctx)),
+                                     true, {}, InliningAdvisorMode::Release))
 MODULE_PASS("inliner-wrapper", ModuleInlinerWrapperPass(
-            *OptsCtx, getInlineParams(*OptsCtx)))
+            *OptsCtx, getInlineParams(getAnalysisOptions(Ctx))))
 MODULE_PASS("inliner-wrapper-no-mandatory-first",
-            ModuleInlinerWrapperPass(*OptsCtx, getInlineParams(*OptsCtx),
+            ModuleInlinerWrapperPass(*OptsCtx,
+                                     getInlineParams(getAnalysisOptions(Ctx)),
                                      false))
 MODULE_PASS("insert-gcov-profiling", GCOVProfilerPass())
 MODULE_PASS("instrprof", InstrProfilingLoweringPass())

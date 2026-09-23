@@ -23,17 +23,16 @@
 #include "llvm/CodeGen/RegisterClassInfo.h"
 #include "llvm/CodeGen/VirtRegMap.h"
 #include "llvm/InitializePasses.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/AMDGPU/AMDGPUOptionsOptInfos.h"
+#include "llvm/Target/AMDGPU/AMDGPUOptions.h"
 
 using namespace llvm;
 
 #define DEBUG_TYPE "si-pre-allocate-wwm-regs"
 
 static bool getEnablePreallocateSGPRSpillVGPRs(const Function &F) {
-  return clv2::getOptValOrDefault<
-      &clv2::AMDGPU_EnablePreallocateSGPRSpillVGPRs>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<AMDGPUOptions>()
+      .AMDGPU_EnablePreallocateSGPRSpillVGPRs;
 }
 
 bool llvm::isPreallocateSGPRSpillVGPRsEnabled(const MachineFunction &MF) {
@@ -215,7 +214,8 @@ bool SIPreAllocateWWMRegsLegacy::runOnMachineFunction(MachineFunction &MF) {
 }
 
 bool SIPreAllocateWWMRegs::run(MachineFunction &MF) {
-  LLVM_DEBUG(dbgs() << "SIPreAllocateWWMRegs: function " << MF.getName() << "\n");
+  LLVM_DEBUG(dbgs() << "SIPreAllocateWWMRegs: function " << MF.getName()
+                    << "\n");
 
   const GCNSubtarget &ST = MF.getSubtarget<GCNSubtarget>();
 
@@ -232,7 +232,7 @@ bool SIPreAllocateWWMRegs::run(MachineFunction &MF) {
   // expressions are guaranteed to never involve phi nodes, and we can only
   // escape WWM through the special WWM instruction, this means that this is a
   // perfect elimination order, so we can never do any better.
-  ReversePostOrderTraversal<MachineFunction*> RPOT(&MF);
+  ReversePostOrderTraversal<MachineFunction *> RPOT(&MF);
 
   for (MachineBasicBlock *MBB : RPOT) {
     bool InWWM = false;

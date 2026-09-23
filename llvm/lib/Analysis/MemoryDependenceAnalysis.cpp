@@ -20,7 +20,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/AliasAnalysis.h"
-#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
+#include "llvm/Analysis/AnalysisOptions.h"
 #include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/Analysis/MemoryBuiltins.h"
 #include "llvm/Analysis/MemoryLocation.h"
@@ -48,7 +48,6 @@
 #include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/OptionsContext.h"
 #include <algorithm>
 #include <cassert>
 #include <iterator>
@@ -72,18 +71,16 @@ STATISTIC(NumCacheCompleteNonLocalPtr,
 
 // Limit for the number of instructions to scan in a block.
 
-static unsigned getBlockScanLimit(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::AN_BlockScanLimit>(Ctx);
+static unsigned getBlockScanLimit(const AnalysisOptions &Opts) {
+  return Opts.AN_BlockScanLimit;
 }
 
 static unsigned getBlockNumberLimit(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AN_BlockNumberLimit>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<AnalysisOptions>().AN_BlockNumberLimit;
 }
 
 static unsigned getCacheGlobalLimit(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AN_CacheGlobalLimit>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<AnalysisOptions>().AN_CacheGlobalLimit;
 }
 
 // Limit on the number of memdep results to process.
@@ -390,8 +387,7 @@ MemDepResult MemoryDependenceResults::getSimplePointerDependencyFrom(
     BasicBlock *BB, Instruction *QueryInst, unsigned *Limit,
     BatchAAResults &BatchAA) {
   bool isInvariantLoad = false;
-  Align MemLocAlign =
-      MemLoc.Ptr->getPointerAlignment(BB->getDataLayout());
+  Align MemLocAlign = MemLoc.Ptr->getPointerAlignment(BB->getDataLayout());
 
   unsigned DefaultLimit = getDefaultBlockScanLimit();
   if (!Limit)
@@ -438,7 +434,7 @@ MemDepResult MemoryDependenceResults::getSimplePointerDependencyFrom(
   // True for volatile instruction.
   // For Load/Store return true if atomic ordering is stronger than AO,
   // for other instruction just true if it can read or write to memory.
-  auto isComplexForReordering = [](Instruction * I, AtomicOrdering AO)->bool {
+  auto isComplexForReordering = [](Instruction *I, AtomicOrdering AO) -> bool {
     if (I->isVolatile())
       return true;
     if (auto *LI = dyn_cast<LoadInst>(I))
@@ -476,7 +472,7 @@ MemDepResult MemoryDependenceResults::getSimplePointerDependencyFrom(
       case Intrinsic::masked_load:
       case Intrinsic::masked_store: {
         MemoryLocation Loc;
-        /*ModRefInfo MR =*/ GetLocation(II, Loc, TLI);
+        /*ModRefInfo MR =*/GetLocation(II, Loc, TLI);
         AliasResult R = BatchAA.alias(Loc, MemLoc);
         if (R == AliasResult::NoAlias)
           continue;
@@ -1474,7 +1470,6 @@ bool MemoryDependenceResults::getNonLocalPointerDepFromBB(
 
         I.setResult(MemDepResult::getUnknown());
 
-
         break;
       }
     }
@@ -1790,7 +1785,8 @@ MemoryDependenceAnalysis::run(Function &F, FunctionAnalysisManager &AM) {
   auto &TLI = AM.getResult<TargetLibraryAnalysis>(F);
   auto &DT = AM.getResult<DominatorTreeAnalysis>(F);
   return MemoryDependenceResults(
-      AA, AC, TLI, DT, getBlockScanLimit(F.getContext().getOptionsContext()));
+      AA, AC, TLI, DT,
+      getBlockScanLimit(F.getContext().getOptions<AnalysisOptions>()));
 }
 
 char MemoryDependenceWrapperPass::ID = 0;
@@ -1808,9 +1804,7 @@ MemoryDependenceWrapperPass::MemoryDependenceWrapperPass() : FunctionPass(ID) {}
 
 MemoryDependenceWrapperPass::~MemoryDependenceWrapperPass() = default;
 
-void MemoryDependenceWrapperPass::releaseMemory() {
-  MemDep.reset();
-}
+void MemoryDependenceWrapperPass::releaseMemory() { MemDep.reset(); }
 
 void MemoryDependenceWrapperPass::getAnalysisUsage(AnalysisUsage &AU) const {
   AU.setPreservesAll();
@@ -1820,8 +1814,9 @@ void MemoryDependenceWrapperPass::getAnalysisUsage(AnalysisUsage &AU) const {
   AU.addRequiredTransitive<TargetLibraryInfoWrapperPass>();
 }
 
-bool MemoryDependenceResults::invalidate(Function &F, const PreservedAnalyses &PA,
-                               FunctionAnalysisManager::Invalidator &Inv) {
+bool MemoryDependenceResults::invalidate(
+    Function &F, const PreservedAnalyses &PA,
+    FunctionAnalysisManager::Invalidator &Inv) {
   // Check whether our analysis is preserved.
   auto PAC = PA.getChecker<MemoryDependenceAnalysis>();
   if (!PAC.preserved() && !PAC.preservedSet<AllAnalysesOn<Function>>())
@@ -1847,7 +1842,8 @@ bool MemoryDependenceWrapperPass::runOnFunction(Function &F) {
   auto &AC = getAnalysis<AssumptionCacheTracker>().getAssumptionCache(F);
   auto &TLI = getAnalysis<TargetLibraryInfoWrapperPass>().getTLI(F);
   auto &DT = getAnalysis<DominatorTreeWrapperPass>().getDomTree();
-  MemDep.emplace(AA, AC, TLI, DT,
-                 getBlockScanLimit(F.getContext().getOptionsContext()));
+  MemDep.emplace(
+      AA, AC, TLI, DT,
+      getBlockScanLimit(F.getContext().getOptions<AnalysisOptions>()));
   return false;
 }

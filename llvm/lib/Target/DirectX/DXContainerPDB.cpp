@@ -18,7 +18,7 @@
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Module.h"
 #include "llvm/MC/MCDXContainerWriter.h"
-#include "llvm/MC/MCOptionsOptInfos.h"
+#include "llvm/MC/MCOptions.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/FileSystem.h"
@@ -26,7 +26,6 @@
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 
 using namespace llvm;
-
 
 namespace {
 
@@ -64,8 +63,7 @@ bool DXContainerPDB::shouldSkipSection(StringRef SectionName,
 
   // Slim debug omits ILDB from every DXContainer output, the PDB included.
   if (SectionName == "ILDB" &&
-      clv2::getOptValOr<&clv2::MCOptsReg, &clv2::MC_DXSlimDebug>(
-          M->getContext().getOptionsContext(), false))
+      M->getContext().getOptions<MCLibraryOptions>().MC_DXSlimDebug)
     return true;
 
   // Skip sections that are irrelevant for debug info.

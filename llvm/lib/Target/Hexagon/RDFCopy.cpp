@@ -23,9 +23,8 @@
 #include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
+#include "llvm/Target/Hexagon/HexagonOptions.h"
 #include <cassert>
 #include <cstdint>
 
@@ -33,18 +32,14 @@ using namespace llvm;
 using namespace rdf;
 
 #ifndef NDEBUG
-unsigned RDFCpLimit = 0;
-
 static unsigned CpCount = 0;
 
 static unsigned getCpLimit(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_RDFCpLimit>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_RDFCpLimit.value_or(0);
 }
 
 static bool getCpLimitWasSpecified(const Function &F) {
-  return clv2::wasOptSpecified<&clv2::HexagonOptsReg, &clv2::HEX_RDFCpLimit>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_RDFCpLimit.has_value();
 }
 #endif
 

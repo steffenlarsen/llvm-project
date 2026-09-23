@@ -57,10 +57,9 @@
 #include "llvm/Support/BlockFrequency.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Scalar.h"
-#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
+#include "llvm/Transforms/Scalar/ScalarOptions.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/SizeOpts.h"
 #include <cassert>
@@ -77,19 +76,17 @@ STATISTIC(NumConstantsHoisted, "Number of constants hoisted");
 STATISTIC(NumConstantsRebased, "Number of constants rebased");
 
 static bool getConstHoistWithBlockFrequency(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_ConsthoistWithBlockFrequency>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_ConsthoistWithBlockFrequency;
 }
 
 static bool getConstHoistGEP(const Function &F) {
-  return clv2::getOptValOr<&clv2::ScalarOptsReg, &clv2::SC_ConsthoistGep>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext().getOptions<ScalarOptions>().SC_ConsthoistGep;
 }
 
 static unsigned getMinNumOfDependentToRebase(const Function &F) {
-  return clv2::getOptValOr<&clv2::ScalarOptsReg,
-                           &clv2::SC_ConsthoistMinNumToRebase>(
-      F.getContext().getOptionsContext(), 0);
+  return F.getContext().getOptions<ScalarOptions>().SC_ConsthoistMinNumToRebase;
 }
 
 namespace {

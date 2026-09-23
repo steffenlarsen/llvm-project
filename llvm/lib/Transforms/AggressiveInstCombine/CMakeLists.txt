@@ -1,6 +1,4 @@
 add_llvm_component_library(LLVMAggressiveInstCombine
-  AggressiveInstCombineOptionsGetters.cpp
-  AggressiveInstCombineOptionsRegistration.cpp
   AggressiveInstCombine.cpp
   AggressiveInstCombineOptions.cpp
   TruncInstCombine.cpp
@@ -11,10 +9,12 @@ add_llvm_component_library(LLVMAggressiveInstCombine
 
   DEPENDS
   intrinsics_gen
+  AggressiveInstCombineOptParserTableGen
 
   LINK_COMPONENTS
   Analysis
   Core
+  Option
   ProfileData
   Support
   TransformUtils

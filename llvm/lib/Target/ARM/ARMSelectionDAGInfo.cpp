@@ -14,8 +14,7 @@
 #include "ARMTargetTransformInfo.h"
 #include "llvm/CodeGen/SelectionDAG.h"
 #include "llvm/IR/Function.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/ARM/ARMOptionsOptInfos.h"
+#include "llvm/Target/ARM/ARMOptions.h"
 
 #define GET_SDNODE_DESC
 #include "ARMGenSDNodeInfo.inc"
@@ -24,14 +23,9 @@ using namespace llvm;
 
 #define DEBUG_TYPE "arm-selectiondag-info"
 
-static TPLoop::MemTransfer EnableMemtransferTPLoop = TPLoop::ForceDisabled;
-
 static TPLoop::MemTransfer getEnableMemtransferTPLoop(const Function &F) {
-  if (auto *O =
-          clv2::getView<&clv2::ARMOptsReg>(F.getContext().getOptionsContext()))
-    return static_cast<TPLoop::MemTransfer>(
-        O->get<&clv2::ARM_EnableMemtransferTPLoop>());
-  return EnableMemtransferTPLoop;
+  return static_cast<TPLoop::MemTransfer>(
+      F.getContext().getOptions<ARMOptions>().ARM_EnableMemtransferTPLoop);
 }
 
 ARMSelectionDAGInfo::ARMSelectionDAGInfo()
@@ -161,11 +155,7 @@ SDValue ARMSelectionDAGInfo::EmitSpecializedLibcall(
   }
 
   // Choose the most-aligned libcall variant that we can
-  enum {
-    ALIGN1 = 0,
-    ALIGN4,
-    ALIGN8
-  } AlignVariant;
+  enum { ALIGN1 = 0, ALIGN4, ALIGN8 } AlignVariant;
   if ((Align & 7) == 0)
     AlignVariant = ALIGN8;
   else if ((Align & 3) == 0)
@@ -219,7 +209,7 @@ SDValue ARMSelectionDAGInfo::EmitSpecializedLibcall(
           DAG.getExternalSymbol(LCImpl, TLI->getPointerTy(DAG.getDataLayout())),
           std::move(Args))
       .setDiscardResult();
-  std::pair<SDValue,SDValue> CallResult = TLI->LowerCallTo(CLI);
+  std::pair<SDValue, SDValue> CallResult = TLI->LowerCallTo(CLI);
 
   return CallResult.second;
 }

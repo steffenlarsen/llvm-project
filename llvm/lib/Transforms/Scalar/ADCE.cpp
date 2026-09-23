@@ -45,9 +45,8 @@
 #include "llvm/ProfileData/InstrProf.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
+#include "llvm/Transforms/Scalar/ScalarOptions.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include <cassert>
 #include <cstddef>
@@ -63,15 +62,13 @@ STATISTIC(NumBranchesRemoved, "Number of branch instructions removed");
 // This is a temporary option until we change the interface to this pass based
 // on optimization level.
 static bool getRemoveControlFlowFlag(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_AdceRemoveControlFlow>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<ScalarOptions>().SC_AdceRemoveControlFlow;
 }
 
 // This option enables removing of may-be-infinite loops which have no other
 // effect.
 static bool getRemoveLoops(const Function &F) {
-  return clv2::getOptValOr<&clv2::ScalarOptsReg, &clv2::SC_AdceRemoveLoops>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext().getOptions<ScalarOptions>().SC_AdceRemoveLoops;
 }
 
 namespace {

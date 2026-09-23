@@ -28,17 +28,14 @@
 #include "llvm/MC/MCSectionELF.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/Compiler.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/LoongArch/LoongArchOptionsOptInfos.h"
+#include "llvm/Target/LoongArch/LoongArchOptions.h"
 
 using namespace llvm;
 
 #define DEBUG_TYPE "loongarch-asm-printer"
 
 static bool getAnnotateTableJump(const Function &F) {
-  return clv2::getOptValOr<&clv2::LoongArchOptsReg,
-                           &clv2::LA_AnnotateTableJump>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext().getOptions<LoongArchOptions>().LA_AnnotateTableJump;
 }
 
 // Simple pseudo-instructions have their lowering (with expansion to real

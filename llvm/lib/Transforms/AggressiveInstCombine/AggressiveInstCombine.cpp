@@ -35,8 +35,7 @@
 #include "llvm/IR/ProfDataUtils.h"
 #include "llvm/ProfileData/InstrProf.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Transforms/AggressiveInstCombine/AggressiveInstCombineOptionsOptInfos.h"
+#include "llvm/Transforms/AggressiveInstCombine/AggressiveInstCombineOptions.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/BuildLibCalls.h"
 #include "llvm/Transforms/Utils/Local.h"
@@ -59,18 +58,21 @@ STATISTIC(NumSelectCTLZFolded,
 STATISTIC(NumMemSetsGuarded, "Number of memsets guarded for a zero length");
 
 static unsigned getMaxInstrsToScan(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AIC_MaxInstrsToScan>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<AggressiveInstCombineOptions>()
+      .AIC_MaxInstrsToScan;
 }
 
 static unsigned getStrNCmpInlineThreshold(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AIC_StrNCmpInlineThreshold>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<AggressiveInstCombineOptions>()
+      .AIC_StrNCmpInlineThreshold;
 }
 
 static unsigned getMemChrInlineThreshold(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AIC_MemChrInlineThreshold>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<AggressiveInstCombineOptions>()
+      .AIC_MemChrInlineThreshold;
 }
 
 /// Try to fold a select-based split cttz pattern into a single full-width cttz.

@@ -16,7 +16,7 @@
 #include "llvm/MC/MCInst.h"
 #include "llvm/MC/MCInstrDesc.h"
 #include "llvm/MC/MCInstrInfo.h"
-#include "llvm/MC/MCOptionsOptInfos.h"
+#include "llvm/MC/MCOptions.h"
 #include "llvm/MC/MCSubtargetInfo.h"
 #include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/OptionsContext.h"
@@ -30,11 +30,10 @@ clv2::OptionCategory
 
 static constexpr float DefaultReservationStationScaleFactor = 1.0f;
 
-// MC_RSScaleFactor belongs to MCOptsReg (MCOptions.td) and is read straight
-// from the OptionsContext in getReservationStationBufferSize below.  It used
-// to be mirrored into a file-scope global through a second registry and an
-// apply hook; the global was never read, and carrying the same descriptor in
-// two registries made the CLI name resolve to whichever was added first.
+// MC_RSScaleFactor is read straight from the process-wide MCLibraryOptions
+// struct in getResourceBufferSize below; the clv2::OptionsContext parameter
+// is retained only for API stability (see MCTargetOptionsCommandFlags.cpp
+// for the same pattern applied to the rest of this library's getters).
 
 static_assert(std::is_trivial_v<MCSchedModel>,
               "MCSchedModel is required to be a trivial type");
@@ -110,9 +109,8 @@ int MCSchedModel::computeInstrLatency(const MCSubtargetInfo &STI,
       });
 }
 
-double
-MCSchedModel::getReciprocalThroughput(const MCSubtargetInfo &STI,
-                                      const MCSchedClassDesc &SCDesc) {
+double MCSchedModel::getReciprocalThroughput(const MCSubtargetInfo &STI,
+                                             const MCSchedClassDesc &SCDesc) {
   std::optional<double> MinThroughput;
   const MCSchedModel &SM = STI.getSchedModel();
   const MCWriteProcResEntry *I = STI.getWriteProcResBegin(&SCDesc);
@@ -135,10 +133,9 @@ MCSchedModel::getReciprocalThroughput(const MCSubtargetInfo &STI,
   return ((double)SCDesc.NumMicroOps) / SM.IssueWidth;
 }
 
-double
-MCSchedModel::getReciprocalThroughput(const MCSubtargetInfo &STI,
-                                      const MCInstrInfo &MCII,
-                                      const MCInst &Inst) const {
+double MCSchedModel::getReciprocalThroughput(const MCSubtargetInfo &STI,
+                                             const MCInstrInfo &MCII,
+                                             const MCInst &Inst) const {
   unsigned SchedClass = MCII.get(Inst.getOpcode()).getSchedClass();
   const MCSchedClassDesc *SCDesc = getSchedClassDesc(SchedClass);
 
@@ -159,9 +156,8 @@ MCSchedModel::getReciprocalThroughput(const MCSubtargetInfo &STI,
   llvm_unreachable("unsupported variant scheduling class");
 }
 
-double
-MCSchedModel::getReciprocalThroughput(unsigned SchedClass,
-                                      const InstrItineraryData &IID) {
+double MCSchedModel::getReciprocalThroughput(unsigned SchedClass,
+                                             const InstrItineraryData &IID) {
   std::optional<double> Throughput;
   const InstrStage *I = IID.beginStage(SchedClass);
   const InstrStage *E = IID.endStage(SchedClass);
@@ -233,10 +229,10 @@ unsigned MCSchedModel::getBypassDelayCycles(const MCSubtargetInfo &STI,
 /// is provided and the original buffer size is > 1, the size is scaled
 /// accordingly.
 int MCSchedModel::getResourceBufferSize(unsigned ProcResourceIdx,
-                                        const clv2::OptionsContext &Ctx) const {
+                                        const clv2::OptionsContext &) const {
   int BufferSize = getProcResource(ProcResourceIdx)->BufferSize;
 
-  float ScaleFactor = clv2::getOptValOrDefault<&clv2::MC_RSScaleFactor>(Ctx);
+  float ScaleFactor = MCLibraryOptions::Current.MC_RSScaleFactor;
 
   // Skip scaling when factor is 1 (the default).
   // Use native float comparison to avoid overhead on the hot fast

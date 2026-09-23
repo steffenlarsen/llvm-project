@@ -15,9 +15,13 @@ add_llvm_component_library(LLVMSystemZDesc
   LINK_COMPONENTS
   CodeGenTypes
   MC
+  Option
   Support
   SystemZInfo
 
   ADD_TO_COMPONENT
   SystemZ
+
+  DEPENDS
+  SystemZOptParserTableGen
   )

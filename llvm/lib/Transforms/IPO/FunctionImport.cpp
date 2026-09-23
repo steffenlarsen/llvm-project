@@ -25,7 +25,7 @@
 #include "llvm/IR/GlobalObject.h"
 #include "llvm/IR/GlobalValue.h"
 #include "llvm/IR/GlobalVariable.h"
-#include "llvm/IR/IROptionsOptInfos.h"
+#include "llvm/IR/IROptions.h"
 #include "llvm/IR/Metadata.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/ModuleSummaryIndex.h"
@@ -44,11 +44,11 @@
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/TimeProfiler.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Transforms/IPO/IPOOptionsOptInfos.h"
+#include "llvm/Transforms/IPO/IPOOptions.h"
 #include "llvm/Transforms/IPO/Internalize.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/FunctionImportUtils.h"
-#include "llvm/Transforms/Utils/UtilsOptionsOptInfos.h"
+#include "llvm/Transforms/Utils/UtilsOptions.h"
 #include "llvm/Transforms/Utils/ValueMapper.h"
 #include <cassert>
 #include <memory>
@@ -76,79 +76,68 @@ STATISTIC(NumImportedModules, "Number of modules imported from");
 STATISTIC(NumDeadSymbols, "Number of dead stripped symbols in index");
 STATISTIC(NumLiveSymbols, "Number of live symbols in index");
 
-namespace llvm {
-} // end namespace llvm
+namespace llvm {} // end namespace llvm
 
-static bool getForceImportAll(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::IPO_ForceImportAll>(Ctx);
+// The functions below take a legacy clv2::OptionsContext instead of a
+// Module/LLVMContext because they are reached from the index-only ThinLTO
+// paths (ComputeCrossModuleImport, computeDeadSymbolsAndUpdateIndirectCalls,
+// computeDeadSymbolsWithConstProp, gatherImportedSummariesForModule), whose
+// only real callers (ThinLTOCodeGenerator.cpp, LTO.cpp) operate on a
+// ModuleSummaryIndex with no Module/LLVMContext in scope. Since there is
+// nothing to key a per-context override off of, read the process-wide
+// default directly, same idiom as LTOOptions::Current in LTO.cpp.
+static bool getForceImportAll(const clv2::OptionsContext & /*Ctx*/) {
+  return IPOOptions::Current.IPO_ForceImportAll;
 }
-static unsigned getImportInstrLimit(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::IPO_ImportInstrLimit>(Ctx);
+static unsigned getImportInstrLimit(const clv2::OptionsContext & /*Ctx*/) {
+  return IPOOptions::Current.IPO_ImportInstrLimit;
 }
-static int getImportCutoff(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::IPO_ImportCutoff>(Ctx);
+static int getImportCutoff(const clv2::OptionsContext & /*Ctx*/) {
+  return IPOOptions::Current.IPO_ImportCutoff;
 }
-static float getImportInstrFactor(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValIfSpecified<&clv2::IPOOptsReg,
-                                    &clv2::IPO_ImportInstrFactor>(Ctx, 0.7f);
+static float getImportInstrFactor(const clv2::OptionsContext & /*Ctx*/) {
+  return IPOOptions::Current.IPO_ImportInstrFactor;
 }
-static float getImportHotInstrFactor(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValIfSpecified<&clv2::IPOOptsReg,
-                                    &clv2::IPO_ImportHotInstrFactor>(Ctx, 1.0f);
+static float getImportHotInstrFactor(const clv2::OptionsContext & /*Ctx*/) {
+  return IPOOptions::Current.IPO_ImportHotInstrFactor;
 }
-static float getImportHotMultiplier(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValIfSpecified<&clv2::IPOOptsReg,
-                                    &clv2::IPO_ImportHotMultiplier>(Ctx, 10.0f);
+static float getImportHotMultiplier(const clv2::OptionsContext & /*Ctx*/) {
+  return IPOOptions::Current.IPO_ImportHotMultiplier;
 }
-static float getImportCriticalMultiplier(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValIfSpecified<&clv2::IPOOptsReg,
-                                    &clv2::IPO_ImportCriticalMultiplier>(
-      Ctx, 100.0f);
+static float getImportCriticalMultiplier(const clv2::OptionsContext & /*Ctx*/) {
+  return IPOOptions::Current.IPO_ImportCriticalMultiplier;
 }
-static float getImportColdMultiplier(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValIfSpecified<&clv2::IPOOptsReg,
-                                    &clv2::IPO_ImportColdMultiplier>(Ctx, 0.0f);
+static float getImportColdMultiplier(const clv2::OptionsContext & /*Ctx*/) {
+  return IPOOptions::Current.IPO_ImportColdMultiplier;
 }
 static bool getPrintImports(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_PrintImports>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_PrintImports;
 }
-static bool getPrintImportFailures(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::IPO_PrintImportFailures>(Ctx);
+static bool getPrintImportFailures(const clv2::OptionsContext & /*Ctx*/) {
+  return IPOOptions::Current.IPO_PrintImportFailures;
 }
-static bool getComputeDead(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::IPO_ComputeDead>(Ctx);
+static bool getComputeDead(const clv2::OptionsContext & /*Ctx*/) {
+  return IPOOptions::Current.IPO_ComputeDead;
 }
 static bool getEnableImportMetadata(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_EnableImportMetadata>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_EnableImportMetadata;
 }
 static const std::string &getSummaryFile(const Module &M) {
-  if (auto *O =
-          clv2::getView<&clv2::IPOOptsReg>(M.getContext().getOptionsContext()))
-    if (O->specified<&clv2::IPO_SummaryFile>())
-      return O->get<&clv2::IPO_SummaryFile>();
-  static const std::string Default;
-  return Default;
+  return M.getContext().getOptions<IPOOptions>().IPO_SummaryFile;
 }
 static bool getImportAllIndex(const Module &M) {
-  return clv2::getOptValIfSpecified<&clv2::IPOOptsReg,
-                                    &clv2::IPO_ImportAllIndex>(
-      M.getContext().getOptionsContext(), false);
+  return M.getContext().getOptions<IPOOptions>().IPO_ImportAllIndex;
 }
-static bool getImportDeclaration(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::IPO_ImportDeclaration>(Ctx);
+static bool getImportDeclaration(const clv2::OptionsContext & /*Ctx*/) {
+  return IPOOptions::Current.IPO_ImportDeclaration;
 }
 static const std::string &
-getWorkloadDefinitions(const clv2::OptionsContext &Ctx) {
-  if (auto *O = clv2::getView<&clv2::IPOOptsReg>(Ctx))
-    if (O->specified<&clv2::IPO_WorkloadDefinitions>())
-      return O->get<&clv2::IPO_WorkloadDefinitions>();
-  static const std::string Default;
-  return Default;
+getWorkloadDefinitions(const clv2::OptionsContext & /*Ctx*/) {
+  return IPOOptions::Current.IPO_WorkloadDefinitions;
 }
-static bool getCtxprofMoveRootsToOwnModule(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::IPO_CtxprofMoveRootsToOwnModule>(Ctx);
+static bool
+getCtxprofMoveRootsToOwnModule(const clv2::OptionsContext & /*Ctx*/) {
+  return IPOOptions::Current.IPO_CtxprofMoveRootsToOwnModule;
 }
 
 // Load lazily a module from \p FileName in \p Context.
@@ -579,7 +568,7 @@ class WorkloadImportsManager : public ModuleImportsManager {
                                   << " ImportFailureReason: "
                                   << getFailureName(Candidate.first) << "\n");
                 return Candidate.first ==
-                        FunctionImporter::ImportFailureReason::None;
+                       FunctionImporter::ImportFailureReason::None;
               }),
           [](const auto &Candidate) { return Candidate.second; });
       if (PotentialCandidates.empty()) {
@@ -723,7 +712,8 @@ class WorkloadImportsManager : public ModuleImportsManager {
 
   void loadFromCtxProf() {
     std::error_code EC;
-    auto BufferOrErr = MemoryBuffer::getFileOrSTDIN(getUseCtxProfile(*Ctx));
+    auto BufferOrErr =
+        MemoryBuffer::getFileOrSTDIN(getUseCtxProfile(AnalysisOptions::Current));
     if (std::error_code EC = BufferOrErr.getError()) {
       report_fatal_error("Failed to open contextual profile file");
       return;
@@ -786,12 +776,13 @@ public:
       DenseMap<StringRef, FunctionImporter::ExportSetTy> *ExportLists,
       const clv2::OptionsContext &Ctx)
       : ModuleImportsManager(IsPrevailing, Index, ExportLists, Ctx) {
-    if (getUseCtxProfile(Ctx).empty() == getWorkloadDefinitions(Ctx).empty()) {
+    if (getUseCtxProfile(AnalysisOptions::Current).empty() ==
+        getWorkloadDefinitions(Ctx).empty()) {
       report_fatal_error(
           "Pass only one of: -thinlto-pgo-ctx-prof or -thinlto-workload-def");
       return;
     }
-    if (!getUseCtxProfile(Ctx).empty())
+    if (!getUseCtxProfile(AnalysisOptions::Current).empty())
       loadFromCtxProf();
     else
       loadFromJson();
@@ -814,7 +805,8 @@ std::unique_ptr<ModuleImportsManager> ModuleImportsManager::create(
     const ModuleSummaryIndex &Index,
     DenseMap<StringRef, FunctionImporter::ExportSetTy> *ExportLists,
     const clv2::OptionsContext &Ctx) {
-  if (getWorkloadDefinitions(Ctx).empty() && getUseCtxProfile(Ctx).empty()) {
+  if (getWorkloadDefinitions(Ctx).empty() &&
+      getUseCtxProfile(AnalysisOptions::Current).empty()) {
     LLVM_DEBUG(dbgs() << "[Workload] Using the regular imports manager.\n");
     return std::unique_ptr<ModuleImportsManager>(
         new ModuleImportsManager(IsPrevailing, Index, ExportLists, Ctx));
@@ -933,7 +925,7 @@ void ModuleImportsManager::computeImportForFunction(
       if (PreviouslyVisited && NewThreshold <= ProcessedThreshold) {
         LLVM_DEBUG(
             dbgs() << "ignored! Target was already rejected with Threshold "
-            << ProcessedThreshold << "\n");
+                   << ProcessedThreshold << "\n");
         if (getPrintImportFailures(*Ctx)) {
           assert(FailureInfo &&
                  "Expected FailureInfo for previously rejected candidate");
@@ -1546,7 +1538,7 @@ void llvm::gatherImportedSummariesForModule(
     const DenseMap<StringRef, GVSummaryMapTy> &ModuleToDefinedGVSummaries,
     const FunctionImporter::ImportMapTy &ImportList,
     ModuleToSummariesForIndexTy &ModuleToSummariesForIndex,
-    GVSummaryPtrSet &DecSummaries, const clv2::OptionsContext &Ctx) {
+    GVSummaryPtrSet &DecSummaries, const clv2::OptionsContext &) {
   // Include all summaries from the importing module.
   ModuleToSummariesForIndex[std::string(ModulePath)] =
       ModuleToDefinedGVSummaries.lookup(ModulePath);
@@ -1592,8 +1584,11 @@ void llvm::gatherImportedSummariesForModule(
   // by the importing module. Computing the precise set would require walking
   // the summary reference graph from each imported function, which is more
   // expensive than the simple scan here.
-  bool AlwaysRename =
-      clv2::getOptValOrDefault<&clv2::IR_AlwaysRenamePromotedLocals>(Ctx);
+  // gatherImportedSummariesForModule only ever receives a bare
+  // clv2::OptionsContext, with no reachable LLVMContext -- see the analogous
+  // getOpts(const clv2::OptionsContext &) overload in PrintPasses.cpp. The
+  // parameter is kept (unnamed) only for call-site/ABI stability.
+  bool AlwaysRename = IROptions::Current.IR_AlwaysRenamePromotedLocals;
   if (!AlwaysRename) {
     for (auto &[ModPath, SummariesForIndex] : ModuleToSummariesForIndex) {
       if (ModPath == ModulePath)
@@ -1662,10 +1657,9 @@ bool llvm::convertToDeclaration(GlobalValue &GV) {
   } else {
     GlobalValue *NewGV;
     if (GV.getValueType()->isFunctionTy())
-      NewGV =
-          Function::Create(cast<FunctionType>(GV.getValueType()),
-                           GlobalValue::ExternalLinkage, GV.getAddressSpace(),
-                           "", GV.getParent());
+      NewGV = Function::Create(cast<FunctionType>(GV.getValueType()),
+                               GlobalValue::ExternalLinkage,
+                               GV.getAddressSpace(), "", GV.getParent());
     else
       NewGV =
           new GlobalVariable(*GV.getParent(), GV.getValueType(),
@@ -1899,10 +1893,8 @@ Expected<bool> FunctionImporter::importFunctions(
   // The function will be imported elsewhere, as extenal linkage, and the
   // destination doesn't yet have its definition.
   DenseSet<GlobalValue::GUID> MoveSymbolGUIDSet;
-  if (auto *O = clv2::getView<&clv2::TransformUtilsOptsReg>(
-          DestModule.getContext().getOptionsContext()))
-    if (O->specified<&clv2::TU_MoveSymbolGUID>())
-      MoveSymbolGUIDSet.insert_range(O->get<&clv2::TU_MoveSymbolGUID>());
+  MoveSymbolGUIDSet.insert_range(
+      DestModule.getContext().getOptions<UtilsOptions>().TU_MoveSymbolGUID);
   for (auto &F : DestModule)
     if (!F.isDeclaration() && MoveSymbolGUIDSet.contains(F.getGUIDOrFallback()))
       F.deleteBody();
@@ -1949,10 +1941,9 @@ Expected<bool> FunctionImporter::importFunctions(
             return std::move(Err);
           // MemProf should match function's definition and summary,
           // 'thinlto_src_module' is needed.
-          bool EMPCDVal = false;
-          if (auto *O = clv2::getView<&clv2::IPOOptsReg>(
-                  DestModule.getContext().getOptionsContext()))
-            EMPCDVal = O->get<&clv2::IPO_EnableMemProfContextDisambiguation>();
+          bool EMPCDVal = DestModule.getContext()
+                              .getOptions<IPOOptions>()
+                              .IPO_EnableMemProfContextDisambiguation;
           if (getEnableImportMetadata(DestModule) || EMPCDVal) {
             // Add 'thinlto_src_module' and 'thinlto_src_file' metadata for
             // statistics and debugging.
@@ -2024,10 +2015,9 @@ Expected<bool> FunctionImporter::importFunctions(
                      << "Is importing aliasee fn " << GO->getGUIDOrFallback()
                      << " " << GO->getName() << " from "
                      << SrcModule->getSourceFileName() << "\n");
-          bool EMPCDVal = false;
-          if (auto *O = clv2::getView<&clv2::IPOOptsReg>(
-                  DestModule.getContext().getOptionsContext()))
-            EMPCDVal = O->get<&clv2::IPO_EnableMemProfContextDisambiguation>();
+          bool EMPCDVal = DestModule.getContext()
+                              .getOptions<IPOOptions>()
+                              .IPO_EnableMemProfContextDisambiguation;
           if (getEnableImportMetadata(DestModule) || EMPCDVal) {
             // Add 'thinlto_src_module' and 'thinlto_src_file' metadata for
             // statistics and debugging.

@@ -10,6 +10,7 @@
 
 #include "DebugOptions.h"
 
+#include "llvm/Support/ColorOptions.h"
 #include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Error.h"
@@ -22,14 +23,17 @@ cl::OptionCategory &llvm::getColorCategory() {
   return const_cast<cl::OptionCategory &>(clv2::ColorOptionsCategory);
 }
 
-cl::boolOrDefault UseColorVal = cl::boolOrDefault::BOU_UNSET;
-
+// Tools not yet migrated off clv2 still reach --color only through clv2's
+// OptionParser::parse(), which unconditionally drains this registry (see
+// the "--color is always drained" block in CommandLineV2.cpp's runParser).
+// Route its parsed value into ColorOptions::Current so every reader --
+// migrated or not -- observes the same process-wide value.
 static constexpr clv2::OptionsRegistry<&clv2::SUP_Color> ColorOptsReg;
 static void applyColorOpts(const decltype(ColorOptsReg)::ParsedOptionsT &Opts) {
-  UseColorVal = Opts.get<&clv2::SUP_Color>();
+  ColorOptions::Current.Color = Opts.get<&clv2::SUP_Color>();
 }
 
-static cl::boolOrDefault getUseColor() { return UseColorVal; }
+static cl::boolOrDefault getUseColor() { return ColorOptions::Current.Color; }
 
 const clv2::detail::DynamicRegistration &
 clv2::detail::getColorDynamicRegistration() {

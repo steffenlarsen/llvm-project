@@ -16,17 +16,14 @@
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/MDBuilder.h"
 #include "llvm/IR/PatternMatch.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
-#include "llvm/Transforms/Utils/UtilsOptionsOptInfos.h"
+#include "llvm/Transforms/Utils/UtilsOptions.h"
 
 using namespace llvm;
 using namespace llvm::PatternMatch;
 
 static unsigned getPredicatePassBranchWeight(const Function &F) {
-  return clv2::getOptValIfSpecified<&clv2::TransformUtilsOptsReg,
-                                    &clv2::TU_PredicatePassBranchWeight>(
-      F.getContext().getOptionsContext(), 1u << 20);
+  return F.getContext().getOptions<UtilsOptions>().TU_PredicatePassBranchWeight;
 }
 
 void llvm::makeGuardControlFlowExplicit(Function *DeoptIntrinsic,
@@ -76,8 +73,8 @@ void llvm::makeGuardControlFlowExplicit(Function *DeoptIntrinsic,
     IRBuilder<> B(CheckBI);
     auto *WC = B.CreateIntrinsic(Intrinsic::experimental_widenable_condition,
                                  {}, nullptr, "widenable_cond");
-    CheckBI->setCondition(B.CreateAnd(CheckBI->getCondition(), WC,
-                                      "exiplicit_guard_cond"));
+    CheckBI->setCondition(
+        B.CreateAnd(CheckBI->getCondition(), WC, "exiplicit_guard_cond"));
     assert(isWidenableBranch(CheckBI) && "Branch must be widenable.");
   }
 }

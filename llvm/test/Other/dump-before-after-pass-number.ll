@@ -8,7 +8,7 @@
 
 
 ; RUN: rm -rf %t/logs
-; RUN: opt %s -disable-output -passes='no-op-module,no-op-module,no-op-module' -print-before-pass-number=2 -print-pass-numbers -ir-dump-directory %t/logs 2>&1 | FileCheck -check-prefix=RUN_PASS_NUMBERS %s
+; RUN: opt %s -disable-output -passes='no-op-module,no-op-module,no-op-module' -print-before-pass-number=2 -print-pass-numbers -ir-dump-directory=%t/logs 2>&1 | FileCheck -check-prefix=RUN_PASS_NUMBERS %s
 ; RUN: ls %t/logs | FileCheck --check-prefix=BEFORE2 %s
 ; RUN: ls %t/logs | count 1
 ; BEFORE2: 2-[[MODULE_NAME_HASH:[a-z0-9]+]]-module-NoOpModulePass-before.ll
@@ -19,7 +19,7 @@
 
 
 ; RUN: rm -rf %t/logs
-; RUN: opt %s -disable-output -passes='no-op-module,no-op-module,no-op-module' -print-before-pass-number=1 -print-pass-numbers -ir-dump-directory %t/logs 2>&1 | FileCheck -check-prefix=RUN_PASS_NUMBERS %s
+; RUN: opt %s -disable-output -passes='no-op-module,no-op-module,no-op-module' -print-before-pass-number=1 -print-pass-numbers -ir-dump-directory=%t/logs 2>&1 | FileCheck -check-prefix=RUN_PASS_NUMBERS %s
 ; RUN: ls %t/logs | FileCheck --check-prefix=BEFORE1 %s
 ; RUN: ls %t/logs | count 1
 
@@ -31,7 +31,7 @@
 
 
 ; RUN: rm -rf %t/logs
-; RUN: opt %s -disable-output -passes='no-op-module,no-op-module,no-op-module' -print-after-pass-number=2 -print-pass-numbers -ir-dump-directory %t/logs 2>&1 | FileCheck -check-prefix=RUN_PASS_NUMBERS %s
+; RUN: opt %s -disable-output -passes='no-op-module,no-op-module,no-op-module' -print-after-pass-number=2 -print-pass-numbers -ir-dump-directory=%t/logs 2>&1 | FileCheck -check-prefix=RUN_PASS_NUMBERS %s
 ; RUN: ls %t/logs | FileCheck --check-prefix=AFTER2 %s
 ; RUN: ls %t/logs | count 1
 ; AFTER2: 2-[[MODULE_NAME_HASH:[a-z0-9]+]]-module-NoOpModulePass-after.ll
@@ -43,7 +43,7 @@
 
 
 ; RUN: rm -rf %t/logs
-; RUN: opt %s -disable-output -passes='no-op-module,no-op-module,no-op-module' -print-after-pass-number=1 -print-pass-numbers -ir-dump-directory %t/logs 2>&1 | FileCheck -check-prefix=RUN_PASS_NUMBERS %s
+; RUN: opt %s -disable-output -passes='no-op-module,no-op-module,no-op-module' -print-after-pass-number=1 -print-pass-numbers -ir-dump-directory=%t/logs 2>&1 | FileCheck -check-prefix=RUN_PASS_NUMBERS %s
 ; RUN: ls %t/logs | FileCheck --check-prefix=AFTER1 %s
 ; RUN: ls %t/logs | count 1
 ; AFTER1: 1-[[MODULE_NAME_HASH:[a-z0-9]+]]-module-NoOpModulePass-after.ll

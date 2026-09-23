@@ -1,5 +1,3 @@
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
 //===--- ExpandMemCmp.cpp - Expand memcmp() to load/stores ----------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -28,6 +26,7 @@
 #include "llvm/IR/PatternMatch.h"
 #include "llvm/IR/ProfDataUtils.h"
 #include "llvm/Transforms/Scalar/ExpandMemCmp.h"
+#include "llvm/Transforms/Scalar/ScalarOptions.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/SizeOpts.h"
@@ -45,34 +44,36 @@ STATISTIC(NumMemCmpGreaterThanMax,
 STATISTIC(NumMemCmpInlined, "Number of inlined memcmp calls");
 
 static bool isMemCmpEqZeroNumLoadsPerBlockSpecified(const Function &F) {
-  return clv2::wasOptSpecified<&clv2::ScalarOptsReg,
-                               &clv2::SC_MemcmpNumLoadsPerBlock>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_MemcmpNumLoadsPerBlock.has_value();
 }
 static unsigned getMemCmpEqZeroNumLoadsPerBlock(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_MemcmpNumLoadsPerBlock>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_MemcmpNumLoadsPerBlock.value_or(1);
 }
 
 static bool isMaxLoadsPerMemcmpSpecified(const Function &F) {
-  return clv2::wasOptSpecified<&clv2::ScalarOptsReg,
-                               &clv2::SC_MaxLoadsPerMemcmp>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_MaxLoadsPerMemcmp.has_value();
 }
 static unsigned getMaxLoadsPerMemcmp(const Function &F) {
-  return clv2::getOptValOr<&clv2::ScalarOptsReg, &clv2::SC_MaxLoadsPerMemcmp>(
-      F.getContext().getOptionsContext(), 0);
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_MaxLoadsPerMemcmp.value_or(0);
 }
 
 static bool isMaxLoadsPerMemcmpOptSizeSpecified(const Function &F) {
-  return clv2::wasOptSpecified<&clv2::ScalarOptsReg,
-                               &clv2::SC_MaxLoadsPerMemcmpOptSize>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_MaxLoadsPerMemcmpOptSize.has_value();
 }
 static unsigned getMaxLoadsPerMemcmpOptSize(const Function &F) {
-  return clv2::getOptValOr<&clv2::ScalarOptsReg,
-                           &clv2::SC_MaxLoadsPerMemcmpOptSize>(
-      F.getContext().getOptionsContext(), 0);
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_MaxLoadsPerMemcmpOptSize.value_or(0);
 }
 
 namespace {

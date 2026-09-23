@@ -1,5 +1,3 @@
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
 //===- LoopDeletion.cpp - Dead Loop Deletion Pass ---------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -29,6 +27,7 @@
 #include "llvm/IR/PatternMatch.h"
 #include "llvm/Transforms/Scalar/LoopDeletion.h"
 #include "llvm/Transforms/Scalar/LoopPassManager.h"
+#include "llvm/Transforms/Scalar/ScalarOptions.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
 
 using namespace llvm;
@@ -40,9 +39,9 @@ STATISTIC(NumBackedgesBroken,
           "Number of loops for which we managed to break the backedge");
 
 static bool getEnableSymbolicExecution(const Function &F) {
-  return clv2::getOptValOrDefault<
-      &clv2::SC_LoopDeletionEnableSymbolicExecution>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_LoopDeletionEnableSymbolicExecution;
 }
 
 enum class LoopDeletionResult {

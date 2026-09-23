@@ -17,7 +17,6 @@
 #include "llvm/BinaryFormat/Dwarf.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCExpr.h"
-#include "llvm/MC/MCOptionsOptInfos.h"
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/MC/MCTargetOptionsCommandFlags.h"
 #include "llvm/MC/MCValue.h"
@@ -30,14 +29,10 @@ MCAsmInfo::MCAsmInfo(const MCTargetOptions &Options) : TargetOptions(Options) {
   // The context is always present, so the former fallback to the mc:: legacy
   // globals is unreachable and has been removed.
   const auto &Ctx = Options.getOptsCtx();
-  auto Val = clv2::getOptValOrDefault<&clv2::MC_DwarfExtendedLoc>(Ctx);
-  if (Val != clv2::DefaultOnOff::Default)
-    SupportsExtendedDwarfLocDirective = (Val == clv2::DefaultOnOff::Enable);
-  if (clv2::wasOptSpecified<&clv2::MCOptsReg, &clv2::MC_UseLEB128Directives>(
-          Ctx))
-    HasLEB128Directives =
-        clv2::getOptValOr<&clv2::MCOptsReg, &clv2::MC_UseLEB128Directives>(
-            Ctx, false);
+  if (auto Val = mc::getDwarfExtendedLoc(Ctx))
+    SupportsExtendedDwarfLocDirective = *Val;
+  if (auto Val = mc::getUseLEB128Directives(Ctx))
+    HasLEB128Directives = *Val;
   if (Options.BinutilsVersion.first > 0)
     BinutilsVersion = Options.BinutilsVersion;
 }
@@ -49,8 +44,7 @@ void MCAsmInfo::addInitialFrameState(const MCCFIInstruction &Inst) {
 }
 
 const MCExpr *
-MCAsmInfo::getExprForPersonalitySymbol(const MCSymbol *Sym,
-                                       unsigned Encoding,
+MCAsmInfo::getExprForPersonalitySymbol(const MCSymbol *Sym, unsigned Encoding,
                                        MCStreamer &Streamer) const {
   return getExprForFDESymbol(Sym, Encoding, Streamer);
 }
@@ -111,7 +105,7 @@ bool MCAsmInfo::isValidUnquotedName(StringRef Name) const {
 bool MCAsmInfo::shouldOmitSectionDirective(StringRef SectionName) const {
   // FIXME: Does .section .bss/.data/.text work everywhere??
   return SectionName == ".text" || SectionName == ".data" ||
-        (SectionName == ".bss" && !usesELFSectionDirectiveForBSS());
+         (SectionName == ".bss" && !usesELFSectionDirectiveForBSS());
 }
 
 void MCAsmInfo::initializeAtSpecifiers(EnumStrings<AtSpecifierKind, 1> Descs) {

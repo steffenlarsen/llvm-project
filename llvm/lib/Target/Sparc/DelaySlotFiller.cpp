@@ -21,8 +21,7 @@
 #include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/CodeGen/TargetRegisterInfo.h"
 #include "llvm/IR/Function.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/Sparc/SparcOptionsOptInfos.h"
+#include "llvm/Target/Sparc/SparcOptions.h"
 
 using namespace llvm;
 
@@ -33,8 +32,9 @@ STATISTIC(FilledSlots, "Number of delay slots filled");
 static bool DisableDelaySlotFiller = false;
 
 static bool getDisableDelaySlotFiller(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SPARC_DisableDelaySlotFiller>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<SparcOptions>()
+      .SPARC_DisableDelaySlotFiller;
 }
 
 namespace {

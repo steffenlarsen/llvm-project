@@ -6,19 +6,11 @@
 //
 //===----------------------------------------------------------------------===//
 
-include "llvm/Support/CLV2Options.td"
+include "llvm/Option/OptParser.td"
 
-def AsmParserOptsReg : Registry<"llvm::asm_opts"> {
-  // Getter bodies are compiled once, in AsmParserOptionsGetters.cpp.
-  let OutOfLineGetters = 1;
-}
+def AsmParserOptions : OptionsStruct<"llvm"> {}
 
-def ASM_AllowIncompleteIR : Option<
-    "allow-incomplete-ir",
+defm ASM_AllowIncompleteIR : BoolField<
+    "allow-incomplete-ir", "false",
     "Allow incomplete IR on a best effort basis (references to unknown "
-    "metadata will be dropped)",
-    "bool"> {
-  let Registry = AsmParserOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+    "metadata will be dropped)", /*hidden=*/1>;

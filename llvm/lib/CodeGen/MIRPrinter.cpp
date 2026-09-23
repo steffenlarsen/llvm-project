@@ -19,7 +19,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsGISel.h"
 #include "llvm/CodeGen/MIRFormatter.h"
 #include "llvm/CodeGen/MIRYamlMapping.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
@@ -46,16 +46,15 @@
 #include "llvm/IR/IRPrintingPasses.h"
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/ModuleSlotTracker.h"
 #include "llvm/IR/Value.h"
 #include "llvm/MC/LaneBitmask.h"
 #include "llvm/Support/BranchProbability.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/Format.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/YAMLTraits.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
@@ -70,12 +69,12 @@
 
 using namespace llvm;
 
-static bool getSimplifyMir(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_SimplifyMir>(Ctx);
+static bool getSimplifyMir(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenGISelOptions>().CGPASS_SimplifyMir;
 }
 
-static bool getMirDebugLoc(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_MirDebugLoc>(Ctx);
+static bool getMirDebugLoc(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenGISelOptions>().CGPASS_MirDebugLoc;
 }
 
 namespace {
@@ -253,7 +252,7 @@ static void printMF(raw_ostream &OS, MFGetterFnT Fn, const MachineFunction &MF,
   convertPrefetchTargets(YamlMF, MF);
 
   yaml::Output Out(OS);
-  if (!getSimplifyMir(MF.getFunction().getContext().getOptionsContext()))
+  if (!getSimplifyMir(MF.getFunction().getContext()))
     Out.setWriteDefaultValues(true);
   Out << YamlMF;
 }
@@ -776,8 +775,7 @@ void printMBB(raw_ostream &OS, MFPrintState &State,
   // without the successor list, it would guess the code would
   // fallthrough.
   if ((!MBB.succ_empty() &&
-       !getSimplifyMir(
-           MBB.getParent()->getFunction().getContext().getOptionsContext())) ||
+       !getSimplifyMir(MBB.getParent()->getFunction().getContext())) ||
       !canPredictProbs || !canPredictSuccessors(MBB)) {
     OS.indent(2) << "successors:";
     if (!MBB.succ_empty())
@@ -785,10 +783,7 @@ void printMBB(raw_ostream &OS, MFPrintState &State,
     ListSeparator LS;
     for (auto I = MBB.succ_begin(), E = MBB.succ_end(); I != E; ++I) {
       OS << LS << printMBBReference(**I);
-      if (!getSimplifyMir(MBB.getParent()
-                              ->getFunction()
-                              .getContext()
-                              .getOptionsContext()) ||
+      if (!getSimplifyMir(MBB.getParent()->getFunction().getContext()) ||
           !canPredictProbs)
         OS << format("(0x%08" PRIx32 ")",
                      MBB.getSuccProbability(I).getNumerator());
@@ -952,7 +947,7 @@ static void printMI(raw_ostream &OS, MFPrintState &State,
   if (auto Num = MI.peekDebugInstrNum())
     OS << LS << "debug-instr-number " << Num;
 
-  if (getMirDebugLoc(MF->getFunction().getContext().getOptionsContext())) {
+  if (getMirDebugLoc(MF->getFunction().getContext())) {
     if (const DebugLoc &DL = MI.getDebugLoc()) {
       OS << LS << "debug-location ";
       DL->printAsOperand(OS, State.MST);

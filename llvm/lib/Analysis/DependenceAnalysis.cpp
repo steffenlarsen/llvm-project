@@ -47,7 +47,7 @@
 #include "llvm/Analysis/DependenceAnalysis.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/AliasAnalysis.h"
-#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
+#include "llvm/Analysis/AnalysisOptions.h"
 #include "llvm/Analysis/Delinearization.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/ScalarEvolution.h"
@@ -59,7 +59,6 @@
 #include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 
 using namespace llvm;
@@ -96,18 +95,17 @@ STATISTIC(BanerjeeSuccesses, "Banerjee successes");
 STATISTIC(SameSDLoopsCount, "Loops with Same iteration Space and Depth");
 
 static bool getDelinearize(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AN_Delinearize>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<AnalysisOptions>().AN_Delinearize;
 }
 
 static bool getDisableDelinearizationChecks(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AN_DisableDelinearizationChecks>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<AnalysisOptions>()
+      .AN_DisableDelinearizationChecks;
 }
 
 static unsigned getMIVMaxLevelThreshold(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AN_MIVMaxLevelThreshold>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<AnalysisOptions>().AN_MIVMaxLevelThreshold;
 }
 
 //===----------------------------------------------------------------------===//

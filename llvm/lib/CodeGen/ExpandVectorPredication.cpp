@@ -16,18 +16,15 @@
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/Analysis/VectorUtils.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsCore1.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Intrinsics.h"
-#include "llvm/Support/CommandLineCompat.h"
-#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
 #include <optional>
 
@@ -46,16 +43,14 @@ using VPTransform = TargetTransformInfo::VPLegalization::VPTransform;
 
 // Override options.
 
-static std::string
-getExpandvpOverrideEvlTransform(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_ExpandvpOverrideEvlTransform>(
-      Ctx);
+static std::string getExpandvpOverrideEvlTransform(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore1Options>()
+      .CGPASS_ExpandvpOverrideEvlTransform;
 }
 
-static std::string
-getExpandvpOverrideMaskTransform(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_ExpandvpOverrideMaskTransform>(
-      Ctx);
+static std::string getExpandvpOverrideMaskTransform(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore1Options>()
+      .CGPASS_ExpandvpOverrideMaskTransform;
 }
 
 #undef VPINTERNAL_CASE
@@ -70,11 +65,11 @@ static VPTransform parseOverrideOption(const std::string &TextOpt) {
 // Whether any override options are set.
 static bool anyExpandVPOverridesSet(const Function *F = nullptr) {
   return !(F ? getExpandvpOverrideEvlTransform(
-                   F->getContext().getOptionsContext())
+                   F->getContext())
              : std::string())
               .empty() ||
          !(F ? getExpandvpOverrideMaskTransform(
-                   F->getContext().getOptionsContext())
+                   F->getContext())
              : std::string())
               .empty();
 }
@@ -524,11 +519,10 @@ CachingVPExpander::getVPLegalizationStrategy(const VPIntrinsic &VPI) const {
 
   // Overrides set - we are in testing, the following does not need to be
   // efficient.
-  VPStrat.EVLParamStrategy =
-      parseOverrideOption(getExpandvpOverrideEvlTransform(
-          VPI.getFunction()->getContext().getOptionsContext()));
-  VPStrat.OpStrategy = parseOverrideOption(getExpandvpOverrideMaskTransform(
-      VPI.getFunction()->getContext().getOptionsContext()));
+  VPStrat.EVLParamStrategy = parseOverrideOption(
+      getExpandvpOverrideEvlTransform(VPI.getFunction()->getContext()));
+  VPStrat.OpStrategy = parseOverrideOption(
+      getExpandvpOverrideMaskTransform(VPI.getFunction()->getContext()));
   return VPStrat;
 }
 

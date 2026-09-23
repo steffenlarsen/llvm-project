@@ -15,20 +15,15 @@
 #include "AMDGPUIGroupLP.h"
 #include "GCNHazardRecognizer.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/AMDGPU/AMDGPUOptionsOptInfos.h"
+#include "llvm/Target/AMDGPU/AMDGPUOptions.h"
 
 using namespace llvm;
 using namespace llvm::AMDGPU;
 
 #define DEBUG_TYPE "machine-scheduler"
-namespace {
-enum class CarriedLatency { Off, Fence, All };
-} // namespace
 
-static CarriedLatency getBlockCarriedLatency(const clv2::OptionsContext &Ctx) {
-  return static_cast<CarriedLatency>(
-      clv2::getOptValOrDefault<&clv2::AMDGPU_BlockCarriedLatency>(Ctx));
+static CarriedLatency getBlockCarriedLatency(const AMDGPUOptions &Opts) {
+  return Opts.AMDGPU_BlockCarriedLatency;
 }
 
 namespace {
@@ -622,7 +617,7 @@ void CandidateHeuristics::initialize(ScheduleDAGMI *SchedDAG,
 unsigned CandidateHeuristics::getCarriedLatency(SUnit *SU) {
   MachineInstr *MI = SU->getInstr();
   const CarriedLatency BlockLatencyMode = getBlockCarriedLatency(
-      MI->getMF()->getFunction().getContext().getOptionsContext());
+      MI->getMF()->getFunction().getContext().getOptions<AMDGPUOptions>());
   if (BlockLatencyMode == CarriedLatency::Off)
     return 0;
 

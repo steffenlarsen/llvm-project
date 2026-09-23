@@ -1,5 +1,3 @@
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
 //===- SpeculativeExecution.cpp ---------------------------------*- C++ -*-===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -72,6 +70,7 @@
 #include "llvm/InitializePasses.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Transforms/Scalar.h"
+#include "llvm/Transforms/Scalar/ScalarOptions.h"
 
 using namespace llvm;
 
@@ -80,8 +79,9 @@ using namespace llvm;
 // The risk that speculation will not pay off increases with the
 // number of instructions speculated, so we put a limit on that.
 static unsigned getSpecExecMaxSpeculationCost(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_SpecExecMaxSpeculationCost>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_SpecExecMaxSpeculationCost;
 }
 
 // Speculating just a few instructions from a larger block tends not
@@ -89,14 +89,13 @@ static unsigned getSpecExecMaxSpeculationCost(const Function &F) {
 // that small basic blocks are more likely to be candidates for
 // further optimization.
 static unsigned getSpecExecMaxNotHoisted(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_SpecExecMaxNotHoisted>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<ScalarOptions>().SC_SpecExecMaxNotHoisted;
 }
 
 static bool getSpecExecOnlyIfDivergentTarget(const Function &F) {
-  return clv2::getOptValOr<&clv2::ScalarOptsReg,
-                           &clv2::SC_SpecExecOnlyIfDivergentTarget>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_SpecExecOnlyIfDivergentTarget;
 }
 
 namespace {

@@ -16,10 +16,8 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ProfileData/InstrProf.h"
-#include "llvm/ProfileData/ProfileDataOptionsOptInfos.h"
 #include "llvm/Support/Compression.h"
 #include "llvm/Support/LEB128.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cassert>
 #include <limits>
@@ -27,10 +25,6 @@
 
 using namespace llvm;
 using namespace coverage;
-
-static bool getDoInstrProfNameCompression(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::PD_EnableNameCompression>(Ctx);
-}
 
 CoverageFilenamesSectionWriter::CoverageFilenamesSectionWriter(
     ArrayRef<std::string> Filenames)
@@ -43,7 +37,7 @@ CoverageFilenamesSectionWriter::CoverageFilenamesSectionWriter(
 }
 
 void CoverageFilenamesSectionWriter::write(raw_ostream &OS, bool Compress,
-                                           const clv2::OptionsContext &Ctx) {
+                                           const ProfileDataOptions &Opts) {
   std::string FilenamesStr;
   {
     raw_string_ostream FilenamesOS{FilenamesStr};
@@ -55,7 +49,7 @@ void CoverageFilenamesSectionWriter::write(raw_ostream &OS, bool Compress,
 
   SmallVector<uint8_t, 128> CompressedStr;
   bool doCompression = Compress && compression::zlib::isAvailable() &&
-                       getDoInstrProfNameCompression(Ctx);
+                       Opts.PD_EnableNameCompression;
   if (doCompression)
     compression::zlib::compress(arrayRefFromStringRef(FilenamesStr),
                                 CompressedStr,

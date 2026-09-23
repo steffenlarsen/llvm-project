@@ -16,7 +16,6 @@
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCInstrInfo.h"
 #include "llvm/MC/MCLFIRewriter.h"
-#include "llvm/MC/MCOptionsOptInfos.h"
 #include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/MC/MCSectionELF.h"
 #include "llvm/MC/MCStreamer.h"
@@ -41,11 +40,7 @@ void initializeLFIMCStreamer(MCStreamer &Streamer, MCContext &Ctx,
 
   // Create the target-specific MCLFIRewriter.
   assert(TheTarget != nullptr);
-  // The context is always present now, so the former fallback to the legacy
-  // global (mc::getLFIEnableRewriter()) is unreachable and has been dropped.
-  const bool EnableRewriter =
-      clv2::getOptValIfSpecified<&clv2::MCOptsReg, &clv2::MC_LFIEnableRewriter>(
-          Ctx.getOptionsContext(), true);
+  const bool EnableRewriter = mc::getLFIEnableRewriter(Ctx.getOptionsContext());
   if (EnableRewriter) {
     auto MRI =
         std::unique_ptr<MCRegisterInfo>(TheTarget->createMCRegInfo(TheTriple));

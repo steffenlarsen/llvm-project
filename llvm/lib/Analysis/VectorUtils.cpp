@@ -13,7 +13,7 @@
 #include "llvm/Analysis/VectorUtils.h"
 #include "llvm/ADT/EquivalenceClasses.h"
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
+#include "llvm/Analysis/AnalysisOptions.h"
 #include "llvm/Analysis/DemandedBits.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/LoopIterator.h"
@@ -29,7 +29,6 @@
 #include "llvm/IR/PatternMatch.h"
 #include "llvm/IR/Value.h"
 #include "llvm/Support/CommandLineCompat.h"
-#include "llvm/Support/OptionsContext.h"
 
 #define DEBUG_TYPE "vectorutils"
 
@@ -39,8 +38,8 @@ using namespace llvm::PatternMatch;
 /// Maximum factor for an interleaved memory access.
 unsigned MaxInterleaveGroupFactor = 8;
 
-static unsigned getMaxInterleaveGroupFactor(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::AN_MaxInterleaveGroupFactor>(Ctx);
+static unsigned getMaxInterleaveGroupFactor(const AnalysisOptions &Opts) {
+  return Opts.AN_MaxInterleaveGroupFactor;
 }
 
 /// Return true if all of the intrinsic's arguments and return type are scalars
@@ -49,7 +48,7 @@ static unsigned getMaxInterleaveGroupFactor(const clv2::OptionsContext &Ctx) {
 /// isVectorIntrinsicWithScalarOpAtArg).
 bool llvm::isTriviallyVectorizable(Intrinsic::ID ID) {
   switch (ID) {
-  case Intrinsic::abs:   // Begin integer bit-manipulation.
+  case Intrinsic::abs: // Begin integer bit-manipulation.
   case Intrinsic::bswap:
   case Intrinsic::bitreverse:
   case Intrinsic::ctpop:
@@ -349,7 +348,8 @@ Value *llvm::findScalarElement(Value *V, unsigned EltNo) {
 
   // Extract a value from a vector add operation with a constant zero.
   // TODO: Use getBinOpIdentity() to generalize this.
-  Value *Val; Constant *C;
+  Value *Val;
+  Constant *C;
   if (match(V, m_Add(m_Value(Val), m_Constant(C))))
     if (Constant *Elt = C->getAggregateElement(EltNo))
       if (Elt->isNullValue())
@@ -394,9 +394,8 @@ Value *llvm::getSplatValue(const Value *V) {
 
   // shuf (inselt ?, Splat, 0), ?, <0, undef, 0, ...>
   Value *Splat;
-  if (match(V,
-            m_Shuffle(m_InsertElt(m_Value(), m_Value(Splat), m_ZeroInt()),
-                      m_Value(), m_ZeroMask())))
+  if (match(V, m_Shuffle(m_InsertElt(m_Value(), m_Value(Splat), m_ZeroInt()),
+                         m_Value(), m_ZeroMask())))
     return Splat;
 
   return nullptr;
@@ -922,7 +921,8 @@ llvm::computeMinimumValueSizes(ArrayRef<BasicBlock *> Blocks, DemandedBits &DB,
     // We don't modify the types of PHIs. Reductions will already have been
     // truncated if possible, and inductions' sizes will have been chosen by
     // indvars.
-    // If we are required to shrink a PHI, abandon this entire equivalence class.
+    // If we are required to shrink a PHI, abandon this entire equivalence
+    // class.
     bool Abort = false;
     for (Value *M : ECs.members(*E))
       if (isa<PHINode>(M) && MinBW < M->getType()->getScalarSizeInBits()) {
@@ -1290,9 +1290,10 @@ APInt llvm::possiblyDemandedEltsInMask(Value *Mask) {
 bool InterleavedAccessInfo::isStrided(int Stride) const {
   unsigned Factor = std::abs(Stride);
   const Function *F = TheLoop ? TheLoop->getHeader()->getParent() : nullptr;
-  return Factor >= 2 && Factor <= (F ? getMaxInterleaveGroupFactor(
-                                           F->getContext().getOptionsContext())
-                                     : MaxInterleaveGroupFactor);
+  return Factor >= 2 &&
+         Factor <= (F ? getMaxInterleaveGroupFactor(
+                            F->getContext().getOptions<AnalysisOptions>())
+                      : MaxInterleaveGroupFactor);
 }
 
 void InterleavedAccessInfo::collectConstStrideAccesses(
@@ -1334,8 +1335,8 @@ void InterleavedAccessInfo::collectConstStrideAccesses(
                            .value_or(0);
 
       const SCEV *Scev = replaceSymbolicStrideSCEV(PSE, Strides, Ptr);
-      AccessStrideInfo[&I] = StrideDescriptor(Stride, Scev, Size,
-                                              getLoadStoreAlignment(&I));
+      AccessStrideInfo[&I] =
+          StrideDescriptor(Stride, Scev, Size, getLoadStoreAlignment(&I));
     }
 }
 
@@ -1376,7 +1377,7 @@ void InterleavedAccessInfo::collectConstStrideAccesses(
 // with other accesses that may precede it in program order. Note that a
 // bottom-up order does not imply that WAW dependences should not be checked.
 void InterleavedAccessInfo::analyzeInterleaving(
-                                 bool EnablePredicatedInterleavedMemAccesses) {
+    bool EnablePredicatedInterleavedMemAccesses) {
   LLVM_DEBUG(dbgs() << "LV: Analyzing interleaved accesses...\n");
   const auto &Strides = LAI->getSymbolicStrides();
 
@@ -1420,8 +1421,8 @@ void InterleavedAccessInfo::analyzeInterleaving(
     // create a group for B, we continue with the bottom-up algorithm to ensure
     // we don't break any of B's dependences.
     InterleaveGroup<Instruction> *GroupB = nullptr;
-    if (isStrided(DesB.Stride) &&
-        (!isPredicated(B->getParent()) || EnablePredicatedInterleavedMemAccesses)) {
+    if (isStrided(DesB.Stride) && (!isPredicated(B->getParent()) ||
+                                   EnablePredicatedInterleavedMemAccesses)) {
       GroupB = getInterleaveGroup(B);
       if (!GroupB) {
         LLVM_DEBUG(dbgs() << "LV: Creating an interleave group with:" << *B
@@ -1553,8 +1554,8 @@ void InterleavedAccessInfo::analyzeInterleaving(
       if (DistanceToB % static_cast<int64_t>(DesB.Size))
         continue;
 
-      // All members of a predicated interleave-group must have the same predicate,
-      // and currently must reside in the same BB.
+      // All members of a predicated interleave-group must have the same
+      // predicate, and currently must reside in the same BB.
       BasicBlock *BlockA = A->getParent();
       BasicBlock *BlockB = B->getParent();
       if ((isPredicated(BlockA) || isPredicated(BlockB)) &&
@@ -1578,7 +1579,7 @@ void InterleavedAccessInfo::analyzeInterleaving(
           GroupB->setInsertPos(A);
       }
     } // Iteration over A accesses.
-  }   // Iteration over B accesses.
+  } // Iteration over B accesses.
 
   // Commit the collected predicates to PSE if any candidate group was formed.
   if (!LoadGroups.empty() || !StoreGroups.empty())

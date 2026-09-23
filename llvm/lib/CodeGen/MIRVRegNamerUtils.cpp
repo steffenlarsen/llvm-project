@@ -7,20 +7,19 @@
 //===----------------------------------------------------------------------===//
 
 #include "MIRVRegNamerUtils.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsGISel.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/MachineStableHash.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
-#include "llvm/Support/CommandLineV2.h"
-#include "llvm/Support/OptionsContext.h"
+#include "llvm/IR/LLVMContext.h"
 
 using namespace llvm;
 
 #define DEBUG_TYPE "mir-vregnamer-utils"
 
-static bool getMirVregNamerUseStableHash(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_MirVregNamerUseStableHash>(Ctx);
+static bool getMirVregNamerUseStableHash(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenGISelOptions>().CGPASS_MirVregNamerUseStableHash;
 }
 
 using VRegRenameMap = std::map<Register, Register>;
@@ -58,8 +57,7 @@ std::string VRegRenamer::getInstructionOpcodeHash(MachineInstr &MI) {
   std::string S;
   raw_string_ostream OS(S);
 
-  if (getMirVregNamerUseStableHash(
-          MI.getMF()->getFunction().getContext().getOptionsContext())) {
+  if (getMirVregNamerUseStableHash(MI.getMF()->getFunction().getContext())) {
     auto Hash = stableHashValue(MI, /* HashVRegs */ true,
                                 /* HashConstantPoolIndices */ true,
                                 /* HashMemOperands */ true);

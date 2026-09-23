@@ -16,8 +16,6 @@ tablegen(LLVM LoongArchGenSubtargetInfo.inc -gen-subtarget)
 add_public_tablegen_target(LoongArchCommonTableGen)
 
 add_llvm_target(LoongArchCodeGen
-  LoongArchOptionsGetters.cpp
-  LoongArchOptionsRegistration.cpp
   LoongArchAsmPrinter.cpp
   LoongArchDeadRegisterDefinitions.cpp
   LoongArchExpandAtomicPseudoInsts.cpp
@@ -56,6 +54,9 @@ add_llvm_target(LoongArchCodeGen
 
   ADD_TO_COMPONENT
   LoongArch
+
+  DEPENDS
+  LoongArchOptParserTableGen
   )
 
 add_subdirectory(AsmParser)

@@ -27,7 +27,7 @@ add_llvm_component_library(LLVMAArch64Desc
   AArch64
   )
 
-add_dependencies(LLVMAArch64Desc AArch64CommonTableGen)
+add_dependencies(LLVMAArch64Desc AArch64CommonTableGen AArch64OptParserTableGen)
 
 # Hack: we need to include 'main' target directory to grab private headers
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/.. ${CMAKE_CURRENT_BINARY_DIR}/..)

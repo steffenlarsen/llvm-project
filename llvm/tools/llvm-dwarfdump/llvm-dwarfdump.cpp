@@ -33,6 +33,7 @@
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Parallel.h"
 #include "llvm/Support/Path.h"
+#include "llvm/Support/PluginLoaderOptions.h"
 #include "llvm/Support/Regex.h"
 #include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/TargetSelect.h"
@@ -910,7 +911,10 @@ int main(int argc, char **argv) {
   P.hideUnrelatedOptions(
       {&DwarfDumpCategory, &SectionCategory, &getColorCategory()});
   P.setExtraHelp("\nPass @FILE as argument to read options from FILE.\n");
-  auto OptsCtx = P.parse(argc, argv,
+  std::vector<const char *> ArgsAfterPlugins =
+      loadPluginsAndStripArgs(argc, argv);
+  auto OptsCtx = P.parse(static_cast<int>(ArgsAfterPlugins.size()),
+                         ArgsAfterPlugins.data(),
                          "pretty-print DWARF debug information in object files"
                          " and debug info archives.\n");
   auto *ParsedOpts = OptsCtx->getViewPtr<&DwarfDumpToolReg>();

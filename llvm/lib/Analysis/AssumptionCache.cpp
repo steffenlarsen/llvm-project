@@ -16,7 +16,7 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
-#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
+#include "llvm/Analysis/AnalysisOptions.h"
 #include "llvm/Analysis/AssumeBundleQueries.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/Analysis/ValueTracking.h"
@@ -32,7 +32,6 @@
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cassert>
 
@@ -42,13 +41,11 @@ using namespace llvm::PatternMatch;
 static bool VerifyAssumptionCache = false;
 
 static bool getVerifyAssumptionCache(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AN_VerifyAssumptionCache>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<AnalysisOptions>().AN_VerifyAssumptionCache;
 }
 
 static unsigned getMaxAssumesPerValue(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AN_MaxAssumesPerValue>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<AnalysisOptions>().AN_MaxAssumesPerValue;
 }
 
 SmallVector<AssumptionCache::ResultElem, 1> &

@@ -37,8 +37,7 @@
 #include "llvm/IR/Dominators.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Support/DebugCounter.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/AMDGPU/AMDGPUOptionsOptInfos.h"
+#include "llvm/Target/AMDGPU/AMDGPUOptions.h"
 #include "llvm/TargetParser/AMDGPUTargetParser.h"
 #include "llvm/TargetParser/TargetParser.h"
 
@@ -49,24 +48,19 @@ using HWEvents = AMDGPU::HWEvents;
 #define DEBUG_TYPE "si-insert-waitcnts"
 
 static bool getForceEmitZeroFlag(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AMDGPU_ForceEmitZeroFlag>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<AMDGPUOptions>().AMDGPU_ForceEmitZeroFlag;
 }
 
 static bool getForceEmitZeroLoadFlag(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AMDGPU_ForceEmitZeroLoadFlag>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<AMDGPUOptions>()
+      .AMDGPU_ForceEmitZeroLoadFlag;
 }
 
-static bool getExpertSchedulingModeFlag(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AMDGPU_ExpertSchedulingModeFlag>(
-      F.getContext().getOptionsContext());
-}
-
-static bool getExpertSchedulingModeFlagWasSpecified(const Function &F) {
-  return clv2::wasOptSpecified<&clv2::AMDGPUOptsReg,
-                               &clv2::AMDGPU_ExpertSchedulingModeFlag>(
-      F.getContext().getOptionsContext());
+static std::optional<bool> getExpertSchedulingModeFlag(const Function &F) {
+  return F.getContext()
+      .getOptions<AMDGPUOptions>()
+      .AMDGPU_ExpertSchedulingModeFlag;
 }
 
 namespace {
@@ -1350,8 +1344,8 @@ void WaitcntBrackets::simplifyVmVsrc(const AMDGPU::Waitcnt &CheckWait,
   // have read its VGPR sources, but only if there are no other outstanding VMEM
   // operations that use a different counter (like SAMPLE_CNT).
   static constexpr AMDGPU::InstCounterType VmemCounters[] = {
-      AMDGPU::LOAD_CNT, AMDGPU::STORE_CNT, AMDGPU::SAMPLE_CNT, AMDGPU::BVH_CNT,
-      AMDGPU::DS_CNT,   AMDGPU::ASYNC_CNT};
+      AMDGPU::LOAD_CNT, AMDGPU::STORE_CNT, AMDGPU::SAMPLE_CNT,
+      AMDGPU::BVH_CNT,  AMDGPU::DS_CNT,    AMDGPU::ASYNC_CNT};
   HWEvents VmemEvents = llvm::accumulate(
       VmemCounters, HWEvents(), [&](HWEvents Acc, AMDGPU::InstCounterType T) {
         return Acc | Context->getWaitEvents(T);
@@ -3494,12 +3488,12 @@ bool SIInsertWaitcnts::run() {
   Limits = AMDGPU::HardwareLimits(IV);
 
   if (ST.hasExtendedWaitCounts()) {
-    IsExpertMode = ST.hasExpertSchedulingMode() &&
-                   (getExpertSchedulingModeFlagWasSpecified(MF.getFunction())
-                        ? getExpertSchedulingModeFlag(MF.getFunction())
-                        : MF.getFunction()
-                              .getFnAttribute("amdgpu-expert-scheduling-mode")
-                              .getValueAsBool());
+    IsExpertMode =
+        ST.hasExpertSchedulingMode() &&
+        getExpertSchedulingModeFlag(MF.getFunction())
+            .value_or(MF.getFunction()
+                          .getFnAttribute("amdgpu-expert-scheduling-mode")
+                          .getValueAsBool());
     MaxCounter = IsExpertMode ? AMDGPU::NUM_EXPERT_INST_CNTS
                               : AMDGPU::NUM_EXTENDED_INST_CNTS;
     // Initialize WCG per MF. It contains state that depends on MF attributes.

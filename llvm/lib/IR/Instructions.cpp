@@ -24,7 +24,7 @@
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Function.h"
-#include "llvm/IR/IROptionsOptInfos.h"
+#include "llvm/IR/IROptions.h"
 #include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/Intrinsics.h"
@@ -45,7 +45,6 @@
 #include "llvm/Support/KnownBits.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/ModRef.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/TypeSize.h"
 #include <algorithm>
 #include <cassert>
@@ -56,8 +55,7 @@
 using namespace llvm;
 
 static bool getDisableI2pP2iOpt(const LLVMContext &Ctx) {
-  return clv2::getOptValOr<&clv2::IROptsReg, &clv2::IR_DisableI2pP2iOpt>(
-      Ctx.getOptionsContext(), false);
+  return Ctx.getOptions<IROptions>().IR_DisableI2pP2iOpt;
 }
 
 //===----------------------------------------------------------------------===//
@@ -125,7 +123,7 @@ const char *SelectInst::areInvalidOperands(Value *Op0, Value *Op1, Value *Op2) {
       return "selected values for vector select must be vectors";
     if (ET->getElementCount() != VT->getElementCount())
       return "vector select requires selected vectors to have "
-                   "the same vector length as select condition";
+             "the same vector length as select condition";
   } else if (Op0->getType() != Type::getInt1Ty(Op0->getContext())) {
     return "select condition must be i1 or <n x i1>";
   }
@@ -204,7 +202,8 @@ void PHINode::removeIncomingValueIf(function_ref<bool(unsigned)> Predicate,
 void PHINode::growOperands() {
   unsigned e = getNumOperands();
   unsigned NumOps = e + e / 2;
-  if (NumOps < 2) NumOps = 2;      // 2 op PHI nodes are VERY common.
+  if (NumOps < 2)
+    NumOps = 2; // 2 op PHI nodes are VERY common.
 
   ReservedSpace = NumOps;
   growHungoffUses(ReservedSpace, /*WithExtraValues=*/true);
@@ -219,7 +218,7 @@ Value *PHINode::hasConstantValue() const {
     if (getIncomingValue(i) != ConstantValue && getIncomingValue(i) != this) {
       if (ConstantValue != this)
         return nullptr; // Incoming values not all the same.
-       // The case where the first value is this PHI.
+                        // The case where the first value is this PHI.
       ConstantValue = getIncomingValue(i);
     }
   if (ConstantValue == this)
@@ -287,7 +286,8 @@ void LandingPadInst::init(unsigned NumReservedValues, const Twine &NameStr) {
 /// push_back style of operation. This grows the number of ops by 2 times.
 void LandingPadInst::growOperands(unsigned Size) {
   unsigned e = getNumOperands();
-  if (ReservedSpace >= e + Size) return;
+  if (ReservedSpace >= e + Size)
+    return;
   ReservedSpace = (std::max(e, 1U) + Size / 2) * 2;
   growHungoffUses(ReservedSpace);
 }
@@ -1326,7 +1326,8 @@ bool AllocaInst::isArrayAllocation() const {
 /// into the prolog/epilog code, so it is basically free.
 bool AllocaInst::isStaticAlloca() const {
   // Must be constant size.
-  if (!isa<ConstantInt>(getArraySize())) return false;
+  if (!isa<ConstantInt>(getArraySize()))
+    return false;
 
   // Must be in the entry block.
   const BasicBlock *Parent = getParent();
@@ -1649,7 +1650,8 @@ Type *GetElementPtrInst::getIndexedType(Type *Ty, ArrayRef<uint64_t> IdxList) {
 bool GetElementPtrInst::hasAllZeroIndices() const {
   for (unsigned i = 1, e = getNumOperands(); i != e; ++i) {
     if (ConstantInt *CI = dyn_cast<ConstantInt>(getOperand(i))) {
-      if (!CI->isZero()) return false;
+      if (!CI->isZero())
+        return false;
     } else {
       return false;
     }
@@ -1753,10 +1755,11 @@ InsertElementInst::InsertElementInst(Value *Vec, Value *Elt, Value *Index,
 bool InsertElementInst::isValidOperands(const Value *Vec, const Value *Elt,
                                         const Value *Index) {
   if (!Vec->getType()->isVectorTy())
-    return false;   // First operand of insertelement must be vector type.
+    return false; // First operand of insertelement must be vector type.
 
   if (Elt->getType() != cast<VectorType>(Vec->getType())->getElementType())
-    return false;// Second operand of insertelement must be vector element type.
+    return false; // Second operand of insertelement must be vector element
+                  // type.
 
   if (!Index->getType()->isIntegerTy())
     return false; // Third operand of insertelement must be an integer.
@@ -1884,7 +1887,7 @@ bool ShuffleVectorInst::isValidOperands(const Value *V1, const Value *V2,
   if (const auto *MV = dyn_cast<ConstantVector>(Mask)) {
     for (Value *Op : MV->operands()) {
       if (auto *CI = dyn_cast<ConstantInt>(Op)) {
-        if (CI->uge(V1Size*2))
+        if (CI->uge(V1Size * 2))
           return false;
       } else if (!isa<UndefValue>(Op)) {
         return false;
@@ -1896,7 +1899,7 @@ bool ShuffleVectorInst::isValidOperands(const Value *V1, const Value *V2,
   if (const auto *CDS = dyn_cast<ConstantDataSequential>(Mask)) {
     for (unsigned i = 0, e = cast<FixedVectorType>(MaskTy)->getNumElements();
          i != e; ++i)
-      if (CDS->getElementAsInteger(i) >= V1Size*2)
+      if (CDS->getElementAsInteger(i) >= V1Size * 2)
         return false;
     return true;
   }
@@ -1928,8 +1931,8 @@ void ShuffleVectorInst::getShuffleMask(const Constant *Mask,
   }
   for (unsigned i = 0; i != NumElts; ++i) {
     Constant *C = Mask->getAggregateElement(i);
-    Result.push_back(isa<UndefValue>(C) ? -1 :
-                     cast<ConstantInt>(C)->getZExtValue());
+    Result.push_back(isa<UndefValue>(C) ? -1
+                                        : cast<ConstantInt>(C)->getZExtValue());
   }
 }
 
@@ -1972,7 +1975,8 @@ static bool isSingleSourceMaskImpl(ArrayRef<int> Mask, int NumOpElts) {
     if (UsesLHS && UsesRHS)
       return false;
   }
-  // Allow for degenerate case: completely undef mask means neither source is used.
+  // Allow for degenerate case: completely undef mask means neither source is
+  // used.
   return UsesLHS || UsesRHS;
 }
 
@@ -2566,7 +2570,8 @@ void InsertValueInst::init(Value *Agg, Value *Val, ArrayRef<unsigned> Idxs,
   assert(!Idxs.empty() && "InsertValueInst must have at least one index");
 
   assert(ExtractValueInst::getIndexedType(Agg->getType(), Idxs) ==
-         Val->getType() && "Inserted value must match indexed type!");
+             Val->getType() &&
+         "Inserted value must match indexed type!");
   Op<0>() = Agg;
   Op<1>() = Val;
 
@@ -2610,8 +2615,7 @@ ExtractValueInst::ExtractValueInst(const ExtractValueInst &EVI)
 // A null type is returned if the indices are invalid for the specified
 // pointer type.
 //
-Type *ExtractValueInst::getIndexedType(Type *Agg,
-                                       ArrayRef<unsigned> Idxs) {
+Type *ExtractValueInst::getIndexedType(Type *Agg, ArrayRef<unsigned> Idxs) {
   for (unsigned Index : Idxs) {
     // We can't use CompositeType::indexValid(Index) here.
     // indexValid() always returns true for arrays because getelementptr allows
@@ -2669,7 +2673,8 @@ void UnaryOperator::AssertOK() {
            "Tried to create a floating-point operation on a "
            "non-floating-point type!");
     break;
-  default: llvm_unreachable("Invalid opcode provided");
+  default:
+    llvm_unreachable("Invalid opcode provided");
   }
 #endif
 }
@@ -2689,19 +2694,22 @@ BinaryOperator::BinaryOperator(BinaryOps iType, Value *S1, Value *S2, Type *Ty,
 
 void BinaryOperator::AssertOK() {
   Value *LHS = getOperand(0), *RHS = getOperand(1);
-  (void)LHS; (void)RHS; // Silence warnings.
+  (void)LHS;
+  (void)RHS; // Silence warnings.
   assert(LHS->getType() == RHS->getType() &&
          "Binary operator operand types must match!");
 #ifndef NDEBUG
   switch (getOpcode()) {
-  case Add: case Sub:
+  case Add:
+  case Sub:
   case Mul:
     assert(getType() == LHS->getType() &&
            "Arithmetic operation should return same type as operands!");
     assert(getType()->isIntOrIntVectorTy() &&
            "Tried to create an integer operation on a non-integer type!");
     break;
-  case FAdd: case FSub:
+  case FAdd:
+  case FSub:
   case FMul:
     assert(getType() == LHS->getType() &&
            "Arithmetic operation should return same type as operands!");
@@ -2743,14 +2751,16 @@ void BinaryOperator::AssertOK() {
     assert(getType()->isIntOrIntVectorTy() &&
            "Tried to create a shift operation on a non-integral type!");
     break;
-  case And: case Or:
+  case And:
+  case Or:
   case Xor:
     assert(getType() == LHS->getType() &&
            "Logical operation should return same type as operands!");
     assert(getType()->isIntOrIntVectorTy() &&
            "Tried to create a logical operation on a non-integral type!");
     break;
-  default: llvm_unreachable("Invalid opcode provided");
+  default:
+    llvm_unreachable("Invalid opcode provided");
   }
 #endif
 }
@@ -2788,8 +2798,8 @@ BinaryOperator *BinaryOperator::CreateNSWNeg(Value *Op, const Twine &Name,
 BinaryOperator *BinaryOperator::CreateNot(Value *Op, const Twine &Name,
                                           InsertPosition InsertBefore) {
   Constant *C = Constant::getAllOnesValue(Op->getType());
-  return new BinaryOperator(Instruction::Xor, Op, C,
-                            Op->getType(), Name, InsertBefore);
+  return new BinaryOperator(Instruction::Xor, Op, C, Op->getType(), Name,
+                            InsertBefore);
 }
 
 // Exchange the two operands to this instruction. This instruction is safe to
@@ -2822,14 +2832,14 @@ float FPMathOperator::getFPAccuracy() const {
 // Just determine if this cast only deals with integral->integral conversion.
 bool CastInst::isIntegerCast() const {
   switch (getOpcode()) {
-    default: return false;
-    case Instruction::ZExt:
-    case Instruction::SExt:
-    case Instruction::Trunc:
-      return true;
-    case Instruction::BitCast:
-      return getOperand(0)->getType()->isIntegerTy() &&
-        getType()->isIntegerTy();
+  default:
+    return false;
+  case Instruction::ZExt:
+  case Instruction::SExt:
+  case Instruction::Trunc:
+    return true;
+  case Instruction::BitCast:
+    return getOperand(0)->getType()->isIntegerTy() && getType()->isIntegerTy();
   }
 }
 
@@ -2841,34 +2851,33 @@ bool CastInst::isIntegerCast() const {
 /// # bitcast <2 x i32> %x to <4 x i16>
 /// # ptrtoint i32* %x to i32     ; on 32-bit plaforms only
 /// Determine if the described cast is a no-op.
-bool CastInst::isNoopCast(Instruction::CastOps Opcode,
-                          Type *SrcTy,
-                          Type *DestTy,
-                          const DataLayout &DL) {
+bool CastInst::isNoopCast(Instruction::CastOps Opcode, Type *SrcTy,
+                          Type *DestTy, const DataLayout &DL) {
   assert(castIsValid(Opcode, SrcTy, DestTy) && "method precondition");
   switch (Opcode) {
-    default: llvm_unreachable("Invalid CastOp");
-    case Instruction::Trunc:
-    case Instruction::ZExt:
-    case Instruction::SExt:
-    case Instruction::FPTrunc:
-    case Instruction::FPExt:
-    case Instruction::UIToFP:
-    case Instruction::SIToFP:
-    case Instruction::FPToUI:
-    case Instruction::FPToSI:
-    case Instruction::AddrSpaceCast:
-      // TODO: Target informations may give a more accurate answer here.
-      return false;
-    case Instruction::BitCast:
-      return true;  // BitCast never modifies bits.
-    case Instruction::PtrToAddr:
-    case Instruction::PtrToInt:
-      return DL.getIntPtrType(SrcTy)->getScalarSizeInBits() ==
-             DestTy->getScalarSizeInBits();
-    case Instruction::IntToPtr:
-      return DL.getIntPtrType(DestTy)->getScalarSizeInBits() ==
-             SrcTy->getScalarSizeInBits();
+  default:
+    llvm_unreachable("Invalid CastOp");
+  case Instruction::Trunc:
+  case Instruction::ZExt:
+  case Instruction::SExt:
+  case Instruction::FPTrunc:
+  case Instruction::FPExt:
+  case Instruction::UIToFP:
+  case Instruction::SIToFP:
+  case Instruction::FPToUI:
+  case Instruction::FPToSI:
+  case Instruction::AddrSpaceCast:
+    // TODO: Target informations may give a more accurate answer here.
+    return false;
+  case Instruction::BitCast:
+    return true; // BitCast never modifies bits.
+  case Instruction::PtrToAddr:
+  case Instruction::PtrToInt:
+    return DL.getIntPtrType(SrcTy)->getScalarSizeInBits() ==
+           DestTy->getScalarSizeInBits();
+  case Instruction::IntToPtr:
+    return DL.getIntPtrType(DestTy)->getScalarSizeInBits() ==
+           SrcTy->getScalarSizeInBits();
   }
 }
 
@@ -2920,7 +2929,7 @@ unsigned CastInst::isEliminableCastPair(Instruction::CastOps firstOp,
   // and causes issues when building libgcc.  We disallow fptosi+sext for the
   // same reason.
   const unsigned numCastOps =
-    Instruction::CastOpsEnd - Instruction::CastOpsBegin;
+      Instruction::CastOpsEnd - Instruction::CastOpsBegin;
   // clang-format off
   static const uint8_t CastResults[numCastOps][numCastOps] = {
     // T        F  F  U  S  F  F  P  P  I  B  A  -+
@@ -2949,163 +2958,157 @@ unsigned CastInst::isEliminableCastPair(Instruction::CastOps firstOp,
   // switch below.
   // If either of the casts are a bitcast from scalar to vector, disallow the
   // merging. However, any pair of bitcasts are allowed.
-  bool IsFirstBitcast  = (firstOp == Instruction::BitCast);
+  bool IsFirstBitcast = (firstOp == Instruction::BitCast);
   bool IsSecondBitcast = (secondOp == Instruction::BitCast);
   bool AreBothBitcasts = IsFirstBitcast && IsSecondBitcast;
 
   // Check if any of the casts convert scalars <-> vectors.
-  if ((IsFirstBitcast  && isa<VectorType>(SrcTy) != isa<VectorType>(MidTy)) ||
+  if ((IsFirstBitcast && isa<VectorType>(SrcTy) != isa<VectorType>(MidTy)) ||
       (IsSecondBitcast && isa<VectorType>(MidTy) != isa<VectorType>(DstTy)))
     if (!AreBothBitcasts)
       return 0;
 
-  int ElimCase = CastResults[firstOp-Instruction::CastOpsBegin]
-                            [secondOp-Instruction::CastOpsBegin];
+  int ElimCase = CastResults[firstOp - Instruction::CastOpsBegin]
+                            [secondOp - Instruction::CastOpsBegin];
   switch (ElimCase) {
-    case 0:
-      // Categorically disallowed.
-      return 0;
-    case 1:
-      // Allowed, use first cast's opcode.
+  case 0:
+    // Categorically disallowed.
+    return 0;
+  case 1:
+    // Allowed, use first cast's opcode.
+    return firstOp;
+  case 2:
+    // Allowed, use second cast's opcode.
+    return secondOp;
+  case 3:
+    // No-op cast in second op implies firstOp as long as the DestTy
+    // is integer and we are not converting between a vector and a
+    // non-vector type.
+    if (!SrcTy->isVectorTy() && DstTy->isIntegerTy())
       return firstOp;
-    case 2:
-      // Allowed, use second cast's opcode.
+    return 0;
+  case 4:
+    // No-op cast in second op implies firstOp as long as the DestTy
+    // matches MidTy.
+    if (DstTy == MidTy)
+      return firstOp;
+    return 0;
+  case 5:
+    // No-op cast in first op implies secondOp as long as the SrcTy
+    // is an integer.
+    if (SrcTy->isIntegerTy())
       return secondOp;
-    case 3:
-      // No-op cast in second op implies firstOp as long as the DestTy
-      // is integer and we are not converting between a vector and a
-      // non-vector type.
-      if (!SrcTy->isVectorTy() && DstTy->isIntegerTy())
-        return firstOp;
+    return 0;
+  case 7: {
+    // Disable inttoptr/ptrtoint optimization if enabled.
+    if (getDisableI2pP2iOpt(SrcTy->getContext()))
       return 0;
-    case 4:
-      // No-op cast in second op implies firstOp as long as the DestTy
-      // matches MidTy.
-      if (DstTy == MidTy)
-        return firstOp;
+
+    // Cannot simplify if address spaces are different!
+    if (SrcTy != DstTy)
       return 0;
-    case 5:
-      // No-op cast in first op implies secondOp as long as the SrcTy
-      // is an integer.
-      if (SrcTy->isIntegerTy())
-        return secondOp;
+
+    // Cannot simplify if the intermediate integer size is smaller than the
+    // pointer size.
+    unsigned MidSize = MidTy->getScalarSizeInBits();
+    if (!DL || MidSize < DL->getPointerTypeSizeInBits(SrcTy))
       return 0;
-    case 7: {
-      // Disable inttoptr/ptrtoint optimization if enabled.
-      if (getDisableI2pP2iOpt(SrcTy->getContext()))
-        return 0;
 
-      // Cannot simplify if address spaces are different!
-      if (SrcTy != DstTy)
-        return 0;
-
-      // Cannot simplify if the intermediate integer size is smaller than the
-      // pointer size.
-      unsigned MidSize = MidTy->getScalarSizeInBits();
-      if (!DL || MidSize < DL->getPointerTypeSizeInBits(SrcTy))
-        return 0;
-
+    return Instruction::BitCast;
+  }
+  case 8: {
+    // ext, trunc -> bitcast,    if the SrcTy and DstTy are the same
+    // ext, trunc -> ext,        if sizeof(SrcTy) < sizeof(DstTy)
+    // ext, trunc -> trunc,      if sizeof(SrcTy) > sizeof(DstTy)
+    unsigned SrcSize = SrcTy->getScalarSizeInBits();
+    unsigned DstSize = DstTy->getScalarSizeInBits();
+    if (SrcTy == DstTy)
       return Instruction::BitCast;
-    }
-    case 8: {
-      // ext, trunc -> bitcast,    if the SrcTy and DstTy are the same
-      // ext, trunc -> ext,        if sizeof(SrcTy) < sizeof(DstTy)
-      // ext, trunc -> trunc,      if sizeof(SrcTy) > sizeof(DstTy)
-      unsigned SrcSize = SrcTy->getScalarSizeInBits();
-      unsigned DstSize = DstTy->getScalarSizeInBits();
-      if (SrcTy == DstTy)
-        return Instruction::BitCast;
-      if (SrcSize < DstSize)
-        return firstOp;
-      if (SrcSize > DstSize)
-        return secondOp;
+    if (SrcSize < DstSize)
+      return firstOp;
+    if (SrcSize > DstSize)
+      return secondOp;
+    return 0;
+  }
+  case 9:
+    // zext, sext -> zext, because sext can't sign extend after zext
+    return Instruction::ZExt;
+  case 11: {
+    // inttoptr, ptrtoint/ptrtoaddr -> integer cast
+    if (!DL)
       return 0;
-    }
-    case 9:
-      // zext, sext -> zext, because sext can't sign extend after zext
+    unsigned MidSize = secondOp == Instruction::PtrToAddr
+                           ? DL->getAddressSizeInBits(MidTy)
+                           : DL->getPointerTypeSizeInBits(MidTy);
+    unsigned SrcSize = SrcTy->getScalarSizeInBits();
+    unsigned DstSize = DstTy->getScalarSizeInBits();
+    // If the middle size is smaller than both source and destination,
+    // an additional masking operation would be required.
+    if (MidSize < SrcSize && MidSize < DstSize)
+      return 0;
+    if (DstSize < SrcSize)
+      return Instruction::Trunc;
+    if (DstSize > SrcSize)
       return Instruction::ZExt;
-    case 11: {
-      // inttoptr, ptrtoint/ptrtoaddr -> integer cast
-      if (!DL)
-        return 0;
-      unsigned MidSize = secondOp == Instruction::PtrToAddr
-                             ? DL->getAddressSizeInBits(MidTy)
-                             : DL->getPointerTypeSizeInBits(MidTy);
-      unsigned SrcSize = SrcTy->getScalarSizeInBits();
-      unsigned DstSize = DstTy->getScalarSizeInBits();
-      // If the middle size is smaller than both source and destination,
-      // an additional masking operation would be required.
-      if (MidSize < SrcSize && MidSize < DstSize)
-        return 0;
-      if (DstSize < SrcSize)
-        return Instruction::Trunc;
-      if (DstSize > SrcSize)
-        return Instruction::ZExt;
-      return Instruction::BitCast;
-    }
-    case 12:
-      // addrspacecast, addrspacecast -> bitcast,       if SrcAS == DstAS
-      // addrspacecast, addrspacecast -> addrspacecast, if SrcAS != DstAS
-      if (SrcTy->getPointerAddressSpace() != DstTy->getPointerAddressSpace())
-        return Instruction::AddrSpaceCast;
-      return Instruction::BitCast;
-    case 13:
-      // FIXME: this state can be merged with (1), but the following assert
-      // is useful to check the correcteness of the sequence due to semantic
-      // change of bitcast.
-      // addrspacecast can only fold through a bitcast if the result remains a
-      // pointer. A pointer-to-byte bitcast must stay as a separate bitcast.
-      if (!DstTy->isPtrOrPtrVectorTy())
-        return 0;
-      assert(
-        SrcTy->isPtrOrPtrVectorTy() &&
-        MidTy->isPtrOrPtrVectorTy() &&
-        DstTy->isPtrOrPtrVectorTy() &&
-        SrcTy->getPointerAddressSpace() != MidTy->getPointerAddressSpace() &&
-        MidTy->getPointerAddressSpace() == DstTy->getPointerAddressSpace() &&
-        "Illegal addrspacecast, bitcast sequence!");
-      // Allowed, use first cast's opcode
-      return firstOp;
-    case 14:
-      // bitcast, addrspacecast -> addrspacecast
-      // addrspacecast can only fold through a bitcast if the source was already
-      // a pointer. A byte-to-pointer bitcast must stay as a separate bitcast.
-      if (!SrcTy->isPtrOrPtrVectorTy())
-        return 0;
+    return Instruction::BitCast;
+  }
+  case 12:
+    // addrspacecast, addrspacecast -> bitcast,       if SrcAS == DstAS
+    // addrspacecast, addrspacecast -> addrspacecast, if SrcAS != DstAS
+    if (SrcTy->getPointerAddressSpace() != DstTy->getPointerAddressSpace())
       return Instruction::AddrSpaceCast;
-    case 15:
-      // FIXME: this state can be merged with (1), but the following assert
-      // is useful to check the correcteness of the sequence due to semantic
-      // change of bitcast.
-      assert(
-        SrcTy->isIntOrIntVectorTy() &&
-        MidTy->isPtrOrPtrVectorTy() &&
-        DstTy->isPtrOrPtrVectorTy() &&
-        MidTy->getPointerAddressSpace() == DstTy->getPointerAddressSpace() &&
-        "Illegal inttoptr, bitcast sequence!");
-      // Allowed, use first cast's opcode
-      return firstOp;
-    case 16:
-      // FIXME: this state can be merged with (2), but the following assert
-      // is useful to check the correcteness of the sequence due to semantic
-      // change of bitcast.
-      assert(
-        SrcTy->isPtrOrPtrVectorTy() &&
-        MidTy->isPtrOrPtrVectorTy() &&
-        DstTy->isIntOrIntVectorTy() &&
-        SrcTy->getPointerAddressSpace() == MidTy->getPointerAddressSpace() &&
-        "Illegal bitcast, ptrtoint sequence!");
-      // Allowed, use second cast's opcode
-      return secondOp;
-    case 17:
-      // (sitofp (zext x)) -> (uitofp x)
-      return Instruction::UIToFP;
-    case 99:
-      // Cast combination can't happen (error in input). This is for all cases
-      // where the MidTy is not the same for the two cast instructions.
-      llvm_unreachable("Invalid Cast Combination");
-    default:
-      llvm_unreachable("Error in CastResults table!!!");
+    return Instruction::BitCast;
+  case 13:
+    // FIXME: this state can be merged with (1), but the following assert
+    // is useful to check the correcteness of the sequence due to semantic
+    // change of bitcast.
+    // addrspacecast can only fold through a bitcast if the result remains a
+    // pointer. A pointer-to-byte bitcast must stay as a separate bitcast.
+    if (!DstTy->isPtrOrPtrVectorTy())
+      return 0;
+    assert(SrcTy->isPtrOrPtrVectorTy() && MidTy->isPtrOrPtrVectorTy() &&
+           DstTy->isPtrOrPtrVectorTy() &&
+           SrcTy->getPointerAddressSpace() != MidTy->getPointerAddressSpace() &&
+           MidTy->getPointerAddressSpace() == DstTy->getPointerAddressSpace() &&
+           "Illegal addrspacecast, bitcast sequence!");
+    // Allowed, use first cast's opcode
+    return firstOp;
+  case 14:
+    // bitcast, addrspacecast -> addrspacecast
+    // addrspacecast can only fold through a bitcast if the source was already
+    // a pointer. A byte-to-pointer bitcast must stay as a separate bitcast.
+    if (!SrcTy->isPtrOrPtrVectorTy())
+      return 0;
+    return Instruction::AddrSpaceCast;
+  case 15:
+    // FIXME: this state can be merged with (1), but the following assert
+    // is useful to check the correcteness of the sequence due to semantic
+    // change of bitcast.
+    assert(SrcTy->isIntOrIntVectorTy() && MidTy->isPtrOrPtrVectorTy() &&
+           DstTy->isPtrOrPtrVectorTy() &&
+           MidTy->getPointerAddressSpace() == DstTy->getPointerAddressSpace() &&
+           "Illegal inttoptr, bitcast sequence!");
+    // Allowed, use first cast's opcode
+    return firstOp;
+  case 16:
+    // FIXME: this state can be merged with (2), but the following assert
+    // is useful to check the correcteness of the sequence due to semantic
+    // change of bitcast.
+    assert(SrcTy->isPtrOrPtrVectorTy() && MidTy->isPtrOrPtrVectorTy() &&
+           DstTy->isIntOrIntVectorTy() &&
+           SrcTy->getPointerAddressSpace() == MidTy->getPointerAddressSpace() &&
+           "Illegal bitcast, ptrtoint sequence!");
+    // Allowed, use second cast's opcode
+    return secondOp;
+  case 17:
+    // (sitofp (zext x)) -> (uitofp x)
+    return Instruction::UIToFP;
+  case 99:
+    // Cast combination can't happen (error in input). This is for all cases
+    // where the MidTy is not the same for the two cast instructions.
+    llvm_unreachable("Invalid Cast Combination");
+  default:
+    llvm_unreachable("Error in CastResults table!!!");
   }
 }
 
@@ -3114,18 +3117,30 @@ CastInst *CastInst::Create(Instruction::CastOps op, Value *S, Type *Ty,
   assert(castIsValid(op, S, Ty) && "Invalid cast!");
   // Construct and return the appropriate CastInst subclass
   switch (op) {
-  case Trunc:         return new TruncInst         (S, Ty, Name, InsertBefore);
-  case ZExt:          return new ZExtInst          (S, Ty, Name, InsertBefore);
-  case SExt:          return new SExtInst          (S, Ty, Name, InsertBefore);
-  case FPTrunc:       return new FPTruncInst       (S, Ty, Name, InsertBefore);
-  case FPExt:         return new FPExtInst         (S, Ty, Name, InsertBefore);
-  case UIToFP:        return new UIToFPInst        (S, Ty, Name, InsertBefore);
-  case SIToFP:        return new SIToFPInst        (S, Ty, Name, InsertBefore);
-  case FPToUI:        return new FPToUIInst        (S, Ty, Name, InsertBefore);
-  case FPToSI:        return new FPToSIInst        (S, Ty, Name, InsertBefore);
-  case PtrToAddr:     return new PtrToAddrInst     (S, Ty, Name, InsertBefore);
-  case PtrToInt:      return new PtrToIntInst      (S, Ty, Name, InsertBefore);
-  case IntToPtr:      return new IntToPtrInst      (S, Ty, Name, InsertBefore);
+  case Trunc:
+    return new TruncInst(S, Ty, Name, InsertBefore);
+  case ZExt:
+    return new ZExtInst(S, Ty, Name, InsertBefore);
+  case SExt:
+    return new SExtInst(S, Ty, Name, InsertBefore);
+  case FPTrunc:
+    return new FPTruncInst(S, Ty, Name, InsertBefore);
+  case FPExt:
+    return new FPExtInst(S, Ty, Name, InsertBefore);
+  case UIToFP:
+    return new UIToFPInst(S, Ty, Name, InsertBefore);
+  case SIToFP:
+    return new SIToFPInst(S, Ty, Name, InsertBefore);
+  case FPToUI:
+    return new FPToUIInst(S, Ty, Name, InsertBefore);
+  case FPToSI:
+    return new FPToSIInst(S, Ty, Name, InsertBefore);
+  case PtrToAddr:
+    return new PtrToAddrInst(S, Ty, Name, InsertBefore);
+  case PtrToInt:
+    return new PtrToIntInst(S, Ty, Name, InsertBefore);
+  case IntToPtr:
+    return new IntToPtrInst(S, Ty, Name, InsertBefore);
   case BitCast:
     return new BitCastInst(S, Ty, Name, InsertBefore);
   case AddrSpaceCast:
@@ -3204,9 +3219,11 @@ CastInst *CastInst::CreateIntegerCast(Value *C, Type *Ty, bool isSigned,
   unsigned SrcBits = C->getType()->getScalarSizeInBits();
   unsigned DstBits = Ty->getScalarSizeInBits();
   Instruction::CastOps opcode =
-    (SrcBits == DstBits ? Instruction::BitCast :
-     (SrcBits > DstBits ? Instruction::Trunc :
-      (isSigned ? Instruction::SExt : Instruction::ZExt)));
+      (SrcBits == DstBits
+           ? Instruction::BitCast
+           : (SrcBits > DstBits
+                  ? Instruction::Trunc
+                  : (isSigned ? Instruction::SExt : Instruction::ZExt)));
   return Create(opcode, C, Ty, Name, InsertBefore);
 }
 
@@ -3218,8 +3235,9 @@ CastInst *CastInst::CreateFPCast(Value *C, Type *Ty, const Twine &Name,
   unsigned DstBits = Ty->getScalarSizeInBits();
   assert((C->getType() == Ty || SrcBits != DstBits) && "Invalid cast");
   Instruction::CastOps opcode =
-    (SrcBits == DstBits ? Instruction::BitCast :
-     (SrcBits > DstBits ? Instruction::FPTrunc : Instruction::FPExt));
+      (SrcBits == DstBits
+           ? Instruction::BitCast
+           : (SrcBits > DstBits ? Instruction::FPTrunc : Instruction::FPExt));
   return Create(opcode, C, Ty, Name, InsertBefore);
 }
 
@@ -3281,9 +3299,8 @@ bool CastInst::isBitOrNoopPointerCastable(Type *SrcTy, Type *DestTy,
 //   castIsValid( getCastOpcode(Val, Ty), Val, Ty)
 // should not assert in castIsValid. In other words, this produces a "correct"
 // casting opcode for the arguments passed to it.
-Instruction::CastOps
-CastInst::getCastOpcode(
-  const Value *Src, bool SrcIsSigned, Type *DestTy, bool DestIsSigned) {
+Instruction::CastOps CastInst::getCastOpcode(const Value *Src, bool SrcIsSigned,
+                                             Type *DestTy, bool DestIsSigned) {
   Type *SrcTy = Src->getType();
 
   assert(SrcTy->isFirstClassType() && DestTy->isFirstClassType() &&
@@ -3320,50 +3337,50 @@ CastInst::getCastOpcode(
       return BitCast;
     }
     llvm_unreachable("Illegal cast to byte type");
-  } else if (DestTy->isIntegerTy()) {               // Casting to integral
-    if (SrcTy->isIntegerTy()) {                     // Casting from integral
+  } else if (DestTy->isIntegerTy()) { // Casting to integral
+    if (SrcTy->isIntegerTy()) {       // Casting from integral
       if (DestBits < SrcBits)
-        return Trunc;                               // int -> smaller int
-      else if (DestBits > SrcBits) {                // its an extension
+        return Trunc;                // int -> smaller int
+      else if (DestBits > SrcBits) { // its an extension
         if (SrcIsSigned)
-          return SExt;                              // signed -> SEXT
+          return SExt; // signed -> SEXT
         else
-          return ZExt;                              // unsigned -> ZEXT
+          return ZExt; // unsigned -> ZEXT
       } else {
-        return BitCast;                             // Same size, No-op cast
+        return BitCast; // Same size, No-op cast
       }
-    } else if (SrcTy->isFloatingPointTy()) {        // Casting from floating pt
+    } else if (SrcTy->isFloatingPointTy()) { // Casting from floating pt
       if (DestIsSigned)
-        return FPToSI;                              // FP -> sint
+        return FPToSI; // FP -> sint
       else
-        return FPToUI;                              // FP -> uint
+        return FPToUI; // FP -> uint
     } else if (SrcTy->isVectorTy()) {
       assert(DestBits == SrcBits &&
              "Casting vector to integer of different width");
-      return BitCast;                             // Same size, no-op cast
+      return BitCast; // Same size, no-op cast
     } else {
       assert(SrcTy->isPointerTy() &&
              "Casting from a value that is not first-class type");
-      return PtrToInt;                              // ptr -> int
+      return PtrToInt; // ptr -> int
     }
-  } else if (DestTy->isFloatingPointTy()) {         // Casting to floating pt
-    if (SrcTy->isIntegerTy()) {                     // Casting from integral
+  } else if (DestTy->isFloatingPointTy()) { // Casting to floating pt
+    if (SrcTy->isIntegerTy()) {             // Casting from integral
       if (SrcIsSigned)
-        return SIToFP;                              // sint -> FP
+        return SIToFP; // sint -> FP
       else
-        return UIToFP;                              // uint -> FP
-    } else if (SrcTy->isFloatingPointTy()) {        // Casting from floating pt
+        return UIToFP;                       // uint -> FP
+    } else if (SrcTy->isFloatingPointTy()) { // Casting from floating pt
       if (DestBits < SrcBits) {
-        return FPTrunc;                             // FP -> smaller FP
+        return FPTrunc; // FP -> smaller FP
       } else if (DestBits > SrcBits) {
-        return FPExt;                               // FP -> larger FP
-      } else  {
-        return BitCast;                             // same size, no-op cast
+        return FPExt; // FP -> larger FP
+      } else {
+        return BitCast; // same size, no-op cast
       }
     } else if (SrcTy->isVectorTy()) {
       assert(DestBits == SrcBits &&
              "Casting vector to floating point of different width");
-      return BitCast;                             // same size, no-op cast
+      return BitCast; // same size, no-op cast
     }
     llvm_unreachable("Casting pointer or non-first class to float");
   } else if (DestTy->isVectorTy()) {
@@ -3374,9 +3391,9 @@ CastInst::getCastOpcode(
     if (SrcTy->isPointerTy()) {
       if (DestTy->getPointerAddressSpace() != SrcTy->getPointerAddressSpace())
         return AddrSpaceCast;
-      return BitCast;                               // ptr -> ptr
+      return BitCast; // ptr -> ptr
     } else if (SrcTy->isIntegerTy()) {
-      return IntToPtr;                              // int -> ptr
+      return IntToPtr; // int -> ptr
     }
     llvm_unreachable("Casting pointer to other than pointer or int");
   }
@@ -3391,8 +3408,7 @@ CastInst::getCastOpcode(
 /// could be broken out into the separate constructors but it is useful to have
 /// it in one place and to eliminate the redundant code for getting the sizes
 /// of the types involved.
-bool
-CastInst::castIsValid(Instruction::CastOps op, Type *SrcTy, Type *DstTy) {
+bool CastInst::castIsValid(Instruction::CastOps op, Type *SrcTy, Type *DstTy) {
   if (!SrcTy->isFirstClassType() || !DstTy->isFirstClassType() ||
       SrcTy->isAggregateType() || DstTy->isAggregateType())
     return false;
@@ -3414,7 +3430,8 @@ CastInst::castIsValid(Instruction::CastOps op, Type *SrcTy, Type *DstTy) {
 
   // Switch on the opcode provided
   switch (op) {
-  default: return false; // This is an input error
+  default:
+    return false; // This is an input error
   case Instruction::Trunc:
     return SrcTy->isIntOrIntVectorTy() && DstTy->isIntOrIntVectorTy() &&
            SrcEC == DstEC && SrcScalarBitSize > DstScalarBitSize;
@@ -3596,19 +3613,17 @@ CmpInst *CmpInst::Create(OtherOps Op, Predicate predicate, Value *S1, Value *S2,
                          const Twine &Name, InsertPosition InsertBefore) {
   if (Op == Instruction::ICmp) {
     if (InsertBefore.isValid())
-      return new ICmpInst(InsertBefore, CmpInst::Predicate(predicate),
-                          S1, S2, Name);
+      return new ICmpInst(InsertBefore, CmpInst::Predicate(predicate), S1, S2,
+                          Name);
     else
-      return new ICmpInst(CmpInst::Predicate(predicate),
-                          S1, S2, Name);
+      return new ICmpInst(CmpInst::Predicate(predicate), S1, S2, Name);
   }
 
   if (InsertBefore.isValid())
-    return new FCmpInst(InsertBefore, CmpInst::Predicate(predicate),
-                        S1, S2, Name);
+    return new FCmpInst(InsertBefore, CmpInst::Predicate(predicate), S1, S2,
+                        Name);
   else
-    return new FCmpInst(CmpInst::Predicate(predicate),
-                        S1, S2, Name);
+    return new FCmpInst(CmpInst::Predicate(predicate), S1, S2, Name);
 }
 
 CmpInst *CmpInst::CreateWithCopiedFlags(OtherOps Op, Predicate Pred, Value *S1,
@@ -3674,66 +3689,120 @@ bool CmpInst::isEquivalence(bool Invert) const {
 
 CmpInst::Predicate CmpInst::getInversePredicate(Predicate pred) {
   switch (pred) {
-    default: llvm_unreachable("Unknown cmp predicate!");
-    case ICMP_EQ: return ICMP_NE;
-    case ICMP_NE: return ICMP_EQ;
-    case ICMP_UGT: return ICMP_ULE;
-    case ICMP_ULT: return ICMP_UGE;
-    case ICMP_UGE: return ICMP_ULT;
-    case ICMP_ULE: return ICMP_UGT;
-    case ICMP_SGT: return ICMP_SLE;
-    case ICMP_SLT: return ICMP_SGE;
-    case ICMP_SGE: return ICMP_SLT;
-    case ICMP_SLE: return ICMP_SGT;
+  default:
+    llvm_unreachable("Unknown cmp predicate!");
+  case ICMP_EQ:
+    return ICMP_NE;
+  case ICMP_NE:
+    return ICMP_EQ;
+  case ICMP_UGT:
+    return ICMP_ULE;
+  case ICMP_ULT:
+    return ICMP_UGE;
+  case ICMP_UGE:
+    return ICMP_ULT;
+  case ICMP_ULE:
+    return ICMP_UGT;
+  case ICMP_SGT:
+    return ICMP_SLE;
+  case ICMP_SLT:
+    return ICMP_SGE;
+  case ICMP_SGE:
+    return ICMP_SLT;
+  case ICMP_SLE:
+    return ICMP_SGT;
 
-    case FCMP_OEQ: return FCMP_UNE;
-    case FCMP_ONE: return FCMP_UEQ;
-    case FCMP_OGT: return FCMP_ULE;
-    case FCMP_OLT: return FCMP_UGE;
-    case FCMP_OGE: return FCMP_ULT;
-    case FCMP_OLE: return FCMP_UGT;
-    case FCMP_UEQ: return FCMP_ONE;
-    case FCMP_UNE: return FCMP_OEQ;
-    case FCMP_UGT: return FCMP_OLE;
-    case FCMP_ULT: return FCMP_OGE;
-    case FCMP_UGE: return FCMP_OLT;
-    case FCMP_ULE: return FCMP_OGT;
-    case FCMP_ORD: return FCMP_UNO;
-    case FCMP_UNO: return FCMP_ORD;
-    case FCMP_TRUE: return FCMP_FALSE;
-    case FCMP_FALSE: return FCMP_TRUE;
+  case FCMP_OEQ:
+    return FCMP_UNE;
+  case FCMP_ONE:
+    return FCMP_UEQ;
+  case FCMP_OGT:
+    return FCMP_ULE;
+  case FCMP_OLT:
+    return FCMP_UGE;
+  case FCMP_OGE:
+    return FCMP_ULT;
+  case FCMP_OLE:
+    return FCMP_UGT;
+  case FCMP_UEQ:
+    return FCMP_ONE;
+  case FCMP_UNE:
+    return FCMP_OEQ;
+  case FCMP_UGT:
+    return FCMP_OLE;
+  case FCMP_ULT:
+    return FCMP_OGE;
+  case FCMP_UGE:
+    return FCMP_OLT;
+  case FCMP_ULE:
+    return FCMP_OGT;
+  case FCMP_ORD:
+    return FCMP_UNO;
+  case FCMP_UNO:
+    return FCMP_ORD;
+  case FCMP_TRUE:
+    return FCMP_FALSE;
+  case FCMP_FALSE:
+    return FCMP_TRUE;
   }
 }
 
 StringRef CmpInst::getPredicateName(Predicate Pred) {
   switch (Pred) {
-  default:                   return "unknown";
-  case FCmpInst::FCMP_FALSE: return "false";
-  case FCmpInst::FCMP_OEQ:   return "oeq";
-  case FCmpInst::FCMP_OGT:   return "ogt";
-  case FCmpInst::FCMP_OGE:   return "oge";
-  case FCmpInst::FCMP_OLT:   return "olt";
-  case FCmpInst::FCMP_OLE:   return "ole";
-  case FCmpInst::FCMP_ONE:   return "one";
-  case FCmpInst::FCMP_ORD:   return "ord";
-  case FCmpInst::FCMP_UNO:   return "uno";
-  case FCmpInst::FCMP_UEQ:   return "ueq";
-  case FCmpInst::FCMP_UGT:   return "ugt";
-  case FCmpInst::FCMP_UGE:   return "uge";
-  case FCmpInst::FCMP_ULT:   return "ult";
-  case FCmpInst::FCMP_ULE:   return "ule";
-  case FCmpInst::FCMP_UNE:   return "une";
-  case FCmpInst::FCMP_TRUE:  return "true";
-  case ICmpInst::ICMP_EQ:    return "eq";
-  case ICmpInst::ICMP_NE:    return "ne";
-  case ICmpInst::ICMP_SGT:   return "sgt";
-  case ICmpInst::ICMP_SGE:   return "sge";
-  case ICmpInst::ICMP_SLT:   return "slt";
-  case ICmpInst::ICMP_SLE:   return "sle";
-  case ICmpInst::ICMP_UGT:   return "ugt";
-  case ICmpInst::ICMP_UGE:   return "uge";
-  case ICmpInst::ICMP_ULT:   return "ult";
-  case ICmpInst::ICMP_ULE:   return "ule";
+  default:
+    return "unknown";
+  case FCmpInst::FCMP_FALSE:
+    return "false";
+  case FCmpInst::FCMP_OEQ:
+    return "oeq";
+  case FCmpInst::FCMP_OGT:
+    return "ogt";
+  case FCmpInst::FCMP_OGE:
+    return "oge";
+  case FCmpInst::FCMP_OLT:
+    return "olt";
+  case FCmpInst::FCMP_OLE:
+    return "ole";
+  case FCmpInst::FCMP_ONE:
+    return "one";
+  case FCmpInst::FCMP_ORD:
+    return "ord";
+  case FCmpInst::FCMP_UNO:
+    return "uno";
+  case FCmpInst::FCMP_UEQ:
+    return "ueq";
+  case FCmpInst::FCMP_UGT:
+    return "ugt";
+  case FCmpInst::FCMP_UGE:
+    return "uge";
+  case FCmpInst::FCMP_ULT:
+    return "ult";
+  case FCmpInst::FCMP_ULE:
+    return "ule";
+  case FCmpInst::FCMP_UNE:
+    return "une";
+  case FCmpInst::FCMP_TRUE:
+    return "true";
+  case ICmpInst::ICMP_EQ:
+    return "eq";
+  case ICmpInst::ICMP_NE:
+    return "ne";
+  case ICmpInst::ICMP_SGT:
+    return "sgt";
+  case ICmpInst::ICMP_SGE:
+    return "sge";
+  case ICmpInst::ICMP_SLT:
+    return "slt";
+  case ICmpInst::ICMP_SLE:
+    return "sle";
+  case ICmpInst::ICMP_UGT:
+    return "ugt";
+  case ICmpInst::ICMP_UGE:
+    return "uge";
+  case ICmpInst::ICMP_ULT:
+    return "ult";
+  case ICmpInst::ICMP_ULE:
+    return "ule";
   }
 }
 
@@ -3744,57 +3813,97 @@ raw_ostream &llvm::operator<<(raw_ostream &OS, CmpInst::Predicate Pred) {
 
 ICmpInst::Predicate ICmpInst::getSignedPredicate(Predicate pred) {
   switch (pred) {
-    default: llvm_unreachable("Unknown icmp predicate!");
-    case ICMP_EQ: case ICMP_NE:
-    case ICMP_SGT: case ICMP_SLT: case ICMP_SGE: case ICMP_SLE:
-       return pred;
-    case ICMP_UGT: return ICMP_SGT;
-    case ICMP_ULT: return ICMP_SLT;
-    case ICMP_UGE: return ICMP_SGE;
-    case ICMP_ULE: return ICMP_SLE;
+  default:
+    llvm_unreachable("Unknown icmp predicate!");
+  case ICMP_EQ:
+  case ICMP_NE:
+  case ICMP_SGT:
+  case ICMP_SLT:
+  case ICMP_SGE:
+  case ICMP_SLE:
+    return pred;
+  case ICMP_UGT:
+    return ICMP_SGT;
+  case ICMP_ULT:
+    return ICMP_SLT;
+  case ICMP_UGE:
+    return ICMP_SGE;
+  case ICMP_ULE:
+    return ICMP_SLE;
   }
 }
 
 ICmpInst::Predicate ICmpInst::getUnsignedPredicate(Predicate pred) {
   switch (pred) {
-    default: llvm_unreachable("Unknown icmp predicate!");
-    case ICMP_EQ: case ICMP_NE:
-    case ICMP_UGT: case ICMP_ULT: case ICMP_UGE: case ICMP_ULE:
-       return pred;
-    case ICMP_SGT: return ICMP_UGT;
-    case ICMP_SLT: return ICMP_ULT;
-    case ICMP_SGE: return ICMP_UGE;
-    case ICMP_SLE: return ICMP_ULE;
+  default:
+    llvm_unreachable("Unknown icmp predicate!");
+  case ICMP_EQ:
+  case ICMP_NE:
+  case ICMP_UGT:
+  case ICMP_ULT:
+  case ICMP_UGE:
+  case ICMP_ULE:
+    return pred;
+  case ICMP_SGT:
+    return ICMP_UGT;
+  case ICMP_SLT:
+    return ICMP_ULT;
+  case ICMP_SGE:
+    return ICMP_UGE;
+  case ICMP_SLE:
+    return ICMP_ULE;
   }
 }
 
 CmpInst::Predicate CmpInst::getSwappedPredicate(Predicate pred) {
   switch (pred) {
-    default: llvm_unreachable("Unknown cmp predicate!");
-    case ICMP_EQ: case ICMP_NE:
-      return pred;
-    case ICMP_SGT: return ICMP_SLT;
-    case ICMP_SLT: return ICMP_SGT;
-    case ICMP_SGE: return ICMP_SLE;
-    case ICMP_SLE: return ICMP_SGE;
-    case ICMP_UGT: return ICMP_ULT;
-    case ICMP_ULT: return ICMP_UGT;
-    case ICMP_UGE: return ICMP_ULE;
-    case ICMP_ULE: return ICMP_UGE;
+  default:
+    llvm_unreachable("Unknown cmp predicate!");
+  case ICMP_EQ:
+  case ICMP_NE:
+    return pred;
+  case ICMP_SGT:
+    return ICMP_SLT;
+  case ICMP_SLT:
+    return ICMP_SGT;
+  case ICMP_SGE:
+    return ICMP_SLE;
+  case ICMP_SLE:
+    return ICMP_SGE;
+  case ICMP_UGT:
+    return ICMP_ULT;
+  case ICMP_ULT:
+    return ICMP_UGT;
+  case ICMP_UGE:
+    return ICMP_ULE;
+  case ICMP_ULE:
+    return ICMP_UGE;
 
-    case FCMP_FALSE: case FCMP_TRUE:
-    case FCMP_OEQ: case FCMP_ONE:
-    case FCMP_UEQ: case FCMP_UNE:
-    case FCMP_ORD: case FCMP_UNO:
-      return pred;
-    case FCMP_OGT: return FCMP_OLT;
-    case FCMP_OLT: return FCMP_OGT;
-    case FCMP_OGE: return FCMP_OLE;
-    case FCMP_OLE: return FCMP_OGE;
-    case FCMP_UGT: return FCMP_ULT;
-    case FCMP_ULT: return FCMP_UGT;
-    case FCMP_UGE: return FCMP_ULE;
-    case FCMP_ULE: return FCMP_UGE;
+  case FCMP_FALSE:
+  case FCMP_TRUE:
+  case FCMP_OEQ:
+  case FCMP_ONE:
+  case FCMP_UEQ:
+  case FCMP_UNE:
+  case FCMP_ORD:
+  case FCMP_UNO:
+    return pred;
+  case FCMP_OGT:
+    return FCMP_OLT;
+  case FCMP_OLT:
+    return FCMP_OGT;
+  case FCMP_OGE:
+    return FCMP_OLE;
+  case FCMP_OLE:
+    return FCMP_OGE;
+  case FCMP_UGT:
+    return FCMP_ULT;
+  case FCMP_ULT:
+    return FCMP_UGT;
+  case FCMP_UGE:
+    return FCMP_ULE;
+  case FCMP_ULE:
+    return FCMP_UGE;
   }
 }
 
@@ -3999,35 +4108,65 @@ CmpInst::Predicate ICmpInst::getFlippedSignednessPredicate(Predicate pred) {
 
 bool CmpInst::isOrdered(Predicate predicate) {
   switch (predicate) {
-    default: return false;
-    case FCmpInst::FCMP_OEQ: case FCmpInst::FCMP_ONE: case FCmpInst::FCMP_OGT:
-    case FCmpInst::FCMP_OLT: case FCmpInst::FCMP_OGE: case FCmpInst::FCMP_OLE:
-    case FCmpInst::FCMP_ORD: return true;
+  default:
+    return false;
+  case FCmpInst::FCMP_OEQ:
+  case FCmpInst::FCMP_ONE:
+  case FCmpInst::FCMP_OGT:
+  case FCmpInst::FCMP_OLT:
+  case FCmpInst::FCMP_OGE:
+  case FCmpInst::FCMP_OLE:
+  case FCmpInst::FCMP_ORD:
+    return true;
   }
 }
 
 bool CmpInst::isUnordered(Predicate predicate) {
   switch (predicate) {
-    default: return false;
-    case FCmpInst::FCMP_UEQ: case FCmpInst::FCMP_UNE: case FCmpInst::FCMP_UGT:
-    case FCmpInst::FCMP_ULT: case FCmpInst::FCMP_UGE: case FCmpInst::FCMP_ULE:
-    case FCmpInst::FCMP_UNO: return true;
+  default:
+    return false;
+  case FCmpInst::FCMP_UEQ:
+  case FCmpInst::FCMP_UNE:
+  case FCmpInst::FCMP_UGT:
+  case FCmpInst::FCMP_ULT:
+  case FCmpInst::FCMP_UGE:
+  case FCmpInst::FCMP_ULE:
+  case FCmpInst::FCMP_UNO:
+    return true;
   }
 }
 
 bool CmpInst::isTrueWhenEqual(Predicate predicate) {
-  switch(predicate) {
-    default: return false;
-    case ICMP_EQ:   case ICMP_UGE: case ICMP_ULE: case ICMP_SGE: case ICMP_SLE:
-    case FCMP_TRUE: case FCMP_UEQ: case FCMP_UGE: case FCMP_ULE: return true;
+  switch (predicate) {
+  default:
+    return false;
+  case ICMP_EQ:
+  case ICMP_UGE:
+  case ICMP_ULE:
+  case ICMP_SGE:
+  case ICMP_SLE:
+  case FCMP_TRUE:
+  case FCMP_UEQ:
+  case FCMP_UGE:
+  case FCMP_ULE:
+    return true;
   }
 }
 
 bool CmpInst::isFalseWhenEqual(Predicate predicate) {
-  switch(predicate) {
-  case ICMP_NE:    case ICMP_UGT: case ICMP_ULT: case ICMP_SGT: case ICMP_SLT:
-  case FCMP_FALSE: case FCMP_ONE: case FCMP_OGT: case FCMP_OLT: return true;
-  default: return false;
+  switch (predicate) {
+  case ICMP_NE:
+  case ICMP_UGT:
+  case ICMP_ULT:
+  case ICMP_SGT:
+  case ICMP_SLT:
+  case FCMP_FALSE:
+  case FCMP_ONE:
+  case FCMP_OGT:
+  case FCMP_OLT:
+    return true;
+  default:
+    return false;
   }
 }
 
@@ -4163,7 +4302,7 @@ void SwitchInst::addCase(ConstantInt *OnVal, BasicBlock *Dest) {
   unsigned NewCaseIdx = getNumCases();
   unsigned OpNo = getNumOperands();
   if (OpNo + 1 > ReservedSpace)
-    growOperands();  // Get more space!
+    growOperands(); // Get more space!
   // Initialize some new operands.
   assert(OpNo < ReservedSpace && "Growing didn't work!");
   setNumHungOffUseOperands(OpNo + 1);
@@ -4202,7 +4341,7 @@ SwitchInst::CaseIt SwitchInst::removeCase(CaseIt I) {
 ///
 void SwitchInst::growOperands() {
   unsigned e = getNumOperands();
-  unsigned NumOps = e*3;
+  unsigned NumOps = e * 3;
 
   ReservedSpace = NumOps;
   growHungoffUses(ReservedSpace, /*WithExtraValues=*/true);
@@ -4326,13 +4465,12 @@ void IndirectBrInst::init(Value *Address, unsigned NumDests) {
   Op<0>() = Address;
 }
 
-
 /// growOperands - grow operands - This grows the operand list in response
 /// to a push_back style of operation.  This grows the number of ops by 2 times.
 ///
 void IndirectBrInst::growOperands() {
   unsigned e = getNumOperands();
-  unsigned NumOps = e*2;
+  unsigned NumOps = e * 2;
 
   ReservedSpace = NumOps;
   growHungoffUses(ReservedSpace);
@@ -4361,28 +4499,28 @@ IndirectBrInst::IndirectBrInst(const IndirectBrInst &IBI)
 ///
 void IndirectBrInst::addDestination(BasicBlock *DestBB) {
   unsigned OpNo = getNumOperands();
-  if (OpNo+1 > ReservedSpace)
-    growOperands();  // Get more space!
+  if (OpNo + 1 > ReservedSpace)
+    growOperands(); // Get more space!
   // Initialize some new operands.
   assert(OpNo < ReservedSpace && "Growing didn't work!");
-  setNumHungOffUseOperands(OpNo+1);
+  setNumHungOffUseOperands(OpNo + 1);
   getOperandList()[OpNo] = DestBB;
 }
 
 /// removeDestination - This method removes the specified successor from the
 /// indirectbr instruction.
 void IndirectBrInst::removeDestination(unsigned idx) {
-  assert(idx < getNumOperands()-1 && "Successor index out of range!");
+  assert(idx < getNumOperands() - 1 && "Successor index out of range!");
 
   unsigned NumOps = getNumOperands();
   Use *OL = getOperandList();
 
   // Replace this value with the last one.
-  OL[idx+1] = OL[NumOps-1];
+  OL[idx + 1] = OL[NumOps - 1];
 
   // Nuke the last value.
-  OL[NumOps-1].set(nullptr);
-  setNumHungOffUseOperands(NumOps-1);
+  OL[NumOps - 1].set(nullptr);
+  setNumHungOffUseOperands(NumOps - 1);
 }
 
 //===----------------------------------------------------------------------===//

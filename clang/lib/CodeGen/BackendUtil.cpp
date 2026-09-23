@@ -45,7 +45,7 @@
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Object/OffloadBinary.h"
 #include "llvm/Passes/PassBuilder.h"
-#include "llvm/Passes/PassesOptionsOptInfos.h"
+#include "llvm/Passes/PassesOptions.h"
 #include "llvm/Passes/RunCodeGen.h"
 #include "llvm/Passes/StandardInstrumentations.h"
 #include "llvm/Plugins/PassPlugin.h"
@@ -887,7 +887,8 @@ void EmitAssemblyHelper::RunOptimizationPipeline(
       CodeGenOpts.VerifyEach, PrintPassOpts);
   SI.registerCallbacks(PIC, &MAM);
   PassBuilder PB(TheModule->getContext().getOptionsContext(), TM.get(), PTO,
-                 PGOOpt, &PIC, CI.getVirtualFileSystemPtr());
+                 PGOOpt, &PIC, CI.getVirtualFileSystemPtr(),
+                 &TheModule->getContext());
 
   // Handle the assignment tracking feature options.
   switch (CodeGenOpts.getAssignmentTrackingMode()) {
@@ -1164,10 +1165,10 @@ void EmitAssemblyHelper::RunOptimizationPipeline(
   // This should be done for both clang and flang simultaneously.
   // Print a textual, '-passes=' compatible, representation of pipeline if
   // requested.
-  bool DoPrintPipeline = false;
-  if (auto *O = llvm::clv2::getView<&llvm::clv2::PassesOptsReg>(
-          TheModule->getContext().getOptionsContext()))
-    DoPrintPipeline = O->specified<&llvm::clv2::PAS_PrintPipelinePasses>();
+  bool DoPrintPipeline =
+      TheModule->getContext()
+          .getOptions<llvm::PassesOptions>()
+          .PAS_PrintPipelinePasses.has_value();
   if (DoPrintPipeline) {
     MPM.printPipeline(outs(), [&PIC](StringRef ClassName) {
       auto PassName = PIC.getPassNameForClassName(ClassName);
@@ -1216,10 +1217,10 @@ void EmitAssemblyHelper::RunCodegenPipeline(
   }
 
   // If -print-pipeline-passes is requested, don't run the codegen pipeline.
-  bool DoPrintPipeline = false;
-  if (auto *O = llvm::clv2::getView<&llvm::clv2::PassesOptsReg>(
-          TheModule->getContext().getOptionsContext()))
-    DoPrintPipeline = O->specified<&llvm::clv2::PAS_PrintPipelinePasses>();
+  bool DoPrintPipeline =
+      TheModule->getContext()
+          .getOptions<llvm::PassesOptions>()
+          .PAS_PrintPipelinePasses.has_value();
   TimeCodegenPasses([&]() {
     Error CodeGenError = runCodeGenPipeline(
         *TM, *TheModule, *OS, DwoOS, CGFT, DoPrintPipeline,

@@ -21,14 +21,12 @@
 #include "llvm/IR/Function.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCInstBuilder.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/LoongArch/LoongArchOptionsOptInfos.h"
+#include "llvm/Target/LoongArch/LoongArchOptions.h"
 
 using namespace llvm;
 
 static bool getDisableRelocSched(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::LA_DisableRelocSched>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<LoongArchOptions>().LA_DisableRelocSched;
 }
 
 #define GET_INSTRINFO_CTOR_DTOR

@@ -126,10 +126,9 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/IPO.h"
-#include "llvm/Transforms/IPO/IPOOptionsOptInfos.h"
+#include "llvm/Transforms/IPO/IPOOptions.h"
 #include "llvm/Transforms/Utils/FunctionComparator.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 #include <algorithm>
@@ -166,18 +165,17 @@ STATISTIC(NumDoubleWeak, "Number of new functions created");
 //   when both occur within the same translation unit.
 
 static unsigned getNumFunctionsForVerificationCheck(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_NumFunctionsForVerificationCheck>(
-      M.getContext().getOptionsContext());
+  return M.getContext()
+      .getOptions<IPOOptions>()
+      .IPO_NumFunctionsForVerificationCheck;
 }
 
 static bool getMergeFunctionsPDI(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_MergeFunctionsPDI>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_MergeFunctionsPDI;
 }
 
 static bool getMergeFunctionsAliases(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_MergeFunctionsAliases>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_MergeFunctionsAliases;
 }
 
 namespace {

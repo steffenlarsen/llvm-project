@@ -12,7 +12,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/LTO/legacy/ThinLTOCodeGenerator.h"
-#include "llvm/LTO/LTOOptionsOptInfos.h"
+#include "llvm/LTO/LTOOptions.h"
 
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/Statistic.h"
@@ -55,7 +55,7 @@
 #include "llvm/TargetParser/SubtargetFeature.h"
 #include "llvm/Transforms/IPO/FunctionAttrs.h"
 #include "llvm/Transforms/IPO/FunctionImport.h"
-#include "llvm/Transforms/IPO/IPOOptionsOptInfos.h"
+#include "llvm/Transforms/IPO/IPOOptions.h"
 #include "llvm/Transforms/IPO/Internalize.h"
 #include "llvm/Transforms/IPO/WholeProgramDevirt.h"
 #include "llvm/Transforms/Utils/FunctionImportUtils.h"
@@ -72,9 +72,8 @@ using namespace ThinLTOCodeGeneratorImpl;
 #define DEBUG_TYPE "thinlto"
 
 static bool getLTODiscardValueNames(const LLVMContext &Ctx) {
-  if (auto *O = clv2::getView<&clv2::LTOOptsReg>(Ctx.getOptionsContext()))
-    if (O->specified<&clv2::LTO_DiscardValueNames>())
-      return O->get<&clv2::LTO_DiscardValueNames>();
+  if (auto V = Ctx.getOptions<LTOOptions>().LTO_DiscardValueNames)
+    return *V;
 #ifdef NDEBUG
   return true;
 #else
@@ -82,27 +81,26 @@ static bool getLTODiscardValueNames(const LLVMContext &Ctx) {
 #endif
 }
 
-static int getThreadCount(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValIfSpecified<&clv2::LTOOptsReg, &clv2::LTO_ThreadCount>(
-      Ctx, 0);
+// No LLVMContext is reachable here (only a clv2::OptionsContext, which is
+// unrelated to the new-system per-context storage LTOOptions relies on --
+// this is called to size a thread pool before any per-module LLVMContext
+// exists), so this reads the process-wide LTOOptions::Current default
+// directly instead, the same no-context fallback used by e.g.
+// CGDataOptions/BitcodeMemProfOptions.
+static int getThreadCount(const clv2::OptionsContext &) {
+  return LTOOptions::Current.LTO_ThreadCount;
 }
 
 static bool getLTORunCSIRInstr(const Module &M) {
-  return clv2::getOptValIfSpecified<&clv2::LTOOptsReg,
-                                    &clv2::LTO_CSProfileGenerate>(
-      M.getContext().getOptionsContext(), false);
+  return M.getContext().getOptions<LTOOptions>().LTO_CSProfileGenerate;
 }
 
 static std::string getLTOCSIRProfile(const Module &M) {
-  return clv2::getOptValIfSpecified<&clv2::LTOOptsReg,
-                                    &clv2::LTO_CSProfilePath>(
-      M.getContext().getOptionsContext(), std::string{});
+  return M.getContext().getOptions<LTOOptions>().LTO_CSProfilePath;
 }
 
 static std::string getSampleProfileFile(const Module &M) {
-  return clv2::getOptValIfSpecified<&clv2::IPOOptsReg,
-                                    &clv2::IPO_SampleProfileFile>(
-      M.getContext().getOptionsContext(), std::string{});
+  return M.getContext().getOptions<IPOOptions>().IPO_SampleProfileFile;
 }
 
 // Simple helper to save temporary files for debug.
@@ -285,7 +283,8 @@ static void optimizeModule(Module &TheModule, TargetMachine &TM,
   PipelineTuningOptions PTO(LocalOptsCtx);
   PTO.LoopVectorization = true;
   PTO.SLPVectorization = true;
-  PassBuilder PB(LocalOptsCtx, &TM, PTO, PGOOpt, &PIC, /*FS=*/nullptr);
+  PassBuilder PB(LocalOptsCtx, &TM, PTO, PGOOpt, &PIC, /*FS=*/nullptr,
+                 &TheModule.getContext());
 
   std::unique_ptr<TargetLibraryInfoImpl> TLII(
       new TargetLibraryInfoImpl(TM.getTargetTriple(), TM.Options.VecLib));
@@ -589,7 +588,7 @@ static void initTMBuilder(TargetMachineBuilder &TMBuilder,
 void ThinLTOCodeGenerator::addModule(StringRef Identifier, StringRef Data) {
   MemoryBufferRef Buffer(Data, Identifier);
 
-  auto InputOrError = lto::InputFile::create(Buffer, *OptsCtx);
+  auto InputOrError = lto::InputFile::create(Buffer);
   if (!InputOrError)
     report_fatal_error(Twine("ThinLTO cannot create input file: ") +
                        toString(InputOrError.takeError()));
@@ -1221,15 +1220,14 @@ void ThinLTOCodeGenerator::run() {
             std::string ThinRemarksFormat = "yaml";
             bool ThinRemarksWithHotness = false;
             std::optional<uint64_t> ThinRemarksHotnessThreshold = 0;
-            if (auto *O = clv2::getView<&clv2::LTOOptsReg>(
-                    Context.getOptionsContext())) {
-              ThinRemarksFilename = O->get<&clv2::LTO_PassRemarksOutput>();
-              ThinRemarksPasses = O->get<&clv2::LTO_PassRemarksFilter>();
-              ThinRemarksFormat = O->get<&clv2::LTO_PassRemarksFormat>();
-              ThinRemarksWithHotness =
-                  O->get<&clv2::LTO_PassRemarksWithHotness>();
-              ThinRemarksHotnessThreshold =
-                  O->get<&clv2::LTO_PassRemarksHotnessThreshold>();
+            {
+              const LTOOptions &Opts = Context.getOptions<LTOOptions>();
+              ThinRemarksFilename = Opts.LTO_PassRemarksOutput;
+              ThinRemarksPasses = Opts.LTO_PassRemarksFilter;
+              ThinRemarksFormat = Opts.LTO_PassRemarksFormat;
+              ThinRemarksWithHotness = Opts.LTO_PassRemarksWithHotness;
+              if (auto V = Opts.LTO_PassRemarksHotnessThreshold)
+                ThinRemarksHotnessThreshold = static_cast<uint64_t>(*V);
             }
             auto DiagFileOrErr = lto::setupLLVMOptimizationRemarks(
                 Context, ThinRemarksFilename, ThinRemarksPasses,

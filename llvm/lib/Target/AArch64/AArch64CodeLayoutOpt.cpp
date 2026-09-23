@@ -30,7 +30,7 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
-#include "llvm/Target/AArch64/AArch64OptionsOptInfos.h"
+#include "llvm/Target/AArch64/AArch64Options.h"
 #include <optional>
 
 using namespace llvm;
@@ -41,8 +41,8 @@ using namespace llvm;
 
 enum CodeLayoutOpt {
   None = 0,
-  CmpCsel = 1 << static_cast<int>(clv2::A64CodeLayoutOpt::CmpCsel),
-  FcmpFcsel = 1 << static_cast<int>(clv2::A64CodeLayoutOpt::FcmpFcsel),
+  CmpCsel = 1 << static_cast<int>(A64CodeLayoutOpt::CmpCsel),
+  FcmpFcsel = 1 << static_cast<int>(A64CodeLayoutOpt::FcmpFcsel),
   LLVM_MARK_AS_BITMASK_ENUM(FcmpFcsel)
 };
 
@@ -51,16 +51,25 @@ enum CodeLayoutOpt {
 /// per enumerator, matching CodeLayoutOpt; "none" occupies a bit of its own
 /// that is masked off here.
 static std::optional<CodeLayoutOpt>
-getSelectedCodeLayoutOpts(const clv2::OptionsContext &Ctx) {
-  const auto *V = clv2::getView<&clv2::AArch64OptsReg>(Ctx);
-  if (!V || !V->specified<&clv2::A64_CodeLayoutOptEnable>())
+getSelectedCodeLayoutOpts(const Function &F) {
+  const std::vector<A64CodeLayoutOpt> &Selected =
+      F.getContext().getOptions<AArch64Options>().A64_CodeLayoutOptEnable;
+  if (Selected.empty())
     return std::nullopt;
-  return static_cast<CodeLayoutOpt>(V->get<&clv2::A64_CodeLayoutOptEnable>() &
-                                    (CmpCsel | FcmpFcsel));
+  unsigned Mask = None;
+  for (A64CodeLayoutOpt Opt : Selected) {
+    if (Opt == A64CodeLayoutOpt::CmpCsel)
+      Mask |= CmpCsel;
+    else if (Opt == A64CodeLayoutOpt::FcmpFcsel)
+      Mask |= FcmpFcsel;
+  }
+  return static_cast<CodeLayoutOpt>(Mask);
 }
 
-static unsigned getFunctionAlignBytes(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::A64_CodeLayoutOptAlignFunctions>(Ctx);
+static unsigned getFunctionAlignBytes(const Function &F) {
+  return F.getContext()
+      .getOptions<AArch64Options>()
+      .A64_CodeLayoutOptAlignFunctions;
 }
 
 STATISTIC(NumFunctionsAligned,
@@ -95,7 +104,7 @@ private:
                    unsigned MaxSkipBytes = 4);
 
   bool optimizeForCodeLayout(MachineFunction &MF, CodeLayoutOpt CLO,
-                             const clv2::OptionsContext &Ctx);
+                             const Function &F);
 };
 
 } // end anonymous namespace
@@ -175,10 +184,8 @@ bool AArch64CodeLayoutOpt::runOnMachineFunction(MachineFunction &MF) {
   const auto *Subtarget = &MF.getSubtarget<AArch64Subtarget>();
   TII = Subtarget->getInstrInfo();
 
-  const clv2::OptionsContext &Ctx = F.getContext().getOptionsContext();
-
   CodeLayoutOpt CLO = None;
-  if (std::optional<CodeLayoutOpt> Selected = getSelectedCodeLayoutOpts(Ctx)) {
+  if (std::optional<CodeLayoutOpt> Selected = getSelectedCodeLayoutOpts(F)) {
     CLO = *Selected;
   } else {
     // Default: enable when the subtarget opts in via FeatureAlignCmpCSelPairs.
@@ -193,7 +200,7 @@ bool AArch64CodeLayoutOpt::runOnMachineFunction(MachineFunction &MF) {
   if (CLO == None)
     return false;
 
-  return optimizeForCodeLayout(MF, CLO, Ctx);
+  return optimizeForCodeLayout(MF, CLO, F);
 }
 
 void AArch64CodeLayoutOpt::emitP2Align(MachineInstr &MI, Align DesiredAlign,
@@ -252,8 +259,9 @@ bool AArch64CodeLayoutOpt::alignLayoutSensitivePatterns(MachineBasicBlock *MBB,
   return !Pairs.empty();
 }
 
-bool AArch64CodeLayoutOpt::optimizeForCodeLayout(
-    MachineFunction &MF, CodeLayoutOpt CLO, const clv2::OptionsContext &Ctx) {
+bool AArch64CodeLayoutOpt::optimizeForCodeLayout(MachineFunction &MF,
+                                                 CodeLayoutOpt CLO,
+                                                 const Function &F) {
   DBG("optimizeForCodeLayout: " << MF.getName() << "\n");
 
   bool Changed = false;
@@ -263,7 +271,7 @@ bool AArch64CodeLayoutOpt::optimizeForCodeLayout(
   if (!Changed)
     return false;
 
-  unsigned FuncAlignBytes = getFunctionAlignBytes(Ctx);
+  unsigned FuncAlignBytes = getFunctionAlignBytes(F);
   if (MF.getAlignment() < Align(FuncAlignBytes)) {
     MF.setAlignment(Align(FuncAlignBytes));
     ++NumFunctionsAligned;

@@ -36,6 +36,7 @@
 namespace llvm {
 
 class LibcallLoweringInfo;
+class MachineFunction;
 class MachineInstr;
 class SDep;
 class SUnit;
@@ -332,6 +333,7 @@ public:
   }
 
   void getPostRAMutations(
+      const MachineFunction &MF,
       std::vector<std::unique_ptr<ScheduleDAGMutation>> &Mutations)
       const override;
 

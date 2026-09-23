@@ -18,7 +18,7 @@
 #include "llvm/Config/llvm-config.h"
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/Function.h"
-#include "llvm/IR/IROptionsOptInfos.h"
+#include "llvm/IR/IROptions.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/PassManager.h"
@@ -28,7 +28,6 @@
 #include "llvm/Support/Error.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/GenericDomTreeConstruction.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <cassert>
@@ -39,7 +38,6 @@ class Constant;
 class Value;
 } // namespace llvm
 using namespace llvm;
-
 
 #ifdef EXPENSIVE_CHECKS
 static constexpr bool ExpensiveChecksEnabled = true;
@@ -285,7 +283,8 @@ bool DominatorTree::isReachableFromEntry(const Use &U) const {
 
   // ConstantExprs aren't really reachable from the entry block, but they
   // don't need to be treated like unreachable code either.
-  if (!I) return true;
+  if (!I)
+    return true;
 
   // PHI nodes use their operands on their incoming edges.
   if (PHINode *PN = dyn_cast<PHINode>(I))
@@ -383,9 +382,7 @@ void DominatorTreeWrapperPass::verifyAnalysis() const {
   bool DoVerifyDom = false;
   if (auto *R = DT.getRoot())
     if (auto *F = R->getParent())
-      if (auto *O = clv2::getView<&clv2::IROptsReg>(
-              F->getContext().getOptionsContext()))
-        DoVerifyDom = O->get<&clv2::IR_VerifyDomInfo>();
+      DoVerifyDom = F->getContext().getOptions<IROptions>().IR_VerifyDomInfo;
   if (DoVerifyDom)
     assert(DT.verify(DominatorTree::VerificationLevel::Full));
   else if (ExpensiveChecksEnabled)

@@ -25,9 +25,8 @@
 #include "llvm/IR/Type.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/M68k/M68kOptionsOptInfos.h"
+#include "llvm/Target/M68k/M68kOptions.h"
 
 #define GET_REGINFO_TARGET_DESC
 #include "M68kGenRegisterInfo.inc"
@@ -36,11 +35,8 @@
 
 using namespace llvm;
 
-static bool EnableBasePointer = true;
-
 static bool getEnableBasePointer(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::M68K_EnableBasePointer>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<M68kOptions>().M68K_EnableBasePointer;
 }
 
 // Pin the vtable to this file.

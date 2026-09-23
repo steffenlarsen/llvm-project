@@ -18,7 +18,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/MemoryLocation.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsMachine1.h"
 #include "llvm/CodeGen/LiveRegUnits.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
@@ -66,8 +66,8 @@
 
 using namespace llvm;
 
-static bool getPrintMiAddrs(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_PrintMiAddrs>(Ctx);
+static bool getPrintMiAddrs(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenMachine1Options>().CGPASS_PrintMiAddrs;
 }
 
 static const MachineFunction *getMFIfAvailable(const MachineInstr &MI) {
@@ -2152,8 +2152,7 @@ void MachineInstr::print(raw_ostream &OS, ModuleSlotTracker &MST,
     const Function *PrintF = nullptr;
     if (const MachineFunction *MF = getMFIfAvailable(*this))
       PrintF = &MF->getFunction();
-    if (PrintF ? getPrintMiAddrs(PrintF->getContext().getOptionsContext())
-               : false)
+    if (PrintF ? getPrintMiAddrs(PrintF->getContext()) : false)
       OS << " ; " << this;
   }
 

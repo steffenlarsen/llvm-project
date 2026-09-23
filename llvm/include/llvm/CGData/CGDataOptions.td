@@ -1,4 +1,4 @@
-//===- CGDataOptions.td - CLV2 option defs for CGData ------*- tablegen -*-===//
+//===- CGDataOptions.td - Options -*- tablegen -*-===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -6,125 +6,77 @@
 //
 //===----------------------------------------------------------------------===//
 
-include "llvm/Support/CLV2Options.td"
+include "llvm/Option/OptParser.td"
 
-def CGDataOptsReg : Registry<"llvm::cgd_opts"> {
-  // Getter bodies are compiled once, in CGDataOptionsGetters.cpp.
-  let OutOfLineGetters = 1;
-}
+def CGDataOptions : OptionsStruct<"llvm"> {}
 
 // --- CodeGenData.cpp ---
 
-def CGD_CodeGenDataGenerate : Option<
-    "codegen-data-generate",
+defm CGD_CodeGenDataGenerate : BoolField<
+    "codegen-data-generate", "false",
     "Emit CodeGen Data into custom sections",
-    "bool"> {
-  let Registry = CGDataOptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def CGD_CodeGenDataUsePath : Option<
-    "codegen-data-use-path",
+defm CGD_CodeGenDataUsePath : ValueField<
+    "codegen-data-use-path", "std::string", "",
     "File path to where .cgdata file is read",
-    "std::string"> {
-  let Registry = CGDataOptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def CGD_CodeGenDataThinLTOTwoRounds : Option<
-    "codegen-data-thinlto-two-rounds",
+defm CGD_CodeGenDataThinLTOTwoRounds : BoolField<
+    "codegen-data-thinlto-two-rounds", "false",
     "Enable two-round ThinLTO code generation",
-    "bool"> {
-  let Registry = CGDataOptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // --- CodeGenDataReader.cpp ---
 
-def CGD_IndexedCodeGenDataReadFunctionMapNames : Option<
-    "indexed-codegen-data-read-function-map-names",
+defm CGD_IndexedCodeGenDataReadFunctionMapNames : BoolField<
+    "indexed-codegen-data-read-function-map-names", "true",
     "Read function map names in indexed CodeGenData",
-    "bool"> {
-  let Registry = CGDataOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // --- StableFunctionMap.cpp ---
 
-def CGD_GlobalMergingMinMerges : Option<
-    "global-merging-min-merges",
+defm CGD_GlobalMergingMinMerges : ValueField<
+    "global-merging-min-merges", "unsigned", "2",
     "Minimum number of similar functions with the same hash required for "
     "merging.",
-    "unsigned"> {
-  let Registry = CGDataOptsReg;
-  let Default = "2";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def CGD_GlobalMergingMinInstrs : Option<
-    "global-merging-min-instrs",
+defm CGD_GlobalMergingMinInstrs : ValueField<
+    "global-merging-min-instrs", "unsigned", "1",
     "The minimum instruction count required when merging functions.",
-    "unsigned"> {
-  let Registry = CGDataOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def CGD_GlobalMergingMaxParams : Option<
-    "global-merging-max-params",
+defm CGD_GlobalMergingMaxParams : ValueField<
+    "global-merging-max-params", "unsigned", "4294967295",
     "The maximum number of parameters allowed when merging functions.",
-    "unsigned"> {
-  let Registry = CGDataOptsReg;
-  let Default = "4294967295";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def CGD_GlobalMergingSkipNoParams : Option<
-    "global-merging-skip-no-params",
+defm CGD_GlobalMergingSkipNoParams : BoolField<
+    "global-merging-skip-no-params", "true",
     "Skip merging functions with no parameters.",
-    "bool"> {
-  let Registry = CGDataOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def CGD_GlobalMergingInstOverhead : Option<
-    "global-merging-inst-overhead",
+defm CGD_GlobalMergingInstOverhead : ValueField<
+    "global-merging-inst-overhead", "double", "1.2",
     "The overhead cost associated with each instruction when lowering to "
     "machine instruction.",
-    "double"> {
-  let Registry = CGDataOptsReg;
-  let Default = "1.2";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def CGD_GlobalMergingParamOverhead : Option<
-    "global-merging-param-overhead",
+defm CGD_GlobalMergingParamOverhead : ValueField<
+    "global-merging-param-overhead", "double", "2.0",
     "The overhead cost associated with each parameter when merging "
     "functions.",
-    "double"> {
-  let Registry = CGDataOptsReg;
-  let Default = "2.0";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def CGD_GlobalMergingCallOverhead : Option<
-    "global-merging-call-overhead",
+defm CGD_GlobalMergingCallOverhead : ValueField<
+    "global-merging-call-overhead", "double", "1.0",
     "The overhead cost associated with each function call when merging "
     "functions.",
-    "double"> {
-  let Registry = CGDataOptsReg;
-  let Default = "1.0";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def CGD_GlobalMergingExtraThreshold : Option<
-    "global-merging-extra-threshold",
+defm CGD_GlobalMergingExtraThreshold : ValueField<
+    "global-merging-extra-threshold", "double", "0.0",
     "An additional cost threshold that must be exceeded for merging to be "
     "considered beneficial.",
-    "double"> {
-  let Registry = CGDataOptsReg;
-  let Default = "0.0";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;

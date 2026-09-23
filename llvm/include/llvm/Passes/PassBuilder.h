@@ -41,6 +41,7 @@ class StringRef;
 class AAManager;
 class TargetMachine;
 class ModuleSummaryIndex;
+class LLVMContext;
 
 /// Tunable parameters for passes in the default pipelines.
 class PipelineTuningOptions {
@@ -123,6 +124,14 @@ class PassBuilder {
   std::optional<PGOOptions> PGOOpt;
   PassInstrumentationCallbacks *PIC;
   IntrusiveRefCntPtr<vfs::FileSystem> FS;
+  /// The LLVMContext of the module this PassBuilder's pipeline will run on,
+  /// if the caller has one available at construction time (e.g. one Module
+  /// per LTO/ThinLTO backend or per-TU compile). Null when a PassBuilder is
+  /// built without a specific bound module (most drivers, unit tests): in
+  /// that case, per-context migrated library options (see
+  /// llvm/include/llvm/Option/LibraryOptions.h) fall back to their
+  /// process-wide default instead of a per-context override.
+  LLVMContext *Ctx = nullptr;
 
 public:
   /// A struct to capture parsed pass pipeline names.
@@ -144,12 +153,18 @@ public:
           PipelineTuningOptions(llvm::clv2::defaultOptionsContext()),
       std::optional<PGOOptions> PGOOpt = std::nullopt,
       PassInstrumentationCallbacks *PIC = nullptr,
-      IntrusiveRefCntPtr<vfs::FileSystem> FS = vfs::getRealFileSystem());
+      IntrusiveRefCntPtr<vfs::FileSystem> FS = vfs::getRealFileSystem(),
+      LLVMContext *Ctx = nullptr);
 
   const clv2::OptionsContext &getOptionsContext() const {
     assert(OptsCtx && "OptsCtx is set at construction and never cleared");
     return *OptsCtx;
   }
+
+  /// The LLVMContext bound to this PassBuilder's pipeline, or nullptr if none
+  /// was given at construction. Used to read per-context migrated library
+  /// options (llvm::PassesOptions) rather than their process-wide default.
+  LLVMContext *getContext() const { return Ctx; }
 
   /// Cross register the analysis managers through their proxies.
   ///

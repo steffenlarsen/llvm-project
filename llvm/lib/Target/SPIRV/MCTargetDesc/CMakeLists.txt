@@ -11,10 +11,14 @@ add_llvm_component_library(LLVMSPIRVDesc
   LINK_COMPONENTS
   CodeGenTypes
   MC
+  Option
   SPIRVInfo
   Support
   TargetParser
 
   ADD_TO_COMPONENT
   SPIRV
+
+  DEPENDS
+  SPIRVOptParserTableGen
   )

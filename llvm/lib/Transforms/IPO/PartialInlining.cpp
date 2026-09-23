@@ -47,9 +47,8 @@
 #include "llvm/Support/BranchProbability.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Transforms/IPO.h"
-#include "llvm/Transforms/IPO/IPOOptionsOptInfos.h"
+#include "llvm/Transforms/IPO/IPOOptions.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/CodeExtractor.h"
 #include "llvm/Transforms/Utils/ValueMapper.h"
@@ -75,66 +74,53 @@ STATISTIC(NumColdRegionsOutlined,
            "Number of cold single entry/exit regions outlined.");
 
 static bool getDisablePartialInlining(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_DisablePartialInlining>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_DisablePartialInlining;
 }
 
 static bool getDisableMultiRegionPartialInline(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_DisableMultiRegionPartialInline>(
-      M.getContext().getOptionsContext());
+  return M.getContext()
+      .getOptions<IPOOptions>()
+      .IPO_DisableMultiRegionPartialInline;
 }
 
 static bool getForceLiveExit(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_ForceLiveExit>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_ForceLiveExit;
 }
 
 static bool getMarkOutlinedColdCC(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_MarkOutlinedColdCC>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_MarkOutlinedColdCC;
 }
 
 static bool getSkipCostAnalysis(const Module &M) {
-  return clv2::getOptValIfSpecified<&clv2::IPOOptsReg,
-                                    &clv2::IPO_SkipCostAnalysis>(
-      M.getContext().getOptionsContext(), false);
+  return M.getContext().getOptions<IPOOptions>().IPO_SkipCostAnalysis;
 }
 
 static float getMinRegionSizeRatio(const Module &M) {
-  return clv2::getOptValIfSpecified<&clv2::IPOOptsReg,
-                                    &clv2::IPO_MinRegionSizeRatio>(
-      M.getContext().getOptionsContext(), 0.1f);
+  return M.getContext().getOptions<IPOOptions>().IPO_MinRegionSizeRatio;
 }
 
 static unsigned getMinBlockCounterExecution(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_MinBlockCounterExecution>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_MinBlockCounterExecution;
 }
 
 static float getColdBranchRatio(const Module &M) {
-  return clv2::getOptValIfSpecified<&clv2::IPOOptsReg,
-                                    &clv2::IPO_ColdBranchRatio>(
-      M.getContext().getOptionsContext(), 0.1f);
+  return M.getContext().getOptions<IPOOptions>().IPO_ColdBranchRatio;
 }
 
 static unsigned getMaxNumInlineBlocks(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_MaxNumInlineBlocks>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_MaxNumInlineBlocks;
 }
 
 static int getMaxNumPartialInlining(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_MaxNumPartialInlining>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_MaxNumPartialInlining;
 }
 
 static int getOutlineRegionFreqPercent(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_OutlineRegionFreqPercent>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_OutlineRegionFreqPercent;
 }
 
 static unsigned getExtraOutliningPenalty(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_ExtraOutliningPenalty>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_ExtraOutliningPenalty;
 }
 
 namespace {
@@ -728,8 +714,8 @@ bool PartialInlinerImpl::shouldPartialInline(
       Callee->getContext().getDiagHandlerPtr()->isMissedOptRemarkEnabled(
           DEBUG_TYPE);
   InlineCost IC = getInlineCost(
-      CB, getInlineParams(Callee->getContext().getOptionsContext()), CalleeTTI,
-      GetAssumptionCache, GetTLI, GetBFI, &PSI,
+      CB, getInlineParams(Callee->getContext().getOptions<AnalysisOptions>()),
+      CalleeTTI, GetAssumptionCache, GetTLI, GetBFI, &PSI,
       RemarksEnabled ? &ORE : nullptr);
 
   if (IC.isAlways()) {
@@ -802,8 +788,8 @@ PartialInlinerImpl::computeBBInlineCost(BasicBlock *BB,
                                         TargetTransformInfo *TTI) {
   InstructionCost InlineCost = 0;
   const DataLayout &DL = BB->getDataLayout();
-  int InstrCost =
-      InlineConstants::getInstrCost(BB->getContext().getOptionsContext());
+  int InstrCost = InlineConstants::getInstrCost(
+      BB->getContext().getOptions<AnalysisOptions>());
   for (Instruction &I : *BB) {
     // Skip free instructions.
     switch (I.getOpcode()) {
@@ -884,7 +870,7 @@ PartialInlinerImpl::computeOutliningCosts(FunctionCloner &Cloner) const {
   OutlinedFunctionCost -=
       2 *
       InlineConstants::getInstrCost(
-          Cloner.OrigFunc->getContext().getOptionsContext()) *
+          Cloner.OrigFunc->getContext().getOptions<AnalysisOptions>()) *
       Cloner.OutlinedFunctions.size();
 
   InstructionCost OutliningRuntimeOverhead =

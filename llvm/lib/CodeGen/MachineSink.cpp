@@ -27,7 +27,7 @@
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/CFG.h"
 #include "llvm/Analysis/ProfileSummaryInfo.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsMachine2.h"
 #include "llvm/CodeGen/LiveIntervals.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineBlockFrequencyInfo.h"
@@ -59,9 +59,7 @@
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/BranchProbability.h"
-#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cassert>
 #include <cstdint>
@@ -72,38 +70,39 @@ using namespace llvm;
 
 #define DEBUG_TYPE "machine-sink"
 
-static bool getMachineSinkSplit(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_MachineSinkSplit>(Ctx);
+static bool getMachineSinkSplit(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenMachine2Options>().CGPASS_MachineSinkSplit;
 }
 
-static bool getMachineSinkBfi(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_MachineSinkBfi>(Ctx);
-}
-
-static unsigned
-getMachineSinkSplitProbabilityThreshold(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<
-      &clv2::CGPASS_MachineSinkSplitProbabilityThreshold>(Ctx);
+static bool getMachineSinkBfi(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenMachine2Options>().CGPASS_MachineSinkBfi;
 }
 
 static unsigned
-getMachineSinkLoadInstrsThreshold(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_MachineSinkLoadInstrsThreshold>(
-      Ctx);
+getMachineSinkSplitProbabilityThreshold(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenMachine2Options>()
+      .CGPASS_MachineSinkSplitProbabilityThreshold;
 }
 
 static unsigned
-getMachineSinkLoadBlocksThreshold(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_MachineSinkLoadBlocksThreshold>(
-      Ctx);
+getMachineSinkLoadInstrsThreshold(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenMachine2Options>()
+      .CGPASS_MachineSinkLoadInstrsThreshold;
 }
 
-static bool getSinkInstsToAvoidSpills(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_SinkInstsToAvoidSpills>(Ctx);
+static unsigned
+getMachineSinkLoadBlocksThreshold(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenMachine2Options>()
+      .CGPASS_MachineSinkLoadBlocksThreshold;
 }
 
-static unsigned getMachineSinkCycleLimit(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_MachineSinkCycleLimit>(Ctx);
+static bool getSinkInstsToAvoidSpills(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenMachine2Options>()
+      .CGPASS_SinkInstsToAvoidSpills;
+}
+
+static unsigned getMachineSinkCycleLimit(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenMachine2Options>().CGPASS_MachineSinkCycleLimit;
 }
 
 STATISTIC(NumSunk, "Number of machine instructions sunk");
@@ -767,7 +766,7 @@ MachineSinkingPass::run(MachineFunction &MF,
                   .getCachedResult<ProfileSummaryAnalysis>(
                       *MF.getFunction().getParent());
   auto *MBFI =
-      getMachineSinkBfi(MF.getFunction().getContext().getOptionsContext())
+      getMachineSinkBfi(MF.getFunction().getContext())
           ? &MFAM.getResult<MachineBlockFrequencyAnalysis>(MF)
           : nullptr;
   auto *MBPI = &MFAM.getResult<MachineBranchProbabilityAnalysis>(MF);
@@ -786,7 +785,7 @@ MachineSinkingPass::run(MachineFunction &MF,
   auto PA = getMachineFunctionPassPreservedAnalyses();
   PA.preserve<MachineCycleAnalysis>();
   PA.preserve<MachineLoopAnalysis>();
-  if (getMachineSinkBfi(MF.getFunction().getContext().getOptionsContext()))
+  if (getMachineSinkBfi(MF.getFunction().getContext()))
     PA.preserve<MachineBlockFrequencyAnalysis>();
   return PA;
 }
@@ -811,7 +810,7 @@ bool MachineSinkingLegacy::runOnMachineFunction(MachineFunction &MF) {
   auto *CI = &getAnalysis<MachineCycleInfoWrapperPass>().getCycleInfo();
   auto *PSI = &getAnalysis<ProfileSummaryInfoWrapperPass>().getPSI();
   auto *MBFI =
-      getMachineSinkBfi(MF.getFunction().getContext().getOptionsContext())
+      getMachineSinkBfi(MF.getFunction().getContext())
           ? &getAnalysis<MachineBlockFrequencyInfoWrapperPass>().getMBFI()
           : nullptr;
   auto *MBPI =
@@ -879,7 +878,7 @@ bool MachineSinking::run(MachineFunction &MF) {
   }
 
   if (getSinkInstsToAvoidSpills(
-          MF.getFunction().getContext().getOptionsContext())) {
+          MF.getFunction().getContext())) {
     SmallVector<CycleRef, 8> Cycles(CI->toplevel_cycles());
     SchedModel.init(STI);
     bool HasHighPressure;
@@ -909,7 +908,7 @@ bool MachineSinking::run(MachineFunction &MF) {
           // CycleSinkStage::COPY: Sink a limited number of copies
           if (Stage == CycleSinkStage::COPY) {
             if (i++ == getMachineSinkCycleLimit(
-                           MF.getFunction().getContext().getOptionsContext())) {
+                           MF.getFunction().getContext())) {
               LLVM_DEBUG(dbgs()
                          << "CycleSink:   Limit reached of instructions to "
                             "be analyzed.");
@@ -1073,7 +1072,7 @@ bool MachineSinking::isWorthBreakingCriticalEdge(
       MBPI->getEdgeProbability(From, To) <=
           BranchProbability(
               getMachineSinkSplitProbabilityThreshold(
-                  MI.getMF()->getFunction().getContext().getOptionsContext()),
+                  MI.getMF()->getFunction().getContext()),
               100))
     return true;
 
@@ -1114,7 +1113,7 @@ bool MachineSinking::isLegalToBreakCriticalEdge(MachineInstr &MI,
                                                 bool BreakPHIEdge) {
   // Avoid breaking back edge. From == To means backedge for single BB cycle.
   if (!getMachineSinkSplit(
-          MI.getMF()->getFunction().getContext().getOptionsContext()) ||
+          MI.getMF()->getFunction().getContext()) ||
       FromBB == ToBB || !FromBB->isSuccessor(ToBB))
     return false;
 
@@ -1704,10 +1703,10 @@ bool MachineSinking::hasStoreBetween(MachineBasicBlock *From,
       // If this BB is too big or the block number in straight line between From
       // and To is too big, stop searching to save compiling time.
       if (BB->sizeWithoutDebugLargerThan(getMachineSinkLoadInstrsThreshold(
-              MI.getMF()->getFunction().getContext().getOptionsContext())) ||
+              MI.getMF()->getFunction().getContext())) ||
           HandledDomBlocks.size() >
               getMachineSinkLoadBlocksThreshold(
-                  MI.getMF()->getFunction().getContext().getOptionsContext())) {
+                  MI.getMF()->getFunction().getContext())) {
         for (auto *DomBB : HandledDomBlocks) {
           if (DomBB != BB && DT->dominates(DomBB, BB))
             HasStoreCache[std::make_pair(DomBB, To)] = true;

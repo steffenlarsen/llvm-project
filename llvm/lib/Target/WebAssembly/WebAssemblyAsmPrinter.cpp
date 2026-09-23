@@ -165,11 +165,10 @@ MCSymbolWasm *WebAssemblyAsmPrinter::getMCSymbolForFunction(
     const Function *F, wasm::WasmSignature *Sig, bool &InvokeDetected) {
   MCSymbolWasm *WasmSym = nullptr;
 
-  auto &OptsCtx = TM.getOptionsContext();
   const bool EnableEmEH =
       TM.Options.ExceptionModel == ExceptionHandling::Emscripten ||
-      WebAssembly::getWasmEnableEmEH(OptsCtx) ||
-      WebAssembly::getWasmEnableEmSjLj(OptsCtx);
+      WebAssembly::getWasmEnableEmEH(F->getContext()) ||
+      WebAssembly::getWasmEnableEmSjLj(F->getContext());
   if (EnableEmEH && isEmscriptenInvokeName(F->getName())) {
     assert(Sig);
     InvokeDetected = true;

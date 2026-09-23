@@ -54,9 +54,8 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/KnownBits.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
+#include "llvm/Target/Hexagon/HexagonOptions.h"
 #include "llvm/TargetParser/Triple.h"
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Utils.h"
@@ -88,38 +87,35 @@ static bool HexagonVolatileMemcpy = false;
 static unsigned SimplifyLimit = 10000;
 
 static bool getDisableMemcpyIdiom(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_DisableMemcpyIdiom>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_DisableMemcpyIdiom;
 }
 
 static bool getDisableMemmoveIdiom(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_DisableMemmoveIdiom>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_DisableMemmoveIdiom;
 }
 
 static unsigned getRuntimeMemSizeThreshold(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_RuntimeMemSizeThreshold>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<HexagonOptions>()
+      .HEX_RuntimeMemSizeThreshold;
 }
 
 static unsigned getCompileTimeMemSizeThreshold(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_CompileTimeMemSizeThreshold>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<HexagonOptions>()
+      .HEX_CompileTimeMemSizeThreshold;
 }
 
 static bool getOnlyNonNestedMemmove(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_OnlyNonNestedMemmove>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_OnlyNonNestedMemmove;
 }
 
 static bool getHexagonVolatileMemcpy(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_VolatileMemcpy>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_VolatileMemcpy;
 }
 
 static unsigned getSimplifyLimit(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_HLIRSimplifyLimit>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_HLIRSimplifyLimit;
 }
 
 namespace {

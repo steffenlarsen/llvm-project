@@ -24,35 +24,28 @@
 #include "llvm/IR/ProfDataUtils.h"
 #include "llvm/Support/BranchProbability.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Transforms/Utils/UtilsOptionsOptInfos.h"
+#include "llvm/Transforms/Utils/UtilsOptions.h"
 
 using namespace llvm;
 
 static int64_t getDefaultFunctionEntryCount(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::TU_DefaultFunctionEntryCount>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<UtilsOptions>().TU_DefaultFunctionEntryCount;
 }
 
 static bool getAnnotateSelect(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::TU_AnnotateSelect>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<UtilsOptions>().TU_AnnotateSelect;
 }
 
 static bool getWeightsForTest(const Function &F) {
-  return clv2::getOptValIfSpecified<&clv2::TransformUtilsOptsReg,
-                                    &clv2::TU_WeightsForTest>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext().getOptions<UtilsOptions>().TU_WeightsForTest;
 }
 
 static unsigned getSelectTrueWeight(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::TU_SelectTrueWeight>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<UtilsOptions>().TU_SelectTrueWeight;
 }
 
 static unsigned getSelectFalseWeight(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::TU_SelectFalseWeight>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<UtilsOptions>().TU_SelectFalseWeight;
 }
 namespace {
 class ProfileInjector {

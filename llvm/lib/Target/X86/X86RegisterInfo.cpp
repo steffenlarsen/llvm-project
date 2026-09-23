@@ -31,39 +31,29 @@
 #include "llvm/IR/Type.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOptions.h"
-#include "llvm/Target/X86/X86OptionsOptInfos.h"
+#include "llvm/Target/X86/X86Options.h"
 
 using namespace llvm;
 
 #define GET_REGINFO_TARGET_DESC
 #include "X86GenRegisterInfo.inc"
 
-static bool EnableBasePointer = true;
-
-static unsigned SetjmpCSRWarningThreshold = 50;
-
 static bool getEnableBasePointer(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::X86_UseBasePointer>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<X86Options>().X86_UseBasePointer;
 }
 
 static bool getDisableRegAllocNDDHints(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::X86_DisableRegAllocNDDHints>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<X86Options>().X86_DisableRegAllocNDDHints;
 }
 
 static bool getX86EnableAPXForRelocation(const Function &F) {
-  return clv2::getOptValOr<&clv2::X86OptsReg,
-                           &clv2::X86_EnableAPXForRelocation>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext().getOptions<X86Options>().X86_EnableAPXForRelocation;
 }
 
 static unsigned getSetjmpCSRWarningThreshold(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::X86_SetjmpCSRWarningThreshold>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<X86Options>().X86_SetjmpCSRWarningThreshold;
 }
 
 X86RegisterInfo::X86RegisterInfo(const Triple &TT)
@@ -229,9 +219,8 @@ X86RegisterInfo::getCrossCopyRegClass(const TargetRegisterClass *RC) const {
   return RC;
 }
 
-unsigned
-X86RegisterInfo::getRegPressureLimit(const TargetRegisterClass *RC,
-                                     MachineFunction &MF) const {
+unsigned X86RegisterInfo::getRegPressureLimit(const TargetRegisterClass *RC,
+                                              MachineFunction &MF) const {
   const X86FrameLowering *TFI = getFrameLowering(MF);
 
   unsigned FPDiff = TFI->hasFP(MF) ? 1 : 0;
@@ -294,8 +283,9 @@ X86RegisterInfo::getCalleeSavedRegs(const MachineFunction *MF) const {
     return CSR_64_NoneRegs_SaveList;
   case CallingConv::CXX_FAST_TLS:
     if (Is64Bit)
-      return MF->getInfo<X86MachineFunctionInfo>()->isSplitCSR() ?
-             CSR_64_CXX_TLS_Darwin_PE_SaveList : CSR_64_TLS_Darwin_SaveList;
+      return MF->getInfo<X86MachineFunctionInfo>()->isSplitCSR()
+                 ? CSR_64_CXX_TLS_Darwin_PE_SaveList
+                 : CSR_64_TLS_Darwin_SaveList;
     break;
   case CallingConv::Intel_OCL_BI: {
     if (HasAVX512 && IsWin64)
@@ -396,8 +386,8 @@ X86RegisterInfo::getIPRACSRegs(const MachineFunction *MF) const {
   return Is64Bit ? CSR_IPRA_64_SaveList : CSR_IPRA_32_SaveList;
 }
 
-const MCPhysReg *X86RegisterInfo::getCalleeSavedRegsViaCopy(
-    const MachineFunction *MF) const {
+const MCPhysReg *
+X86RegisterInfo::getCalleeSavedRegsViaCopy(const MachineFunction *MF) const {
   assert(MF && "Invalid MachineFunction pointer.");
   if (MF->getFunction().getCallingConv() == CallingConv::CXX_FAST_TLS &&
       MF->getInfo<X86MachineFunctionInfo>()->isSplitCSR())
@@ -530,8 +520,7 @@ X86RegisterInfo::getCallPreservedMask(const MachineFunction &MF,
   return CSR_32_RegMask;
 }
 
-const uint32_t*
-X86RegisterInfo::getNoPreservedMask() const {
+const uint32_t *X86RegisterInfo::getNoPreservedMask() const {
   return CSR_NoRegs_RegMask;
 }
 
@@ -948,16 +937,15 @@ void X86RegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
   }
 }
 
-bool
-X86RegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
-                                     int SPAdj, unsigned FIOperandNum,
-                                     RegScavenger *RS) const {
+bool X86RegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
+                                          int SPAdj, unsigned FIOperandNum,
+                                          RegScavenger *RS) const {
   MachineInstr &MI = *II;
   MachineBasicBlock &MBB = *MI.getParent();
   MachineFunction &MF = *MBB.getParent();
   MachineBasicBlock::iterator MBBI = MBB.getFirstTerminator();
-  bool IsEHFuncletEpilogue = MBBI == MBB.end() ? false
-                                               : isFuncletReturnInstr(*MBBI);
+  bool IsEHFuncletEpilogue =
+      MBBI == MBB.end() ? false : isFuncletReturnInstr(*MBBI);
   const X86FrameLowering *TFI = getFrameLowering(MF);
   int FrameIndex = MI.getOperand(FIOperandNum).getIndex();
 
@@ -1012,7 +1000,7 @@ X86RegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
     return false;
   }
 
-  if (MI.getOperand(FIOperandNum+3).isImm()) {
+  if (MI.getOperand(FIOperandNum + 3).isImm()) {
     const X86InstrInfo *TII = MF.getSubtarget<X86Subtarget>().getInstrInfo();
     const DebugLoc &DL = MI.getDebugLoc();
     int64_t Imm = MI.getOperand(FIOperandNum + 3).getImm();
@@ -1064,8 +1052,8 @@ X86RegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
       MI.getOperand(FIOperandNum + 3).ChangeToImmediate(Offset);
   } else {
     // Offset is symbolic. This is extremely rare.
-    uint64_t Offset = FIOffset +
-      (uint64_t)MI.getOperand(FIOperandNum+3).getOffset();
+    uint64_t Offset =
+        FIOffset + (uint64_t)MI.getOperand(FIOperandNum + 3).getOffset();
     MI.getOperand(FIOperandNum + 3).setOffset(Offset);
   }
   return false;

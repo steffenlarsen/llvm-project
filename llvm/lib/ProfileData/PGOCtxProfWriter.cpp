@@ -13,7 +13,7 @@
 #include "llvm/ProfileData/PGOCtxProfWriter.h"
 #include "llvm/Bitstream/BitCodeEnums.h"
 #include "llvm/ProfileData/CtxInstrContextNode.h"
-#include "llvm/ProfileData/ProfileDataOptionsOptInfos.h"
+#include "llvm/ProfileData/ProfileDataOptions.h"
 #include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/OptionsContext.h"
@@ -23,24 +23,18 @@
 using namespace llvm;
 using namespace llvm::ctx_profile;
 
-static bool getCtxProfIncludeEmpty(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::PD_CtxProfIncludeEmpty>(Ctx);
-}
-
-static bool
-getCtxProfIncludeEmptyWasSpecified(const clv2::OptionsContext &Ctx) {
-  return clv2::wasOptSpecified<&clv2::ProfileDataOptsReg,
-                               &clv2::PD_CtxProfIncludeEmpty>(Ctx);
-}
-
+// This ctor has no Module/LLVMContext in scope (it's used both for writing
+// profiles out-of-process and from unit tests), so it cannot use
+// Ctx.getContext().getOptions<ProfileDataOptions>(); the Ctx parameter itself
+// is otherwise unused. It reads the process-wide ProfileDataOptions::Current
+// default instead, falling back to the caller-supplied IncludeEmpty only when
+// -ctx-prof-include-empty was not explicitly specified.
 PGOCtxProfileWriter::PGOCtxProfileWriter(
     raw_ostream &Out, std::optional<unsigned> VersionOverride,
     bool IncludeEmpty, const clv2::OptionsContext &Ctx)
-    : Writer(Out, 0), IncludeEmpty([IncludeEmpty, &Ctx]() {
-        return getCtxProfIncludeEmptyWasSpecified(Ctx)
-                   ? getCtxProfIncludeEmpty(Ctx)
-                   : IncludeEmpty;
-      }()) {
+    : Writer(Out, 0),
+      IncludeEmpty(ProfileDataOptions::Current.PD_CtxProfIncludeEmpty.value_or(
+          IncludeEmpty)) {
   static_assert(ContainerMagic.size() == 4);
   Out.write(ContainerMagic.data(), ContainerMagic.size());
   Writer.EnterBlockInfoBlock();

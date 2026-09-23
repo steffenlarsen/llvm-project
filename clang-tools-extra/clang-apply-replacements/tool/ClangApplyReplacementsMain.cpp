@@ -24,6 +24,7 @@
 #include "llvm/ADT/StringSet.h"
 #include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/CommandLineV2.h"
+#include "llvm/Support/PluginLoaderOptions.h"
 #include "llvm/Support/RegisterLLVMOptions.h"
 
 using namespace llvm;
@@ -115,7 +116,9 @@ int main(int argc, char **argv) {
     });
   }
   P.hideUnrelatedOptions(ArrayRef(VisibleCategories));
-  P.parse(argc, argv);
+  std::vector<const char *> ArgsAfterPlugins =
+      loadPluginsAndStripArgs(argc, argv);
+  P.parse(static_cast<int>(ArgsAfterPlugins.size()), ArgsAfterPlugins.data());
 
   DiagnosticOptions DiagOpts;
   DiagnosticsEngine Diagnostics(DiagnosticIDs::create(), DiagOpts);

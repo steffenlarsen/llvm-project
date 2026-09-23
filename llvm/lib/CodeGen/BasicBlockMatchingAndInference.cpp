@@ -21,19 +21,16 @@
 #include "llvm/CodeGen/BasicBlockMatchingAndInference.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/CodeGen/BasicBlockSectionsProfileReader.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsCore1.h"
 #include "llvm/CodeGen/MachineBlockHashInfo.h"
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/IR/Function.h"
 #include "llvm/InitializePasses.h"
-#include "llvm/Support/CommandLineCompat.h"
-#include "llvm/Support/CommandLineV2.h"
-#include "llvm/Support/OptionsContext.h"
 
 using namespace llvm;
 
-static float getPropellerInferThreshold(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_PropellerInferThreshold>(Ctx);
+static float getPropellerInferThreshold(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore1Options>().CGPASS_PropellerInferThreshold;
 }
 
 /// The object is used to identify and match basic blocks given their hashes.
@@ -183,8 +180,7 @@ bool BasicBlockMatchingAndInference::runOnMachineFunction(MachineFunction &MF) {
   // in the function is less than the threshold value, the processing should be
   // abandoned.
   if (static_cast<float>(MatchWeight.BlockWeights.size()) / MF.size() <
-      getPropellerInferThreshold(
-          MF.getFunction().getContext().getOptionsContext())) {
+      getPropellerInferThreshold(MF.getFunction().getContext())) {
     return false;
   }
   generateWeightInfoByInference(MF, MatchWeight);

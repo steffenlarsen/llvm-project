@@ -29,6 +29,9 @@ add_llvm_component_library(LLVMAsmPrinter
 
   DEPENDS
   intrinsics_gen
+  CodeGenAsmPrintOptParserTableGen
+  CodeGenSched2OptParserTableGen
+  ProfileDataOptParserTableGen
 
   LINK_COMPONENTS
   Analysis

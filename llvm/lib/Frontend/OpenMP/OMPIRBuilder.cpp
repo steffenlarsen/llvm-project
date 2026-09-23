@@ -28,7 +28,7 @@
 #include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/Frontend/Offloading/Utility.h"
 #include "llvm/Frontend/OpenMP/OMPGridValues.h"
-#include "llvm/Frontend/OpenMP/OpenMPOptionsOptInfos.h"
+#include "llvm/Frontend/OpenMP/OpenMPOptions.h"
 #include "llvm/IR/Attributes.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/CFG.h"
@@ -73,10 +73,9 @@ using namespace llvm;
 using namespace omp;
 
 static double getUnrollThresholdFactor(const Function &F) {
-  if (auto *O =
-          clv2::getView<&clv2::OMPOptsReg>(F.getContext().getOptionsContext()))
-    return O->get<&clv2::OMP_UnrollThresholdFactor>();
-  return 1.5;
+  return F.getContext()
+      .getOptions<OpenMPOptions>()
+      .OMP_UnrollThresholdFactor;
 }
 
 #ifndef NDEBUG
@@ -725,10 +724,8 @@ void OpenMPIRBuilder::addAttributes(omp::RuntimeFunction FnID, Function &Fn) {
     }
   };
 
-  bool OptimisticAttributes = false;
-  if (auto *O =
-          clv2::getView<&clv2::OMPOptsReg>(Fn.getContext().getOptionsContext()))
-    OptimisticAttributes = O->get<&clv2::OMP_OptimisticAttributes>();
+  bool OptimisticAttributes =
+      Fn.getContext().getOptions<OpenMPOptions>().OMP_OptimisticAttributes;
 
 #define OMP_ATTRS_SET(VarName, AttrSet) AttributeSet VarName = AttrSet;
 #include "llvm/Frontend/OpenMP/OMPKinds.def"
@@ -8593,8 +8590,7 @@ OpenMPIRBuilder::InsertPointTy OpenMPIRBuilder::createTargetInit(
   // the default workgroup size and the MinThreads value.
   int32_t MaxThreadsVal = Attrs.MaxThreads.front();
   bool DoUseDefaultMaxThreads =
-      clv2::getOptValOrDefault<&clv2::OMP_UseDefaultMaxThreads>(
-          Kernel->getContext().getOptionsContext());
+      Kernel->getContext().getOptions<OpenMPOptions>().OMP_UseDefaultMaxThreads;
   if (MaxThreadsVal < 0 && DoUseDefaultMaxThreads) {
     if (hasGridValue(T)) {
       MaxThreadsVal =

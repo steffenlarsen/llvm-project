@@ -33,7 +33,7 @@
 #include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Target/AArch64/AArch64OptionsOptInfos.h"
+#include "llvm/Target/AArch64/AArch64Options.h"
 
 using namespace llvm;
 
@@ -203,8 +203,10 @@ bool AArch64PTrueCoalescingImpl::tryCoalesce(PredicateInfo &DomPI,
 }
 
 bool AArch64PTrueCoalescingImpl::run(MachineFunction &MF) {
-  bool Enabled = clv2::getOptValOrDefault<&clv2::A64_EnablePTrueCoalescing>(
-      MF.getFunction().getContext().getOptionsContext());
+  bool Enabled = MF.getFunction()
+                     .getContext()
+                     .getOptions<AArch64Options>()
+                     .A64_EnablePTrueCoalescing;
   if (!Enabled ||
       !MF.getSubtarget<AArch64Subtarget>().isSVEorStreamingSVEAvailable())
     return false;

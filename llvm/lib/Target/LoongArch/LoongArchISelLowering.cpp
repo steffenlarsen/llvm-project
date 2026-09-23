@@ -35,8 +35,7 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/KnownBits.h"
 #include "llvm/Support/MathExtras.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/LoongArch/LoongArchOptionsOptInfos.h"
+#include "llvm/Target/LoongArch/LoongArchOptions.h"
 #include <llvm/Analysis/VectorUtils.h>
 
 using namespace llvm;
@@ -54,19 +53,27 @@ enum MaterializeFPImm {
   MaterializeFPImm6Ins = 6
 };
 
-static MaterializeFPImm MaterializeFPImmInsNum = MaterializeFPImm3Ins;
-
 static bool getZeroDivCheck(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::LA_ZeroDivCheck>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<LoongArchOptions>().LA_ZeroDivCheck;
 }
 
 static MaterializeFPImm getMaterializeFPImmInsNum(const Function &F) {
-  if (auto *O = clv2::getView<&clv2::LoongArchOptsReg>(
-          F.getContext().getOptionsContext()))
-    return static_cast<MaterializeFPImm>(
-        O->get<&clv2::LA_MaterializeFPImmInsNum>());
-  return MaterializeFPImmInsNum;
+  switch (
+      F.getContext().getOptions<LoongArchOptions>().LA_MaterializeFPImmInsNum) {
+  case LAMaterializeFPImm::NoMaterialize:
+    return NoMaterializeFPImm;
+  case LAMaterializeFPImm::Materialize2Ins:
+    return MaterializeFPImm2Ins;
+  case LAMaterializeFPImm::Materialize3Ins:
+    return MaterializeFPImm3Ins;
+  case LAMaterializeFPImm::Materialize4Ins:
+    return MaterializeFPImm4Ins;
+  case LAMaterializeFPImm::Materialize5Ins:
+    return MaterializeFPImm5Ins;
+  case LAMaterializeFPImm::Materialize6Ins:
+    return MaterializeFPImm6Ins;
+  }
+  llvm_unreachable("Unknown LAMaterializeFPImm value");
 }
 
 LoongArchTargetLowering::LoongArchTargetLowering(const TargetMachine &TM,

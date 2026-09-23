@@ -20,8 +20,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Transforms/IPO/StripSymbols.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Transforms/IPO/IPOOptionsOptInfos.h"
+#include "llvm/Transforms/IPO/IPOOptions.h"
 
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
@@ -41,8 +40,7 @@
 using namespace llvm;
 
 static bool getStripGlobalConstants(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_StripGlobalConstants>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_StripGlobalConstants;
 }
 
 /// OnlyUsedBy - Return true if V is only used by Usr.

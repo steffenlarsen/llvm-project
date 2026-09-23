@@ -1,4 +1,4 @@
-//===- SPIRVOptions.td - CLV2 option defs for SPIRV ------*- tablegen -*-===//
+//===- SPIRVOptions.td - SPIRV target options -*- tablegen -*-===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -6,131 +6,93 @@
 //
 //===----------------------------------------------------------------------===//
 
-include "llvm/Support/CLV2Options.td"
+include "llvm/Option/OptParser.td"
 
-def SPIRVOptsReg : Registry<"llvm::spirv_opts"> {
-  // Getter bodies are compiled once, in SPIRVOptionsGetters.cpp.
-  let OutOfLineGetters = 1;
-}
+def SPIRVOptions : OptionsStruct<"llvm"> {}
 
 // --- SPIRVCtorDtorLowering.cpp ---
 
-def SPIRV_LowerGlobalCtorDtorId : Option<
-    "spirv-lower-global-ctor-dtor-id",
+defm SPIRV_LowerGlobalCtorDtorId : ValueField<
+    "spirv-lower-global-ctor-dtor-id", "std::string", "\"\"",
     "Override unique ID of ctor/dtor globals.",
-    "std::string"> {
-  let Default = "\"\"";
-  let Registry = SPIRVOptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def SPIRV_EmitInitFiniKernel : Option<
-    "spirv-emit-init-fini-kernel",
+defm SPIRV_EmitInitFiniKernel : BoolField<
+    "spirv-emit-init-fini-kernel", "true",
     "Emit kernels to call ctor/dtor globals.",
-    "bool"> {
-  let Registry = SPIRVOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // --- SPIRVEmitIntrinsics.cpp ---
 
-def SPIRV_EmitOpNames : Option<
-    "spirv-emit-op-names",
-    "Emit OpName for all instructions",
-    "bool"> {
-  let Default = "false";
-  let Registry = SPIRVOptsReg;
-}
+defm SPIRV_EmitOpNames : BoolField<
+    "spirv-emit-op-names", "false",
+    "Emit OpName for all instructions">;
 
 // --- SPIRVModuleAnalysis.cpp ---
 
-def SPIRV_DumpDeps : Option<
-    "spv-dump-deps",
-    "Dump MIR with SPIR-V dependencies info",
-    "bool"> {
-  let Default = "false";
-  let Registry = SPIRVOptsReg;
-}
+defm SPIRV_DumpDeps : BoolField<
+    "spv-dump-deps", "false",
+    "Dump MIR with SPIR-V dependencies info">;
 
 // --- SPIRVTargetMachine.cpp ---
 
-def SPIRV_EnableNonSemanticDI : Option<
-    "spv-emit-nonsemantic-debug-info",
+defm SPIRV_EnableNonSemanticDI : BoolField<
+    "spv-emit-nonsemantic-debug-info", "false",
     "Deprecated. Use -g to emit SPIR-V NonSemantic.Shader.DebugInfo "
-    "instructions",
-    "bool"> {
-  let Default = "false";
-  let Registry = SPIRVOptsReg;
-}
+    "instructions">;
 
 // --- SPIRVPrepareFunctions.cpp ---
 
-def SPIRV_AllowUnknownIntrinsics : ListOption<
-    "spv-allow-unknown-intrinsics",
-    "Emit unknown intrinsics as calls to external functions. A "
-    "comma-separated input list of intrinsic prefixes must be "
-    "provided, and only intrinsics carrying a listed prefix get "
-    "emitted as described.",
-    "std::string"> {
-  let Registry = SPIRVOptsReg;
-  let ValueDesc = "intrinsic_prefix_0,intrinsic_prefix_1";
-  let CommaSeparated = 1;
-  let ValueOptional = 1;
-}
+// Hand-authored rather than ListField<>: ListField's default "-name value"
+// (Separate) spelling is an Alias of the Joined "-name=value" spelling, so it
+// unconditionally steals the next argv token as its value -- even for a bare
+// "-spv-allow-unknown-intrinsics" with nothing attached. The old clv2
+// ListOption had ValueOptional=1, which never steals a following separate
+// token (see CommandLineV2.cpp's ValueOptional case), and
+// llvm/test/CodeGen/SPIRV/allow_unknown_intrinsics.ll relies on the bare flag
+// NOT consuming the next positional argument (the input file). So this pair
+// mirrors OptionalValueField's Joined-plus-bare-Flag shape (no Separate
+// alias) instead, adapted to a list-valued field.
+def SPIRV_AllowUnknownIntrinsics : Joined<["-", "--"],
+    "spv-allow-unknown-intrinsics=">,
+    HelpText<"Emit unknown intrinsics as calls to external functions. A "
+             "comma-separated input list of intrinsic prefixes must be "
+             "provided, and only intrinsics carrying a listed prefix get "
+             "emitted as described.">,
+    Field<"std::vector<std::string>", "SPIRV_AllowUnknownIntrinsics", "{}">,
+    ListElement<"std::string", /*commaSplit=*/1, /*alwaysPrefix=*/0>,
+    MetaVarName<"intrinsic_prefix_0,intrinsic_prefix_1">;
+def SPIRV_AllowUnknownIntrinsics_bare : Flag<["-", "--"],
+    "spv-allow-unknown-intrinsics">,
+    Flags<[HelpHidden]>,
+    Assign<"SPIRV_AllowUnknownIntrinsics", "{}">;
 
 // --- SPIRVSubtarget.cpp ---
 
-def SPIRV_TranslatorCompat : Option<
-    "translator-compatibility-mode",
-    "SPIR-V Translator compatibility mode",
-    "bool"> {
-  let Default = "false";
-  let Registry = SPIRVOptsReg;
-}
+defm SPIRV_TranslatorCompat : BoolField<
+    "translator-compatibility-mode", "false",
+    "SPIR-V Translator compatibility mode">;
 
 // spirv-ext is NOT declared here: validating it needs SPIRVExtensionsParser,
-// which lives in this backend's library.  A .td descriptor is a header-inline
-// constexpr whose Validate body must be self-contained (see CLV2Options.td), so
-// the descriptor is hand-written in SPIRVSubtarget.cpp instead.
-
+// which lives in this backend's library, so the descriptor is hand-written
+// in SPIRVSubtarget.cpp instead.
 
 // --- SPIRVAsmPrinter.cpp ---
 
-def SPIRVFPContractModeOn : EnumValue<"on",
-    "Follow IR metadata (default)"> {
-  let CppName = "On";
-}
+def SPIRVFPContractModeEnum : OptionEnum<"SPIRVFPContractMode", [
+    EnumMember<"On", "on">,
+    EnumMember<"Off", "off">,
+    EnumMember<"Fast", "fast">]>;
 
-def SPIRVFPContractModeOff : EnumValue<"off",
-    "Force ContractionOff on all kernel entry points"> {
-  let CppName = "Off";
-}
-
-def SPIRVFPContractModeFast : EnumValue<"fast",
-    "Suppress ContractionOff on all kernel entry points"> {
-  let CppName = "Fast";
-}
-
-def SPIRVFPContractModeEnum : EnumType<"SPIRVFPContractMode",
-    [SPIRVFPContractModeOn, SPIRVFPContractModeOff, SPIRVFPContractModeFast]>;
-
-def SPIRV_FPContract : Option<
-    "spirv-fp-contract",
-    "Override FP contraction policy for SPIR-V kernel entry points",
-    "SPIRVFPContractMode"> {
-  let Registry = SPIRVOptsReg;
-  let Default = "on";
-}
+defm SPIRV_FPContract : EnumField<
+    "spirv-fp-contract", SPIRVFPContractModeEnum, "SPIRVFPContractMode::On",
+    "Override FP contraction policy for SPIR-V kernel entry points">;
 
 // --- SPIRVAuxDataHandler.cpp ---
 
-def SPIRV_PreserveAuxData : Option<
-    "spirv-preserve-auxdata",
+defm SPIRV_PreserveAuxData : BoolField<
+    "spirv-preserve-auxdata", "false",
     "Preserve LLVM attributes and metadata as "
     "NonSemantic.AuxData ExtInst annotations (requires "
     "SPV_KHR_non_semantic_info)",
-    "bool"> {
-  let Registry = SPIRVOptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;

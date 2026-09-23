@@ -17,7 +17,7 @@
 #include "HexagonSubtarget.h"
 #include "HexagonTargetObjectFile.h"
 #include "llvm/CodeGen/CodeGenTargetMachineImpl.h"
-#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
+#include "llvm/Target/Hexagon/HexagonOptions.h"
 #include <optional>
 
 namespace llvm {

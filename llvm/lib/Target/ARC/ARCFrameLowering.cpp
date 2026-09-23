@@ -19,8 +19,7 @@
 #include "llvm/CodeGen/TargetRegisterInfo.h"
 #include "llvm/IR/Function.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/ARC/ARCOptionsOptInfos.h"
+#include "llvm/Target/ARC/ARCOptions.h"
 
 #define DEBUG_TYPE "arc-frame-lowering"
 
@@ -29,8 +28,8 @@ using namespace llvm;
 static bool UseSaveRestoreFunclet = true;
 
 static bool getUseSaveRestoreFunclet(const MachineFunction &MF) {
-  return clv2::getOptValOrDefault<&clv2::ARC_UseSaveRestoreFunclet>(
-      MF.getFunction().getContext().getOptionsContext());
+  return MF.getFunction().getContext().getOptions<ARCOptions>()
+      .ARC_UseSaveRestoreFunclet;
 }
 
 static const char *store_funclet_name[] = {

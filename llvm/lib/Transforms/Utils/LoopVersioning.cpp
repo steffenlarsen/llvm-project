@@ -33,7 +33,7 @@
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
 #include "llvm/Transforms/Utils/ScalarEvolutionExpander.h"
-#include "llvm/Transforms/Utils/UtilsOptionsOptInfos.h"
+#include "llvm/Transforms/Utils/UtilsOptions.h"
 #include <memory>
 
 using namespace llvm;
@@ -41,8 +41,7 @@ using namespace llvm;
 #define DEBUG_TYPE "loop-versioning"
 
 static bool getAnnotateNoAlias(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::TU_AnnotateNoAlias>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<UtilsOptions>().TU_AnnotateNoAlias;
 }
 
 LoopVersioning::LoopVersioning(const LoopAccessInfo &LAI,
@@ -177,7 +176,7 @@ void LoopVersioning::addPHINodes(
     if (!PN) {
       PN = PHINode::Create(Inst->getType(), 2, Inst->getName() + ".lver");
       PN->insertBefore(PHIBlock->begin());
-      SmallVector<User*, 8> UsersToUpdate;
+      SmallVector<User *, 8> UsersToUpdate;
       for (User *U : Inst->users())
         if (!VersionedLoop->contains(cast<Instruction>(U)->getParent()))
           UsersToUpdate.push_back(U);
@@ -334,7 +333,7 @@ bool runImpl(LoopInfo *LI, LoopAccessInfoManager &LAIs, DominatorTree *DT,
 
   return Changed;
 }
-}
+} // namespace
 
 PreservedAnalyses LoopVersioningPass::run(Function &F,
                                           FunctionAnalysisManager &AM) {

@@ -33,7 +33,7 @@
 #include "llvm/Analysis/UniformityAnalysis.h"
 #include "llvm/CodeGen/AssignmentTrackingAnalysis.h"
 #include "llvm/CodeGen/CodeGenCommonISel.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsSelDAG.h"
 #include "llvm/CodeGen/FastISel.h"
 #include "llvm/CodeGen/FunctionLoweringInfo.h"
 #include "llvm/CodeGen/GCMetadata.h"
@@ -129,18 +129,22 @@ STATISTIC(NumFastIselFailLowerArguments,
           "Number of entry blocks where fast isel failed to lower arguments");
 
 // Forward declarations for accessor functions defined later in the file.
-static int getFastIselAbort(const clv2::OptionsContext &Ctx);
-static bool getFastIselReportOnFallback(const clv2::OptionsContext &Ctx);
-static bool getUseMbpi(const clv2::OptionsContext &Ctx);
-static bool getDumpSortedDags(const clv2::OptionsContext &Ctx);
-static bool getViewDagCombine1Dags(const clv2::OptionsContext &Ctx);
-static bool getViewLegalizeTypesDags(const clv2::OptionsContext &Ctx);
-static bool getViewDagCombineLtDags(const clv2::OptionsContext &Ctx);
-static bool getViewLegalizeDags(const clv2::OptionsContext &Ctx);
-static bool getViewDagCombine2Dags(const clv2::OptionsContext &Ctx);
-static bool getViewIselDags(const clv2::OptionsContext &Ctx);
-static bool getViewSchedDags(const clv2::OptionsContext &Ctx);
-static bool getViewSunitDags(const clv2::OptionsContext &Ctx);
+static int getFastIselAbort(const LLVMContext &Ctx);
+static bool getFastIselReportOnFallback(const LLVMContext &Ctx);
+// getUseMbpi takes a nullable context: SelectionDAGISelLegacy::getAnalysisUsage
+// runs before a Function/Module (and thus LLVMContext) is reachable, so it
+// falls back to the process-wide default; see getSched1Options in
+// TargetPassConfig.cpp for the same pattern.
+static bool getUseMbpi(const LLVMContext *Ctx);
+static bool getDumpSortedDags(const LLVMContext &Ctx);
+static bool getViewDagCombine1Dags(const LLVMContext &Ctx);
+static bool getViewLegalizeTypesDags(const LLVMContext &Ctx);
+static bool getViewDagCombineLtDags(const LLVMContext &Ctx);
+static bool getViewLegalizeDags(const LLVMContext &Ctx);
+static bool getViewDagCombine2Dags(const LLVMContext &Ctx);
+static bool getViewIselDags(const LLVMContext &Ctx);
+static bool getViewSchedDags(const LLVMContext &Ctx);
+static bool getViewSunitDags(const LLVMContext &Ctx);
 
 #ifndef NDEBUG
 #define ISEL_DUMP(X)                                                           \
@@ -348,7 +352,7 @@ bool SelectionDAGISelLegacy::runOnMachineFunction(MachineFunction &MF) {
     return false;
 
   // Do some sanity-checking on the command-line options.
-  if (getFastIselAbort(MF.getFunction().getContext().getOptionsContext()) &&
+  if (getFastIselAbort(MF.getFunction().getContext()) &&
       !Selector->TM.Options.EnableFastISel)
     reportFatalUsageError("-fast-isel-abort > 0 requires -fast-isel");
 
@@ -393,7 +397,9 @@ void SelectionDAGISelLegacy::getAnalysisUsage(AnalysisUsage &AU) const {
   AU.addRequired<TargetLibraryInfoWrapperPass>();
   AU.addRequired<TargetTransformInfoWrapperPass>();
   AU.addRequired<AssumptionCacheTracker>();
-  if (getUseMbpi(Selector->TM.getOptionsContext()) && RegisterPGOPasses)
+  // No Function/Module (and thus LLVMContext) is reachable here; getUseMbpi
+  // falls back to the process-wide default.
+  if (getUseMbpi(/*Ctx=*/nullptr) && RegisterPGOPasses)
     AU.addRequired<BranchProbabilityInfoWrapperPass>();
   AU.addRequired<ProfileSummaryInfoWrapperPass>();
   // AssignmentTrackingAnalysis only runs if assignment tracking is enabled for
@@ -416,7 +422,7 @@ SelectionDAGISelPass::run(MachineFunction &MF,
     return PreservedAnalyses::all();
 
   // Do some sanity-checking on the command-line options.
-  if (getFastIselAbort(MF.getFunction().getContext().getOptionsContext()) &&
+  if (getFastIselAbort(MF.getFunction().getContext()) &&
       !Selector->TM.Options.EnableFastISel)
     reportFatalUsageError("-fast-isel-abort > 0 requires -fast-isel");
 
@@ -488,7 +494,7 @@ void SelectionDAGISel::initializeAnalysisResults(
   // into account).  That's unfortunate but OK because it just means we won't
   // ask for passes that have been required anyway.
 
-  if (getUseMbpi(Fn.getContext().getOptionsContext()) && RegisterPGOPasses)
+  if (getUseMbpi(&Fn.getContext()) && RegisterPGOPasses)
     FuncInfo->BPI = &FAM.getResult<BranchProbabilityAnalysis>(Fn);
   else
     FuncInfo->BPI = nullptr;
@@ -550,7 +556,7 @@ void SelectionDAGISel::initializeAnalysisResults(MachineFunctionPass &MFP) {
   // into account).  That's unfortunate but OK because it just means we won't
   // ask for passes that have been required anyway.
 
-  if (getUseMbpi(Fn.getContext().getOptionsContext()) && RegisterPGOPasses)
+  if (getUseMbpi(&Fn.getContext()) && RegisterPGOPasses)
     FuncInfo->BPI =
         &MFP.getAnalysis<BranchProbabilityInfoWrapperPass>().getBPI();
   else
@@ -612,7 +618,7 @@ bool SelectionDAGISel::runOnMachineFunction(MachineFunction &mf) {
   SelectAllBasicBlocks(Fn);
   if (FastISelFailed &&
       getFastIselReportOnFallback(
-          MF->getFunction().getContext().getOptionsContext())) {
+          MF->getFunction().getContext())) {
     DiagnosticInfoISelFallback DiagFallback(Fn);
     Fn.getContext().diagnose(DiagFallback);
   }
@@ -926,26 +932,26 @@ void SelectionDAGISel::CodeGenAndEmitDAG() {
   // Read the slot as a StringRef: this runs for every basic block, and
   // materialising a std::string per block only to find it empty is wasteful
   // even in an assertions build.
-  StringRef FilterBB;
-  if (const auto *V = clv2::getView<&clv2::CGPassSelDAGReg>(
-          MF->getFunction().getContext().getOptionsContext()))
-    FilterBB = V->get<&clv2::CGPASS_FilterViewDags>();
+  StringRef FilterBB = MF->getFunction()
+                            .getContext()
+                            .getOptions<CodeGenSelDAGOptions>()
+                            .CGPASS_FilterViewDags;
   MatchFilterBB = (FilterBB.empty() ||
                    FilterBB == FuncInfo->MBB->getBasicBlock()->getName());
 #endif
 #ifdef NDEBUG
   if (getViewDagCombine1Dags(
-          MF->getFunction().getContext().getOptionsContext()) ||
+          MF->getFunction().getContext()) ||
       getViewLegalizeTypesDags(
-          MF->getFunction().getContext().getOptionsContext()) ||
+          MF->getFunction().getContext()) ||
       getViewDagCombineLtDags(
-          MF->getFunction().getContext().getOptionsContext()) ||
-      getViewLegalizeDags(MF->getFunction().getContext().getOptionsContext()) ||
+          MF->getFunction().getContext()) ||
+      getViewLegalizeDags(MF->getFunction().getContext()) ||
       getViewDagCombine2Dags(
-          MF->getFunction().getContext().getOptionsContext()) ||
-      getViewIselDags(MF->getFunction().getContext().getOptionsContext()) ||
-      getViewSchedDags(MF->getFunction().getContext().getOptionsContext()) ||
-      getViewSunitDags(MF->getFunction().getContext().getOptionsContext()))
+          MF->getFunction().getContext()) ||
+      getViewIselDags(MF->getFunction().getContext()) ||
+      getViewSchedDags(MF->getFunction().getContext()) ||
+      getViewSunitDags(MF->getFunction().getContext()))
 #endif
   {
     BlockName =
@@ -955,7 +961,7 @@ void SelectionDAGISel::CodeGenAndEmitDAG() {
                    << printMBBReference(*FuncInfo->MBB) << " '" << BlockName
                    << "'\n";
             CurDAG->dump(getDumpSortedDags(
-                MF->getFunction().getContext().getOptionsContext())));
+                MF->getFunction().getContext())));
 
 #if !defined(NDEBUG) && LLVM_ENABLE_ABI_BREAKING_CHECKS
   if (TTI->hasBranchDivergence())
@@ -963,7 +969,7 @@ void SelectionDAGISel::CodeGenAndEmitDAG() {
 #endif
 
   if (getViewDagCombine1Dags(
-          MF->getFunction().getContext().getOptionsContext()) &&
+          MF->getFunction().getContext()) &&
       MatchFilterBB)
     CurDAG->viewGraph("dag-combine1 input for " + BlockName);
 
@@ -978,7 +984,7 @@ void SelectionDAGISel::CodeGenAndEmitDAG() {
                    << printMBBReference(*FuncInfo->MBB) << " '" << BlockName
                    << "'\n";
             CurDAG->dump(getDumpSortedDags(
-                MF->getFunction().getContext().getOptionsContext())));
+                MF->getFunction().getContext())));
 
 #if !defined(NDEBUG) && LLVM_ENABLE_ABI_BREAKING_CHECKS
   if (TTI->hasBranchDivergence())
@@ -988,7 +994,7 @@ void SelectionDAGISel::CodeGenAndEmitDAG() {
   // Second step, hack on the DAG until it only uses operations and types that
   // the target supports.
   if (getViewLegalizeTypesDags(
-          MF->getFunction().getContext().getOptionsContext()) &&
+          MF->getFunction().getContext()) &&
       MatchFilterBB)
     CurDAG->viewGraph("legalize-types input for " + BlockName);
 
@@ -1003,7 +1009,7 @@ void SelectionDAGISel::CodeGenAndEmitDAG() {
                    << printMBBReference(*FuncInfo->MBB) << " '" << BlockName
                    << "'\n";
             CurDAG->dump(getDumpSortedDags(
-                MF->getFunction().getContext().getOptionsContext())));
+                MF->getFunction().getContext())));
 
 #if !defined(NDEBUG) && LLVM_ENABLE_ABI_BREAKING_CHECKS
   if (TTI->hasBranchDivergence())
@@ -1015,7 +1021,7 @@ void SelectionDAGISel::CodeGenAndEmitDAG() {
 
   if (Changed) {
     if (getViewDagCombineLtDags(
-            MF->getFunction().getContext().getOptionsContext()) &&
+            MF->getFunction().getContext()) &&
         MatchFilterBB)
       CurDAG->viewGraph("dag-combine-lt input for " + BlockName);
 
@@ -1030,7 +1036,7 @@ void SelectionDAGISel::CodeGenAndEmitDAG() {
                      << printMBBReference(*FuncInfo->MBB) << " '" << BlockName
                      << "'\n";
               CurDAG->dump(getDumpSortedDags(
-                  MF->getFunction().getContext().getOptionsContext())));
+                  MF->getFunction().getContext())));
 
 #if !defined(NDEBUG) && LLVM_ENABLE_ABI_BREAKING_CHECKS
     if (TTI->hasBranchDivergence())
@@ -1049,7 +1055,7 @@ void SelectionDAGISel::CodeGenAndEmitDAG() {
                      << printMBBReference(*FuncInfo->MBB) << " '" << BlockName
                      << "'\n";
               CurDAG->dump(getDumpSortedDags(
-                  MF->getFunction().getContext().getOptionsContext())));
+                  MF->getFunction().getContext())));
 
 #if !defined(NDEBUG) && LLVM_ENABLE_ABI_BREAKING_CHECKS
     if (TTI->hasBranchDivergence())
@@ -1066,7 +1072,7 @@ void SelectionDAGISel::CodeGenAndEmitDAG() {
                      << printMBBReference(*FuncInfo->MBB) << " '" << BlockName
                      << "'\n";
               CurDAG->dump(getDumpSortedDags(
-                  MF->getFunction().getContext().getOptionsContext())));
+                  MF->getFunction().getContext())));
 
 #if !defined(NDEBUG) && LLVM_ENABLE_ABI_BREAKING_CHECKS
     if (TTI->hasBranchDivergence())
@@ -1074,7 +1080,7 @@ void SelectionDAGISel::CodeGenAndEmitDAG() {
 #endif
 
     if (getViewDagCombineLtDags(
-            MF->getFunction().getContext().getOptionsContext()) &&
+            MF->getFunction().getContext()) &&
         MatchFilterBB)
       CurDAG->viewGraph("dag-combine-lv input for " + BlockName);
 
@@ -1089,7 +1095,7 @@ void SelectionDAGISel::CodeGenAndEmitDAG() {
                      << printMBBReference(*FuncInfo->MBB) << " '" << BlockName
                      << "'\n";
               CurDAG->dump(getDumpSortedDags(
-                  MF->getFunction().getContext().getOptionsContext())));
+                  MF->getFunction().getContext())));
 
 #if !defined(NDEBUG) && LLVM_ENABLE_ABI_BREAKING_CHECKS
     if (TTI->hasBranchDivergence())
@@ -1097,7 +1103,7 @@ void SelectionDAGISel::CodeGenAndEmitDAG() {
 #endif
   }
 
-  if (getViewLegalizeDags(MF->getFunction().getContext().getOptionsContext()) &&
+  if (getViewLegalizeDags(MF->getFunction().getContext()) &&
       MatchFilterBB)
     CurDAG->viewGraph("legalize input for " + BlockName);
 
@@ -1111,7 +1117,7 @@ void SelectionDAGISel::CodeGenAndEmitDAG() {
                    << printMBBReference(*FuncInfo->MBB) << " '" << BlockName
                    << "'\n";
             CurDAG->dump(getDumpSortedDags(
-                MF->getFunction().getContext().getOptionsContext())));
+                MF->getFunction().getContext())));
 
 #if !defined(NDEBUG) && LLVM_ENABLE_ABI_BREAKING_CHECKS
   if (TTI->hasBranchDivergence())
@@ -1119,7 +1125,7 @@ void SelectionDAGISel::CodeGenAndEmitDAG() {
 #endif
 
   if (getViewDagCombine2Dags(
-          MF->getFunction().getContext().getOptionsContext()) &&
+          MF->getFunction().getContext()) &&
       MatchFilterBB)
     CurDAG->viewGraph("dag-combine2 input for " + BlockName);
 
@@ -1134,7 +1140,7 @@ void SelectionDAGISel::CodeGenAndEmitDAG() {
                    << printMBBReference(*FuncInfo->MBB) << " '" << BlockName
                    << "'\n";
             CurDAG->dump(getDumpSortedDags(
-                MF->getFunction().getContext().getOptionsContext())));
+                MF->getFunction().getContext())));
 
 #if !defined(NDEBUG) && LLVM_ENABLE_ABI_BREAKING_CHECKS
   if (TTI->hasBranchDivergence())
@@ -1144,7 +1150,7 @@ void SelectionDAGISel::CodeGenAndEmitDAG() {
   if (OptLevel != CodeGenOptLevel::None)
     ComputeLiveOutVRegInfo();
 
-  if (getViewIselDags(MF->getFunction().getContext().getOptionsContext()) &&
+  if (getViewIselDags(MF->getFunction().getContext()) &&
       MatchFilterBB)
     CurDAG->viewGraph("isel input for " + BlockName);
 
@@ -1160,9 +1166,9 @@ void SelectionDAGISel::CodeGenAndEmitDAG() {
                    << printMBBReference(*FuncInfo->MBB) << " '" << BlockName
                    << "'\n";
             CurDAG->dump(getDumpSortedDags(
-                MF->getFunction().getContext().getOptionsContext())));
+                MF->getFunction().getContext())));
 
-  if (getViewSchedDags(MF->getFunction().getContext().getOptionsContext()) &&
+  if (getViewSchedDags(MF->getFunction().getContext()) &&
       MatchFilterBB)
     CurDAG->viewGraph("scheduler input for " + BlockName);
 
@@ -1174,7 +1180,7 @@ void SelectionDAGISel::CodeGenAndEmitDAG() {
     Scheduler->Run(CurDAG, FuncInfo->MBB);
   }
 
-  if (getViewSunitDags(MF->getFunction().getContext().getOptionsContext()) &&
+  if (getViewSunitDags(MF->getFunction().getContext()) &&
       MatchFilterBB)
     Scheduler->viewGraph();
 
@@ -1702,7 +1708,7 @@ void SelectionDAGISel::SelectAllBasicBlocks(const Function &Fn) {
         << ore::NV("Prototype", Fn.getFunctionType());
       reportFastISelFailure(
           *MF, *ORE, R,
-          getFastIselAbort(MF->getFunction().getContext().getOptionsContext()) >
+          getFastIselAbort(MF->getFunction().getContext()) >
               1);
 
       // Use SelectionDAG argument lowering
@@ -1864,7 +1870,7 @@ void SelectionDAGISel::SelectAllBasicBlocks(const Function &Fn) {
 
           if (R.isEnabled() ||
               getFastIselAbort(
-                  MF->getFunction().getContext().getOptionsContext())) {
+                  MF->getFunction().getContext())) {
             std::string InstStrStorage;
             raw_string_ostream InstStr(InstStrStorage);
             InstStr << *Inst;
@@ -1875,7 +1881,7 @@ void SelectionDAGISel::SelectAllBasicBlocks(const Function &Fn) {
           reportFastISelFailure(
               *MF, *ORE, R,
               getFastIselAbort(
-                  MF->getFunction().getContext().getOptionsContext()) > 2);
+                  MF->getFunction().getContext()) > 2);
 
           // If the call has operand bundles, then it's best if they are handled
           // together with the call instead of selecting the call as its own
@@ -1916,21 +1922,21 @@ void SelectionDAGISel::SelectAllBasicBlocks(const Function &Fn) {
                                    Inst->getDebugLoc(), LLVMBB);
 
         bool ShouldAbort = getFastIselAbort(
-            MF->getFunction().getContext().getOptionsContext());
+            MF->getFunction().getContext());
         if (Inst->isTerminator()) {
           // Use a different message for terminator misses.
           R << "FastISel missed terminator";
           // Don't abort for terminator unless the level is really high
           ShouldAbort =
               (getFastIselAbort(
-                   MF->getFunction().getContext().getOptionsContext()) > 2);
+                   MF->getFunction().getContext()) > 2);
         } else {
           R << "FastISel missed";
         }
 
         if (R.isEnabled() ||
             getFastIselAbort(
-                MF->getFunction().getContext().getOptionsContext())) {
+                MF->getFunction().getContext())) {
           std::string InstStrStorage;
           raw_string_ostream InstStr(InstStrStorage);
           InstStr << *Inst;
@@ -4665,50 +4671,51 @@ void SelectionDAGISel::CannotYetSelect(SDNode *N) {
   report_fatal_error(Twine(msg));
 }
 
-static int getFastIselAbort(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_FastIselAbort>(Ctx);
+static int getFastIselAbort(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenSelDAGOptions>().CGPASS_FastIselAbort;
 }
 
-static bool getFastIselReportOnFallback(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_FastIselReportOnFallback>(Ctx);
+static bool getFastIselReportOnFallback(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenSelDAGOptions>().CGPASS_FastIselReportOnFallback;
 }
 
-static bool getUseMbpi(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_UseMbpi>(Ctx);
+static bool getUseMbpi(const LLVMContext *Ctx) {
+  return Ctx ? Ctx->getOptions<CodeGenSelDAGOptions>().CGPASS_UseMbpi
+             : CodeGenSelDAGOptions::Current.CGPASS_UseMbpi;
 }
 
-static bool getDumpSortedDags(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_DumpSortedDags>(Ctx);
+static bool getDumpSortedDags(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenSelDAGOptions>().CGPASS_DumpSortedDags;
 }
 
-static bool getViewDagCombine1Dags(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_ViewDagCombine1Dags>(Ctx);
+static bool getViewDagCombine1Dags(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenSelDAGOptions>().CGPASS_ViewDagCombine1Dags;
 }
 
-static bool getViewLegalizeTypesDags(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_ViewLegalizeTypesDags>(Ctx);
+static bool getViewLegalizeTypesDags(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenSelDAGOptions>().CGPASS_ViewLegalizeTypesDags;
 }
 
-static bool getViewDagCombineLtDags(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_ViewDagCombineLtDags>(Ctx);
+static bool getViewDagCombineLtDags(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenSelDAGOptions>().CGPASS_ViewDagCombineLtDags;
 }
 
-static bool getViewLegalizeDags(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_ViewLegalizeDags>(Ctx);
+static bool getViewLegalizeDags(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenSelDAGOptions>().CGPASS_ViewLegalizeDags;
 }
 
-static bool getViewDagCombine2Dags(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_ViewDagCombine2Dags>(Ctx);
+static bool getViewDagCombine2Dags(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenSelDAGOptions>().CGPASS_ViewDagCombine2Dags;
 }
 
-static bool getViewIselDags(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_ViewIselDags>(Ctx);
+static bool getViewIselDags(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenSelDAGOptions>().CGPASS_ViewIselDags;
 }
 
-static bool getViewSchedDags(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_ViewSchedDags>(Ctx);
+static bool getViewSchedDags(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenSelDAGOptions>().CGPASS_ViewSchedDags;
 }
 
-static bool getViewSunitDags(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_ViewSunitDags>(Ctx);
+static bool getViewSunitDags(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenSelDAGOptions>().CGPASS_ViewSunitDags;
 }

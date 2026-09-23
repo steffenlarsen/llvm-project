@@ -221,14 +221,16 @@ void CodeGenPassBuilder::flushFPMsToMPM(PassManagerWrapper &PMW,
 Error CodeGenPassBuilder::buildPipeline(
     ModulePassManager &MPM, ModuleAnalysisManager &MAM, raw_pwrite_stream &Out,
     raw_pwrite_stream *DwoOut, CodeGenFileType FileType, MCContext &Ctx) {
+  // No Function/Module is reachable at pipeline-construction time; fall back
+  // to the process-wide default (see getSched2Options).
   auto StartStopInfo =
-      TargetPassConfig::getStartStopInfo(*PIC, TM.getOptionsContext());
+      TargetPassConfig::getStartStopInfo(*PIC, /*Ctx=*/nullptr);
   if (!StartStopInfo)
     return StartStopInfo.takeError();
   setStartStopPasses(*StartStopInfo);
 
   bool PrintAsm =
-      TargetPassConfig::willCompleteCodeGenPipeline(TM.getOptionsContext());
+      TargetPassConfig::willCompleteCodeGenPipeline(/*Ctx=*/nullptr);
   bool PrintMIR = !PrintAsm && FileType != CodeGenFileType::Null;
 
   PassManagerWrapper PMW(MPM);

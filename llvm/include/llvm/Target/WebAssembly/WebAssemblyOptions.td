@@ -6,95 +6,54 @@
 //
 //===----------------------------------------------------------------------===//
 
-include "llvm/Support/CLV2Options.td"
+include "llvm/Option/OptParser.td"
 
-def WebAssemblyOptsReg : Registry<"llvm::wasm_opts"> {
-  // Getter bodies are compiled once, in WebAssemblyOptionsGetters.cpp.
-  let OutOfLineGetters = 1;
-}
+def WebAssemblyOptions : OptionsStruct<"llvm"> {}
 
-def WASM_DisableEHPadSort : Option<
-    "wasm-disable-ehpad-sort",
+defm WASM_DisableEHPadSort : BoolField<
+    "wasm-disable-ehpad-sort", "false",
     "WebAssembly: Disable EH pad-first sort order. Testing purpose only.",
-    "bool"> {
-  let Registry = WebAssemblyOptsReg;
-  let Default = "0";
-  let ReallyHidden = 1;
-}
+    /*hidden=*/1>;
 
-def WASM_EHAllowlist : ListOption<
-    "emscripten-cxx-exceptions-allowed",
+defm WASM_EHAllowlist : ListField<
+    "emscripten-cxx-exceptions-allowed", "std::string",
     "The list of function names in which Emscripten-style "
     "exception handling is enabled (see emscripten "
-    "EMSCRIPTEN_CATCHING_ALLOWED options)",
-    "std::string"> {
-  let Registry = WebAssemblyOptsReg;
-  let CommaSeparated = 1;
-}
+    "EMSCRIPTEN_CATCHING_ALLOWED options)">;
 
-def WASM_KeepRegisters : Option<
-    "wasm-keep-registers",
+defm WASM_KeepRegisters : BoolField<
+    "wasm-keep-registers", "false",
     "WebAssembly: output stack registers in"
     " instruction output for test purposes only.",
-    "bool"> {
-  let Registry = WebAssemblyOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def WASM_DisableFallthroughReturnOpt : Option<
-    "disable-wasm-fallthrough-return-opt",
+defm WASM_DisableFallthroughReturnOpt : BoolField<
+    "disable-wasm-fallthrough-return-opt", "false",
     "WebAssembly: Disable fallthrough-return optimizations.",
-    "bool"> {
-  let Registry = WebAssemblyOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def WASM_DisableExplicitLocals : Option<
-    "wasm-disable-explicit-locals",
+defm WASM_DisableExplicitLocals : BoolField<
+    "wasm-disable-explicit-locals", "false",
     "WebAssembly: output implicit locals in"
     " instruction output for test purposes only.",
-    "bool"> {
-  let Registry = WebAssemblyOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def WASM_EnableEmEH : Option<
-    "enable-emscripten-cxx-exceptions",
-    "WebAssembly Emscripten-style exception handling",
-    "bool"> {
-  let Registry = WebAssemblyOptsReg;
-  let Default = "0";
-}
+defm WASM_EnableEmEH : BoolField<
+    "enable-emscripten-cxx-exceptions", "false",
+    "WebAssembly Emscripten-style exception handling">;
 
-def WASM_EnableEmSjLj : Option<
-    "enable-emscripten-sjlj",
-    "WebAssembly Emscripten-style setjmp/longjmp handling",
-    "bool"> {
-  let Registry = WebAssemblyOptsReg;
-  let Default = "0";
-}
+defm WASM_EnableEmSjLj : BoolField<
+    "enable-emscripten-sjlj", "false",
+    "WebAssembly Emscripten-style setjmp/longjmp handling">;
 
-def WASM_EnableEH : Option<
-    "wasm-enable-eh",
-    "WebAssembly exception handling",
-    "bool"> {
-  let Registry = WebAssemblyOptsReg;
-}
+defm WASM_EnableEH : BoolField<
+    "wasm-enable-eh", "false",
+    "WebAssembly exception handling">;
 
-def WASM_EnableSjLj : Option<
-    "wasm-enable-sjlj",
-    "WebAssembly setjmp/longjmp handling",
-    "bool"> {
-  let Registry = WebAssemblyOptsReg;
-}
+defm WASM_EnableSjLj : BoolField<
+    "wasm-enable-sjlj", "false",
+    "WebAssembly setjmp/longjmp handling">;
 
-def WASM_UseLegacyEH : Option<
-    "wasm-use-legacy-eh",
-    "WebAssembly exception handling (legacy)",
-    "bool"> {
-  let Registry = WebAssemblyOptsReg;
-  let Default = "1";
-}
+defm WASM_UseLegacyEH : BoolField<
+    "wasm-use-legacy-eh", "true",
+    "WebAssembly exception handling (legacy)">;

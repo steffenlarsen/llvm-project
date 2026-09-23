@@ -1,6 +1,4 @@
 add_llvm_component_library(LLVMInstrumentation
-  InstrumentationOptionsRegistration.cpp
-  InstrumentationOptionsGetters.cpp
   AddressSanitizer.cpp
   AllocToken.cpp
   InstrumentationOptions.cpp
@@ -37,6 +35,8 @@ add_llvm_component_library(LLVMInstrumentation
 
   DEPENDS
   intrinsics_gen
+  InstrumentationOptParserTableGen
+  ProfileDataOptParserTableGen
 
   LINK_COMPONENTS
   Analysis

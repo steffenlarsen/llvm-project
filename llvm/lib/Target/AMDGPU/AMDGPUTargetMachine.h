@@ -19,14 +19,11 @@
 #include "llvm/CodeGen/CodeGenTargetMachineImpl.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
 #include "llvm/MC/MCStreamer.h"
-#include "llvm/Support/OptionsContext.h"
 #include <optional>
 #include <utility>
 
 namespace llvm {
-namespace clv2 {
-class OptionsContext;
-}
+class LLVMContext;
 
 //===----------------------------------------------------------------------===//
 // AMDGPU Target Machine (R600+)
@@ -44,13 +41,11 @@ protected:
   StringRef getFeatureString(const Function &F) const;
 
 public:
-  static bool getEnableFunctionCalls(const clv2::OptionsContext &Ctx);
-  static bool getEnableFunctionCalls(const Triple &TT,
-                                     const clv2::OptionsContext &Ctx);
-  static bool getEnableObjectLinking(const clv2::OptionsContext &Ctx);
-  static bool getEnableLowerModuleLDS(const clv2::OptionsContext &Ctx);
-  static bool
-  getEnableFunctionCallsWasSpecified(const clv2::OptionsContext &Ctx);
+  static bool getEnableFunctionCalls(const LLVMContext *Ctx);
+  static bool getEnableFunctionCalls(const Triple &TT, const LLVMContext *Ctx);
+  static bool getEnableObjectLinking(const LLVMContext *Ctx);
+  static bool getEnableLowerModuleLDS(const LLVMContext *Ctx);
+  static bool getEnableFunctionCallsWasSpecified(const LLVMContext *Ctx);
 
   AMDGPUTargetMachine(const Target &T, const Triple &TT, StringRef CPU,
                       StringRef FS, const TargetOptions &Options,

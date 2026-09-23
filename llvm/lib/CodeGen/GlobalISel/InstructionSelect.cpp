@@ -16,7 +16,7 @@
 #include "llvm/Analysis/BlockFrequencyInfo.h"
 #include "llvm/Analysis/LazyBlockFrequencyInfo.h"
 #include "llvm/Analysis/ProfileSummaryInfo.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsGISel.h"
 #include "llvm/CodeGen/GlobalISel/GISelChangeObserver.h"
 #include "llvm/CodeGen/GlobalISel/GISelValueTracking.h"
 #include "llvm/CodeGen/GlobalISel/InstructionSelector.h"
@@ -34,14 +34,13 @@
 #include "llvm/Config/config.h"
 #include "llvm/IR/Analysis.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/LLVMContext.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/CodeGen.h"
 #include "llvm/Support/CodeGenCoverage.h"
-#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/DebugCounter.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Target/TargetMachine.h"
 
 #define DEBUG_TYPE "instruction-select"
@@ -194,16 +193,11 @@ bool InstructionSelectImpl::selectMachineFunction(MachineFunction &MF) {
   // FIXME: This should be in the MachineVerifier, as the RegBankSelected
   // property check already is.
   {
-    bool DisableLegalityCheck = false;
-    const cgpass_opts::CGPassGISelRegOpts *O = nullptr;
-    if (const Function *F = &MF.getFunction())
-      O = clv2::getView<&clv2::CGPassGISelReg>(
-          F->getContext().getOptionsContext());
-    if (!O)
-      O = clv2::getView<&clv2::CGPassGISelReg>(
-          MF.getFunction().getContext().getOptionsContext());
-    if (O)
-      DisableLegalityCheck = O->get<&clv2::CGPASS_DisableGiselLegalityCheck>();
+    bool DisableLegalityCheck =
+        MF.getFunction()
+            .getContext()
+            .getOptions<CodeGenGISelOptions>()
+            .CGPASS_DisableGiselLegalityCheck;
     if (!DisableLegalityCheck)
       if (const MachineInstr *MI = machineFunctionIsIllegal(MF)) {
         reportGISelFailure(MF, MORE, "gisel-select", "instruction is not legal",

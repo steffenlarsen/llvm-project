@@ -19,7 +19,7 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/iterator_range.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsGISel.h"
 #include "llvm/CodeGen/LiveInterval.h"
 #include "llvm/CodeGen/LiveIntervalCalc.h"
 #include "llvm/CodeGen/LiveVariables.h"
@@ -40,6 +40,7 @@
 #include "llvm/CodeGen/VirtRegMap.h"
 #include "llvm/Config/llvm-config.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/ProfileSummary.h"
 #include "llvm/IR/Statepoint.h"
 #include "llvm/InitializePasses.h"
@@ -99,8 +100,8 @@ bool LiveIntervalsWrapperPass::runOnMachineFunction(MachineFunction &MF) {
   return false;
 }
 
-static bool getPrecomputePhysLiveness(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_PrecomputePhysLiveness>(Ctx);
+static bool getPrecomputePhysLiveness(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenGISelOptions>().CGPASS_PrecomputePhysLiveness;
 }
 
 static bool UseSegmentSetForPhysRegs = true;
@@ -170,8 +171,7 @@ void LiveIntervals::analyze(MachineFunction &fn) {
   computeRegMasks();
   computeLiveInRegUnits();
 
-  if (getPrecomputePhysLiveness(
-          MF->getFunction().getContext().getOptionsContext())) {
+  if (getPrecomputePhysLiveness(MF->getFunction().getContext())) {
     // For stress testing, precompute live ranges of all physical register
     // units, including reserved registers.
     for (MCRegUnit Unit : TRI->regunits())

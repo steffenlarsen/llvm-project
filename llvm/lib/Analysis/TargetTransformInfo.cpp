@@ -8,7 +8,7 @@
 
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
+#include "llvm/Analysis/AnalysisOptions.h"
 #include "llvm/Analysis/CFG.h"
 #include "llvm/Analysis/LoopIterator.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
@@ -263,13 +263,9 @@ TargetTransformInfo::getInstructionCost(const User *U,
 }
 
 BranchProbability TargetTransformInfo::getPredictableBranchThreshold(
-    const clv2::OptionsContext &Ctx) const {
-  if (auto *O = clv2::getView<&clv2::AnalysisOptsReg>(Ctx)) {
-    if (O->specified<&clv2::AN_PredictableBranchThreshold>()) {
-      unsigned Threshold = O->get<&clv2::AN_PredictableBranchThreshold>();
-      return BranchProbability(Threshold, 100);
-    }
-  }
+    const AnalysisOptions &Opts) const {
+  if (Opts.AN_PredictableBranchThreshold)
+    return BranchProbability(*Opts.AN_PredictableBranchThreshold, 100);
   return TTIImpl->getPredictableBranchThreshold();
 }
 
@@ -709,12 +705,11 @@ bool TargetTransformInfo::isFPVectorizationPotentiallyUnsafe() const {
   return TTIImpl->isFPVectorizationPotentiallyUnsafe();
 }
 
-bool
-TargetTransformInfo::allowsMisalignedMemoryAccesses(LLVMContext &Context,
-                                                    unsigned BitWidth,
-                                                    unsigned AddressSpace,
-                                                    Align Alignment,
-                                                    unsigned *Fast) const {
+bool TargetTransformInfo::allowsMisalignedMemoryAccesses(LLVMContext &Context,
+                                                         unsigned BitWidth,
+                                                         unsigned AddressSpace,
+                                                         Align Alignment,
+                                                         unsigned *Fast) const {
   return TTIImpl->allowsMisalignedMemoryAccesses(Context, BitWidth,
                                                  AddressSpace, Alignment, Fast);
 }
@@ -859,10 +854,8 @@ bool TargetTransformInfo::shouldConsiderAddressTypePromotion(
 }
 
 unsigned
-TargetTransformInfo::getCacheLineSize(const clv2::OptionsContext &Ctx) const {
-  return clv2::getOptValIfSpecified<&clv2::AnalysisOptsReg,
-                                    &clv2::AN_CacheLineSize>(
-      Ctx, TTIImpl->getCacheLineSize());
+TargetTransformInfo::getCacheLineSize(const AnalysisOptions &Opts) const {
+  return Opts.AN_CacheLineSize.value_or(TTIImpl->getCacheLineSize());
 }
 
 std::optional<unsigned>
@@ -876,10 +869,9 @@ TargetTransformInfo::getCacheAssociativity(CacheLevel Level) const {
 }
 
 std::optional<unsigned>
-TargetTransformInfo::getMinPageSize(const clv2::OptionsContext &Ctx) const {
-  if (auto *V = Ctx.getViewPtr<&clv2::AnalysisOptsReg>())
-    if (V->template specified<&clv2::AN_MinPageSize>())
-      return V->template get<&clv2::AN_MinPageSize>();
+TargetTransformInfo::getMinPageSize(const AnalysisOptions &Opts) const {
+  if (Opts.AN_MinPageSize)
+    return Opts.AN_MinPageSize;
   return TTIImpl->getMinPageSize();
 }
 

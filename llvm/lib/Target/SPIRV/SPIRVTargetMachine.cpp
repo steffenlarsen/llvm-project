@@ -30,8 +30,7 @@
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/CodeGen.h"
 #include "llvm/Support/Compiler.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/SPIRV/SPIRVOptionsOptInfos.h"
+#include "llvm/Target/SPIRV/SPIRVOptions.h"
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/Transforms/IPO/ExpandVariadics.h"
 #include "llvm/Transforms/Scalar.h"
@@ -266,8 +265,7 @@ bool SPIRVPassConfig::addRegBankSelect() {
 // -spv-emit-nonsemantic-debug-info should switch to -g.
 
 [[maybe_unused]] static bool getEnableNonSemanticDI(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::SPIRV_EnableNonSemanticDI>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<SPIRVOptions>().SPIRV_EnableNonSemanticDI;
 }
 
 // Add the custom SPIRVInstructionSelect from above.

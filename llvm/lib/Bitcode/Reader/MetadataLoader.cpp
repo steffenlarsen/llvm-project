@@ -21,7 +21,7 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/BinaryFormat/Dwarf.h"
-#include "llvm/Bitcode/BitcodeOptionsOptInfos.h"
+#include "llvm/Bitcode/BitcodeOptions.h"
 #include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/Bitcode/LLVMBitCodes.h"
 #include "llvm/Bitstream/BitstreamReader.h"
@@ -43,7 +43,6 @@
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/TimeProfiler.h"
 
 #include <algorithm>
@@ -71,13 +70,13 @@ STATISTIC(NumMDRecordLoaded, "Number of Metadata records loaded");
 /// Currently needed for Darwin and LLDB.
 
 static bool getImportFullTypeDefinitions(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::BC_ImportFullTypeDefinitions>(
-      M.getContext().getOptionsContext());
+  return M.getContext()
+      .getOptions<BitcodeOptions>()
+      .BC_ImportFullTypeDefinitions;
 }
 
 static bool getDisableLazyLoading(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::BC_DisableLazyLoading>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<BitcodeOptions>().BC_DisableLazyLoading;
 }
 
 namespace {

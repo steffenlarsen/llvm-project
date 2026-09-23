@@ -23,6 +23,7 @@
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/OptionsContext.h"
+#include "llvm/Support/PluginLoaderOptions.h"
 #include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/WithColor.h"
@@ -555,9 +556,12 @@ int main(int argc, const char *argv[]) {
   P.add<&CXXDumpToolReg>();
   RegisterAllLLVMOptions(P);
   P.hideUnrelatedOptions({&CXXDumpCategory, &getColorCategory()});
+  std::vector<const char *> ArgsAfterPlugins =
+      loadPluginsAndStripArgs(argc, argv);
   auto OptsCtx =
-      P.parse(argc, argv, "LLVM C++ ABI Data Dumper\n", /*Errs=*/nullptr,
-              /*VersionString=*/{}, /*HelpOS=*/nullptr,
+      P.parse(static_cast<int>(ArgsAfterPlugins.size()),
+              ArgsAfterPlugins.data(), "LLVM C++ ABI Data Dumper\n",
+              /*Errs=*/nullptr, /*VersionString=*/{}, /*HelpOS=*/nullptr,
               TargetRegistry::printRegisteredTargetsForVersion);
   auto *Opts = OptsCtx->getViewPtr<&CXXDumpToolReg>();
 

@@ -51,9 +51,8 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
+#include "llvm/Target/Hexagon/HexagonOptions.h"
 #include "llvm/Target/TargetMachine.h"
 #include <algorithm>
 #include <cassert>
@@ -263,76 +262,68 @@ static bool OptimizeSpillSlots = true;
 
 #ifndef NDEBUG
 static unsigned SpillOptMax = std::numeric_limits<unsigned>::max();
-static bool SpillOptMaxWasSpecified = false;
 static unsigned SpillOptCount = 0;
 #endif
 
 static bool getDisableDeallocRet(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_DisableDeallocRet>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_DisableDeallocRet;
 }
 
 static unsigned getNumberScavengerSlots(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_NumberScavengerSlots>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_NumberScavengerSlots;
 }
 
 static int getSpillFuncThreshold(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_SpillFuncThreshold>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_SpillFuncThreshold;
 }
 
 static int getSpillFuncThresholdOs(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_SpillFuncThresholdOs>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_SpillFuncThresholdOs;
 }
 
 static bool getEnableStackOVFSanitizer(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_EnableStackOVFSanitizer>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<HexagonOptions>()
+      .HEX_EnableStackOVFSanitizer;
 }
 
 static bool getEnableShrinkWrapping(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_EnableShrinkWrapping>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_EnableShrinkWrapping;
 }
 
 static unsigned getShrinkLimit(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_ShrinkLimit>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_ShrinkLimit.value_or(
+      std::numeric_limits<unsigned>::max());
 }
 
 static bool getShrinkLimitWasSpecified(const Function &F) {
-  return clv2::wasOptSpecified<&clv2::HexagonOptsReg, &clv2::HEX_ShrinkLimit>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<HexagonOptions>()
+      .HEX_ShrinkLimit.has_value();
 }
 
 static bool getEnableSaveRestoreLong(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_EnableSaveRestoreLong>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_EnableSaveRestoreLong;
 }
 
 static bool getEliminateFramePointer(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_EliminateFramePointer>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_EliminateFramePointer;
 }
 
 static bool getOptimizeSpillSlots(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_OptimizeSpillSlots>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_OptimizeSpillSlots;
 }
 
 #ifndef NDEBUG
 static unsigned getSpillOptMax(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_SpillOptMax>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_SpillOptMax.value_or(
+      std::numeric_limits<unsigned>::max());
 }
 
 static bool getSpillOptMaxWasSpecified(const Function &F) {
-  if (auto *O = clv2::getView<&clv2::HexagonOptsReg>(
-          F.getContext().getOptionsContext()))
-    return O->specified<&clv2::HEX_SpillOptMax>();
-  return SpillOptMaxWasSpecified;
+  return F.getContext()
+      .getOptions<HexagonOptions>()
+      .HEX_SpillOptMax.has_value();
 }
 #endif
 

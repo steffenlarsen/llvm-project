@@ -1,4 +1,3 @@
-#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
 //===- LowerMatrixIntrinsics.cpp -  Lower matrix intrinsics -----*- C++ -*-===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -45,8 +44,8 @@
 #include "llvm/Support/Alignment.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Transforms/Scalar/LowerMatrixIntrinsics.h"
+#include "llvm/Transforms/Scalar/ScalarOptions.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
 #include "llvm/Transforms/Utils/MatrixUtils.h"
@@ -63,67 +62,48 @@ STATISTIC(ReshapedMatrices, "Number of matrix reshapes");
 STATISTIC(SplitMatrices, "Number of matrix splits");
 
 static bool getFuseMatrix(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_FuseMatrix>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<ScalarOptions>().SC_FuseMatrix;
 }
 // TODO: Allow and use non-square tiles.
 static unsigned getTileSize(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_FuseMatrixTileSize>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<ScalarOptions>().SC_FuseMatrixTileSize;
 }
 static unsigned getTileLoopsThreshold(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_FuseMatrixLoopsThreshold>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<ScalarOptions>().SC_FuseMatrixLoopsThreshold;
 }
 static bool getForceFusion(const Function &F) {
-  return clv2::getOptValOr<&clv2::ScalarOptsReg, &clv2::SC_ForceFuseMatrix>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext().getOptions<ScalarOptions>().SC_ForceFuseMatrix;
 }
 static bool getAllowContractEnabled(const Function &F) {
-  return clv2::getOptValOr<&clv2::ScalarOptsReg, &clv2::SC_MatrixAllowContract>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext().getOptions<ScalarOptions>().SC_MatrixAllowContract;
 }
 
 static bool getVerifyShapeInfo(const Function &F) {
-  return clv2::getOptValOr<&clv2::ScalarOptsReg, &clv2::SC_VerifyMatrixShapes>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext().getOptions<ScalarOptions>().SC_VerifyMatrixShapes;
 }
 
 enum class MatrixLayoutTy { ColumnMajor, RowMajor };
 
-/// Return the matrix layout from the Function or OptionsContext.
-/// When F is provided, its LLVMContext is used to obtain the OptionsContext.
-static MatrixLayoutTy getMatrixLayoutDefault(const clv2::OptionsContext &Ctx) {
-  if (auto *O = clv2::getView<&clv2::ScalarOptsReg>(Ctx)) {
-    if (O->specified<&clv2::SC_MatrixDefaultLayout>()) {
-      auto V = O->get<&clv2::SC_MatrixDefaultLayout>();
-      return static_cast<MatrixLayoutTy>(static_cast<int>(V));
-    }
-  }
-  return MatrixLayoutTy::ColumnMajor;
+/// Return the default matrix layout configured for \p Ctx.
+static MatrixLayoutTy getMatrixLayoutDefault(const LLVMContext &Ctx) {
+  return static_cast<MatrixLayoutTy>(
+      static_cast<int>(Ctx.getOptions<ScalarOptions>().SC_MatrixDefaultLayout));
 }
 
 static MatrixLayoutTy getMatrixLayout(const Function &F) {
-  if (auto *O = clv2::getView<&clv2::ScalarOptsReg>(
-          F.getContext().getOptionsContext())) {
-    if (O->specified<&clv2::SC_MatrixDefaultLayout>()) {
-      auto V = O->get<&clv2::SC_MatrixDefaultLayout>();
-      return static_cast<MatrixLayoutTy>(static_cast<int>(V));
-    }
-  }
-  return MatrixLayoutTy::ColumnMajor;
+  return getMatrixLayoutDefault(F.getContext());
 }
 
 static bool getPrintAfterTransposeOpt(const Function &F) {
-  return clv2::getOptValOr<&clv2::ScalarOptsReg,
-                           &clv2::SC_MatrixPrintAfterTransposeOpt>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_MatrixPrintAfterTransposeOpt;
 }
 
 static unsigned getSplitMatmulRemainderOverThreshold(const Function &F) {
-  return clv2::getOptValOr<&clv2::ScalarOptsReg,
-                           &clv2::SC_MatrixSplitMatmulRemainderOverThreshold>(
-      F.getContext().getOptionsContext(), 0);
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_MatrixSplitMatmulRemainderOverThreshold;
 }
 
 namespace llvm {
@@ -230,13 +210,12 @@ struct ShapeInfo {
   ShapeInfo(unsigned NumRows, unsigned NumColumns)
       : NumRows(NumRows), NumColumns(NumColumns), IsColumnMajor(true) {}
 
-  ShapeInfo(unsigned NumRows, unsigned NumColumns,
-            const clv2::OptionsContext &Ctx)
+  ShapeInfo(unsigned NumRows, unsigned NumColumns, const LLVMContext &Ctx)
       : NumRows(NumRows), NumColumns(NumColumns),
         IsColumnMajor(getMatrixLayoutDefault(Ctx) ==
                       MatrixLayoutTy::ColumnMajor) {}
 
-  ShapeInfo(Value *NumRows, Value *NumColumns, const clv2::OptionsContext &Ctx)
+  ShapeInfo(Value *NumRows, Value *NumColumns, const LLVMContext &Ctx)
       : ShapeInfo(cast<ConstantInt>(NumRows)->getZExtValue(),
                   cast<ConstantInt>(NumColumns)->getZExtValue(), Ctx) {}
 
@@ -356,8 +335,7 @@ static iterator_range<Use *> getShapedOperandsForInst(Instruction *I) {
 static std::optional<ShapeInfo>
 computeShapeInfoForInst(Instruction *I,
                         const DenseMap<Value *, ShapeInfo> &ShapeMap) {
-  const clv2::OptionsContext &OptCtx =
-      I->getFunction()->getContext().getOptionsContext();
+  const LLVMContext &OptCtx = I->getFunction()->getContext();
   Value *M;
   Value *N;
   Value *K;
@@ -464,14 +442,14 @@ class LowerMatrixIntrinsics {
 
   public:
     MatrixTy() : IsColumnMajor(true) {}
-    MatrixTy(const clv2::OptionsContext &Ctx)
+    MatrixTy(const LLVMContext &Ctx)
         : IsColumnMajor(getMatrixLayoutDefault(Ctx) ==
                         MatrixLayoutTy::ColumnMajor) {}
-    MatrixTy(ArrayRef<Value *> Vectors, const clv2::OptionsContext &Ctx)
+    MatrixTy(ArrayRef<Value *> Vectors, const LLVMContext &Ctx)
         : Vectors(Vectors), IsColumnMajor(getMatrixLayoutDefault(Ctx) ==
                                           MatrixLayoutTy::ColumnMajor) {}
     MatrixTy(unsigned NumRows, unsigned NumColumns, Type *EltTy,
-             const clv2::OptionsContext &Ctx)
+             const LLVMContext &Ctx)
         : IsColumnMajor(getMatrixLayoutDefault(Ctx) ==
                         MatrixLayoutTy::ColumnMajor) {
 
@@ -634,14 +612,12 @@ private:
     return FMF;
   }
 
-  /// Create a ShapeInfo with OptionsContext for correct option lookup.
+  /// Create a ShapeInfo with the function's LLVMContext for option lookup.
   ShapeInfo makeShape(unsigned NumRows, unsigned NumColumns) {
-    return ShapeInfo(NumRows, NumColumns,
-                     Func.getContext().getOptionsContext());
+    return ShapeInfo(NumRows, NumColumns, Func.getContext());
   }
   ShapeInfo makeShape(Value *NumRows, Value *NumColumns) {
-    return ShapeInfo(NumRows, NumColumns,
-                     Func.getContext().getOptionsContext());
+    return ShapeInfo(NumRows, NumColumns, Func.getContext());
   }
 
 public:
@@ -748,7 +724,7 @@ public:
       }
     }
 
-    return MatrixTy(SplitVecs, Func.getContext().getOptionsContext());
+    return MatrixTy(SplitVecs, Func.getContext());
   }
 
   /// If \p V already has a known shape return false.  Otherwise set the shape
@@ -1004,11 +980,9 @@ public:
                       m_ConstantInt(K), m_ConstantInt(C)))) {
       auto NewInst = distributeTransposes(
           TAMB,
-          ShapeInfo(K->getZExtValue(), C->getZExtValue(),
-                    Func.getContext().getOptionsContext()),
+          ShapeInfo(K->getZExtValue(), C->getZExtValue(), Func.getContext()),
           TAMA,
-          ShapeInfo(R->getZExtValue(), K->getZExtValue(),
-                    Func.getContext().getOptionsContext()),
+          ShapeInfo(R->getZExtValue(), K->getZExtValue(), Func.getContext()),
           Builder,
           [&](Value *T0, ShapeInfo Shape0, Value *T1, ShapeInfo Shape1) {
             return Builder.CreateMatrixMultiply(T0, T1, Shape0.NumRows,
@@ -1033,11 +1007,9 @@ public:
       // An when multiplied with a scalar, the shape is preserved.
       auto NewInst = distributeTransposes(
           TAMA,
-          ShapeInfo(R->getZExtValue(), C->getZExtValue(),
-                    Func.getContext().getOptionsContext()),
+          ShapeInfo(R->getZExtValue(), C->getZExtValue(), Func.getContext()),
           TAMB,
-          ShapeInfo(R->getZExtValue(), C->getZExtValue(),
-                    Func.getContext().getOptionsContext()),
+          ShapeInfo(R->getZExtValue(), C->getZExtValue(), Func.getContext()),
           Builder,
           [&](Value *T0, ShapeInfo Shape0, Value *T1, ShapeInfo Shape1) {
             bool IsFP = I.getType()->isFPOrFPVectorTy();
@@ -1060,11 +1032,9 @@ public:
       IRBuilder<> LocalBuilder(&I);
       auto NewInst = distributeTransposes(
           TAMA,
-          ShapeInfo(R->getZExtValue(), C->getZExtValue(),
-                    Func.getContext().getOptionsContext()),
+          ShapeInfo(R->getZExtValue(), C->getZExtValue(), Func.getContext()),
           TAMB,
-          ShapeInfo(R->getZExtValue(), C->getZExtValue(),
-                    Func.getContext().getOptionsContext()),
+          ShapeInfo(R->getZExtValue(), C->getZExtValue(), Func.getContext()),
           Builder,
           [&](Value *T0, ShapeInfo Shape0, Value *T1, ShapeInfo Shape1) {
             bool IsFP = I.getType()->isFPOrFPVectorTy();
@@ -1261,8 +1231,7 @@ public:
 
       const ShapeInfo &SI = ShapeMap.at(Inst);
       auto *EltTy = cast<FixedVectorType>(PHI->getType())->getElementType();
-      MatrixTy PhiM(SI.NumRows, SI.NumColumns, EltTy,
-                    Func.getContext().getOptionsContext());
+      MatrixTy PhiM(SI.NumRows, SI.NumColumns, EltTy, Func.getContext());
 
       IRBuilder<> Builder(Inst);
       for (unsigned VI = 0, VE = PhiM.getNumVectors(); VI != VE; ++VI)
@@ -1282,7 +1251,7 @@ public:
 
       Value *Op1;
       Value *Op2;
-      MatrixTy Result(Func.getContext().getOptionsContext());
+      MatrixTy Result(Func.getContext());
       IRBuilder<> Builder(Inst);
       if (auto *BinOp = dyn_cast<BinaryOperator>(Inst))
         Result = VisitBinaryOperator(BinOp, SI, Builder);
@@ -1359,7 +1328,7 @@ public:
       return LowerColumnMajorStore(Inst, Builder);
     case Intrinsic::abs:
     case Intrinsic::fabs: {
-      MatrixTy Result(Func.getContext().getOptionsContext());
+      MatrixTy Result(Func.getContext());
       MatrixTy M = getMatrix(Inst->getOperand(0), SI, Builder);
       Builder.setFastMathFlags(getFastMathFlags(Inst));
 
@@ -1434,7 +1403,7 @@ public:
     Type *EltTy = VType->getElementType();
     Type *VecTy = FixedVectorType::get(EltTy, Shape.getStride());
     Value *EltPtr = Ptr;
-    MatrixTy Result(Func.getContext().getOptionsContext());
+    MatrixTy Result(Func.getContext());
     Stride = castToIndexType(Ptr, Stride, Builder);
     for (unsigned I = 0, E = Shape.getNumVectors(); I < E; ++I) {
       Value *GEP = computeVectorAddr(
@@ -1487,7 +1456,7 @@ public:
     return LowerLoad(Inst, Ptr, Inst->getParamAlign(0), Stride,
                      cast<ConstantInt>(Inst->getArgOperand(2))->isOne(),
                      ShapeInfo(Inst->getArgOperand(3), Inst->getArgOperand(4),
-                               Func.getContext().getOptionsContext()),
+                               Func.getContext()),
                      Builder);
   }
 
@@ -1528,7 +1497,7 @@ public:
                                                   MAlign),
                                  IsVolatile);
     }
-    return MatrixTy(Func.getContext().getOptionsContext())
+    return MatrixTy(Func.getContext())
         .addNumStores(getNumOps(StoreVal.getVectorTy()) *
                       StoreVal.getNumVectors());
   }
@@ -1554,7 +1523,7 @@ public:
     return LowerStore(Inst, Matrix, Ptr, Inst->getParamAlign(1), Stride,
                       cast<ConstantInt>(Inst->getArgOperand(3))->isOne(),
                       ShapeInfo(Inst->getArgOperand(4), Inst->getArgOperand(5),
-                                Func.getContext().getOptionsContext()),
+                                Func.getContext()),
                       Builder);
   }
 
@@ -1656,9 +1625,9 @@ public:
         getMatrixLayout(Func) != MatrixLayoutTy::ColumnMajor)
       return;
     ShapeInfo LShape(MatMul->getArgOperand(2), MatMul->getArgOperand(3),
-                     Func.getContext().getOptionsContext());
+                     Func.getContext());
     ShapeInfo RShape(MatMul->getArgOperand(3), MatMul->getArgOperand(4),
-                     Func.getContext().getOptionsContext());
+                     Func.getContext());
 
     if (LShape.NumRows != 1 || RShape.NumColumns != 1) // not a dot product
       return;
@@ -2076,9 +2045,9 @@ public:
       return true;
 
     ShapeInfo LShape(MatMul->getArgOperand(2), MatMul->getArgOperand(3),
-                     Func.getContext().getOptionsContext());
+                     Func.getContext());
     ShapeInfo RShape(MatMul->getArgOperand(3), MatMul->getArgOperand(4),
-                     Func.getContext().getOptionsContext());
+                     Func.getContext());
 
     const unsigned R = LShape.NumRows;
     const unsigned C = RShape.NumColumns;
@@ -2110,7 +2079,7 @@ public:
   }
 
   MatrixTy getZeroMatrix(Type *EltType, unsigned R, unsigned C) {
-    MatrixTy Res(Func.getContext().getOptionsContext());
+    MatrixTy Res(Func.getContext());
     unsigned Stride = Res.isColumnMajor() ? R : C;
     unsigned NumVecs = Res.isColumnMajor() ? C : R;
     auto *VecType = FixedVectorType::get(EltType, Stride);
@@ -2136,7 +2105,7 @@ public:
 
     Type *TileVecTy = FixedVectorType::get(MatMul->getType()->getScalarType(),
                                            getTileSize(Func));
-    MatrixTy TileResult(Func.getContext().getOptionsContext());
+    MatrixTy TileResult(Func.getContext());
     // Insert in the inner loop header.
     Builder.SetInsertPoint(TI.KLoop.Header->getTerminator());
     // Create PHI nodes for the result columns to accumulate across iterations.
@@ -2189,9 +2158,9 @@ public:
       return;
 
     ShapeInfo LShape(MatMul->getArgOperand(2), MatMul->getArgOperand(3),
-                     Func.getContext().getOptionsContext());
+                     Func.getContext());
     ShapeInfo RShape(MatMul->getArgOperand(3), MatMul->getArgOperand(4),
-                     Func.getContext().getOptionsContext());
+                     Func.getContext());
 
     const unsigned R = LShape.NumRows;
     const unsigned C = RShape.NumColumns;
@@ -2284,15 +2253,15 @@ public:
       auto *EltType =
           cast<FixedVectorType>(MatMul->getType())->getElementType();
       ShapeInfo LShape(MatMul->getArgOperand(2), MatMul->getArgOperand(3),
-                       Func.getContext().getOptionsContext());
+                       Func.getContext());
       ShapeInfo RShape(MatMul->getArgOperand(3), MatMul->getArgOperand(4),
-                       Func.getContext().getOptionsContext());
+                       Func.getContext());
       const unsigned R = LShape.NumRows;
       const unsigned M = LShape.NumColumns;
       const unsigned C = RShape.NumColumns;
 
-      MatrixTy MA(Func.getContext().getOptionsContext());
-      MatrixTy MB(Func.getContext().getOptionsContext());
+      MatrixTy MA(Func.getContext());
+      MatrixTy MB(Func.getContext());
 
       Value *Transpose;
       if (getMatrixLayout(Func) == MatrixLayoutTy::ColumnMajor) {
@@ -2306,7 +2275,7 @@ public:
       }
 
       // Initialize the output
-      MatrixTy Result(R, C, EltType, Func.getContext().getOptionsContext());
+      MatrixTy Result(R, C, EltType, Func.getContext());
 
       emitMatrixMultiply(Result, MA, MB, Builder, false, true,
                          getFastMathFlags(MatMul));
@@ -2318,7 +2287,7 @@ public:
         // TODO: add a fake entry for the folded instruction so that this is
         // included in the expression in the remark.
         Inst2ColumnMatrix[Transpose] =
-            MatrixTy(M, C, EltType, Func.getContext().getOptionsContext());
+            MatrixTy(M, C, EltType, Func.getContext());
       }
       finalizeLowering(MatMul, Result, Builder);
       return;
@@ -2418,9 +2387,9 @@ public:
   MatrixTy LowerMultiply(CallInst *MatMul, IRBuilder<> &Builder) {
     auto *EltType = cast<FixedVectorType>(MatMul->getType())->getElementType();
     ShapeInfo LShape(MatMul->getArgOperand(2), MatMul->getArgOperand(3),
-                     Func.getContext().getOptionsContext());
+                     Func.getContext());
     ShapeInfo RShape(MatMul->getArgOperand(3), MatMul->getArgOperand(4),
-                     Func.getContext().getOptionsContext());
+                     Func.getContext());
 
     const MatrixTy &Lhs = getMatrix(MatMul->getArgOperand(0), LShape, Builder);
     const MatrixTy &Rhs = getMatrix(MatMul->getArgOperand(1), RShape, Builder);
@@ -2432,7 +2401,7 @@ public:
     assert(LShape.NumColumns == RShape.NumRows);
 
     // Initialize the output
-    MatrixTy Result(R, C, EltType, Func.getContext().getOptionsContext());
+    MatrixTy Result(R, C, EltType, Func.getContext());
     assert(Lhs.getElementType() == Result.getElementType() &&
            "Matrix multiply result element type does not match arguments.");
 
@@ -2443,11 +2412,11 @@ public:
 
   /// Lowers llvm.matrix.transpose.
   MatrixTy LowerTranspose(CallInst *Inst, IRBuilder<> &Builder) {
-    MatrixTy Result(Func.getContext().getOptionsContext());
+    MatrixTy Result(Func.getContext());
     Value *InputVal = Inst->getArgOperand(0);
     FixedVectorType *VectorTy = cast<FixedVectorType>(InputVal->getType());
     ShapeInfo ArgShape(Inst->getArgOperand(1), Inst->getArgOperand(2),
-                       Func.getContext().getOptionsContext());
+                       Func.getContext());
     MatrixTy InputMatrix = getMatrix(InputVal, ArgShape, Builder);
 
     const unsigned NewNumVecs =
@@ -2531,7 +2500,7 @@ public:
     Value *Lhs = Inst->getOperand(0);
     Value *Rhs = Inst->getOperand(1);
 
-    MatrixTy Result(Func.getContext().getOptionsContext());
+    MatrixTy Result(Func.getContext());
     MatrixTy A = getMatrix(Lhs, SI, Builder);
     MatrixTy B = getMatrix(Rhs, SI, Builder);
     assert(A.isColumnMajor() == B.isColumnMajor() &&
@@ -2552,7 +2521,7 @@ public:
                               IRBuilder<> &Builder) {
     Value *Op = Inst->getOperand(0);
 
-    MatrixTy Result(Func.getContext().getOptionsContext());
+    MatrixTy Result(Func.getContext());
     MatrixTy M = getMatrix(Op, SI, Builder);
 
     Builder.setFastMathFlags(getFastMathFlags(Inst));
@@ -2579,7 +2548,7 @@ public:
                                 IRBuilder<> &Builder) {
     Value *Op = Inst->getOperand(0);
 
-    MatrixTy Result(Func.getContext().getOptionsContext());
+    MatrixTy Result(Func.getContext());
     MatrixTy M = getMatrix(Op, Shape, Builder);
 
     Builder.setFastMathFlags(getFastMathFlags(Inst));
@@ -2602,7 +2571,7 @@ public:
     Value *OpA = Inst->getOperand(1);
     Value *OpB = Inst->getOperand(2);
 
-    MatrixTy Result(Func.getContext().getOptionsContext());
+    MatrixTy Result(Func.getContext());
     MatrixTy A = getMatrix(OpA, Shape, Builder);
     MatrixTy B = getMatrix(OpB, Shape, Builder);
 

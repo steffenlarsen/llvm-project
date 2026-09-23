@@ -40,7 +40,7 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/CodeGen/CalcSpillWeights.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsRegAlloc.h"
 #include "llvm/CodeGen/LiveInterval.h"
 #include "llvm/CodeGen/LiveIntervals.h"
 #include "llvm/CodeGen/LiveRangeEdit.h"
@@ -64,13 +64,12 @@
 #include "llvm/CodeGen/VirtRegMap.h"
 #include "llvm/Config/llvm-config.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/FileSystem.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/Printable.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
@@ -96,13 +95,13 @@ static RegisterRegAlloc
 RegisterPBQPRepAlloc("pbqp", "PBQP register allocator",
                        createDefaultPBQPRegisterAllocator);
 
-static bool getPbqpCoalescing(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_PbqpCoalescing>(Ctx);
+static bool getPbqpCoalescing(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenRegAllocOptions>().CGPASS_PbqpCoalescing;
 }
 
 #ifndef NDEBUG
-static bool getPbqpDumpGraphs(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_PbqpDumpGraphs>(Ctx);
+static bool getPbqpDumpGraphs(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenRegAllocOptions>().CGPASS_PbqpDumpGraphs;
 }
 #endif
 
@@ -845,7 +844,7 @@ bool RegAllocPBQP::runOnMachineFunction(MachineFunction &MF) {
       std::make_unique<PBQPRAConstraintList>();
     ConstraintsRoot->addConstraint(std::make_unique<SpillCosts>());
     ConstraintsRoot->addConstraint(std::make_unique<Interference>());
-    if (getPbqpCoalescing(MF.getFunction().getContext().getOptionsContext()))
+    if (getPbqpCoalescing(MF.getFunction().getContext()))
       ConstraintsRoot->addConstraint(std::make_unique<Coalescing>());
     ConstraintsRoot->addConstraint(Subtarget.getCustomPBQPConstraints());
 
@@ -861,8 +860,7 @@ bool RegAllocPBQP::runOnMachineFunction(MachineFunction &MF) {
       ConstraintsRoot->apply(G);
 
 #ifndef NDEBUG
-      if (getPbqpDumpGraphs(
-              MF.getFunction().getContext().getOptionsContext())) {
+      if (getPbqpDumpGraphs(MF.getFunction().getContext())) {
         std::ostringstream RS;
         RS << Round;
         std::string GraphFileName = FullyQualifiedName + "." + RS.str() +

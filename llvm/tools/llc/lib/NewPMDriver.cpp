@@ -89,12 +89,11 @@ int llvm::compileModuleWithNewPM(
     StringRef PrintPipelinePasses, bool DebugPassManager,
     RegAllocType RegAllocNPM) {
 
-  if (!PassPipeline.empty() && TargetPassConfig::hasLimitedCodeGenPipeline(
-                                   Target->getOptionsContext())) {
+  if (!PassPipeline.empty() &&
+      TargetPassConfig::hasLimitedCodeGenPipeline(&Context)) {
     WithColor::error(errs(), Arg0)
         << "--passes cannot be used with "
-        << TargetPassConfig::getLimitedCodeGenPipelineReason(
-               Target->getOptionsContext())
+        << TargetPassConfig::getLimitedCodeGenPipelineReason(&Context)
         << ".\n";
     return 1;
   }
@@ -111,7 +110,8 @@ int llvm::compileModuleWithNewPM(
 
   // Fetch options from TargetPassConfig (populated by setTPCValues() in
   // llc.cpp).
-  CGPassBuilderOption Opt = getCGPassBuilderOption(Target->getOptionsContext());
+  CGPassBuilderOption Opt =
+      getCGPassBuilderOption(Target->getOptionsContext(), &Context);
   Opt.DisableVerify = VK != VerifierKind::InputOutput;
   Opt.DebugPM = DebugPassManager;
   Opt.RegAlloc = RegAllocNPM;
@@ -144,7 +144,7 @@ int llvm::compileModuleWithNewPM(
   MAM.registerPass([&] { return MachineModuleAnalysis(MMI); });
 
   PassBuilder PB(OptsCtx, Target.get(), PipelineTuningOptions(OptsCtx),
-                 std::nullopt, &PIC, vfs::getRealFileSystem());
+                 std::nullopt, &PIC, vfs::getRealFileSystem(), &Context);
   for (auto &PassPlugin : PassPlugins)
     PassPlugin.registerPassBuilderCallbacks(PB);
   PB.registerModuleAnalyses(MAM);

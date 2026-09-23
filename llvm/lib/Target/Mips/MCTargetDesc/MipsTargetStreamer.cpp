@@ -28,15 +28,13 @@
 #include "llvm/MC/MCSymbolELF.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FormattedStream.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/Mips/MipsOptionsOptInfos.h"
+#include "llvm/Target/Mips/MipsOptions.h"
 
 using namespace llvm;
 
 namespace {
-static bool getRoundSectionSizes(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::MipsOptsReg, &clv2::MIPS_RoundSectionSizes>(
-      Ctx, false);
+static bool getRoundSectionSizes() {
+  return MipsOptions::Current.MIPS_RoundSectionSizes;
 }
 } // end anonymous namespace
 
@@ -696,8 +694,8 @@ void MipsTargetAsmStreamer::emitDirectiveSetPop() {
 }
 
 void MipsTargetAsmStreamer::emitDirectiveSetPush() {
- OS << "\t.set\tpush\n";
- MipsTargetStreamer::emitDirectiveSetPush();
+  OS << "\t.set\tpush\n";
+  MipsTargetStreamer::emitDirectiveSetPush();
 }
 
 void MipsTargetAsmStreamer::emitDirectiveSetSoftFloat() {
@@ -822,9 +820,7 @@ void MipsTargetAsmStreamer::emitDirectiveModuleHardFloat() {
   OS << "\t.module\thardfloat\n";
 }
 
-void MipsTargetAsmStreamer::emitDirectiveModuleMT() {
-  OS << "\t.module\tmt\n";
-}
+void MipsTargetAsmStreamer::emitDirectiveModuleMT() { OS << "\t.module\tmt\n"; }
 
 void MipsTargetAsmStreamer::emitDirectiveModuleCRC() {
   OS << "\t.module\tcrc\n";
@@ -895,8 +891,7 @@ MipsTargetELFStreamer::MipsTargetELFStreamer(MCStreamer &S,
   // Architecture
   if (Features[Mips::FeatureMips64r6])
     EFlags |= ELF::EF_MIPS_ARCH_64R6;
-  else if (Features[Mips::FeatureMips64r2] ||
-           Features[Mips::FeatureMips64r3] ||
+  else if (Features[Mips::FeatureMips64r2] || Features[Mips::FeatureMips64r3] ||
            Features[Mips::FeatureMips64r5])
     EFlags |= ELF::EF_MIPS_ARCH_64R2;
   else if (Features[Mips::FeatureMips64])
@@ -909,8 +904,7 @@ MipsTargetELFStreamer::MipsTargetELFStreamer(MCStreamer &S,
     EFlags |= ELF::EF_MIPS_ARCH_3;
   else if (Features[Mips::FeatureMips32r6])
     EFlags |= ELF::EF_MIPS_ARCH_32R6;
-  else if (Features[Mips::FeatureMips32r2] ||
-           Features[Mips::FeatureMips32r3] ||
+  else if (Features[Mips::FeatureMips32r2] || Features[Mips::FeatureMips32r3] ||
            Features[Mips::FeatureMips32r5])
     EFlags |= ELF::EF_MIPS_ARCH_32R2;
   else if (Features[Mips::FeatureMips32])
@@ -962,7 +956,7 @@ void MipsTargetELFStreamer::finish() {
   DataSection.ensureMinAlignment(Align(16));
   BSSSection.ensureMinAlignment(Align(16));
 
-  if (getRoundSectionSizes(getContext().getOptionsContext())) {
+  if (getRoundSectionSizes()) {
     // Make sections sizes a multiple of the alignment. This is useful for
     // verifying the output of IAS against the output of other assemblers but
     // it's not necessary to produce a correct object and increases section

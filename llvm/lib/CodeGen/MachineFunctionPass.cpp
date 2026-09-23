@@ -26,7 +26,7 @@
 #include "llvm/Analysis/PostDominators.h"
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/Analysis/ScalarEvolutionAliasAnalysis.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsMachine1.h"
 #include "llvm/CodeGen/DroppedVariableStatsMIR.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineModuleInfo.h"
@@ -36,15 +36,13 @@
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/PrintPasses.h"
-#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/OptionsContext.h"
 
 using namespace llvm;
 using namespace ore;
 
-static bool getDroppedVariableStatsMir(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_DroppedVariableStatsMir>(Ctx);
+static bool getDroppedVariableStatsMir(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenMachine1Options>().CGPASS_DroppedVariableStatsMir;
 }
 
 Pass *MachineFunctionPass::createPrinterPass(raw_ostream &O,
@@ -90,7 +88,7 @@ bool MachineFunctionPass::runOnFunction(Function &F) {
   MFProps.reset(ClearedProperties);
 
   bool RV;
-  if (getDroppedVariableStatsMir(F.getContext().getOptionsContext())) {
+  if (getDroppedVariableStatsMir(F.getContext())) {
     DroppedVariableStatsMIR DroppedVarStatsMF;
     auto PassName = getPassName();
     DroppedVarStatsMF.runBeforePass(PassName, &MF);

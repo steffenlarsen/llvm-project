@@ -22,9 +22,13 @@ add_llvm_component_library(LLVMARMDesc
   MC
   MCDisassembler
   Object
+  Option
   Support
   TargetParser
 
   ADD_TO_COMPONENT
   ARM
+
+  DEPENDS
+  ARMOptParserTableGen
   )

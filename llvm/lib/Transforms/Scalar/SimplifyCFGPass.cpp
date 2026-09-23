@@ -1,5 +1,3 @@
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
 //===- SimplifyCFGPass.cpp - CFG Simplification Pass ----------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -38,7 +36,9 @@
 #include "llvm/IR/ValueHandle.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Transforms/Scalar.h"
+#include "llvm/Transforms/Scalar/ScalarOptions.h"
 #include "llvm/Transforms/Scalar/SimplifyCFG.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/SimplifyCFGOptions.h"
@@ -48,92 +48,96 @@ using namespace llvm;
 #define DEBUG_TYPE "simplifycfg"
 
 static unsigned getUserBonusInstThreshold(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_BonusInstThreshold>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_BonusInstThreshold.value_or(1);
 }
 static bool isUserBonusInstThresholdSpecified(const Function &F) {
-  return clv2::wasOptSpecified<&clv2::ScalarOptsReg,
-                               &clv2::SC_BonusInstThreshold>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_BonusInstThreshold.has_value();
 }
 
 static bool getUserKeepLoops(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_KeepLoops>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<ScalarOptions>().SC_KeepLoops.value_or(true);
 }
 static bool isUserKeepLoopsSpecified(const Function &F) {
-  return clv2::wasOptSpecified<&clv2::ScalarOptsReg, &clv2::SC_KeepLoops>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<ScalarOptions>().SC_KeepLoops.has_value();
 }
 
 static bool getUserSwitchRangeToICmp(const Function &F) {
-  return clv2::getOptValOr<&clv2::ScalarOptsReg, &clv2::SC_SwitchRangeToIcmp>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_SwitchRangeToIcmp.value_or(false);
 }
 static bool isUserSwitchRangeToICmpSpecified(const Function &F) {
-  return clv2::wasOptSpecified<&clv2::ScalarOptsReg,
-                               &clv2::SC_SwitchRangeToIcmp>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_SwitchRangeToIcmp.has_value();
 }
 
 static bool getUserSwitchToLookup(const Function &F) {
-  return clv2::getOptValOr<&clv2::ScalarOptsReg, &clv2::SC_SwitchToLookup>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext().getOptions<ScalarOptions>().SC_SwitchToLookup.value_or(
+      false);
 }
 static bool isUserSwitchToLookupSpecified(const Function &F) {
-  return clv2::wasOptSpecified<&clv2::ScalarOptsReg, &clv2::SC_SwitchToLookup>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_SwitchToLookup.has_value();
 }
 
 static bool getUserForwardSwitchCond(const Function &F) {
-  return clv2::getOptValOr<&clv2::ScalarOptsReg, &clv2::SC_ForwardSwitchCond>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_ForwardSwitchCond.value_or(false);
 }
 static bool isUserForwardSwitchCondSpecified(const Function &F) {
-  return clv2::wasOptSpecified<&clv2::ScalarOptsReg,
-                               &clv2::SC_ForwardSwitchCond>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_ForwardSwitchCond.has_value();
 }
 
 static bool getUserHoistCommonInsts(const Function &F) {
-  return clv2::getOptValOr<&clv2::ScalarOptsReg, &clv2::SC_HoistCommonInsts>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_HoistCommonInsts.value_or(false);
 }
 static bool isUserHoistCommonInstsSpecified(const Function &F) {
-  return clv2::wasOptSpecified<&clv2::ScalarOptsReg,
-                               &clv2::SC_HoistCommonInsts>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_HoistCommonInsts.has_value();
 }
 
 static bool getUserHoistLoadsStoresWithCondFaulting(const Function &F) {
-  return clv2::getOptValOr<&clv2::ScalarOptsReg,
-                           &clv2::SC_HoistLoadsStoresWithCondFaulting>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_HoistLoadsStoresWithCondFaulting.value_or(false);
 }
 static bool isUserHoistLoadsStoresWithCondFaultingSpecified(const Function &F) {
-  return clv2::wasOptSpecified<&clv2::ScalarOptsReg,
-                               &clv2::SC_HoistLoadsStoresWithCondFaulting>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_HoistLoadsStoresWithCondFaulting.has_value();
 }
 
 static bool getUserSinkCommonInsts(const Function &F) {
-  return clv2::getOptValOr<&clv2::ScalarOptsReg, &clv2::SC_SinkCommonInsts>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext().getOptions<ScalarOptions>().SC_SinkCommonInsts.value_or(
+      false);
 }
 static bool isUserSinkCommonInstsSpecified(const Function &F) {
-  return clv2::wasOptSpecified<&clv2::ScalarOptsReg, &clv2::SC_SinkCommonInsts>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_SinkCommonInsts.has_value();
 }
 
 static bool getUserSpeculateUnpredictables(const Function &F) {
-  return clv2::getOptValOr<&clv2::ScalarOptsReg,
-                           &clv2::SC_SpeculateUnpredictables>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_SpeculateUnpredictables.value_or(false);
 }
 static bool isUserSpeculateUnpredictablesSpecified(const Function &F) {
-  return clv2::wasOptSpecified<&clv2::ScalarOptsReg,
-                               &clv2::SC_SpeculateUnpredictables>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_SpeculateUnpredictables.has_value();
 }
 
 STATISTIC(NumSimpl, "Number of blocks simplified");
@@ -429,14 +433,14 @@ PreservedAnalyses SimplifyCFGPass::run(Function &F,
   auto &TTI = AM.getResult<TargetIRAnalysis>(F);
   Options.AC = &AM.getResult<AssumptionAnalysis>(F);
   DominatorTree *DT = nullptr;
-  if (getRequireAndPreserveDomTree(F.getContext().getOptionsContext()))
+  if (getRequireAndPreserveDomTree(&F.getContext()))
     DT = &AM.getResult<DominatorTreeAnalysis>(F);
   if (!simplifyFunctionCFG(F, TTI, DT, Options))
     return PreservedAnalyses::all();
   // If we removed some blocks, update block numbers to keep dense numbering.
   F.renumberBlocks();
   PreservedAnalyses PA;
-  if (getRequireAndPreserveDomTree(F.getContext().getOptionsContext())) {
+  if (getRequireAndPreserveDomTree(&F.getContext())) {
     DT->updateBlockNumbers();
     PA.preserve<DominatorTreeAnalysis>();
   }
@@ -467,7 +471,7 @@ struct CFGSimplifyPass : public FunctionPass {
     applyCommandLineOverridesToOptions(Options, F);
     Options.AC = &getAnalysis<AssumptionCacheTracker>().getAssumptionCache(F);
     DominatorTree *DT = nullptr;
-    if (getRequireAndPreserveDomTree(getOptionsContext()))
+    if (getRequireAndPreserveDomTree(&F.getContext()))
       DT = &getAnalysis<DominatorTreeWrapperPass>().getDomTree();
 
     auto &TTI = getAnalysis<TargetTransformInfoWrapperPass>().getTTI(F);
@@ -475,10 +479,10 @@ struct CFGSimplifyPass : public FunctionPass {
   }
   void getAnalysisUsage(AnalysisUsage &AU) const override {
     AU.addRequired<AssumptionCacheTracker>();
-    if (getRequireAndPreserveDomTree(getOptionsContext()))
+    if (getRequireAndPreserveDomTree(nullptr))
       AU.addRequired<DominatorTreeWrapperPass>();
     AU.addRequired<TargetTransformInfoWrapperPass>();
-    if (getRequireAndPreserveDomTree(getOptionsContext()))
+    if (getRequireAndPreserveDomTree(nullptr))
       AU.addPreserved<DominatorTreeWrapperPass>();
     AU.addPreserved<GlobalsAAWrapperPass>();
   }

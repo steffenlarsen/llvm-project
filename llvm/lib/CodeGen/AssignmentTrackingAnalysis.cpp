@@ -17,7 +17,7 @@
 #include "llvm/ADT/UniqueVector.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/BinaryFormat/Dwarf.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsCore1.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/DebugInfo.h"
@@ -30,10 +30,7 @@
 #include "llvm/IR/PassManager.h"
 #include "llvm/IR/PrintPasses.h"
 #include "llvm/InitializePasses.h"
-#include "llvm/Support/CommandLineCompat.h"
-#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include <assert.h>
@@ -51,23 +48,20 @@ STATISTIC(NumDefsRemoved, "Number of dbg locs removed");
 STATISTIC(NumWedgesScanned, "Number of dbg wedges scanned");
 STATISTIC(NumWedgesChanged, "Number of dbg wedges changed");
 
-static unsigned getDebugAtaMaxBlocks(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_DebugAtaMaxBlocks>(Ctx);
+static unsigned getDebugAtaMaxBlocks(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore1Options>().CGPASS_DebugAtaMaxBlocks;
 }
 
-static bool getMemLocFragFill(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_MemLocFragFill>(Ctx);
+static bool getMemLocFragFill(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore1Options>().CGPASS_MemLocFragFill;
 }
 
-static bool getPrintDebugAta(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_PrintDebugAta>(Ctx);
+static bool getPrintDebugAta(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore1Options>().CGPASS_PrintDebugAta;
 }
 
-static cl::boolOrDefault
-getDebugAtaCoalesceFrags(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::CGPassCore1Reg,
-                           &clv2::CGPASS_DebugAtaCoalesceFrags>(
-      Ctx, cl::boolOrDefault());
+static std::optional<bool> getDebugAtaCoalesceFrags(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore1Options>().CGPASS_DebugAtaCoalesceFrags;
 }
 
 // Implicit conversions are disabled for enum class types, so unfortunately we
@@ -332,16 +326,10 @@ static bool shouldCoalesceFragments(Function &F) {
   // incorrect locations. Since instruction-referencing mode effectively
   // bypasses LiveDebugVariables we only enable coalescing if the cl::opt flag
   // has not been explicitly set and instruction-referencing is turned on.
-  switch (getDebugAtaCoalesceFrags(F.getContext().getOptionsContext())) {
-  case cl::boolOrDefault::BOU_UNSET:
-    return debuginfoShouldUseDebugInstrRef(F.getParent()->getTargetTriple(),
-                                           F.getContext().getOptionsContext());
-  case cl::boolOrDefault::BOU_TRUE:
-    return true;
-  case cl::boolOrDefault::BOU_FALSE:
-    return false;
-  }
-  llvm_unreachable("Unknown boolOrDefault value");
+  if (std::optional<bool> V = getDebugAtaCoalesceFrags(F.getContext()))
+    return *V;
+  return debuginfoShouldUseDebugInstrRef(F.getParent()->getTargetTriple(),
+                                         F.getContext());
 }
 
 namespace {
@@ -863,7 +851,7 @@ public:
   ///     var x bits 32 to 61: value in memory ; <-- new loc def
   ///
   void run(FunctionVarLocsBuilder *FnVarLocs) {
-    if (!getMemLocFragFill(Fn.getContext().getOptionsContext()))
+    if (!getMemLocFragFill(Fn.getContext()))
       return;
 
     this->FnVarLocs = FnVarLocs;
@@ -2369,7 +2357,7 @@ static AssignmentTrackingLowering::OverlapMap buildOverlapMapAndRecordDeclares(
 }
 
 bool AssignmentTrackingLowering::run(FunctionVarLocsBuilder *FnVarLocsBuilder) {
-  if (Fn.size() > getDebugAtaMaxBlocks(Fn.getContext().getOptionsContext())) {
+  if (Fn.size() > getDebugAtaMaxBlocks(Fn.getContext())) {
     LLVM_DEBUG(dbgs() << "[AT] Dropping var locs in: " << Fn.getName()
                       << ": too many blocks (" << Fn.size() << ")\n");
     at::deleteAll(&Fn);
@@ -2916,7 +2904,7 @@ bool AssignmentTrackingAnalysis::runOnFunction(Function &F) {
   // Save these results.
   Results->init(Builder);
 
-  if (getPrintDebugAta(F.getContext().getOptionsContext()) &&
+  if (getPrintDebugAta(F.getContext()) &&
       isFunctionInPrintList(F.getContext(), F.getName()))
     Results->print(errs(), F);
 

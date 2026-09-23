@@ -1,4 +1,3 @@
-#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
 //===-------- LoopDataPrefetch.cpp - Loop Data Prefetching Pass -----------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -11,11 +10,12 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "llvm/Transforms/Scalar/LoopDataPrefetch.h"
 #include "llvm/InitializePasses.h"
+#include "llvm/Transforms/Scalar/LoopDataPrefetch.h"
 
 #include "llvm/ADT/DepthFirstIterator.h"
 #include "llvm/ADT/Statistic.h"
+#include "llvm/Analysis/AnalysisOptions.h"
 #include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/Analysis/CodeMetrics.h"
 #include "llvm/Analysis/LoopInfo.h"
@@ -26,8 +26,8 @@
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/Function.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Transforms/Scalar.h"
+#include "llvm/Transforms/Scalar/ScalarOptions.h"
 #include "llvm/Transforms/Utils.h"
 #include "llvm/Transforms/Utils/ScalarEvolutionExpander.h"
 
@@ -38,44 +38,47 @@ using namespace llvm;
 // By default, we limit this to creating 16 PHIs (which is a little over half
 // of the allocatable register set).
 static bool getPrefetchWrites(const Function &F) {
-  return clv2::getOptValOr<&clv2::ScalarOptsReg, &clv2::SC_LoopPrefetchWrites>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_LoopPrefetchWrites.value_or(false);
 }
 static bool isPrefetchWritesSpecified(const Function &F) {
-  return clv2::wasOptSpecified<&clv2::ScalarOptsReg,
-                               &clv2::SC_LoopPrefetchWrites>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_LoopPrefetchWrites.has_value();
 }
 
 static unsigned getGlobalPrefetchDistance(const Function &F) {
-  return clv2::getOptValOr<&clv2::ScalarOptsReg, &clv2::SC_PrefetchDistance>(
-      F.getContext().getOptionsContext(), 0);
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_PrefetchDistance.value_or(0);
 }
 static bool isPrefetchDistanceSpecified(const Function &F) {
-  return clv2::wasOptSpecified<&clv2::ScalarOptsReg,
-                               &clv2::SC_PrefetchDistance>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_PrefetchDistance.has_value();
 }
 
 static unsigned getGlobalMinPrefetchStride(const Function &F) {
-  return clv2::getOptValOr<&clv2::ScalarOptsReg, &clv2::SC_MinPrefetchStride>(
-      F.getContext().getOptionsContext(), 0);
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_MinPrefetchStride.value_or(0);
 }
 static bool isMinPrefetchStrideSpecified(const Function &F) {
-  return clv2::wasOptSpecified<&clv2::ScalarOptsReg,
-                               &clv2::SC_MinPrefetchStride>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_MinPrefetchStride.has_value();
 }
 
 static unsigned getGlobalMaxPrefetchIterationsAhead(const Function &F) {
-  return clv2::getOptValOr<&clv2::ScalarOptsReg,
-                           &clv2::SC_MaxPrefetchItersAhead>(
-      F.getContext().getOptionsContext(), 0);
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_MaxPrefetchItersAhead.value_or(0);
 }
 static bool isMaxPrefetchIterationsAheadSpecified(const Function &F) {
-  return clv2::wasOptSpecified<&clv2::ScalarOptsReg,
-                               &clv2::SC_MaxPrefetchItersAhead>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_MaxPrefetchItersAhead.has_value();
 }
 
 STATISTIC(NumPrefetches, "Number of prefetches inserted");
@@ -101,25 +104,16 @@ private:
 
   unsigned getMinPrefetchStride(unsigned NumMemAccesses,
                                 unsigned NumStridedMemAccesses,
-                                unsigned NumPrefetches,
-                                bool HasCall) {
+                                unsigned NumPrefetches, bool HasCall) {
     if (F && isMinPrefetchStrideSpecified(*F))
       return getGlobalMinPrefetchStride(*F);
     return TTI->getMinPrefetchStride(NumMemAccesses, NumStridedMemAccesses,
                                      NumPrefetches, HasCall);
   }
 
-  unsigned getPrefetchDistance(const clv2::OptionsContext &Ctx) {
+  unsigned getPrefetchDistance() {
     if (F && isPrefetchDistanceSpecified(*F))
       return getGlobalPrefetchDistance(*F);
-    // F may be null in early-exit checks; fall back to clv2::getView().
-    if (F)
-      return clv2::getOptValIfSpecified<&clv2::ScalarOptsReg,
-                                        &clv2::SC_PrefetchDistance>(
-          F->getContext().getOptionsContext(),
-          clv2::getOptValIfSpecified<&clv2::ScalarOptsReg,
-                                     &clv2::SC_PrefetchDistance>(
-              Ctx, TTI->getPrefetchDistance()));
     return TTI->getPrefetchDistance();
   }
 
@@ -167,8 +161,8 @@ public:
   }
 
   bool runOnFunction(Function &F) override;
-  };
-}
+};
+} // namespace
 
 char LoopDataPrefetchLegacyPass::ID = 0;
 INITIALIZE_PASS_BEGIN(LoopDataPrefetchLegacyPass, "loop-data-prefetch",
@@ -247,8 +241,9 @@ bool LoopDataPrefetch::run() {
   // If PrefetchDistance is not set, don't run the pass.  This gives an
   // opportunity for targets to run this pass for selected subtargets only
   // (whose TTI sets PrefetchDistance and CacheLineSize).
-  if (getPrefetchDistance(F->getContext().getOptionsContext()) == 0 ||
-      TTI->getCacheLineSize(F->getContext().getOptionsContext()) == 0) {
+  if (getPrefetchDistance() == 0 ||
+      TTI->getCacheLineSize(F->getContext().getOptions<AnalysisOptions>()) ==
+          0) {
     LLVM_DEBUG(dbgs() << "Please set both PrefetchDistance and CacheLineSize "
                          "for loop data prefetch.\n");
     return false;
@@ -344,8 +339,7 @@ bool LoopDataPrefetch::runOnLoop(Loop *L) {
   if (!LoopSize)
     LoopSize = 1;
 
-  unsigned ItersAhead =
-      getPrefetchDistance(F->getContext().getOptionsContext()) / LoopSize;
+  unsigned ItersAhead = getPrefetchDistance() / LoopSize;
   if (!ItersAhead)
     ItersAhead = 1;
 
@@ -368,10 +362,12 @@ bool LoopDataPrefetch::runOnLoop(Loop *L) {
         MemI = LMemI;
         PtrValue = LMemI->getPointerOperand();
       } else if (StoreInst *SMemI = dyn_cast<StoreInst>(&I)) {
-        if (!doPrefetchWrites()) continue;
+        if (!doPrefetchWrites())
+          continue;
         MemI = SMemI;
         PtrValue = SMemI->getPointerOperand();
-      } else continue;
+      } else
+        continue;
 
       unsigned PtrAddrSpace = PtrValue->getType()->getPointerAddressSpace();
       if (!TTI->shouldPrefetchAddressSpace(PtrAddrSpace))
@@ -393,10 +389,10 @@ bool LoopDataPrefetch::runOnLoop(Loop *L) {
       for (auto &Pref : Prefetches) {
         const SCEV *PtrDiff = SE->getMinusSCEV(LSCEVAddRec, Pref.LSCEVAddRec);
         if (const SCEVConstant *ConstPtrDiff =
-            dyn_cast<SCEVConstant>(PtrDiff)) {
+                dyn_cast<SCEVConstant>(PtrDiff)) {
           int64_t PD = std::abs(ConstPtrDiff->getValue()->getSExtValue());
           if (PD < (int64_t)TTI->getCacheLineSize(
-                       F->getContext().getOptionsContext())) {
+                       F->getContext().getOptions<AnalysisOptions>())) {
             Pref.addInstruction(MemI, DT, PD);
             DupPref = true;
             break;
@@ -407,19 +403,17 @@ bool LoopDataPrefetch::runOnLoop(Loop *L) {
         Prefetches.push_back(Prefetch(LSCEVAddRec, MemI));
     }
 
-  unsigned TargetMinStride =
-    getMinPrefetchStride(NumMemAccesses, NumStridedMemAccesses,
-                         Prefetches.size(), HasCall);
+  unsigned TargetMinStride = getMinPrefetchStride(
+      NumMemAccesses, NumStridedMemAccesses, Prefetches.size(), HasCall);
 
   LLVM_DEBUG(dbgs() << "Prefetching " << ItersAhead
-             << " iterations ahead (loop size: " << LoopSize << ") in "
-             << L->getHeader()->getParent()->getName() << ": " << *L);
-  LLVM_DEBUG(dbgs() << "Loop has: "
-             << NumMemAccesses << " memory accesses, "
-             << NumStridedMemAccesses << " strided memory accesses, "
-             << Prefetches.size() << " potential prefetch(es), "
-             << "a minimum stride of " << TargetMinStride << ", "
-             << (HasCall ? "calls" : "no calls") << ".\n");
+                    << " iterations ahead (loop size: " << LoopSize << ") in "
+                    << L->getHeader()->getParent()->getName() << ": " << *L);
+  LLVM_DEBUG(dbgs() << "Loop has: " << NumMemAccesses << " memory accesses, "
+                    << NumStridedMemAccesses << " strided memory accesses, "
+                    << Prefetches.size() << " potential prefetch(es), "
+                    << "a minimum stride of " << TargetMinStride << ", "
+                    << (HasCall ? "calls" : "no calls") << ".\n");
 
   for (auto &P : Prefetches) {
     // Check if the stride of the accesses is large enough to warrant a
@@ -448,12 +442,12 @@ bool LoopDataPrefetch::runOnLoop(Loop *L) {
                              ConstantInt::get(I32, 1)});
     ++NumPrefetches;
     LLVM_DEBUG(dbgs() << "  Access: "
-               << *P.MemI->getOperand(isa<LoadInst>(P.MemI) ? 0 : 1)
-               << ", SCEV: " << *P.LSCEVAddRec << "\n");
+                      << *P.MemI->getOperand(isa<LoadInst>(P.MemI) ? 0 : 1)
+                      << ", SCEV: " << *P.LSCEVAddRec << "\n");
     ORE->emit([&]() {
-        return OptimizationRemark(DEBUG_TYPE, "Prefetched", P.MemI)
-          << "prefetched memory access";
-      });
+      return OptimizationRemark(DEBUG_TYPE, "Prefetched", P.MemI)
+             << "prefetched memory access";
+    });
 
     MadeChange = true;
   }

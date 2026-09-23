@@ -17,6 +17,7 @@
 #include "llvm/Transforms/Vectorize/LoopVectorizationLegality.h"
 #include "LoopVectorizationPlanner.h"
 #include "llvm/Analysis/AliasAnalysis.h"
+#include "llvm/Analysis/AnalysisOptions.h"
 #include "llvm/Analysis/Loads.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/MustExecute.h"
@@ -30,7 +31,6 @@
 #include "llvm/IR/Function.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/PatternMatch.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Transforms/Utils/SizeOpts.h"
 #include "llvm/Transforms/Vectorize/LoopVectorize.h"
 #include "llvm/Transforms/Vectorize/VectorizeOptions.h"
@@ -43,42 +43,34 @@ using namespace LoopVectorizationUtils;
 #define DEBUG_TYPE LV_NAME
 
 static bool getEnableIfConversion(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::VEC_EnableIfConversion>(
-      F.getContext().getOptionsContext());
+  return VectorizeOptions::Current.VEC_EnableIfConversion;
 }
 
 static bool getAllowStridedPointerIVs(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::VEC_AllowStridedPointerIVs>(
-      F.getContext().getOptionsContext());
+  return VectorizeOptions::Current.VEC_AllowStridedPointerIVs;
 }
 
 static bool getHintsAllowReordering(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::VEC_HintsAllowReordering>(
-      F.getContext().getOptionsContext());
+  return VectorizeOptions::Current.VEC_HintsAllowReordering;
 }
 
 // TODO: Move size-based thresholds out of legality checking, make cost based
 // decisions instead of hard thresholds.
 static unsigned getVectorizeSCEVCheckThreshold(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::VEC_VectorizeSCEVCheckThreshold>(
-      F.getContext().getOptionsContext());
+  return VectorizeOptions::Current.VEC_VectorizeSCEVCheckThreshold;
 }
 
 static unsigned getPragmaVectorizeSCEVCheckThreshold(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::VEC_PragmaVectorizeSCEVCheckThreshold>(
-      F.getContext().getOptionsContext());
+  return VectorizeOptions::Current.VEC_PragmaVectorizeSCEVCheckThreshold;
 }
 
 static LoopVectorizeHints::ScalableForceKind
 getForceScalableVectorization(const Function &F) {
-  return clv2::getOptValIfSpecified<&clv2::VectorizeOptsReg,
-                                    &clv2::VEC_ForceScalableVectorization>(
-      F.getContext().getOptionsContext(), SK_Unspecified);
+  return VectorizeOptions::Current.VEC_ForceScalableVectorization;
 }
 
 static bool getEnableHistogramVectorization(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::VEC_EnableHistogramVectorization>(
-      F.getContext().getOptionsContext());
+  return VectorizeOptions::Current.VEC_EnableHistogramVectorization;
 }
 
 /// Maximum vectorization interleave count.
@@ -104,7 +96,10 @@ LoopVectorizeHints::LoopVectorizeHints(const Loop *L,
                                        const TargetTransformInfo *TTI)
     : Width("vectorize.width",
             VectorizerParams::getVectorizationFactor(
-                L->getHeader()->getParent()->getContext().getOptionsContext())
+                L->getHeader()
+                    ->getParent()
+                    ->getContext()
+                    .getOptions<AnalysisOptions>())
                 .getKnownMinValue(),
             HK_WIDTH),
       Interleave("interleave.count", InterleaveOnlyWhenForced, HK_INTERLEAVE),
@@ -113,11 +108,11 @@ LoopVectorizeHints::LoopVectorizeHints(const Loop *L,
   // Populate values with existing loop metadata.
   getHintsFromMetadata();
 
-  const auto &FOptsCtx =
-      L->getHeader()->getParent()->getContext().getOptionsContext();
+  const AnalysisOptions &FOpts =
+      L->getHeader()->getParent()->getContext().getOptions<AnalysisOptions>();
   // force-vector-interleave overrides DisableInterleaving.
-  if (VectorizerParams::isInterleaveForced(FOptsCtx))
-    Interleave.Value = VectorizerParams::getVectorizationInterleave(FOptsCtx);
+  if (VectorizerParams::isInterleaveForced(FOpts))
+    Interleave.Value = VectorizerParams::getVectorizationInterleave(FOpts);
 
   // If the metadata doesn't explicitly specify whether to enable scalable
   // vectorization, then decide based on the following criteria (increasing
@@ -144,7 +139,7 @@ LoopVectorizeHints::LoopVectorizeHints(const Loop *L,
     Scalable = getForceScalableVectorization(*L->getHeader()->getParent());
 
   // If force-vector-width is scalable, force scalable vectorization.
-  if (VectorizerParams::getVectorizationFactor(FOptsCtx).isScalable())
+  if (VectorizerParams::getVectorizationFactor(FOpts).isScalable())
     Scalable = SK_AlwaysScalable;
 
   // Scalable vectorization is disabled if no preference is specified.

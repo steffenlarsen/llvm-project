@@ -1,5 +1,3 @@
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
 //===- TailRecursionElimination.cpp - Eliminate Tail Calls ----------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -82,6 +80,7 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Scalar.h"
+#include "llvm/Transforms/Scalar/ScalarOptions.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include <cmath>
 using namespace llvm;
@@ -96,20 +95,19 @@ STATISTIC(NumTREPreventedCold,
           "calling convention or attribute");
 
 static bool getForceDisableBFI(const Function &F) {
-  return clv2::getOptValOr<&clv2::ScalarOptsReg,
-                           &clv2::SC_TreDisableEntrycountRecompute>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_TreDisableEntrycountRecompute;
 }
 
 static bool shouldDisableTailCallsForCold(const CallBase *CB,
                                           const Function *Caller,
                                           const ProfileSummaryInfo *PSI,
                                           BlockFrequencyInfo *BFI) {
-  bool Disable = clv2::getOptValOr<&clv2::ScalarOptsReg,
-                                   &clv2::SC_DisableTailCallElimForColdCalls>(
-      Caller ? Caller->getContext().getOptionsContext()
-             : clv2::defaultOptionsContext(),
-      false);
+  const ScalarOptions &Opts =
+      Caller ? Caller->getContext().getOptions<ScalarOptions>()
+             : ScalarOptions::Current;
+  bool Disable = Opts.SC_DisableTailCallElimForColdCalls;
   if (!Disable)
     return false;
 

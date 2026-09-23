@@ -12,10 +12,14 @@ add_llvm_component_library(LLVMWebAssemblyDesc
   LINK_COMPONENTS
   CodeGenTypes
   MC
+  Option
   Support
   TargetParser
   WebAssemblyInfo
 
   ADD_TO_COMPONENT
   WebAssembly
+
+  DEPENDS
+  WebAssemblyOptParserTableGen
   )

@@ -34,12 +34,13 @@ void initRandomSeedOptions();
 // The storage belongs to the ManagedStatic singleton that consumes it (e.g.
 // TimerGlobals), which is where it lived before the clv2 migration -- keeping a
 // separate global for the option value would add process-wide state on top of a
-// singleton that already exists.  Called from applySupportOptions(), and only
-// for options actually present on the command line, so an unused facility is
-// still never constructed.
+// singleton that already exists.  Called from SupportOptions::parse() and
+// applySupportOptions(), and only for options actually present on the command
+// line, so an unused facility is still never constructed.
 void setInfoOutputFilename(StringRef F);
 void setTrackSpace(bool V);
 void setSortTimers(bool V);
+void setCrashDiagnosticsDirectory(StringRef Dir);
 
 } // namespace llvm
 

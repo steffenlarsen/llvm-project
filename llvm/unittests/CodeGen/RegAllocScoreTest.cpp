@@ -31,7 +31,7 @@
 
 using namespace llvm;
 
-// Literal defaults matching the Init{} values in CodeGenPassOptionsOptInfos.h.
+// Literal defaults matching CodeGenPassOptionsRegAlloc.td.
 static constexpr double CopyWeight = 0.2;
 static constexpr double LoadWeight = 4.0;
 static constexpr double StoreWeight = 1.0;

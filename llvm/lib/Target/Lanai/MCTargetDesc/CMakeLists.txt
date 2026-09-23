@@ -11,9 +11,13 @@ add_llvm_component_library(LLVMLanaiDesc
   LanaiInfo
   MC
   MCDisassembler
+  Option
   Support
   TargetParser
 
   ADD_TO_COMPONENT
   Lanai
+
+  DEPENDS
+  LanaiOptParserTableGen
 )

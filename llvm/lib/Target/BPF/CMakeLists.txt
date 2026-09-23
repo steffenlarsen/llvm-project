@@ -18,8 +18,6 @@ tablegen(LLVM BPFGenRegisterBank.inc -gen-register-bank)
 add_public_tablegen_target(BPFCommonTableGen)
 
 add_llvm_target(BPFCodeGen
-  BPFOptionsGetters.cpp
-  BPFOptionsRegistration.cpp
   GISel/BPFCallLowering.cpp
   GISel/BPFInstructionSelector.cpp
   GISel/BPFRegisterBankInfo.cpp
@@ -69,6 +67,9 @@ add_llvm_target(BPFCodeGen
 
   ADD_TO_COMPONENT
   BPF
+
+  DEPENDS
+  BPFOptParserTableGen
   )
 
 add_subdirectory(AsmParser)

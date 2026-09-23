@@ -22,8 +22,7 @@
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/IR/Function.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
+#include "llvm/Target/Hexagon/HexagonOptions.h"
 
 #include <map>
 
@@ -32,8 +31,7 @@ using namespace llvm;
 static unsigned VExtractThreshold = 1;
 
 static unsigned getVExtractThreshold(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_VExtractThreshold>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_VExtractThreshold;
 }
 
 namespace {

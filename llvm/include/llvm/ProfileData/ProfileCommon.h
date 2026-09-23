@@ -17,6 +17,7 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/IR/ProfileSummary.h"
 #include "llvm/ProfileData/InstrProf.h"
+#include "llvm/ProfileData/ProfileDataOptions.h"
 #include "llvm/ProfileData/SampleProf.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Error.h"
@@ -28,9 +29,6 @@
 #include <vector>
 
 namespace llvm {
-namespace clv2 {
-class OptionsContext;
-}
 
 LLVM_ABI bool getUseContextLessSummary();
 
@@ -70,12 +68,11 @@ public:
   /// Find the summary entry for a desired percentile of counts.
   LLVM_ABI static const ProfileSummaryEntry &
   getEntryForPercentile(const SummaryEntryVector &DS, uint64_t Percentile);
-  LLVM_ABI static uint64_t
-  getHotCountThreshold(const SummaryEntryVector &DS,
-                       const clv2::OptionsContext &Ctx);
+  LLVM_ABI static uint64_t getHotCountThreshold(const SummaryEntryVector &DS,
+                                                const ProfileDataOptions &Opts);
   LLVM_ABI static uint64_t
   getColdCountThreshold(const SummaryEntryVector &DS,
-                        const clv2::OptionsContext &Ctx);
+                        const ProfileDataOptions &Opts);
 };
 
 class InstrProfSummaryBuilder final : public ProfileSummaryBuilder {
@@ -101,7 +98,7 @@ public:
                           bool isCallsiteSample = false);
   LLVM_ABI std::unique_ptr<ProfileSummary>
   computeSummaryForProfiles(const sampleprof::SampleProfileMap &Profiles,
-                            const clv2::OptionsContext &Ctx);
+                            const ProfileDataOptions &Opts);
   LLVM_ABI std::unique_ptr<ProfileSummary> getSummary();
 };
 

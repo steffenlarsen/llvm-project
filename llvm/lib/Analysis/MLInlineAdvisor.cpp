@@ -13,7 +13,7 @@
 //===----------------------------------------------------------------------===//
 #include "llvm/Analysis/MLInlineAdvisor.h"
 #include "llvm/ADT/SCCIterator.h"
-#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
+#include "llvm/Analysis/AnalysisOptions.h"
 #include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/Analysis/BlockFrequencyInfo.h"
 #include "llvm/Analysis/CallGraph.h"
@@ -45,28 +45,17 @@ static const std::string InclDefaultMsg =
      DefaultDecisionName + ".")
         .str();
 
-enum class SkipMLPolicyCriteria { Never, IfCallerIsNotCold };
-
-static std::string
-getInteractiveChannelBaseName(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValIfSpecified<&clv2::AnalysisOptsReg,
-                                    &clv2::AN_InteractiveChannelBaseName>(
-      Ctx, std::string{});
+static std::string getInteractiveChannelBaseName(const AnalysisOptions &Opts) {
+  return Opts.AN_InteractiveChannelBaseName;
 }
-static bool getInteractiveIncludeDefault(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValIfSpecified<&clv2::AnalysisOptsReg,
-                                    &clv2::AN_InteractiveIncludeDefault>(Ctx,
-                                                                         false);
+static bool getInteractiveIncludeDefault(const AnalysisOptions &Opts) {
+  return Opts.AN_InteractiveIncludeDefault;
 }
-static std::string getModelSelector(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValIfSpecified<&clv2::AnalysisOptsReg,
-                                    &clv2::AN_ModelSelector>(Ctx,
-                                                             std::string{});
+static std::string getModelSelector(const AnalysisOptions &Opts) {
+  return Opts.AN_ModelSelector;
 }
-static bool getStopImmediatelyForTest(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValIfSpecified<&clv2::AnalysisOptsReg,
-                                    &clv2::AN_StopImmediatelyForTest>(Ctx,
-                                                                      false);
+static bool getStopImmediatelyForTest(const AnalysisOptions &Opts) {
+  return Opts.AN_StopImmediatelyForTest;
 }
 
 #if defined(LLVM_HAVE_TF_AOT_INLINERSIZEMODEL)
@@ -142,26 +131,24 @@ createEmitCModelRunner(LLVMContext &, const std::vector<TensorSpec> &) {
 std::unique_ptr<InlineAdvisor>
 llvm::getReleaseModeAdvisor(Module &M, ModuleAnalysisManager &MAM,
                             std::function<bool(CallBase &)> GetDefaultAdvice) {
-  const auto &OptsCtx = M.getContext().getOptionsContext();
+  const auto &Opts = M.getContext().getOptions<AnalysisOptions>();
   if (!isReleaseModelValid<CompiledModelType>(
-          getInteractiveChannelBaseName(OptsCtx), getSelectedMLGOModel()))
+          getInteractiveChannelBaseName(Opts), getSelectedMLGOModel()))
     return nullptr;
   auto RunnerFactory = [&](const std::vector<TensorSpec> &InputFeatures)
       -> std::unique_ptr<MLModelRunner> {
     return createReleaseModeModelRunner<CompiledModelType,
                                         HaveMLIRLoweringInliner>(
         M.getContext(), InputFeatures, DecisionName,
-        getInteractiveChannelBaseName(OptsCtx), InlineDecisionSpec,
+        getInteractiveChannelBaseName(Opts), InlineDecisionSpec,
         createEmitCModelRunner,
-        EmbeddedModelRunnerOptions().setModelSelector(
-            getModelSelector(OptsCtx)));
+        EmbeddedModelRunnerOptions().setModelSelector(getModelSelector(Opts)));
   };
   return std::make_unique<MLInlineAdvisor>(M, MAM, RunnerFactory,
                                            GetDefaultAdvice);
 }
 
 #define DEBUG_TYPE "inline-ml"
-
 
 const std::vector<TensorSpec> &MLInlineAdvisor::getInitialFeatureMap() {
   // clang-format off
@@ -260,8 +247,8 @@ MLInlineAdvisor::MLInlineAdvisor(
     FeatureMap.push_back(
         TensorSpec::createSpec<float>("caller_embedding", {IR2VecDim}));
   }
-  const auto &MOptsCtx = M.getContext().getOptionsContext();
-  if (getInteractiveIncludeDefault(MOptsCtx))
+  const auto &MOpts = M.getContext().getOptions<AnalysisOptions>();
+  if (getInteractiveIncludeDefault(MOpts))
     FeatureMap.push_back(DefaultDecisionSpec);
 
   ModelRunner = GetModelRunner(getFeatureMap());
@@ -270,7 +257,7 @@ MLInlineAdvisor::MLInlineAdvisor(
     return;
   }
   ModelRunner->switchContext("");
-  ForceStop = getStopImmediatelyForTest(MOptsCtx);
+  ForceStop = getStopImmediatelyForTest(MOpts);
 }
 
 unsigned MLInlineAdvisor::getInitialFunctionLevel(const Function &F) const {
@@ -447,7 +434,8 @@ std::unique_ptr<InlineAdvice> MLInlineAdvisor::getAdviceImpl(CallBase &CB) {
   auto &TIR = FAM.getResult<TargetIRAnalysis>(Callee);
   auto &ORE = FAM.getResult<OptimizationRemarkEmitterAnalysis>(Caller);
 
-  if (false) { // SkipPolicy default is Never
+  if (Caller.getContext().getOptions<AnalysisOptions>().AN_SkipPolicy ==
+      SkipMLPolicyCriteria::IfCallerIsNotCold) {
     if (!PSI.isFunctionEntryCold(&Caller)) {
       // Return a MLInlineAdvice, despite delegating to the default advice,
       // because we need to keep track of the internal state. This is different
@@ -561,11 +549,10 @@ std::unique_ptr<InlineAdvice> MLInlineAdvisor::getAdviceImpl(CallBase &CB) {
         static_cast<InlineCostFeatureIndex>(I))) = CostFeatures->at(I);
   }
   // This one would have been set up to be right at the end.
-  if (!getInteractiveChannelBaseName(
-           CB.getCaller()->getContext().getOptionsContext())
-           .empty() &&
-      getInteractiveIncludeDefault(
-          CB.getCaller()->getContext().getOptionsContext()))
+  const auto &CallerOpts =
+      CB.getCaller()->getContext().getOptions<AnalysisOptions>();
+  if (!getInteractiveChannelBaseName(CallerOpts).empty() &&
+      getInteractiveIncludeDefault(CallerOpts))
     *ModelRunner->getTensor<int64_t>(getFeatureMap().size() - 1) =
         GetDefaultAdvice(CB);
   return getAdviceFromModel(CB, ORE);

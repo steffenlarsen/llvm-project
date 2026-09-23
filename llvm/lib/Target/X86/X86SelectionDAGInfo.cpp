@@ -21,16 +21,14 @@
 
 #define GET_SDNODE_DESC
 #include "X86GenSDNodeInfo.inc"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/X86/X86OptionsOptInfos.h"
+#include "llvm/Target/X86/X86Options.h"
 
 using namespace llvm;
 
 #define DEBUG_TYPE "x86-selectiondag-info"
 
 static bool getUseFSRMForMemcpy(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::X86_UseFSRMForMemcpy>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<X86Options>().X86_UseFSRMForMemcpy;
 }
 
 X86SelectionDAGInfo::X86SelectionDAGInfo()

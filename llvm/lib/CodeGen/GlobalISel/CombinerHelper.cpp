@@ -11,7 +11,7 @@
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallBitVector.h"
 #include "llvm/Analysis/CmpInstAnalysis.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsGISel.h"
 #include "llvm/CodeGen/GlobalISel/GISelChangeObserver.h"
 #include "llvm/CodeGen/GlobalISel/GISelValueTracking.h"
 #include "llvm/CodeGen/GlobalISel/GenericMachineInstrs.h"
@@ -35,12 +35,11 @@
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/InstrTypes.h"
+#include "llvm/IR/LLVMContext.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/DivisionByConstantInfo.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Target/TargetMachine.h"
 #include <cmath>
 #include <optional>
@@ -53,12 +52,12 @@ using namespace MIPatternMatch;
 
 // Option to allow testing of the combiner while no targets know about indexed
 // addressing.
-static bool getForceLegalIndexing(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_ForceLegalIndexing>(Ctx);
+static bool getForceLegalIndexing(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenGISelOptions>().CGPASS_ForceLegalIndexing;
 }
 
-static unsigned getPostIndexUseThreshold(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_PostIndexUseThreshold>(Ctx);
+static unsigned getPostIndexUseThreshold(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenGISelOptions>().CGPASS_PostIndexUseThreshold;
 }
 
 CombinerHelper::CombinerHelper(GISelChangeObserver &Observer,
@@ -1275,8 +1274,7 @@ bool CombinerHelper::findPostIndexCandidate(GLoadStore &LdSt, Register &Addr,
   unsigned NumUsesChecked = 0;
   for (auto &Use : MRI.use_nodbg_instructions(Ptr)) {
     if (++NumUsesChecked >
-        getPostIndexUseThreshold(
-            Builder.getMF().getFunction().getContext().getOptionsContext()))
+        getPostIndexUseThreshold(Builder.getMF().getFunction().getContext()))
       return false; // Try to avoid exploding compile time.
 
     auto *PtrAdd = dyn_cast<GPtrAdd>(&Use);
@@ -1291,8 +1289,7 @@ bool CombinerHelper::findPostIndexCandidate(GLoadStore &LdSt, Register &Addr,
       continue;
 
     Offset = PtrAdd->getOffsetReg();
-    if (!getForceLegalIndexing(
-            Builder.getMF().getFunction().getContext().getOptionsContext()) &&
+    if (!getForceLegalIndexing(Builder.getMF().getFunction().getContext()) &&
         !TLI.isIndexingLegal(LdSt, PtrAdd->getBaseReg(), Offset,
                              /*IsPre*/ false, MRI))
       continue;
@@ -1360,8 +1357,7 @@ bool CombinerHelper::findPreIndexCandidate(GLoadStore &LdSt, Register &Addr,
       MRI.hasOneNonDBGUse(Addr))
     return false;
 
-  if (!getForceLegalIndexing(
-          MF.getFunction().getContext().getOptionsContext()) &&
+  if (!getForceLegalIndexing(MF.getFunction().getContext()) &&
       !TLI.isIndexingLegal(LdSt, Base, Offset, /*IsPre*/ true, MRI))
     return false;
 

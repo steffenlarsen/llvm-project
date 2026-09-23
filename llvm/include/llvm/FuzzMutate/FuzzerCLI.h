@@ -14,10 +14,12 @@
 #ifndef LLVM_FUZZMUTATE_FUZZERCLI_H
 #define LLVM_FUZZMUTATE_FUZZERCLI_H
 
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/DataTypes.h"
 #include <memory>
 #include <stddef.h>
+#include <vector>
 
 namespace llvm {
 
@@ -38,6 +40,24 @@ LLVM_ABI std::unique_ptr<clv2::OptionsContext> parseFuzzerCLOpts(int ArgC,
 /// RegisterAllLLVMOptions is called automatically.
 LLVM_ABI std::unique_ptr<clv2::OptionsContext>
 parseFuzzerCLOpts(int ArgC, char *ArgV[], clv2::OptionParser &P);
+
+/// Overload that parses a caller-supplied argument list instead of computing
+/// one from ArgC/ArgV. Args[0] is treated as the program name. Useful when
+/// the caller needs to pre-parse some tokens (e.g. through a migrated
+/// llvm::opt::parseLibraryOptionsChain<...>() struct) out of the result of
+/// getFuzzerCLArgs() before handing the rest to this OptionParser.
+LLVM_ABI std::unique_ptr<clv2::OptionsContext>
+parseFuzzerCLOpts(ArrayRef<const char *> Args, clv2::OptionParser &P);
+
+/// Returns the merged command-line arguments a fuzz target should parse:
+/// any options injected via handleExecNameEncodedBEOpts /
+/// handleExecNameEncodedOptimizerOpts, followed by everything in ArgV after
+/// -ignore_remaining_args=1 (or all of ArgV if that marker isn't present).
+/// ArgV[0] is preserved as the first element. This is the argument list
+/// parseFuzzerCLOpts(ArgC, ArgV, P) parses; exposed separately so callers can
+/// pre-parse some of it (see the ArrayRef overload above) before the rest is
+/// handed to a clv2::OptionParser.
+LLVM_ABI std::vector<const char *> getFuzzerCLArgs(int ArgC, char *ArgV[]);
 
 /// Handle backend options that are encoded in the executable name.
 ///

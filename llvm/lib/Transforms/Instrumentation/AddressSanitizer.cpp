@@ -72,12 +72,11 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/ModRef.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/TargetParser/Triple.h"
 #include "llvm/Transforms/Instrumentation/AddressSanitizerCommon.h"
 #include "llvm/Transforms/Instrumentation/AddressSanitizerOptions.h"
-#include "llvm/Transforms/Instrumentation/InstrumentationOptionsOptInfos.h"
+#include "llvm/Transforms/Instrumentation/InstrumentationOptions.h"
 #include "llvm/Transforms/Utils/ASanStackFrameLayout.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Instrumentation.h"
@@ -198,113 +197,116 @@ constexpr size_t kIsWriteMask = 0x1;
 
 // Command-line flags.
 
-// clv2::InstrumentationOptsReg. Getters check the clv2 override first, then
-// fall back to literal defaults.
-
 static SmallSet<unsigned, 8> SrcAddrSpaces;
 
-#define ASAN_GETTER(GetterName, DescName, Default)                             \
-  static auto get##GetterName(const Module &M) {                               \
-    if (auto *O = clv2::getView<&clv2::InstrumentationOptsReg>(                \
-            M.getContext().getOptionsContext()))                               \
-      if (O->specified<&clv2::DescName>())                                     \
-        return O->get<&clv2::DescName>();                                      \
-    return Default;                                                            \
+#define ASAN_GETTER(GetterName, DescName)                                     \
+  static auto get##GetterName(const Module &M) {                             \
+    return M.getContext().getOptions<InstrumentationOptions>().DescName;     \
   }
 
-ASAN_GETTER(ClEnableKasan, INST_AsanKernel, false)
-ASAN_GETTER(ClRecover, INST_AsanRecover, false)
-ASAN_GETTER(ClInsertVersionCheck, INST_AsanGuardAgainstVersionMismatch, true)
-ASAN_GETTER(ClInstrumentReads, INST_AsanInstrumentReads, true)
-ASAN_GETTER(ClInstrumentWrites, INST_AsanInstrumentWrites, true)
-ASAN_GETTER(ClUseStackSafety, INST_AsanUseStackSafety, true)
-ASAN_GETTER(ClInstrumentAtomics, INST_AsanInstrumentAtomics, true)
-ASAN_GETTER(ClInstrumentByval, INST_AsanInstrumentByval, true)
-ASAN_GETTER(ClAlwaysSlowPath, INST_AsanAlwaysSlowPath, false)
-ASAN_GETTER(ClForceDynamicShadow, INST_AsanForceDynamicShadow, false)
-ASAN_GETTER(ClWithIfunc, INST_AsanWithIfunc, true)
-ASAN_GETTER(ClShadowAddrSpace, INST_AsanShadowAddrSpace, 0)
-ASAN_GETTER(ClWithIfuncSuppressRemat, INST_AsanWithIfuncSuppressRemat, true)
-ASAN_GETTER(ClMaxInsnsToInstrumentPerBB, INST_AsanMaxInsPerBB, 10000)
-ASAN_GETTER(ClStack, INST_AsanStack, true)
-ASAN_GETTER(ClMaxInlinePoisoningSize, INST_AsanMaxInlinePoisoningSize,
-            (uint32_t)64)
-ASAN_GETTER(ClUseAfterReturn, INST_AsanUseAfterReturn,
-            AsanDetectStackUseAfterReturnMode::Runtime)
-ASAN_GETTER(ClRedzoneByvalArgs, INST_AsanRedzoneByvalArgs, true)
-ASAN_GETTER(ClUseAfterScope, INST_AsanUseAfterScope, false)
-ASAN_GETTER(ClGlobals, INST_AsanGlobals, true)
-ASAN_GETTER(ClInitializers, INST_AsanInitializers, true)
-ASAN_GETTER(ClInvalidPointerPairs, INST_AsanDetectInvalidPointerPair, false)
-ASAN_GETTER(ClInvalidPointerCmp, INST_AsanDetectInvalidPointerCmp, false)
-ASAN_GETTER(ClInvalidPointerSub, INST_AsanDetectInvalidPointerSub, false)
-ASAN_GETTER(ClRealignStack, INST_AsanRealignStack, 32u)
-ASAN_GETTER(ClInstrumentationWithCallsThreshold,
-            INST_AsanInstrumentationWithCallThreshold, 7000)
-ASAN_GETTER(ClKasanMemIntrinCallbackPrefix, INST_AsanKernelMemIntrinsicPrefix,
-            false)
-ASAN_GETTER(ClInstrumentDynamicAllocas, INST_AsanInstrumentDynamicAllocas, true)
-ASAN_GETTER(ClSkipPromotableAllocas, INST_AsanSkipPromotableAllocas, true)
-ASAN_GETTER(ClConstructorKind, INST_AsanConstructorKind, AsanCtorKind::Global)
-ASAN_GETTER(ClMappingScale, INST_AsanMappingScale, 0)
-ASAN_GETTER(ClMappingOffset, INST_AsanMappingOffset, (uint64_t)0)
-ASAN_GETTER(ClOpt, INST_AsanOpt, true)
-ASAN_GETTER(ClOptimizeCallbacks, INST_AsanOptimizeCallbacks, false)
-ASAN_GETTER(ClOptSameTemp, INST_AsanOptSameTemp, true)
-ASAN_GETTER(ClOptGlobals, INST_AsanOptGlobals, true)
-ASAN_GETTER(ClOptStack, INST_AsanOptStack, false)
-ASAN_GETTER(ClDynamicAllocaStack, INST_AsanDynamicAllocaStack, true)
-ASAN_GETTER(ClForceExperiment, INST_AsanForceExperiment, (uint32_t)0)
-ASAN_GETTER(ClUsePrivateAlias, INST_AsanUsePrivateAlias, true)
-ASAN_GETTER(ClUseOdrIndicator, INST_AsanUseOdrIndicator, true)
-ASAN_GETTER(ClUseGlobalsGC, INST_AsanGlobalsLiveSupport, true)
-ASAN_GETTER(ClWithComdat, INST_AsanWithComdat, true)
-ASAN_GETTER(ClOverrideDestructorKind, INST_AsanDestructorKind,
-            AsanDtorKind::Invalid)
-ASAN_GETTER(ClDebug, INST_AsanDebug, 0)
-ASAN_GETTER(ClDebugStack, INST_AsanDebugStack, 0)
-ASAN_GETTER(ClDebugMin, INST_AsanDebugMin, -1)
-ASAN_GETTER(ClDebugMax, INST_AsanDebugMax, -1)
+ASAN_GETTER(ClInstrumentReads, INST_AsanInstrumentReads)
+ASAN_GETTER(ClInstrumentWrites, INST_AsanInstrumentWrites)
+ASAN_GETTER(ClUseStackSafety, INST_AsanUseStackSafety)
+ASAN_GETTER(ClInstrumentAtomics, INST_AsanInstrumentAtomics)
+ASAN_GETTER(ClInstrumentByval, INST_AsanInstrumentByval)
+ASAN_GETTER(ClAlwaysSlowPath, INST_AsanAlwaysSlowPath)
+ASAN_GETTER(ClForceDynamicShadow, INST_AsanForceDynamicShadow)
+ASAN_GETTER(ClWithIfunc, INST_AsanWithIfunc)
+ASAN_GETTER(ClShadowAddrSpace, INST_AsanShadowAddrSpace)
+ASAN_GETTER(ClWithIfuncSuppressRemat, INST_AsanWithIfuncSuppressRemat)
+ASAN_GETTER(ClMaxInsnsToInstrumentPerBB, INST_AsanMaxInsPerBB)
+ASAN_GETTER(ClStack, INST_AsanStack)
+ASAN_GETTER(ClRedzoneByvalArgs, INST_AsanRedzoneByvalArgs)
+ASAN_GETTER(ClUseAfterScope, INST_AsanUseAfterScope)
+ASAN_GETTER(ClGlobals, INST_AsanGlobals)
+ASAN_GETTER(ClInitializers, INST_AsanInitializers)
+ASAN_GETTER(ClInvalidPointerPairs, INST_AsanDetectInvalidPointerPair)
+ASAN_GETTER(ClInvalidPointerCmp, INST_AsanDetectInvalidPointerCmp)
+ASAN_GETTER(ClInvalidPointerSub, INST_AsanDetectInvalidPointerSub)
+ASAN_GETTER(ClRealignStack, INST_AsanRealignStack)
+ASAN_GETTER(ClKasanMemIntrinCallbackPrefix, INST_AsanKernelMemIntrinsicPrefix)
+ASAN_GETTER(ClInstrumentDynamicAllocas, INST_AsanInstrumentDynamicAllocas)
+ASAN_GETTER(ClSkipPromotableAllocas, INST_AsanSkipPromotableAllocas)
+ASAN_GETTER(ClOpt, INST_AsanOpt)
+ASAN_GETTER(ClOptimizeCallbacks, INST_AsanOptimizeCallbacks)
+ASAN_GETTER(ClOptSameTemp, INST_AsanOptSameTemp)
+ASAN_GETTER(ClOptGlobals, INST_AsanOptGlobals)
+ASAN_GETTER(ClOptStack, INST_AsanOptStack)
+ASAN_GETTER(ClDynamicAllocaStack, INST_AsanDynamicAllocaStack)
+ASAN_GETTER(ClForceExperiment, INST_AsanForceExperiment)
+ASAN_GETTER(ClUseGlobalsGC, INST_AsanGlobalsLiveSupport)
+ASAN_GETTER(ClWithComdat, INST_AsanWithComdat)
+ASAN_GETTER(ClOverrideDestructorKind, INST_AsanDestructorKind)
+ASAN_GETTER(ClDebug, INST_AsanDebug)
+ASAN_GETTER(ClDebugStack, INST_AsanDebugStack)
+ASAN_GETTER(ClDebugMin, INST_AsanDebugMin)
+ASAN_GETTER(ClDebugMax, INST_AsanDebugMax)
 
 #undef ASAN_GETTER
+
+// Tri-state (std::optional) fields: fall back to the given literal default
+// when the option was not specified on the command line.
+#define ASAN_OPTIONAL_GETTER(GetterName, DescName, Default)                   \
+  static auto get##GetterName(const Module &M) {                             \
+    return M.getContext()                                                    \
+        .getOptions<InstrumentationOptions>()                                \
+        .DescName.value_or(Default);                                         \
+  }
+
+ASAN_OPTIONAL_GETTER(ClEnableKasan, INST_AsanKernel, false)
+ASAN_OPTIONAL_GETTER(ClRecover, INST_AsanRecover, false)
+ASAN_OPTIONAL_GETTER(ClInsertVersionCheck, INST_AsanGuardAgainstVersionMismatch,
+                     true)
+ASAN_OPTIONAL_GETTER(ClMaxInlinePoisoningSize, INST_AsanMaxInlinePoisoningSize,
+                     (uint32_t)64)
+ASAN_OPTIONAL_GETTER(ClUseAfterReturn, INST_AsanUseAfterReturn,
+                     AsanDetectStackUseAfterReturnMode::Runtime)
+ASAN_OPTIONAL_GETTER(ClInstrumentationWithCallsThreshold,
+                     INST_AsanInstrumentationWithCallThreshold, 7000)
+ASAN_OPTIONAL_GETTER(ClConstructorKind, INST_AsanConstructorKind,
+                     AsanCtorKind::Global)
+ASAN_OPTIONAL_GETTER(ClMappingScale, INST_AsanMappingScale, 0)
+ASAN_OPTIONAL_GETTER(ClMappingOffset, INST_AsanMappingOffset, (uint64_t)0)
+ASAN_OPTIONAL_GETTER(ClUsePrivateAlias, INST_AsanUsePrivateAlias, true)
+ASAN_OPTIONAL_GETTER(ClUseOdrIndicator, INST_AsanUseOdrIndicator, true)
+
+#undef ASAN_OPTIONAL_GETTER
 
 // String getters — need explicit return type since auto would deduce
 // different types for std::string vs const char*.
 static std::string getClMemoryAccessCallbackPrefix(const Module &M) {
-  return clv2::getOptValIfSpecified<&clv2::InstrumentationOptsReg,
-                                    &clv2::INST_AsanMemoryAccessCallbackPrefix>(
-      M.getContext().getOptionsContext(), "__asan_");
+  return M.getContext()
+      .getOptions<InstrumentationOptions>()
+      .INST_AsanMemoryAccessCallbackPrefix;
 }
 
 static std::string getClDebugFunc(const Module &M) {
-  return clv2::getOptValIfSpecified<&clv2::InstrumentationOptsReg,
-                                    &clv2::INST_AsanDebugFunc>(
-      M.getContext().getOptionsContext(), std::string{});
+  return M.getContext()
+      .getOptions<InstrumentationOptions>()
+      .INST_AsanDebugFunc;
 }
 
 static const std::vector<unsigned> &getClAddrSpaces(const Module &M) {
-  if (auto *O = clv2::getView<&clv2::InstrumentationOptsReg>(
-          M.getContext().getOptionsContext())) {
-    if (O->specified<&clv2::INST_AsanInstrumentAddrSpaces>()) {
-      static std::vector<unsigned> cached;
-      const auto &v = O->get<&clv2::INST_AsanInstrumentAddrSpaces>();
-      cached.assign(v.begin(), v.end());
-      SrcAddrSpaces.clear();
-      for (unsigned a : cached)
-        SrcAddrSpaces.insert(a);
-      return cached;
-    }
+  const auto &V = M.getContext()
+                      .getOptions<InstrumentationOptions>()
+                      .INST_AsanInstrumentAddrSpaces;
+  if (!V.empty()) {
+    static std::vector<unsigned> cached;
+    cached.assign(V.begin(), V.end());
+    SrcAddrSpaces.clear();
+    for (unsigned a : cached)
+      SrcAddrSpaces.insert(a);
+    return cached;
   }
   static std::vector<unsigned> empty;
   return empty;
 }
 
-#define ASAN_SPECIFIED(GetterName, DescName)                                   \
-  static bool is##GetterName##Specified(const Module &M) {                     \
-    if (auto *O = clv2::getView<&clv2::InstrumentationOptsReg>(                \
-            M.getContext().getOptionsContext()))                               \
-      return O->specified<&clv2::DescName>();                                  \
-    return false;                                                              \
+#define ASAN_SPECIFIED(GetterName, DescName)                                  \
+  static bool is##GetterName##Specified(const Module &M) {                    \
+    return M.getContext()                                                     \
+        .getOptions<InstrumentationOptions>()                                 \
+        .DescName.has_value();                                                \
   }
 
 ASAN_SPECIFIED(ClEnableKasan, INST_AsanKernel)
@@ -318,7 +320,6 @@ ASAN_SPECIFIED(ClConstructorKind, INST_AsanConstructorKind)
 ASAN_SPECIFIED(ClMappingOffset, INST_AsanMappingOffset)
 ASAN_SPECIFIED(ClUsePrivateAlias, INST_AsanUsePrivateAlias)
 ASAN_SPECIFIED(ClUseOdrIndicator, INST_AsanUseOdrIndicator)
-ASAN_SPECIFIED(ClUseGlobalsGC, INST_AsanGlobalsLiveSupport)
 
 #undef ASAN_SPECIFIED
 
@@ -378,10 +379,10 @@ static ShadowMapping getShadowMapping(const Triple &TargetTriple, int LongSize,
 
   Mapping.Scale = kDefaultShadowScale;
   if (M) {
-    if (auto *O = clv2::getView<&clv2::InstrumentationOptsReg>(
-            M->getContext().getOptionsContext()))
-      if (O->specified<&clv2::INST_AsanMappingScale>())
-        Mapping.Scale = O->get<&clv2::INST_AsanMappingScale>();
+    if (auto Scale = M->getContext()
+                         .getOptions<InstrumentationOptions>()
+                         .INST_AsanMappingScale)
+      Mapping.Scale = *Scale;
   }
 
   if (LongSize == 32) {

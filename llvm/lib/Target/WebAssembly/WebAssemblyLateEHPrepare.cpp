@@ -131,7 +131,6 @@ bool WebAssemblyLateEHPrepareImpl::runOnMachineFunction(MachineFunction &MF) {
       ExceptionHandling::Wasm)
     return false;
 
-  auto &OptsCtx = MF.getTarget().getOptionsContext();
   bool Changed = false;
   if (MF.getFunction().hasPersonalityFn()) {
     Changed |= removeUnreachableEHPads(MF);
@@ -139,7 +138,7 @@ bool WebAssemblyLateEHPrepareImpl::runOnMachineFunction(MachineFunction &MF) {
     Changed |= hoistCatches(MF);
     Changed |= addCatchAlls(MF);
     Changed |= replaceFuncletReturns(MF);
-    if (!WebAssembly::getWasmUseLegacyEH(OptsCtx))
+    if (!WebAssembly::getWasmUseLegacyEH(MF.getFunction().getContext()))
       Changed |= addCatchRefsAndThrowRefs(MF);
   }
   Changed |= removeUnnecessaryUnreachables(MF);
@@ -230,7 +229,7 @@ bool WebAssemblyLateEHPrepareImpl::addCatchAlls(MachineFunction &MF) {
         !WebAssembly::isCatch(InsertPos->getOpcode())) {
       Changed = true;
       unsigned CatchAllOpcode =
-          WebAssembly::getWasmUseLegacyEH(MF.getTarget().getOptionsContext())
+          WebAssembly::getWasmUseLegacyEH(MF.getFunction().getContext())
               ? WebAssembly::CATCH_ALL_LEGACY
               : WebAssembly::CATCH_ALL;
       BuildMI(MBB, InsertPos,

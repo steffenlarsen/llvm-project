@@ -20,7 +20,7 @@
 #include "llvm/ADT/iterator_range.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/ValueTracking.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsSched1.h"
 #include "llvm/CodeGen/LiveIntervals.h"
 #include "llvm/CodeGen/LivePhysRegs.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
@@ -42,21 +42,21 @@
 #include "llvm/Config/llvm-config.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Value.h"
 #include "llvm/MC/LaneBitmask.h"
 #include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/Format.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <cassert>
 #include <iterator>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -71,28 +71,28 @@ using namespace llvm;
 // When Stores and Loads maps (or NonAliasStores and NonAliasLoads)
 // together hold this many SUs, a reduction of maps will be done.
 
-static bool getEnableAaSchedMi(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_EnableAaSchedMi>(Ctx);
+static std::optional<bool> getEnableAaSchedMi(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenSched1Options>().CGPASS_EnableAaSchedMi;
 }
 
-static bool getUseTbaaInSchedMi(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_UseTbaaInSchedMi>(Ctx);
+static bool getUseTbaaInSchedMi(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenSched1Options>().CGPASS_UseTbaaInSchedMi;
 }
 
-static bool getSchedmodel(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_Schedmodel>(Ctx);
+static bool getSchedmodel(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenSched1Options>().CGPASS_Schedmodel;
 }
 
-static bool getScheditins(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_Scheditins>(Ctx);
+static bool getScheditins(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenSched1Options>().CGPASS_Scheditins;
 }
 
-static unsigned getDagMapsHugeRegion(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_DagMapsHugeRegion>(Ctx);
+static unsigned getDagMapsHugeRegion(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenSched1Options>().CGPASS_DagMapsHugeRegion;
 }
 
-static bool getSchedPrintCycles(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_SchedPrintCycles>(Ctx);
+static bool getSchedPrintCycles(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenSched1Options>().CGPASS_SchedPrintCycles;
 }
 
 static void dumpSUList(const ScheduleDAGInstrs::SUList &L) {
@@ -118,9 +118,8 @@ ScheduleDAGInstrs::ScheduleDAGInstrs(MachineFunction &mf,
   DbgValues.clear();
 
   const TargetSubtargetInfo &ST = mf.getSubtarget();
-  SchedModel.init(
-      &ST, getSchedmodel(mf.getFunction().getContext().getOptionsContext()),
-      getScheditins(mf.getFunction().getContext().getOptionsContext()));
+  SchedModel.init(&ST, getSchedmodel(mf.getFunction().getContext()),
+                  getScheditins(mf.getFunction().getContext()));
 }
 
 /// If this machine instr has memory reference information and it can be
@@ -561,10 +560,9 @@ void ScheduleDAGInstrs::addVRegUseDeps(SUnit *SU, unsigned OperIdx) {
 
 void ScheduleDAGInstrs::addChainDependency(SUnit *SUa, SUnit *SUb,
                                            unsigned Latency) {
-  if (SUa->getInstr()->mayAlias(
-          getAAForDep(), *SUb->getInstr(),
-          getUseTbaaInSchedMi(
-              MF.getFunction().getContext().getOptionsContext()))) {
+  if (SUa->getInstr()->mayAlias(getAAForDep(), *SUb->getInstr(),
+                                 getUseTbaaInSchedMi(
+                                     MF.getFunction().getContext()))) {
     SDep Dep(SUa, SDep::MayAliasMem);
     Dep.setLatency(Latency);
     SUb->addPred(Dep);
@@ -715,13 +713,9 @@ void ScheduleDAGInstrs::buildSchedGraph(AAResults *AA,
                                         LiveIntervals *LIS,
                                         bool TrackLaneMasks) {
   const TargetSubtargetInfo &ST = MF.getSubtarget();
-  const clv2::OptionsContext &Ctx =
-      MF.getFunction().getContext().getOptionsContext();
-  bool UseAA = clv2::wasOptSpecified<&clv2::CGPassSched1Reg,
-                                     &clv2::CGPASS_EnableAaSchedMi>(Ctx)
-                   ? getEnableAaSchedMi(
-                         MF.getFunction().getContext().getOptionsContext())
-                   : ST.useAA();
+  const LLVMContext &Ctx = MF.getFunction().getContext();
+  std::optional<bool> EnableAaSchedMi = getEnableAaSchedMi(Ctx);
+  bool UseAA = EnableAaSchedMi ? *EnableAaSchedMi : ST.useAA();
   if (UseAA && AA)
     AAForDep.emplace(*AA);
 
@@ -905,9 +899,7 @@ void ScheduleDAGInstrs::buildSchedGraph(AAResults *AA,
       if (BarrierChain)
         BarrierChain->addPredBarrier(SU);
 
-      if (FPExceptions.size() + 1 >=
-          getDagMapsHugeRegion(
-              MF.getFunction().getContext().getOptionsContext())) {
+      if (FPExceptions.size() + 1 >= getDagMapsHugeRegion(Ctx)) {
         LLVM_DEBUG(
             dbgs()
             << "Creating barrier chain and clearing FPExceptions map.\n");
@@ -930,9 +922,7 @@ void ScheduleDAGInstrs::buildSchedGraph(AAResults *AA,
       BarrierChain->addPredBarrier(SU);
 
     // Reduce maps if they grow huge.
-    if (MemOpsProcessed >=
-        getDagMapsHugeRegion(
-            MF.getFunction().getContext().getOptionsContext())) {
+    if (MemOpsProcessed >= getDagMapsHugeRegion(Ctx)) {
       LLVM_DEBUG(dbgs() << "Creating barrier chain and clearing maps.\n");
 
       BarrierChain = SU;
@@ -1120,7 +1110,7 @@ void ScheduleDAGInstrs::fixupKills(MachineBasicBlock &MBB) {
 void ScheduleDAGInstrs::dumpNode(const SUnit &SU) const {
 #if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
   dumpNodeName(SU);
-  if (getSchedPrintCycles(MF.getFunction().getContext().getOptionsContext()))
+  if (getSchedPrintCycles(MF.getFunction().getContext()))
     dbgs() << " [TopReadyCycle = " << SU.TopReadyCycle
            << ", BottomReadyCycle = " << SU.BotReadyCycle << "]";
   dbgs() << ": ";

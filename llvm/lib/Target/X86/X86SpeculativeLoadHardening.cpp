@@ -50,10 +50,9 @@
 #include "llvm/MC/MCSchedule.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
-#include "llvm/Target/X86/X86OptionsOptInfos.h"
+#include "llvm/Target/X86/X86Options.h"
 #include <cassert>
 #include <iterator>
 #include <optional>
@@ -83,38 +82,31 @@ static bool HardenLoads = true;
 static bool HardenIndirectCallsAndJumps = true;
 
 static bool getEnableSpeculativeLoadHardening(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::X86_SpeculativeLoadHardening>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<X86Options>().X86_SpeculativeLoadHardening;
 }
 
 static bool getHardenEdgesWithLFENCE(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::X86_SLHLfence>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<X86Options>().X86_SLHLfence;
 }
 
 static bool getEnablePostLoadHardening(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::X86_SLHPostLoad>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<X86Options>().X86_SLHPostLoad;
 }
 
 static bool getFenceCallAndRet(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::X86_SLHFenceCallAndRet>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<X86Options>().X86_SLHFenceCallAndRet;
 }
 
 static bool getHardenInterprocedurally(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::X86_SLHInterprocedural>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<X86Options>().X86_SLHInterprocedural;
 }
 
 static bool getHardenLoads(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::X86_SLHLoads>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<X86Options>().X86_SLHLoads;
 }
 
 static bool getHardenIndirectCallsAndJumps(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::X86_SLHIndirect>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<X86Options>().X86_SLHIndirect;
 }
 
 namespace {
@@ -1715,9 +1707,9 @@ void X86SpeculativeLoadHardeningImpl::hardenLoadAddr(
 
       // Broadcast our state into a vector register.
       Register VStateReg = MRI->createVirtualRegister(OpRC);
-      unsigned BroadcastOp = Is128Bit ? X86::VPBROADCASTQrZ128rr
-                                      : Is256Bit ? X86::VPBROADCASTQrZ256rr
-                                                 : X86::VPBROADCASTQrZrr;
+      unsigned BroadcastOp = Is128Bit   ? X86::VPBROADCASTQrZ128rr
+                             : Is256Bit ? X86::VPBROADCASTQrZ256rr
+                                        : X86::VPBROADCASTQrZrr;
       auto BroadcastI =
           BuildMI(MBB, InsertPt, Loc, TII->get(BroadcastOp), VStateReg)
               .addReg(StateReg);
@@ -1727,8 +1719,9 @@ void X86SpeculativeLoadHardeningImpl::hardenLoadAddr(
                  dbgs() << "\n");
 
       // Merge our potential poison state into the value with a vector or.
-      unsigned OrOp = Is128Bit ? X86::VPORQZ128rr
-                               : Is256Bit ? X86::VPORQZ256rr : X86::VPORQZrr;
+      unsigned OrOp = Is128Bit   ? X86::VPORQZ128rr
+                      : Is256Bit ? X86::VPORQZ256rr
+                                 : X86::VPORQZrr;
       auto OrI = BuildMI(MBB, InsertPt, Loc, TII->get(OrOp), TmpReg)
                      .addReg(VStateReg)
                      .addReg(OpReg);
@@ -1796,7 +1789,8 @@ MachineInstr *X86SpeculativeLoadHardeningImpl::sinkPostLoadHardenedInst(
       // If we're already going to harden this use, it is data invariant, it
       // does not interfere with EFLAGS, and within our block.
       if (HardenedInstrs.count(&UseMI)) {
-        if (!X86InstrInfo::isDataInvariantLoad(UseMI) || isEFLAGSDefLive(UseMI)) {
+        if (!X86InstrInfo::isDataInvariantLoad(UseMI) ||
+            isEFLAGSDefLive(UseMI)) {
           // If we've already decided to harden a non-load, we must have sunk
           // some other post-load hardened instruction to it and it must itself
           // be data-invariant.
@@ -1830,8 +1824,8 @@ MachineInstr *X86SpeculativeLoadHardeningImpl::sinkPostLoadHardenedInst(
 
       // If this single use isn't data invariant, isn't in this block, or has
       // interfering EFLAGS, we can't sink the hardening to it.
-      if (!X86InstrInfo::isDataInvariant(UseMI) || UseMI.getParent() != MI.getParent() ||
-          isEFLAGSDefLive(UseMI))
+      if (!X86InstrInfo::isDataInvariant(UseMI) ||
+          UseMI.getParent() != MI.getParent() || isEFLAGSDefLive(UseMI))
         return {};
 
       // If this instruction defines multiple registers bail as we won't harden

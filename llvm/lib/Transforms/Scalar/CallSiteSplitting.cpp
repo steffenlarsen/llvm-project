@@ -64,8 +64,7 @@
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/PatternMatch.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
+#include "llvm/Transforms/Scalar/ScalarOptions.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/Local.h"
 
@@ -80,9 +79,9 @@ STATISTIC(NumCallSiteSplit, "Number of call-site split");
 /// DuplicationThreshold. Those instructions need to be duplicated in all
 /// split blocks.
 static unsigned getDuplicationThreshold(const Function &F) {
-  return clv2::getOptValOrDefault<
-      &clv2::SC_CallsiteSplittingDuplicationThreshold>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_CallsiteSplittingDuplicationThreshold;
 }
 
 static void addNonNullAttribute(CallBase &CB, Value *Op) {

@@ -17,13 +17,10 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ProfileData/Coverage/CoverageMapping.h"
+#include "llvm/ProfileData/ProfileDataOptions.h"
 #include "llvm/Support/Compiler.h"
 
 namespace llvm {
-namespace clv2 {
-class OptionsContext;
-}
-
 class raw_ostream;
 
 namespace coverage {
@@ -39,7 +36,7 @@ public:
   /// Write encoded filenames to the given output stream. If \p Compress is
   /// true, attempt to compress the filenames.
   LLVM_ABI void write(raw_ostream &OS, bool Compress,
-                      const clv2::OptionsContext &Ctx);
+                      const ProfileDataOptions &Opts);
 };
 
 /// Writer for instrumentation based coverage mapping data.

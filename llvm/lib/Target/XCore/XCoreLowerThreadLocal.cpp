@@ -22,8 +22,7 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/ValueHandle.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/XCore/XCoreOptionsOptInfos.h"
+#include "llvm/Target/XCore/XCoreOptions.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 
 #define DEBUG_TYPE "xcore-lower-thread-local"
@@ -31,8 +30,7 @@
 using namespace llvm;
 
 static unsigned getMaxThreads(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::XCORE_MaxThreads>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<XCoreOptions>().XCORE_MaxThreads;
 }
 
 namespace {

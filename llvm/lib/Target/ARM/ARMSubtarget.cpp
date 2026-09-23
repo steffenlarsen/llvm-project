@@ -34,8 +34,8 @@
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCTargetOptions.h"
 #include "llvm/Support/CodeGen.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/ARM/ARMOptionsOptInfos.h"
+#include "llvm/Support/ErrorHandling.h"
+#include "llvm/Target/ARM/ARMOptions.h"
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/TargetParser/ARMTargetParser.h"
 #include "llvm/TargetParser/Triple.h"
@@ -48,47 +48,25 @@ using namespace llvm;
 #define GET_SUBTARGETINFO_CTOR
 #include "ARMGenSubtargetInfo.inc"
 
-enum ITMode {
-  DefaultIT,
-  RestrictedIT
-};
+enum ITMode { DefaultIT, RestrictedIT };
 
-static bool getUseFusedMulOps(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::ARM_UseFusedMulOps>(
-      F.getContext().getOptionsContext());
+static bool getUseFusedMulOps() {
+  return ARMOptions::Current.ARM_UseFusedMulOps;
 }
 
-static bool getUseFusedMulOps(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::ARM_UseFusedMulOps>(Ctx);
-}
-
-static ITMode getIT(const clv2::OptionsContext &Ctx) {
-  auto *O = clv2::getView<&clv2::ARMOptsReg>(Ctx);
-  if (!O)
+static ITMode getIT() {
+  switch (ARMOptions::Current.ARM_ITMode) {
+  case ARMITMode::DefaultIT:
     return DefaultIT;
-  bool HaveDefault = O->specified<&clv2::ARM_ITDefaultIT>();
-  bool HaveRestrict = O->specified<&clv2::ARM_ITRestrictedIT>();
-  if (!HaveDefault && !HaveRestrict)
-    return DefaultIT;
-  if (HaveDefault && HaveRestrict)
-    return O->position<&clv2::ARM_ITDefaultIT>() >
-                   O->position<&clv2::ARM_ITRestrictedIT>()
-               ? DefaultIT
-               : RestrictedIT;
-  return HaveRestrict ? RestrictedIT : DefaultIT;
+  case ARMITMode::RestrictedIT:
+    return RestrictedIT;
+  }
+  llvm_unreachable("unknown ARMITMode");
 }
 
 /// ForceFastISel - Use the fast-isel, even for subtargets where it is not
 /// currently supported (for testing only).
-static bool getForceFastISel(const Function &F) {
-  return clv2::getOptValOr<&clv2::ARMOptsReg, &clv2::ARM_ForceFastISel>(
-      F.getContext().getOptionsContext(), false);
-}
-
-static bool getForceFastISel(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::ARMOptsReg, &clv2::ARM_ForceFastISel>(Ctx,
-                                                                        false);
-}
+static bool getForceFastISel() { return ARMOptions::Current.ARM_ForceFastISel; }
 
 /// initializeSubtargetDependencies - Initializes using a CPU and feature string
 /// so that we can use initializer lists for subtarget initialization.
@@ -113,9 +91,9 @@ ARMSubtarget::ARMSubtarget(const Triple &TT, const std::string &CPU,
                            FloatABI::ABIType FloatABI, ARM::ARMABI ABI,
                            bool MinSize, DenormalMode DM)
     : ARMGenSubtargetInfo(TT, CPU, /*TuneCPU*/ CPU, FS, TM.getOptionsContext()),
-      UseMulOps(getUseFusedMulOps(TM.getOptionsContext())), CPUString(CPU),
-      OptMinSize(MinSize), IsLittle(IsLittle), DM(DM), TargetTriple(TT),
-      Options(TM.Options), TM(TM), FloatABIType(FloatABI), ABI(ABI),
+      UseMulOps(getUseFusedMulOps()), CPUString(CPU), OptMinSize(MinSize),
+      IsLittle(IsLittle), DM(DM), TargetTriple(TT), Options(TM.Options), TM(TM),
+      FloatABIType(FloatABI), ABI(ABI),
       FrameLowering(initializeFrameLowering(CPU, FS)),
       // At this point initializeSubtargetDependencies has been called so
       // we can query directly.
@@ -383,7 +361,7 @@ void ARMSubtarget::initSubtargetFeatures(StringRef CPU, StringRef FS) {
 
   SupportsTailCall = !isThumb1Only() || hasV8MBaselineOps();
 
-  switch (getIT(TM.getOptionsContext())) {
+  switch (getIT()) {
   case DefaultIT:
     RestrictIT = false;
     break;
@@ -405,7 +383,8 @@ void ARMSubtarget::initSubtargetFeatures(StringRef CPU, StringRef FS) {
        TargetTriple.isOSVersionLT(3, 0)))
     ReserveR9 = true;
 
-  // If MVEVectorCostFactor is still 0 (has not been set to anything else), default it to 2
+  // If MVEVectorCostFactor is still 0 (has not been set to anything else),
+  // default it to 2
   if (MVEVectorCostFactor == 0)
     MVEVectorCostFactor = 2;
 
@@ -552,8 +531,7 @@ bool ARMSubtarget::useStride4VFPs() const {
   // For general targets, the prologue can grow when VFPs are allocated with
   // stride 4 (more vpush instructions). But WatchOS uses a compact unwind
   // format which it's more important to get right.
-  return isTargetWatchABI() ||
-         (useWideStrideVFP() && !OptMinSize);
+  return isTargetWatchABI() || (useWideStrideVFP() && !OptMinSize);
 }
 
 bool ARMSubtarget::useMovt() const {
@@ -566,7 +544,7 @@ bool ARMSubtarget::useMovt() const {
 
 bool ARMSubtarget::useFastISel() const {
   // Enable fast-isel for any target, for testing only.
-  if (getForceFastISel(TM.getOptionsContext()))
+  if (getForceFastISel())
     return true;
 
   // Limit fast-isel to the targets that are or have been tested.

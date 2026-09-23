@@ -8,6 +8,7 @@ add_llvm_component_library(LLVMCoverage
 
   DEPENDS
   intrinsics_gen
+  ProfileDataOptParserTableGen
 
   LINK_COMPONENTS
   Core

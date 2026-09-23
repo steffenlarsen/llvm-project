@@ -12,7 +12,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Bitcode/BitcodeWriter.h"
-#include "llvm/CGData/CGDataOptionsOptInfos.h"
+#include "llvm/CGData/CGDataOptions.h"
 #include "llvm/CGData/CodeGenDataReader.h"
 #include "llvm/CGData/OutlinedHashTreeRecord.h"
 #include "llvm/CGData/StableFunctionMapRecord.h"
@@ -26,20 +26,19 @@
 using namespace llvm;
 using namespace cgdata;
 
-static bool getCodeGenDataGenerate(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::CGDataOptsReg,
-                           &clv2::CGD_CodeGenDataGenerate>(Ctx, false);
+// No LLVMContext is reachable from this bare clv2::OptionsContext, so there
+// is no per-context CGDataOptions view to prefer; read the process-wide
+// default directly (same idiom as WebAssemblyOptions::Current elsewhere).
+static bool getCodeGenDataGenerate() {
+  return CGDataOptions::Current.CGD_CodeGenDataGenerate;
 }
 
-static std::string getCodeGenDataUsePath(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValIfSpecified<&clv2::CGDataOptsReg,
-                                    &clv2::CGD_CodeGenDataUsePath>(
-      Ctx, std::string(""));
+static std::string getCodeGenDataUsePath() {
+  return CGDataOptions::Current.CGD_CodeGenDataUsePath;
 }
 
-static bool getCodeGenDataThinLTOTwoRounds(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::CGDataOptsReg,
-                           &clv2::CGD_CodeGenDataThinLTOTwoRounds>(Ctx, false);
+static bool getCodeGenDataThinLTOTwoRounds() {
+  return CGDataOptions::Current.CGD_CodeGenDataThinLTOTwoRounds;
 }
 
 static std::string getCGDataErrString(cgdata_error Err,
@@ -150,18 +149,18 @@ CodeGenData &CodeGenData::getInstance(const clv2::OptionsContext &Ctx) {
   std::call_once(CodeGenData::OnceFlag, [&Ctx]() {
     Instance = std::unique_ptr<CodeGenData>(new CodeGenData());
 
-    if (getCodeGenDataGenerate(Ctx) || getCodeGenDataThinLTOTwoRounds(Ctx))
+    if (getCodeGenDataGenerate() || getCodeGenDataThinLTOTwoRounds())
       Instance->EmitCGData = true;
-    else if (!getCodeGenDataUsePath(Ctx).empty()) {
+    else if (!getCodeGenDataUsePath().empty()) {
       // Initialize the global CGData if the input file name is given.
       // We do not error-out when failing to parse the input file.
       // Instead, just emit an warning message and fall back as if no CGData
       // were available.
       auto FS = vfs::getRealFileSystem();
       auto ReaderOrErr = CodeGenDataReader::create(
-          getCodeGenDataUsePath(Ctx), *FS, cgDataLazyLoadingEnabled(Ctx));
+          getCodeGenDataUsePath(), *FS, cgDataLazyLoadingEnabled(Ctx));
       if (Error E = ReaderOrErr.takeError()) {
-        warn(std::move(E), getCodeGenDataUsePath(Ctx));
+        warn(std::move(E), getCodeGenDataUsePath());
         return;
       }
       // Publish each CGData based on the data type in the header.

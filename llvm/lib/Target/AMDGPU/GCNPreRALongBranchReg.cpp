@@ -20,16 +20,14 @@
 #include "SIMachineFunctionInfo.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/InitializePasses.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/AMDGPU/AMDGPUOptionsOptInfos.h"
+#include "llvm/Target/AMDGPU/AMDGPUOptions.h"
 
 using namespace llvm;
 
 #define DEBUG_TYPE "amdgpu-pre-ra-long-branch-reg"
 
 static double getLongBranchFactor(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AMDGPU_LongBranchFactor>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<AMDGPUOptions>().AMDGPU_LongBranchFactor;
 }
 
 namespace {

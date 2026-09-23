@@ -7,7 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Analysis/ProfileSummaryInfo.h"
-#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
+#include "llvm/Analysis/AnalysisOptions.h"
 #include "llvm/Analysis/BlockFrequencyInfo.h"
 #include "llvm/Analysis/BranchProbabilityInfo.h"
 #include "llvm/Analysis/LoopInfo.h"
@@ -392,11 +392,9 @@ TEST_F(ProfileSummaryInfoTest, PartialSampleProfWorkingSetSize) {
   // Set ScalePartialSampleProfileWorkingSetSize = true via OptionsContext.
   // Note: the Init default is already true, so this is a no-op in practice,
   // but we set it explicitly for clarity.
-  auto Opts = clv2::AnalysisOptsReg.makeDefaults();
-  Opts.get<&clv2::AN_ScalePartialSampleProfileWorkingSetSize>() = true;
-  clv2::OptionsContext OptsCtx;
-  OptsCtx.addView<&clv2::AnalysisOptsReg>(Opts);
-  C.setOptionsContext(OptsCtx);
+  AnalysisOptions Opts;
+  Opts.AN_ScalePartialSampleProfileWorkingSetSize = true;
+  C.setOptions<AnalysisOptions>(Opts);
 
   // With PartialProfileRatio unset (zero.)
   auto M1 = makeLLVMModule("SampleProfile", /*NumCounts*/ 3,

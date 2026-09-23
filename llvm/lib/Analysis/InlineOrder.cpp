@@ -7,7 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Analysis/InlineOrder.h"
-#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
+#include "llvm/Analysis/AnalysisOptions.h"
 #include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/Analysis/BlockFrequencyInfo.h"
 #include "llvm/Analysis/GlobalsModRef.h"
@@ -18,19 +18,15 @@
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/Support/CommandLineCompat.h"
-#include "llvm/Support/OptionsContext.h"
 
 using namespace llvm;
 
 #define DEBUG_TYPE "inline-order"
 
-enum class InlinePriorityMode : int { Size, Cost, CostBenefit, ML };
-static InlinePriorityMode UseInlinePriority = InlinePriorityMode::Size;
-static int ModuleInlinerTopPriorityThreshold = 0;
-
 static int getModuleInlinerTopPriorityThreshold(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AN_ModuleInlinerTopPriorityThreshold>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<AnalysisOptions>()
+      .AN_ModuleInlinerTopPriorityThreshold;
 }
 
 namespace {
@@ -271,7 +267,7 @@ std::unique_ptr<InlineOrder>
 llvm::getDefaultInlineOrder(FunctionAnalysisManager &FAM,
                             const InlineParams &Params,
                             ModuleAnalysisManager &MAM, Module &M) {
-  switch (UseInlinePriority) {
+  switch (M.getContext().getOptions<AnalysisOptions>().AN_UseInlinePriority) {
   case InlinePriorityMode::Size:
     LLVM_DEBUG(dbgs() << "    Current used priority: Size priority ---- \n");
     return std::make_unique<PriorityInlineOrder<SizePriority>>(FAM, Params);

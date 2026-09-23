@@ -50,7 +50,7 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/Regex.h"
 #include "llvm/Support/VirtualFileSystem.h"
-#include "llvm/Transforms/IPO/IPOOptionsOptInfos.h"
+#include "llvm/Transforms/IPO/IPOOptions.h"
 #include "llvm/Transforms/IPO/InstrumentorUtils.h"
 #include "llvm/Transforms/IPO/Internalize.h"
 #include "llvm/Transforms/Utils/Cloning.h"
@@ -531,18 +531,10 @@ InstrumentorPass::InstrumentorPass(IntrusiveRefCntPtr<vfs::FileSystem> FS,
 PreservedAnalyses InstrumentorPass::run(Module &M, InstrumentationConfig &IConf,
                                         InstrumentorIRBuilderTy &IIRB,
                                         bool ReadConfig) {
-  const auto &OptsCtx = M.getContext().getOptionsContext();
-  std::string OutputConfigFileVal =
-      clv2::getOptValOr<&clv2::IPOOptsReg,
-                        &clv2::IPO_InstrumentorOutputConfigFile>(OptsCtx,
-                                                                 std::string{});
-  std::vector<std::string> ConfigFilesVal =
-      clv2::getOptValOr<&clv2::IPOOptsReg, &clv2::IPO_InstrumentorConfigFiles>(
-          OptsCtx, std::vector<std::string>{});
-  std::string ConfigPathsFileVal =
-      clv2::getOptValOr<&clv2::IPOOptsReg,
-                        &clv2::IPO_InstrumentorConfigPathsFile>(OptsCtx,
-                                                                std::string{});
+  const IPOOptions &Opts = M.getContext().getOptions<IPOOptions>();
+  std::string OutputConfigFileVal = Opts.IPO_InstrumentorOutputConfigFile;
+  std::vector<std::string> ConfigFilesVal = Opts.IPO_InstrumentorConfigFiles;
+  std::string ConfigPathsFileVal = Opts.IPO_InstrumentorConfigPathsFile;
 
   bool Changed = false;
   InstrumentorImpl Impl(IConf, IIRB, M);

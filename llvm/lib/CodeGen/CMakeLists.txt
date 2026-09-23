@@ -36,7 +36,6 @@ endif()
 add_llvm_component_library(LLVMCodeGen
   CommandFlagsOptionsGetters.cpp
   CodeGenOptionsRegistration.cpp
-  CodeGenPassOptionsGetters.cpp
   AggressiveAntiDepBreaker.cpp
   AllocationOrder.cpp
   Analysis.cpp
@@ -57,7 +56,16 @@ add_llvm_component_library(LLVMCodeGen
   CFIInstrInserter.cpp
   CodeGen.cpp
   CodeGenCommonISel.cpp
-  CodeGenPassOptions.cpp
+  CodeGenPassOptionsAsmPrint.cpp
+  CodeGenPassOptionsCore1.cpp
+  CodeGenPassOptionsCore2.cpp
+  CodeGenPassOptionsGISel.cpp
+  CodeGenPassOptionsMachine1.cpp
+  CodeGenPassOptionsMachine2.cpp
+  CodeGenPassOptionsRegAlloc.cpp
+  CodeGenPassOptionsSched1.cpp
+  CodeGenPassOptionsSched2.cpp
+  CodeGenPassOptionsSelDAG.cpp
   CodeGenPrepare.cpp
   CommandFlags.cpp
   ComplexDeinterleavingPass.cpp
@@ -291,6 +299,18 @@ add_llvm_component_library(LLVMCodeGen
   DEPENDS
   intrinsics_gen
   vt_gen
+  CodeGenAsmPrintOptParserTableGen
+  CodeGenCore1OptParserTableGen
+  CodeGenCore2OptParserTableGen
+  CodeGenGISelOptParserTableGen
+  CodeGenMachine1OptParserTableGen
+  CodeGenMachine2OptParserTableGen
+  CodeGenRegAllocOptParserTableGen
+  CodeGenSched1OptParserTableGen
+  CodeGenSched2OptParserTableGen
+  CodeGenSelDAGOptParserTableGen
+  ProfileDataOptParserTableGen
+  UtilsOptParserTableGen
   ${MLDeps}
 
   LINK_COMPONENTS
@@ -303,6 +323,7 @@ add_llvm_component_library(LLVMCodeGen
   GlobalISel
   MC
   ObjCARC
+  Option
   ProfileData
   Scalar
   Support

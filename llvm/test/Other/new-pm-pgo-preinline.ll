@@ -1,4 +1,4 @@
-; RUN: opt -disable-verify -eagerly-invalidate-analyses=0 -debug-pass-manager -pgo-kind=pgo-instr-gen-pipeline -passes='default<O2>' -S %s 2>&1 | FileCheck %s --check-prefixes=CHECK-O2
+; RUN: opt -disable-verify -no-eagerly-invalidate-analyses -debug-pass-manager -pgo-kind=pgo-instr-gen-pipeline -passes='default<O2>' -S %s 2>&1 | FileCheck %s --check-prefixes=CHECK-O2
 
 ; CHECK-O2: Running pass: ModuleInlinerWrapperPass
 ; CHECK-O2-NEXT: Running analysis: InlineAdvisorAnalysis

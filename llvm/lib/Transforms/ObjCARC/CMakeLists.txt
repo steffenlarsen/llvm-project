@@ -1,6 +1,4 @@
 add_llvm_component_library(LLVMObjCARCOpts
-  ObjCARCOptionsGetters.cpp
-  ObjCARCOptionsRegistration.cpp
   ObjCARC.cpp
   ObjCARCOptions.cpp
   ObjCARCOpts.cpp
@@ -16,6 +14,7 @@ add_llvm_component_library(LLVMObjCARCOpts
 
   DEPENDS
   intrinsics_gen
+  ObjCARCOptParserTableGen
 
   COMPONENT_NAME
   ObjCARC
@@ -23,6 +22,7 @@ add_llvm_component_library(LLVMObjCARCOpts
   LINK_COMPONENTS
   Analysis
   Core
+  Option
   Support
   TargetParser
   TransformUtils

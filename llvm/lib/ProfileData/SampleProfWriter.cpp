@@ -21,7 +21,7 @@
 #include "llvm/ADT/Eytzinger.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ProfileData/ProfileCommon.h"
-#include "llvm/ProfileData/ProfileDataOptionsOptInfos.h"
+#include "llvm/ProfileData/ProfileDataOptions.h"
 #include "llvm/ProfileData/SampleProf.h"
 #include "llvm/Support/Compression.h"
 #include "llvm/Support/EndianStream.h"
@@ -45,25 +45,33 @@
 using namespace llvm;
 using namespace sampleprof;
 
+// None of these have a Module/LLVMContext in scope, so they cannot use
+// Ctx.getContext().getOptions<ProfileDataOptions>(); their clv2::OptionsContext
+// parameters are otherwise unused (see setOptionsContext() below, part of the
+// generic virtual mechanism shared by SampleProfileWriter and many other
+// classes, which is out of scope for this migration). They read the
+// process-wide ProfileDataOptions::Current default instead, which
+// llvm-profdata/llvm-profgen keep up to date via
+// parseLibraryOptionsChain<ProfileDataOptions>.
 static bool getExtBinaryWriteVTableTypeProf(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::PD_ExtBinaryWriteVTableTypeProf>(Ctx);
+  return ProfileDataOptions::Current.PD_ExtBinaryWriteVTableTypeProf;
 }
 
 static uint64_t getRequestedVersion(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::ProfileDataOptsReg,
-                           &clv2::PD_RequestedVersion>(Ctx, DefaultVersion);
+  return ProfileDataOptions::Current.PD_RequestedVersion.value_or(
+      DefaultVersion);
 }
 
 static bool getExtBinaryCompositeProf(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::PD_ExtBinaryCompositeProf>(Ctx);
+  return ProfileDataOptions::Current.PD_ExtBinaryCompositeProf;
 }
 
 static bool getWriteMD5ProfSymList(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::PD_WriteMD5ProfSymList>(Ctx);
+  return ProfileDataOptions::Current.PD_WriteMD5ProfSymList;
 }
 
 static bool getWriteEytzingerNameTables(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::PD_WriteEytzingerNameTables>(Ctx);
+  return ProfileDataOptions::Current.PD_WriteEytzingerNameTables;
 }
 
 namespace llvm {
@@ -1357,8 +1365,7 @@ SampleProfileWriter::create(std::unique_ptr<raw_ostream> &OS,
     // Composite output defaults to its first compatible format version.
     // Preserve a compatible version explicitly selected by the user.
     if (getExtBinaryCompositeProf(Ctx)) {
-      if (!clv2::wasOptSpecified<&clv2::ProfileDataOptsReg,
-                                 &clv2::PD_RequestedVersion>(Ctx)) {
+      if (!ProfileDataOptions::Current.PD_RequestedVersion) {
         Writer->setFormatVersion(CompositeProfileVersion);
       } else {
         if (ReqVersion < CompositeProfileVersion)
@@ -1377,6 +1384,6 @@ SampleProfileWriter::create(std::unique_ptr<raw_ostream> &OS,
 
 void SampleProfileWriter::computeSummary(const SampleProfileMap &ProfileMap) {
   SampleProfileSummaryBuilder Builder(ProfileSummaryBuilder::DefaultCutoffs);
-  Summary = Builder.computeSummaryForProfiles(
-      ProfileMap, llvm::clv2::defaultOptionsContext());
+  Summary = Builder.computeSummaryForProfiles(ProfileMap,
+                                              ProfileDataOptions::Current);
 }

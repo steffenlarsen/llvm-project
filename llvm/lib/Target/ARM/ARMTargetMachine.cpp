@@ -49,8 +49,7 @@
 #include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/ARM/ARMOptionsOptInfos.h"
+#include "llvm/Target/ARM/ARMOptions.h"
 #include "llvm/Target/TargetLoweringObjectFile.h"
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/TargetParser/ARMTargetParser.h"
@@ -65,30 +64,27 @@
 
 using namespace llvm;
 
-static bool getDisableA15SDOptimization(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::ARMOptsReg,
-                           &clv2::ARM_DisableA15SDOptimization>(Ctx, false);
+static bool getDisableA15SDOptimization() {
+  return ARMOptions::Current.ARM_DisableA15SDOptimization;
 }
 
-static bool getEnableAtomicTidy(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::ARM_EnableAtomicTidy>(Ctx);
+static bool getEnableAtomicTidy() {
+  return ARMOptions::Current.ARM_EnableAtomicTidy;
 }
 
-static bool getEnableARMLoadStoreOpt(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::ARM_EnableARMLoadStoreOpt>(Ctx);
+static bool getEnableARMLoadStoreOpt() {
+  return ARMOptions::Current.ARM_EnableARMLoadStoreOpt;
 }
 
-static bool getEnableGlobalMergeSpecified(const clv2::OptionsContext &Ctx) {
-  return clv2::wasOptSpecified<&clv2::ARMOptsReg, &clv2::ARM_EnableGlobalMerge>(
-      Ctx);
+static bool getEnableGlobalMergeSpecified() {
+  return ARMOptions::Current.ARM_EnableGlobalMerge.has_value();
 }
-static bool getEnableGlobalMerge(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::ARMOptsReg, &clv2::ARM_EnableGlobalMerge>(
-      Ctx, false);
+static bool getEnableGlobalMerge() {
+  return ARMOptions::Current.ARM_EnableGlobalMerge.value_or(false);
 }
 
 namespace llvm {
-  void initializeARMExecutionDomainFixPass(PassRegistry&);
+void initializeARMExecutionDomainFixPass(PassRegistry &);
 }
 
 extern "C" LLVM_ABI LLVM_EXTERNAL_VISIBILITY void LLVMInitializeARMTarget() {
@@ -286,7 +282,9 @@ ARMBaseTargetMachine::getSubtargetImpl(const Function &F) const {
                                        FloatABI, ABI, F.hasMinSize(), DM);
 
     if (!I->isThumb() && !I->hasARMOps())
-      F.getContext().emitError("Function '" + F.getName() + "' uses ARM "
+      F.getContext().emitError(
+          "Function '" + F.getName() +
+          "' uses ARM "
           "instructions, but the target does not support ARM mode execution.");
   }
 
@@ -304,8 +302,8 @@ ARMBaseTargetMachine::createMachineScheduler(MachineSchedContext *C) const {
   // add DAG Mutations here.
   const ARMSubtarget &ST = C->MF->getSubtarget<ARMSubtarget>();
   if (ST.hasFusion())
-    DAG->addMutation(createARMMacroFusionDAGMutation(
-        C->MF->getFunction().getContext().getOptionsContext()));
+    DAG->addMutation(
+        createARMMacroFusionDAGMutation(C->MF->getFunction().getContext()));
   return DAG;
 }
 
@@ -315,8 +313,8 @@ ARMBaseTargetMachine::createPostMachineScheduler(MachineSchedContext *C) const {
   // add DAG Mutations here.
   const ARMSubtarget &ST = C->MF->getSubtarget<ARMSubtarget>();
   if (ST.hasFusion())
-    DAG->addMutation(createARMMacroFusionDAGMutation(
-        C->MF->getFunction().getContext().getOptionsContext()));
+    DAG->addMutation(
+        createARMMacroFusionDAGMutation(C->MF->getFunction().getContext()));
   if (auto Mutation = createARMLatencyMutations(ST, C->AA))
     DAG->addMutation(std::move(Mutation));
   return DAG;
@@ -370,9 +368,7 @@ class ARMExecutionDomainFix : public ExecutionDomainFix {
 public:
   static char ID;
   ARMExecutionDomainFix() : ExecutionDomainFix(ID, ARM::DPRRegClass) {}
-  StringRef getPassName() const override {
-    return "ARM Execution Domain Fix";
-  }
+  StringRef getPassName() const override { return "ARM Execution Domain Fix"; }
 };
 char ARMExecutionDomainFix::ID;
 
@@ -403,8 +399,7 @@ void ARMPassConfig::addIRPasses() {
   // Cmpxchg instructions are often used with a subsequent comparison to
   // determine whether it succeeded. We can exploit existing control-flow in
   // ldrex/strex loops to simplify this, but it needs tidying up.
-  if (TM->getOptLevel() != CodeGenOptLevel::None &&
-      getEnableAtomicTidy(TM->getOptionsContext()))
+  if (TM->getOptLevel() != CodeGenOptLevel::None && getEnableAtomicTidy())
     addPass(createCFGSimplificationPass(
         TM->getOptionsContext(),
         SimplifyCFGOptions().hoistCommonInsts(true).sinkCommonInsts(true),
@@ -445,8 +440,8 @@ void ARMPassConfig::addCodeGenPrepare() {
 }
 
 bool ARMPassConfig::addPreISel() {
-  bool GMSpecified = getEnableGlobalMergeSpecified(TM->getOptionsContext());
-  bool GMValue = getEnableGlobalMerge(TM->getOptionsContext());
+  bool GMSpecified = getEnableGlobalMergeSpecified();
+  bool GMValue = getEnableGlobalMerge();
   if ((!GMSpecified && TM->getOptLevel() != CodeGenOptLevel::None) ||
       (GMSpecified && GMValue)) {
     // FIXME: This is using the thumb1 only constant value for
@@ -515,17 +510,17 @@ void ARMPassConfig::addPreRegAlloc() {
 
     addPass(createMLxExpansionPass());
 
-    if (getEnableARMLoadStoreOpt(TM->getOptionsContext()))
+    if (getEnableARMLoadStoreOpt())
       addPass(createARMLoadStoreOptLegacyPass(/* pre-register alloc */ true));
 
-    if (!getDisableA15SDOptimization(TM->getOptionsContext()))
+    if (!getDisableA15SDOptimization())
       addPass(createA15SDOptimizerPass());
   }
 }
 
 void ARMPassConfig::addPreSched2() {
   if (getOptLevel() != CodeGenOptLevel::None) {
-    if (getEnableARMLoadStoreOpt(TM->getOptionsContext()))
+    if (getEnableARMLoadStoreOpt())
       addPass(createARMLoadStoreOptLegacyPass());
 
     addPass(new ARMExecutionDomainFix());

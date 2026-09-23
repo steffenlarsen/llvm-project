@@ -18,8 +18,7 @@
 #include "llvm/IR/Function.h"
 #include "llvm/Support/Alignment.h"
 #include "llvm/Support/CommandLineCompat.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/NVPTX/NVPTXOptionsOptInfos.h"
+#include "llvm/Target/NVPTX/NVPTXOptions.h"
 #include <algorithm>
 
 using namespace llvm;
@@ -55,11 +54,8 @@ static Align getByValParamAlignFloor(const Function *F) {
   // TODO: remove this after verifying the bug is not reproduced
   // on non-deprecated ptxas versions.
   const bool ShouldForceMinAlign =
-      clv2::getOptValOr<&clv2::NVPTXOptsReg,
-                        &clv2::NVPTX_ForceMinByValParamAlign>(
-          F ? F->getContext().getOptionsContext()
-            : clv2::defaultOptionsContext(),
-          false) &&
+      (F ? F->getContext().getOptions<NVPTXOptions>() : NVPTXOptions::Current)
+          .NVPTX_ForceMinByValParamAlign &&
       (!F || !isKernelFunction(*F));
   return ShouldForceMinAlign ? Align(4) : Align(1);
 }

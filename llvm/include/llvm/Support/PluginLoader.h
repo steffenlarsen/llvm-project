@@ -26,15 +26,6 @@ namespace llvm {
     LLVM_ABI static unsigned getNumPlugins();
     LLVM_ABI static std::string &getPlugin(unsigned num);
   };
-
-  /// Register the -load runtime option. Call this explicitly from tool entry
-  /// points before parsing instead of relying on a global constructor.
-  LLVM_ABI void registerPluginLoaderOption();
-
-  /// Whether registerPluginLoaderOption() has been called, i.e. whether -load
-  /// is an option of this program. The parser uses this to decide whether to
-  /// dlopen -load arguments before it snapshots dynamic registrations.
-  LLVM_ABI bool pluginLoaderOptionRegistered();
 }
 
 #endif

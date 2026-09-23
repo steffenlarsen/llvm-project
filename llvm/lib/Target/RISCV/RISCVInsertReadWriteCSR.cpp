@@ -18,16 +18,14 @@
 #include "RISCV.h"
 #include "RISCVSubtarget.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/RISCV/RISCVOptionsOptInfos.h"
+#include "llvm/Target/RISCV/RISCVOptions.h"
 using namespace llvm;
 
 #define DEBUG_TYPE "riscv-insert-read-write-csr"
 #define RISCV_INSERT_READ_WRITE_CSR_NAME "RISC-V Insert Read/Write CSR Pass"
 
 static bool getDisableFRMInsertOpt(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::RV_DisableFRMInsertOpt>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<RISCVOptions>().RV_DisableFRMInsertOpt;
 }
 
 namespace {
@@ -160,8 +158,7 @@ bool RISCVInsertReadWriteCSR::emitWriteRoundingMode(MachineBasicBlock &MBB) {
     // Save
     MachineRegisterInfo *MRI = &MBB.getParent()->getRegInfo();
     Register SavedFRM = MRI->createVirtualRegister(&RISCV::GPRRegClass);
-    BuildMI(MBB, MI, MI.getDebugLoc(), TII->get(RISCV::SwapFRMImm),
-            SavedFRM)
+    BuildMI(MBB, MI, MI.getDebugLoc(), TII->get(RISCV::SwapFRMImm), SavedFRM)
         .addImm(FRMImm);
     MI.addOperand(MachineOperand::CreateReg(RISCV::FRM, /*IsDef*/ false,
                                             /*IsImp*/ true));

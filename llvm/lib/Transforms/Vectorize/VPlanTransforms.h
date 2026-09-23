@@ -19,7 +19,6 @@
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/Support/Compiler.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/Regex.h"
 #include "llvm/Transforms/Vectorize/VectorizeOptions.h"
 #include <string>
@@ -42,7 +41,6 @@ class VPBuilder;
 class VPRecipeBuilder;
 struct VFRange;
 
-
 struct VPlanTransforms {
   /// Helper to run a VPlan pass \p Pass on \p VPlan, forwarding extra arguments
   /// to the pass. Performs verification/printing after each VPlan pass if
@@ -62,19 +60,18 @@ struct VPlanTransforms {
     bool PrintAfterPassesWasSpec = false;
     std::vector<std::string> PrintBeforePasses;
     std::vector<std::string> PrintAfterPasses;
-    if (Fn)
-      if (auto *O = clv2::getView<&clv2::VectorizeOptsReg>(
-              Fn->getContext().getOptionsContext())) {
-        PrintBeforeAll = O->get<&clv2::VEC_VPlanPrintBeforeAll>();
-        PrintAfterAll = O->get<&clv2::VEC_VPlanPrintAfterAll>();
-        PrintVecRegionScope = O->get<&clv2::VEC_VPlanPrintVectorRegionScope>();
-        PrintBeforePassesWasSpec =
-            O->specified<&clv2::VEC_VPlanPrintBeforePasses>();
-        PrintBeforePasses = O->get<&clv2::VEC_VPlanPrintBeforePasses>();
-        PrintAfterPassesWasSpec =
-            O->specified<&clv2::VEC_VPlanPrintAfterPasses>();
-        PrintAfterPasses = O->get<&clv2::VEC_VPlanPrintAfterPasses>();
-      }
+    if (Fn) {
+      PrintBeforeAll = VectorizeOptions::Current.VEC_VPlanPrintBeforeAll;
+      PrintAfterAll = VectorizeOptions::Current.VEC_VPlanPrintAfterAll;
+      PrintVecRegionScope =
+          VectorizeOptions::Current.VEC_VPlanPrintVectorRegionScope;
+      // ListField has no separate "was it specified" tracking; a non-empty
+      // list is equivalent to the option having been specified.
+      PrintBeforePasses = VectorizeOptions::Current.VEC_VPlanPrintBeforePasses;
+      PrintBeforePassesWasSpec = !PrintBeforePasses.empty();
+      PrintAfterPasses = VectorizeOptions::Current.VEC_VPlanPrintAfterPasses;
+      PrintAfterPassesWasSpec = !PrintAfterPasses.empty();
+    }
 
     // Computing these is expensive, so only do it if any VPlan printing has
     // been requested.
@@ -125,10 +122,8 @@ struct VPlanTransforms {
 #else
         bool DoVerify = false;
 #endif
-        if (auto *VPF2 = Plan.getScalarHeader()->getIRBasicBlock()->getParent())
-          if (auto *O = clv2::getView<&clv2::VectorizeOptsReg>(
-                  VPF2->getContext().getOptionsContext()))
-            DoVerify = O->get<&clv2::VEC_VerifyEachVPlan>();
+        if (Plan.getScalarHeader()->getIRBasicBlock()->getParent())
+          DoVerify = VectorizeOptions::Current.VEC_VerifyEachVPlan;
         if (DoVerify && EnableVerify) {
           if (!verifyVPlanIsValid(Plan))
             report_fatal_error("Broken VPlan found, compilation aborted!");
@@ -473,7 +468,8 @@ struct VPlanTransforms {
                                             PredicatedScalarEvolution &PSE,
                                             const Loop *L);
 
-  /// Add explicit broadcasts for live-ins and VPValues defined in \p Plan's entry block if they are used as vectors.
+  /// Add explicit broadcasts for live-ins and VPValues defined in \p Plan's
+  /// entry block if they are used as vectors.
   static void materializeBroadcasts(VPlan &Plan);
 
   /// Hoist predicated loads from the same address to the loop entry block, if

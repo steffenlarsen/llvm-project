@@ -38,9 +38,8 @@
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/CodeGen.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/Mips/MipsOptionsOptInfos.h"
+#include "llvm/Target/Mips/MipsOptions.h"
 #include "llvm/Target/TargetMachine.h"
 #include <cassert>
 #include <iterator>
@@ -62,315 +61,306 @@ static bool DisableForwardSearch = true;
 static bool DisableSuccBBSearch = true;
 
 static bool getDisableDelaySlotFiller(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::MIPS_DisableDelaySlotFiller>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<MipsOptions>().MIPS_DisableDelaySlotFiller;
 }
 
 static bool getDisableForwardSearch(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::MIPS_DisableForwardSearch>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<MipsOptions>().MIPS_DisableForwardSearch;
 }
 
 static bool getDisableSuccBBSearch(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::MIPS_DisableSuccBBSearch>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<MipsOptions>().MIPS_DisableSuccBBSearch;
 }
 
 static bool getDisableBackwardSearch(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::MIPS_DisableBackwardSearch>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<MipsOptions>().MIPS_DisableBackwardSearch;
 }
 
-static clv2::MipsCompactBranch getMipsCompactBranchPolicy(const Function &F) {
-  if (auto *O =
-          clv2::getView<&clv2::MipsOptsReg>(F.getContext().getOptionsContext()))
-    return O->get<&clv2::MIPS_CompactBranchPolicy>();
-  extern CompactBranchPolicy MipsCompactBranchPolicy;
-  return static_cast<clv2::MipsCompactBranch>(MipsCompactBranchPolicy);
+static MipsCompactBranch getMipsCompactBranchPolicy(const Function &F) {
+  return F.getContext().getOptions<MipsOptions>().MIPS_CompactBranchPolicy;
 }
 
 namespace {
 
-  using Iter = MachineBasicBlock::iterator;
-  using ReverseIter = MachineBasicBlock::reverse_iterator;
-  using BB2BrMap = SmallDenseMap<MachineBasicBlock *, MachineInstr *, 2>;
+using Iter = MachineBasicBlock::iterator;
+using ReverseIter = MachineBasicBlock::reverse_iterator;
+using BB2BrMap = SmallDenseMap<MachineBasicBlock *, MachineInstr *, 2>;
 
-  // Holds information about one branch instruction
-  // This is used by the MIPS1 target to easily find all paths of a branch to
-  // then check the first instruction for possible load delay hazards
-  class BranchInformation {
-  private:
-    // The pointer to the actual branch instruction
-    const MachineInstr *BranchInstr = nullptr;
-    // The pointer to the instruction after the branch (= the `else` case)
-    const MachineInstr *ElseBranchInstr = nullptr;
+// Holds information about one branch instruction
+// This is used by the MIPS1 target to easily find all paths of a branch to
+// then check the first instruction for possible load delay hazards
+class BranchInformation {
+private:
+  // The pointer to the actual branch instruction
+  const MachineInstr *BranchInstr = nullptr;
+  // The pointer to the instruction after the branch (= the `else` case)
+  const MachineInstr *ElseBranchInstr = nullptr;
 
-    // Check if `Adr` is a pseudo instruction and if so, then treat it as non
-    // existing
-    static const MachineInstr *filterPseudoInstr(const MachineInstr *Adr) {
-      if (Adr && !Adr->isPseudo()) {
-        return Adr;
-      }
+  // Check if `Adr` is a pseudo instruction and if so, then treat it as non
+  // existing
+  static const MachineInstr *filterPseudoInstr(const MachineInstr *Adr) {
+    if (Adr && !Adr->isPseudo()) {
+      return Adr;
+    }
+    return nullptr;
+  }
+
+public:
+  // Creates a new `BranchInformation` from the branch candidate `CurrentSlot`
+  // together with the end (`MBBEnd`) of the current MBB and the first
+  // instruction of the next MBB `NextMBBInstr`
+  BranchInformation(MachineInstrBundleIterator<MachineInstr> CurrentSlot,
+                    MachineInstrBundleIterator<MachineInstr> MBBEnd,
+                    const MachineInstr *NextMBBInstr)
+      : BranchInstr(CurrentSlot->isBranch()
+                        ? BranchInformation::filterPseudoInstr(&(*CurrentSlot))
+                        : nullptr),
+        ElseBranchInstr(
+            (++CurrentSlot) == MBBEnd
+                ? BranchInformation::filterPseudoInstr(NextMBBInstr)
+                : BranchInformation::filterPseudoInstr(&(*CurrentSlot))) {}
+
+  // Checks if we have a branch
+  constexpr bool hasBranchInstr() const { return this->BranchInstr; }
+
+  // Checks if we have an else branch
+  constexpr bool hasBranchElseInstr() const { return this->ElseBranchInstr; }
+
+  // Checks if we have an indirect branch
+  constexpr bool isIndirectBranch() const {
+    if (this->BranchInstr) {
+      return this->BranchInstr->isIndirectBranch();
+    }
+    return false;
+  }
+
+  // Checks if we have an unconditional branch
+  constexpr bool isUnconditionalBranch() const {
+    if (this->BranchInstr) {
+      return this->BranchInstr->isUnconditionalBranch();
+    }
+    return false;
+  }
+
+  // Accesses the branch instruction
+  const MachineInstr *getBranchInstr() const { return this->BranchInstr; }
+
+  // Accesses the instruction after the branch
+  const MachineInstr *getBranchElseInstr() const {
+    return this->ElseBranchInstr;
+  }
+
+  // Gets the target of the branch
+  const MachineBasicBlock *getBranchTarget() const {
+    if (this->isIndirectBranch() || !this->hasBranchInstr()) {
+      // Indirect branch has no known target
       return nullptr;
     }
 
-  public:
-    // Creates a new `BranchInformation` from the branch candidate `CurrentSlot`
-    // together with the end (`MBBEnd`) of the current MBB and the first
-    // instruction of the next MBB `NextMBBInstr`
-    BranchInformation(MachineInstrBundleIterator<MachineInstr> CurrentSlot,
-                      MachineInstrBundleIterator<MachineInstr> MBBEnd,
-                      const MachineInstr *NextMBBInstr)
-        : BranchInstr(
-              CurrentSlot->isBranch()
-                  ? BranchInformation::filterPseudoInstr(&(*CurrentSlot))
-                  : nullptr),
-          ElseBranchInstr(
-              (++CurrentSlot) == MBBEnd
-                  ? BranchInformation::filterPseudoInstr(NextMBBInstr)
-                  : BranchInformation::filterPseudoInstr(&(*CurrentSlot))) {}
-
-    // Checks if we have a branch
-    constexpr bool hasBranchInstr() const { return this->BranchInstr; }
-
-    // Checks if we have an else branch
-    constexpr bool hasBranchElseInstr() const { return this->ElseBranchInstr; }
-
-    // Checks if we have an indirect branch
-    constexpr bool isIndirectBranch() const {
-      if (this->BranchInstr) {
-        return this->BranchInstr->isIndirectBranch();
+    for (const MachineOperand &MO : this->BranchInstr->operands()) {
+      if (MO.isMBB()) {
+        return MO.getMBB();
       }
-      return false;
+    }
+    return nullptr;
+  }
+};
+
+class RegDefsUses {
+public:
+  RegDefsUses(const TargetRegisterInfo &TRI);
+
+  void init(const MachineInstr &MI);
+
+  /// This function sets all caller-saved registers in Defs.
+  void setCallerSaved(const MachineInstr &MI);
+
+  /// This function sets all unallocatable registers in Defs.
+  void setUnallocatableRegs(const MachineFunction &MF);
+
+  /// Set bits in Uses corresponding to MBB's live-out registers except for
+  /// the registers that are live-in to SuccBB.
+  void addLiveOut(const MachineBasicBlock &MBB,
+                  const MachineBasicBlock &SuccBB);
+
+  bool update(const MachineInstr &MI, unsigned Begin, unsigned End);
+
+private:
+  bool checkRegDefsUses(BitVector &NewDefs, BitVector &NewUses, unsigned Reg,
+                        bool IsDef) const;
+
+  /// Returns true if Reg or its alias is in RegSet.
+  bool isRegInSet(const BitVector &RegSet, unsigned Reg) const;
+
+  const TargetRegisterInfo &TRI;
+  BitVector Defs, Uses;
+};
+
+/// Base class for inspecting loads and stores.
+class InspectMemInstr {
+public:
+  InspectMemInstr(bool ForbidMemInstr_) : ForbidMemInstr(ForbidMemInstr_) {}
+  virtual ~InspectMemInstr() = default;
+
+  /// Return true if MI cannot be moved to delay slot.
+  bool hasHazard(const MachineInstr &MI);
+
+protected:
+  /// Flags indicating whether loads or stores have been seen.
+  bool OrigSeenLoad = false;
+  bool OrigSeenStore = false;
+  bool SeenLoad = false;
+  bool SeenStore = false;
+
+  /// Memory instructions are not allowed to move to delay slot if this flag
+  /// is true.
+  bool ForbidMemInstr;
+
+private:
+  virtual bool hasHazard_(const MachineInstr &MI) = 0;
+};
+
+/// This subclass rejects any memory instructions.
+class NoMemInstr : public InspectMemInstr {
+public:
+  NoMemInstr() : InspectMemInstr(true) {}
+
+private:
+  bool hasHazard_(const MachineInstr &MI) override { return true; }
+};
+
+/// This subclass accepts loads from stacks and constant loads.
+class LoadFromStackOrConst : public InspectMemInstr {
+public:
+  LoadFromStackOrConst() : InspectMemInstr(false) {}
+
+private:
+  bool hasHazard_(const MachineInstr &MI) override;
+};
+
+/// This subclass uses memory dependence information to determine whether a
+/// memory instruction can be moved to a delay slot.
+class MemDefsUses : public InspectMemInstr {
+public:
+  explicit MemDefsUses(const MachineFrameInfo *MFI);
+
+private:
+  using ValueType = PointerUnion<const Value *, const PseudoSourceValue *>;
+
+  bool hasHazard_(const MachineInstr &MI) override;
+
+  /// Update Defs and Uses. Return true if there exist dependences that
+  /// disqualify the delay slot candidate between V and values in Uses and
+  /// Defs.
+  bool updateDefsUses(ValueType V, bool MayStore);
+
+  /// Get the list of underlying objects of MI's memory operand.
+  bool getUnderlyingObjects(const MachineInstr &MI,
+                            SmallVectorImpl<ValueType> &Objects) const;
+
+  const MachineFrameInfo *MFI;
+  SmallPtrSet<ValueType, 4> Uses, Defs;
+
+  /// Flags indicating whether loads or stores with no underlying objects have
+  /// been seen.
+  bool SeenNoObjLoad = false;
+  bool SeenNoObjStore = false;
+};
+
+class MipsDelaySlotFiller : public MachineFunctionPass {
+public:
+  MipsDelaySlotFiller() : MachineFunctionPass(ID) {}
+
+  StringRef getPassName() const override { return "Mips Delay Slot Filler"; }
+
+  bool runOnMachineFunction(MachineFunction &F) override {
+    TM = &F.getTarget();
+    bool Changed = false;
+    for (auto MBB = F.begin(); MBB != F.end();) {
+      auto curMBB = MBB;
+      MBB++;
+
+      Changed |= runOnMachineBasicBlock(
+          *curMBB, (MBB != F.end() && !(*MBB).empty()) ? &(*MBB).instr_front()
+                                                       : nullptr);
     }
 
-    // Checks if we have an unconditional branch
-    constexpr bool isUnconditionalBranch() const {
-      if (this->BranchInstr) {
-        return this->BranchInstr->isUnconditionalBranch();
-      }
-      return false;
-    }
+    // This pass invalidates liveness information when it reorders
+    // instructions to fill delay slot. Without this, -verify-machineinstrs
+    // will fail.
+    if (Changed)
+      F.getRegInfo().invalidateLiveness();
 
-    // Accesses the branch instruction
-    const MachineInstr *getBranchInstr() const { return this->BranchInstr; }
+    return Changed;
+  }
 
-    // Accesses the instruction after the branch
-    const MachineInstr *getBranchElseInstr() const {
-      return this->ElseBranchInstr;
-    }
+  MachineFunctionProperties getRequiredProperties() const override {
+    return MachineFunctionProperties().setNoVRegs();
+  }
 
-    // Gets the target of the branch
-    const MachineBasicBlock *getBranchTarget() const {
-      if (this->isIndirectBranch() || !this->hasBranchInstr()) {
-        // Indirect branch has no known target
-        return nullptr;
-      }
+  void getAnalysisUsage(AnalysisUsage &AU) const override {
+    AU.addRequired<MachineBranchProbabilityInfoWrapperPass>();
+    MachineFunctionPass::getAnalysisUsage(AU);
+  }
 
-      for (const MachineOperand &MO : this->BranchInstr->operands()) {
-        if (MO.isMBB()) {
-          return MO.getMBB();
-        }
-      }
-      return nullptr;
-    }
-  };
+  static char ID;
 
-  class RegDefsUses {
-  public:
-    RegDefsUses(const TargetRegisterInfo &TRI);
+private:
+  bool runOnMachineBasicBlock(MachineBasicBlock &MBB,
+                              MachineInstr *FirstNextMBBInstr);
 
-    void init(const MachineInstr &MI);
+  Iter replaceWithCompactBranch(MachineBasicBlock &MBB, Iter Branch,
+                                const DebugLoc &DL);
 
-    /// This function sets all caller-saved registers in Defs.
-    void setCallerSaved(const MachineInstr &MI);
+  /// This function checks if it is valid to move Candidate to the delay slot
+  /// and returns true if it isn't. It also updates memory and register
+  /// dependence information.
+  bool delayHasHazard(const MipsSubtarget &STI, const MachineInstr &Candidate,
+                      const BranchInformation &BranchInfo, RegDefsUses &RegDU,
+                      InspectMemInstr &IM) const;
 
-    /// This function sets all unallocatable registers in Defs.
-    void setUnallocatableRegs(const MachineFunction &MF);
+  /// This function searches range [Begin, End) for an instruction that can be
+  /// moved to the delay slot. Returns true on success.
+  template <typename IterTy>
+  bool searchRange(MachineBasicBlock &MBB, IterTy Begin, IterTy End,
+                   const BranchInformation &BranchInfo, RegDefsUses &RegDU,
+                   InspectMemInstr &IM, Iter Slot, IterTy &Filler) const;
 
-    /// Set bits in Uses corresponding to MBB's live-out registers except for
-    /// the registers that are live-in to SuccBB.
-    void addLiveOut(const MachineBasicBlock &MBB,
-                    const MachineBasicBlock &SuccBB);
+  /// This function searches in the backward direction for an instruction that
+  /// can be moved to the delay slot. Returns true on success.
+  bool searchBackward(MachineBasicBlock &MBB, MachineInstr &Slot,
+                      const BranchInformation &BranchInfo) const;
 
-    bool update(const MachineInstr &MI, unsigned Begin, unsigned End);
+  /// This function searches MBB in the forward direction for an instruction
+  /// that can be moved to the delay slot. Returns true on success.
+  bool searchForward(MachineBasicBlock &MBB, Iter Slot,
+                     const BranchInformation &BranchInfo) const;
 
-  private:
-    bool checkRegDefsUses(BitVector &NewDefs, BitVector &NewUses, unsigned Reg,
-                          bool IsDef) const;
+  /// This function searches one of MBB's successor blocks for an instruction
+  /// that can be moved to the delay slot and inserts clones of the
+  /// instruction into the successor's predecessor blocks.
+  bool searchSuccBBs(MachineBasicBlock &MBB, Iter Slot,
+                     const BranchInformation &BranchInfo) const;
 
-    /// Returns true if Reg or its alias is in RegSet.
-    bool isRegInSet(const BitVector &RegSet, unsigned Reg) const;
+  /// Pick a successor block of MBB. Return NULL if MBB doesn't have a
+  /// successor block that is not a landing pad.
+  MachineBasicBlock *selectSuccBB(MachineBasicBlock &B) const;
 
-    const TargetRegisterInfo &TRI;
-    BitVector Defs, Uses;
-  };
+  /// This function analyzes MBB and returns an instruction with an unoccupied
+  /// slot that branches to Dst.
+  std::pair<MipsInstrInfo::BranchType, MachineInstr *>
+  getBranch(MachineBasicBlock &MBB, const MachineBasicBlock &Dst) const;
 
-  /// Base class for inspecting loads and stores.
-  class InspectMemInstr {
-  public:
-    InspectMemInstr(bool ForbidMemInstr_) : ForbidMemInstr(ForbidMemInstr_) {}
-    virtual ~InspectMemInstr() = default;
+  /// Examine Pred and see if it is possible to insert an instruction into
+  /// one of its branches delay slot or its end.
+  bool examinePred(MachineBasicBlock &Pred, const MachineBasicBlock &Succ,
+                   RegDefsUses &RegDU, bool &HasMultipleSuccs,
+                   BB2BrMap &BrMap) const;
 
-    /// Return true if MI cannot be moved to delay slot.
-    bool hasHazard(const MachineInstr &MI);
+  bool terminateSearch(const MachineInstr &Candidate) const;
 
-  protected:
-    /// Flags indicating whether loads or stores have been seen.
-    bool OrigSeenLoad = false;
-    bool OrigSeenStore = false;
-    bool SeenLoad = false;
-    bool SeenStore = false;
-
-    /// Memory instructions are not allowed to move to delay slot if this flag
-    /// is true.
-    bool ForbidMemInstr;
-
-  private:
-    virtual bool hasHazard_(const MachineInstr &MI) = 0;
-  };
-
-  /// This subclass rejects any memory instructions.
-  class NoMemInstr : public InspectMemInstr {
-  public:
-    NoMemInstr() : InspectMemInstr(true) {}
-
-  private:
-    bool hasHazard_(const MachineInstr &MI) override { return true; }
-  };
-
-  /// This subclass accepts loads from stacks and constant loads.
-  class LoadFromStackOrConst : public InspectMemInstr {
-  public:
-    LoadFromStackOrConst() : InspectMemInstr(false) {}
-
-  private:
-    bool hasHazard_(const MachineInstr &MI) override;
-  };
-
-  /// This subclass uses memory dependence information to determine whether a
-  /// memory instruction can be moved to a delay slot.
-  class MemDefsUses : public InspectMemInstr {
-  public:
-    explicit MemDefsUses(const MachineFrameInfo *MFI);
-
-  private:
-    using ValueType = PointerUnion<const Value *, const PseudoSourceValue *>;
-
-    bool hasHazard_(const MachineInstr &MI) override;
-
-    /// Update Defs and Uses. Return true if there exist dependences that
-    /// disqualify the delay slot candidate between V and values in Uses and
-    /// Defs.
-    bool updateDefsUses(ValueType V, bool MayStore);
-
-    /// Get the list of underlying objects of MI's memory operand.
-    bool getUnderlyingObjects(const MachineInstr &MI,
-                              SmallVectorImpl<ValueType> &Objects) const;
-
-    const MachineFrameInfo *MFI;
-    SmallPtrSet<ValueType, 4> Uses, Defs;
-
-    /// Flags indicating whether loads or stores with no underlying objects have
-    /// been seen.
-    bool SeenNoObjLoad = false;
-    bool SeenNoObjStore = false;
-  };
-
-  class MipsDelaySlotFiller : public MachineFunctionPass {
-  public:
-    MipsDelaySlotFiller() : MachineFunctionPass(ID) {}
-
-    StringRef getPassName() const override { return "Mips Delay Slot Filler"; }
-
-    bool runOnMachineFunction(MachineFunction &F) override {
-      TM = &F.getTarget();
-      bool Changed = false;
-      for (auto MBB = F.begin(); MBB != F.end();) {
-        auto curMBB = MBB;
-        MBB++;
-
-        Changed |= runOnMachineBasicBlock(
-            *curMBB, (MBB != F.end() && !(*MBB).empty()) ? &(*MBB).instr_front()
-                                                         : nullptr);
-      }
-
-      // This pass invalidates liveness information when it reorders
-      // instructions to fill delay slot. Without this, -verify-machineinstrs
-      // will fail.
-      if (Changed)
-        F.getRegInfo().invalidateLiveness();
-
-      return Changed;
-    }
-
-    MachineFunctionProperties getRequiredProperties() const override {
-      return MachineFunctionProperties().setNoVRegs();
-    }
-
-    void getAnalysisUsage(AnalysisUsage &AU) const override {
-      AU.addRequired<MachineBranchProbabilityInfoWrapperPass>();
-      MachineFunctionPass::getAnalysisUsage(AU);
-    }
-
-    static char ID;
-
-  private:
-    bool runOnMachineBasicBlock(MachineBasicBlock &MBB,
-                                MachineInstr *FirstNextMBBInstr);
-
-    Iter replaceWithCompactBranch(MachineBasicBlock &MBB, Iter Branch,
-                                  const DebugLoc &DL);
-
-    /// This function checks if it is valid to move Candidate to the delay slot
-    /// and returns true if it isn't. It also updates memory and register
-    /// dependence information.
-    bool delayHasHazard(const MipsSubtarget &STI, const MachineInstr &Candidate,
-                        const BranchInformation &BranchInfo, RegDefsUses &RegDU,
-                        InspectMemInstr &IM) const;
-
-    /// This function searches range [Begin, End) for an instruction that can be
-    /// moved to the delay slot. Returns true on success.
-    template <typename IterTy>
-    bool searchRange(MachineBasicBlock &MBB, IterTy Begin, IterTy End,
-                     const BranchInformation &BranchInfo, RegDefsUses &RegDU,
-                     InspectMemInstr &IM, Iter Slot, IterTy &Filler) const;
-
-    /// This function searches in the backward direction for an instruction that
-    /// can be moved to the delay slot. Returns true on success.
-    bool searchBackward(MachineBasicBlock &MBB, MachineInstr &Slot,
-                        const BranchInformation &BranchInfo) const;
-
-    /// This function searches MBB in the forward direction for an instruction
-    /// that can be moved to the delay slot. Returns true on success.
-    bool searchForward(MachineBasicBlock &MBB, Iter Slot,
-                       const BranchInformation &BranchInfo) const;
-
-    /// This function searches one of MBB's successor blocks for an instruction
-    /// that can be moved to the delay slot and inserts clones of the
-    /// instruction into the successor's predecessor blocks.
-    bool searchSuccBBs(MachineBasicBlock &MBB, Iter Slot,
-                       const BranchInformation &BranchInfo) const;
-
-    /// Pick a successor block of MBB. Return NULL if MBB doesn't have a
-    /// successor block that is not a landing pad.
-    MachineBasicBlock *selectSuccBB(MachineBasicBlock &B) const;
-
-    /// This function analyzes MBB and returns an instruction with an unoccupied
-    /// slot that branches to Dst.
-    std::pair<MipsInstrInfo::BranchType, MachineInstr *>
-    getBranch(MachineBasicBlock &MBB, const MachineBasicBlock &Dst) const;
-
-    /// Examine Pred and see if it is possible to insert an instruction into
-    /// one of its branches delay slot or its end.
-    bool examinePred(MachineBasicBlock &Pred, const MachineBasicBlock &Succ,
-                     RegDefsUses &RegDU, bool &HasMultipleSuccs,
-                     BB2BrMap &BrMap) const;
-
-    bool terminateSearch(const MachineInstr &Candidate) const;
-
-    const TargetMachine *TM = nullptr;
-  };
+  const TargetMachine *TM = nullptr;
+};
 
 } // end anonymous namespace
 
@@ -451,8 +441,8 @@ static bool isR5900ShortLoopBranch(const MachineInstr *MI,
   return InstrCount <= 5;
 }
 
-INITIALIZE_PASS(MipsDelaySlotFiller, DEBUG_TYPE,
-                "Fill delay slot for MIPS", false, false)
+INITIALIZE_PASS(MipsDelaySlotFiller, DEBUG_TYPE, "Fill delay slot for MIPS",
+                false, false)
 
 /// This function inserts clones of Filler into predecessor blocks.
 static void insertDelayFiller(Iter Filler, const BB2BrMap &BrMap) {
@@ -629,7 +619,7 @@ bool LoadFromStackOrConst::hasHazard_(const MachineInstr &MI) {
     return true;
 
   if (const PseudoSourceValue *PSV =
-      (*MI.memoperands_begin())->getPseudoValue()) {
+          (*MI.memoperands_begin())->getPseudoValue()) {
     if (isa<FixedStackPseudoSourceValue>(PSV))
       return false;
     return !PSV->isConstant(nullptr) && !PSV->isStack();
@@ -671,13 +661,12 @@ bool MemDefsUses::updateDefsUses(ValueType V, bool MayStore) {
   return Defs.count(V) || SeenNoObjStore;
 }
 
-bool MemDefsUses::
-getUnderlyingObjects(const MachineInstr &MI,
-                     SmallVectorImpl<ValueType> &Objects) const {
+bool MemDefsUses::getUnderlyingObjects(
+    const MachineInstr &MI, SmallVectorImpl<ValueType> &Objects) const {
   if (!MI.hasOneMemOperand())
     return false;
 
-  auto & MMO = **MI.memoperands_begin();
+  auto &MMO = **MI.memoperands_begin();
 
   if (const PseudoSourceValue *PSV = MMO.getPseudoValue()) {
     if (!PSV->isAliased(MFI))
@@ -783,7 +772,7 @@ bool MipsDelaySlotFiller::runOnMachineBasicBlock(
       const auto BranchInfo =
           BranchInformation(I, MBB.end(), FirstNextMBBInstr);
 
-      if (getMipsCompactBranchPolicy(Fn) != clv2::MipsCompactBranch::Always ||
+      if (getMipsCompactBranchPolicy(Fn) != MipsCompactBranch::Always ||
           !TII->getEquivalentCompactForm(I)) {
         if (searchBackward(MBB, *I, BranchInfo)) {
           LLVM_DEBUG(dbgs() << DEBUG_TYPE ": found instruction for delay slot"
@@ -835,7 +824,7 @@ bool MipsDelaySlotFiller::runOnMachineBasicBlock(
     // NOP and for branches will hopefully avoid requiring a NOP.
     if ((InMicroMipsMode ||
          (STI.hasMips32r6() &&
-          getMipsCompactBranchPolicy(Fn) != clv2::MipsCompactBranch::Never)) &&
+          getMipsCompactBranchPolicy(Fn) != MipsCompactBranch::Never)) &&
         TII->getEquivalentCompactForm(I)) {
       I = replaceWithCompactBranch(MBB, I, I->getDebugLoc());
       Changed = true;
@@ -913,16 +902,16 @@ bool MipsDelaySlotFiller::searchRange(MachineBasicBlock &MBB, IterTy Begin,
     // to be able to reach the target. b16 only has a range of +/- 1 KB.
     // It's entirely possible that the target function is reachable with b16
     // but we don't have enough information to make that decision.
-     if (InMicroMipsMode && TII->getInstSizeInBytes(*CurrI) == 2 &&
+    if (InMicroMipsMode && TII->getInstSizeInBytes(*CurrI) == 2 &&
         (Opcode == Mips::JR || Opcode == Mips::PseudoIndirectBranch ||
          Opcode == Mips::PseudoIndirectBranch_MM ||
          Opcode == Mips::PseudoReturn || Opcode == Mips::TAILCALL))
       continue;
-     // Instructions LWP/SWP and MOVEP should not be in a delay slot as that
-     // results in unpredictable behaviour
-     if (InMicroMipsMode && (Opcode == Mips::LWP_MM || Opcode == Mips::SWP_MM ||
-                             Opcode == Mips::MOVEP_MM))
-       continue;
+    // Instructions LWP/SWP and MOVEP should not be in a delay slot as that
+    // results in unpredictable behaviour
+    if (InMicroMipsMode && (Opcode == Mips::LWP_MM || Opcode == Mips::SWP_MM ||
+                            Opcode == Mips::MOVEP_MM))
+      continue;
 
     Filler = CurrI;
     LLVM_DEBUG(dbgs() << DEBUG_TYPE ": found instruction for delay slot: ";
@@ -1057,7 +1046,7 @@ MipsDelaySlotFiller::getBranch(MachineBasicBlock &MBB,
   const MipsInstrInfo *TII =
       MBB.getParent()->getSubtarget<MipsSubtarget>().getInstrInfo();
   MachineBasicBlock *TrueBB = nullptr, *FalseBB = nullptr;
-  SmallVector<MachineInstr*, 2> BranchInstrs;
+  SmallVector<MachineInstr *, 2> BranchInstrs;
   SmallVector<MachineOperand, 2> Cond;
 
   MipsInstrInfo::BranchType R =

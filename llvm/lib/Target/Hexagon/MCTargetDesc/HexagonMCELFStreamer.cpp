@@ -32,12 +32,10 @@
 #include "llvm/MC/MCSubtargetInfo.h"
 #include "llvm/MC/MCSymbol.h"
 #include "llvm/MC/MCSymbolELF.h"
-#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/HexagonAttributes.h"
 #include "llvm/Support/MathExtras.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
+#include "llvm/Target/Hexagon/HexagonOptions.h"
 #include <cassert>
 #include <cstdint>
 
@@ -45,9 +43,7 @@
 
 using namespace llvm;
 
-static unsigned getGPSize(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::HEX_GPSize>(Ctx);
-}
+static unsigned getGPSize() { return HexagonOptions::Current.HEX_GPSize; }
 
 HexagonMCELFStreamer::HexagonMCELFStreamer(
     MCContext &Context, std::unique_ptr<MCAsmBackend> TAB,
@@ -103,8 +99,7 @@ void HexagonMCELFStreamer::HexagonMCEmitCommonSymbol(MCSymbol *Symbol,
 
   if (ELFSymbol->getBinding() == ELF::STB_LOCAL) {
     StringRef SectionName =
-        ((AccessSize == 0) || (Size == 0) ||
-         (Size > getGPSize(getContext().getOptionsContext())))
+        ((AccessSize == 0) || (Size == 0) || (Size > getGPSize()))
             ? ".bss"
             : sbss[(Log2_64(AccessSize))];
     MCSection &Section = *getAssembler().getContext().getELFSection(
@@ -126,9 +121,9 @@ void HexagonMCELFStreamer::HexagonMCEmitCommonSymbol(MCSymbol *Symbol,
     if (ELFSymbol->declareCommon(Size, ByteAlignment))
       report_fatal_error("Symbol: " + Symbol->getName() +
                          " redeclared as different type");
-    if ((AccessSize) && (Size <= getGPSize(getContext().getOptionsContext()))) {
+    if ((AccessSize) && (Size <= getGPSize())) {
       uint64_t SectionIndex =
-          (AccessSize <= getGPSize(getContext().getOptionsContext()))
+          (AccessSize <= getGPSize())
               ? ELF::SHN_HEXAGON_SCOMMON + llvm::bit_width(AccessSize)
               : (unsigned)ELF::SHN_HEXAGON_SCOMMON;
       ELFSymbol->setIndex(SectionIndex);

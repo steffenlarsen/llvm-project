@@ -20,16 +20,14 @@
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/IR/Function.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
+#include "llvm/Target/Hexagon/HexagonOptions.h"
 
 #define DEBUG_TYPE "CopyHoist"
 
 using namespace llvm;
 
 static std::string getCPHoistFn(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_CPHoistFn>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_CPHoistFn;
 }
 
 namespace {

@@ -15,7 +15,7 @@
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/StringExtras.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsSelDAG.h"
 #include "llvm/CodeGen/ISDOpcodes.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineConstantPool.h"
@@ -39,7 +39,6 @@
 #include "llvm/IR/ModuleSlotTracker.h"
 #include "llvm/IR/Value.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -52,12 +51,12 @@
 
 using namespace llvm;
 
-static bool getDagDumpVerbose(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_DagDumpVerbose>(Ctx);
+static bool getDagDumpVerbose(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenSelDAGOptions>().CGPASS_DagDumpVerbose;
 }
 
-static bool getPrintSdnodeAddrs(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_PrintSdnodeAddrs>(Ctx);
+static bool getPrintSdnodeAddrs(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenSelDAGOptions>().CGPASS_PrintSdnodeAddrs;
 }
 
 std::string SDNode::getOperationName(const SelectionDAG *G) const {
@@ -1076,10 +1075,8 @@ void SDNode::print_details(raw_ostream &OS, const SelectionDAG *G) const {
     OS << '<' << AA->getAlign().value() << '>';
   }
 
-  if (G ? getDagDumpVerbose(G->getMachineFunction()
-                                .getFunction()
-                                .getContext()
-                                .getOptionsContext())
+  if (G ? getDagDumpVerbose(
+              G->getMachineFunction().getFunction().getContext())
         : false) {
     if (unsigned Order = getIROrder())
       OS << " [ORD=" << Order << ']';
@@ -1169,10 +1166,8 @@ static bool shouldPrintInline(const SDNode &Node, const SelectionDAG *G) {
   // Avoid lots of cluttering when inline printing nodes with associated
   // DbgValues in verbose mode.
   if (G &&
-      getDagDumpVerbose(G->getMachineFunction()
-                            .getFunction()
-                            .getContext()
-                            .getOptionsContext()) &&
+      getDagDumpVerbose(
+          G->getMachineFunction().getFunction().getContext()) &&
       !G->GetDbgValues(&Node).empty())
     return false;
   if (Node.getOpcode() == ISD::EntryToken)
@@ -1219,10 +1214,7 @@ LLVM_DUMP_METHOD void SelectionDAG::dump(bool Sorted) const {
     DumpNodes(getRoot().getNode(), 2, this);
   dbgs() << "\n";
 
-  if (getDagDumpVerbose(getMachineFunction()
-                            .getFunction()
-                            .getContext()
-                            .getOptionsContext())) {
+  if (getDagDumpVerbose(getMachineFunction().getFunction().getContext())) {
     if (DbgBegin() != DbgEnd())
       dbgs() << "SDDbgValues:\n";
     for (auto *Dbg : make_range(DbgBegin(), DbgEnd()))
@@ -1352,11 +1344,10 @@ LLVM_DUMP_METHOD void SDNode::dumprFull(const SelectionDAG *G) const {
 void SDNode::print(raw_ostream &OS, const SelectionDAG *G) const {
   printr(OS, G);
   // Under VerboseDAGDumping divergence will be printed always.
-  if (isDivergent() && !(G ? getDagDumpVerbose(G->getMachineFunction()
-                                                   .getFunction()
-                                                   .getContext()
-                                                   .getOptionsContext())
-                           : false))
+  if (isDivergent() &&
+      !(G ? getDagDumpVerbose(
+                G->getMachineFunction().getFunction().getContext())
+          : false))
     OS << " # D:1";
   for (unsigned i = 0, e = getNumOperands(); i != e; ++i) {
     if (i)
@@ -1369,10 +1360,8 @@ void SDNode::print(raw_ostream &OS, const SelectionDAG *G) const {
     OS << ", ";
     DL.print(OS);
   }
-  if (G ? getPrintSdnodeAddrs(G->getMachineFunction()
-                                  .getFunction()
-                                  .getContext()
-                                  .getOptionsContext())
+  if (G ? getPrintSdnodeAddrs(
+              G->getMachineFunction().getFunction().getContext())
         : false)
     OS << " ; " << this;
 }

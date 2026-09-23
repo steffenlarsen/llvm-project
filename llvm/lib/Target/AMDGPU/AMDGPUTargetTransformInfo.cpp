@@ -29,8 +29,7 @@
 #include "llvm/IR/IntrinsicsAMDGPU.h"
 #include "llvm/IR/PatternMatch.h"
 #include "llvm/Support/KnownBits.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/AMDGPU/AMDGPUOptionsOptInfos.h"
+#include "llvm/Target/AMDGPU/AMDGPUOptions.h"
 #include <optional>
 
 using namespace llvm;
@@ -38,43 +37,39 @@ using namespace llvm;
 #define DEBUG_TYPE "AMDGPUtti"
 
 static unsigned getUnrollThresholdPrivate(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AMDGPU_UnrollThresholdPrivate>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<AMDGPUOptions>()
+      .AMDGPU_UnrollThresholdPrivate;
 }
 
 static unsigned getUnrollThresholdLocal(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AMDGPU_UnrollThresholdLocal>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<AMDGPUOptions>().AMDGPU_UnrollThresholdLocal;
 }
 
 static unsigned getUnrollThresholdIf(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AMDGPU_UnrollThresholdIf>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<AMDGPUOptions>().AMDGPU_UnrollThresholdIf;
 }
 
 static bool getUnrollRuntimeLocal(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AMDGPU_UnrollRuntimeLocal>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<AMDGPUOptions>().AMDGPU_UnrollRuntimeLocal;
 }
 
 static unsigned getUnrollMaxBlockToAnalyze(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AMDGPU_UnrollMaxBlockToAnalyze>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<AMDGPUOptions>()
+      .AMDGPU_UnrollMaxBlockToAnalyze;
 }
 
 static unsigned getArgAllocaCost(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AMDGPU_ArgAllocaCost>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<AMDGPUOptions>().AMDGPU_ArgAllocaCost;
 }
 
 static unsigned getArgAllocaCutoff(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AMDGPU_ArgAllocaCutoff>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<AMDGPUOptions>().AMDGPU_ArgAllocaCutoff;
 }
 
 static unsigned getInlineMaxBB(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AMDGPU_InlineMaxBB>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<AMDGPUOptions>().AMDGPU_InlineMaxBB;
 }
 
 static bool dependsOnLocalPhi(const Loop *L, const Value *Cond,
@@ -87,18 +82,18 @@ static bool dependsOnLocalPhi(const Loop *L, const Value *Cond,
     return false;
   for (const Value *V : I->operand_values()) {
     if (const PHINode *PHI = dyn_cast<PHINode>(V)) {
-      if (llvm::none_of(L->getSubLoops(), [PHI](const Loop* SubLoop) {
-                  return SubLoop->contains(PHI); }))
+      if (llvm::none_of(L->getSubLoops(), [PHI](const Loop *SubLoop) {
+            return SubLoop->contains(PHI);
+          }))
         return true;
-    } else if (Depth < 10 && dependsOnLocalPhi(L, V, Depth+1))
+    } else if (Depth < 10 && dependsOnLocalPhi(L, V, Depth + 1))
       return true;
   }
   return false;
 }
 
 AMDGPUTTIImpl::AMDGPUTTIImpl(const AMDGPUTargetMachine *TM, const Function &F)
-    : BaseT(TM, F.getDataLayout()),
-      TargetTriple(TM->getTargetTriple()),
+    : BaseT(TM, F.getDataLayout()), TargetTriple(TM->getTargetTriple()),
       ST(static_cast<const GCNSubtarget *>(TM->getSubtargetImpl(F))),
       TLI(ST->getTargetLowering()) {}
 
@@ -151,9 +146,10 @@ void AMDGPUTTIImpl::getUnrollingPreferences(
     const DataLayout &DL = BB->getDataLayout();
     unsigned LocalGEPsSeen = 0;
 
-    if (llvm::any_of(L->getSubLoops(), [BB](const Loop* SubLoop) {
-               return SubLoop->contains(BB); }))
-        continue; // Block belongs to an inner loop.
+    if (llvm::any_of(L->getSubLoops(), [BB](const Loop *SubLoop) {
+          return SubLoop->contains(BB);
+        }))
+      continue; // Block belongs to an inner loop.
 
     for (const Instruction &I : *BB) {
       // Unroll a loop which contains an "if" statement whose condition
@@ -228,8 +224,9 @@ void AMDGPUTTIImpl::getUnrollingPreferences(
         if (!Inst || L->isLoopInvariant(Op))
           continue;
 
-        if (llvm::any_of(L->getSubLoops(), [Inst](const Loop* SubLoop) {
-             return SubLoop->contains(Inst); }))
+        if (llvm::any_of(L->getSubLoops(), [Inst](const Loop *SubLoop) {
+              return SubLoop->contains(Inst);
+            }))
           continue;
         HasLoopDef = true;
         break;
@@ -314,9 +311,7 @@ GCNTTIImpl::getRegisterBitWidth(TargetTransformInfo::RegisterKind K) const {
   llvm_unreachable("Unsupported register kind");
 }
 
-unsigned GCNTTIImpl::getMinVectorRegisterBitWidth() const {
-  return 32;
-}
+unsigned GCNTTIImpl::getMinVectorRegisterBitWidth() const { return 32; }
 
 unsigned GCNTTIImpl::getMaximumVF(unsigned ElemWidth, unsigned Opcode) const {
   if (Opcode == Instruction::Load || Opcode == Instruction::Store)
@@ -353,8 +348,8 @@ unsigned GCNTTIImpl::getLoadVectorFactor(unsigned VF, unsigned LoadSize,
 }
 
 unsigned GCNTTIImpl::getStoreVectorFactor(unsigned VF, unsigned StoreSize,
-                                             unsigned ChainSizeInBytes,
-                                             VectorType *VecTy) const {
+                                          unsigned ChainSizeInBytes,
+                                          VectorType *VecTy) const {
   unsigned VecRegBitWidth = VF * StoreSize;
   if (VecRegBitWidth > 128)
     return 128 / StoreSize;
@@ -429,8 +424,7 @@ Type *GCNTTIImpl::getMemcpyLoopLoweringType(
   // complex lowering for variable-length memcpy and memmove.
   unsigned I32EltsInVector = 4;
   unsigned MemcpyUnroll =
-      clv2::getOptValOrDefault<&clv2::AMDGPU_MemcpyLoopUnroll>(
-          TLI->getTargetMachine().getOptionsContext());
+      Context.getOptions<AMDGPUOptions>().AMDGPU_MemcpyLoopUnroll;
   if (MemcpyUnroll > 0 && isa<ConstantInt>(Length))
     return FixedVectorType::get(Type::getInt32Ty(Context),
                                 MemcpyUnroll * I32EltsInVector);
@@ -491,7 +485,7 @@ unsigned GCNTTIImpl::getMaxInterleaveFactor(ElementCount VF,
 }
 
 bool GCNTTIImpl::getTgtMemIntrinsic(IntrinsicInst *Inst,
-                                       MemIntrinsicInfo &Info) const {
+                                    MemIntrinsicInfo &Info) const {
   switch (Inst->getIntrinsicID()) {
   case Intrinsic::amdgcn_ds_ordered_add:
   case Intrinsic::amdgcn_ds_ordered_swap: {
@@ -501,7 +495,8 @@ bool GCNTTIImpl::getTgtMemIntrinsic(IntrinsicInst *Inst,
       return false; // Invalid.
 
     unsigned OrderingVal = Ordering->getZExtValue();
-    if (OrderingVal > static_cast<unsigned>(AtomicOrdering::SequentiallyConsistent))
+    if (OrderingVal >
+        static_cast<unsigned>(AtomicOrdering::SequentiallyConsistent))
       return false;
 
     Info.PtrVal = Inst->getArgOperand(0);
@@ -549,8 +544,7 @@ InstructionCost GCNTTIImpl::getArithmeticInstrCost(
 
   // Because we don't have any legal vector operations, but the legal types, we
   // need to account for split vectors.
-  unsigned NElts = LT.second.isVector() ?
-    LT.second.getVectorNumElements() : 1;
+  unsigned NElts = LT.second.isVector() ? LT.second.getVectorNumElements() : 1;
 
   MVT::SimpleValueType SLT = LT.second.getScalarType().SimpleTy;
 
@@ -1065,8 +1059,8 @@ InstructionCost GCNTTIImpl::getVectorInstrCost(
   switch (Opcode) {
   case Instruction::ExtractElement:
   case Instruction::InsertElement: {
-    unsigned EltSize
-      = DL.getTypeSizeInBits(cast<VectorType>(ValTy)->getElementType());
+    unsigned EltSize =
+        DL.getTypeSizeInBits(cast<VectorType>(ValTy)->getElementType());
     // Dynamic indexing isn't free and is best avoided.
     if (Index == ~0u)
       return 2;
@@ -1108,7 +1102,7 @@ InstructionCost GCNTTIImpl::getVectorInstrCost(
 /// this is only querying a specific result index if this returns multiple
 /// registers in a struct.
 bool GCNTTIImpl::isInlineAsmSourceOfDivergence(
-  const CallInst *CI, ArrayRef<unsigned> Indices) const {
+    const CallInst *CI, ArrayRef<unsigned> Indices) const {
   // TODO: Handle complex extract indices
   if (Indices.size() > 1)
     return true;
@@ -1131,8 +1125,10 @@ bool GCNTTIImpl::isInlineAsmSourceOfDivergence(
 
     TLI->ComputeConstraintToUse(TC, SDValue());
 
-    const TargetRegisterClass *RC = TLI->getRegForInlineAsmConstraint(
-        TRI, TC.ConstraintCode, TC.ConstraintVT).second;
+    const TargetRegisterClass *RC =
+        TLI->getRegForInlineAsmConstraint(TRI, TC.ConstraintCode,
+                                          TC.ConstraintVT)
+            .second;
 
     // For AGPR constraints null is returned on subtargets without AGPRs, so
     // assume divergent for null.
@@ -1326,12 +1322,13 @@ Value *GCNTTIImpl::rewriteIntrinsicWithAddressSpace(IntrinsicInst *II,
   switch (IntrID) {
   case Intrinsic::amdgcn_is_shared:
   case Intrinsic::amdgcn_is_private: {
-    unsigned TrueAS = IntrID == Intrinsic::amdgcn_is_shared ?
-      AMDGPUAS::LOCAL_ADDRESS : AMDGPUAS::PRIVATE_ADDRESS;
+    unsigned TrueAS = IntrID == Intrinsic::amdgcn_is_shared
+                          ? AMDGPUAS::LOCAL_ADDRESS
+                          : AMDGPUAS::PRIVATE_ADDRESS;
     unsigned NewAS = NewV->getType()->getPointerAddressSpace();
     LLVMContext &Ctx = NewV->getType()->getContext();
-    ConstantInt *NewVal = (TrueAS == NewAS) ?
-      ConstantInt::getTrue(Ctx) : ConstantInt::getFalse(Ctx);
+    ConstantInt *NewVal = (TrueAS == NewAS) ? ConstantInt::getTrue(Ctx)
+                                            : ConstantInt::getFalse(Ctx);
     return NewVal;
   }
   case Intrinsic::amdgcn_flat_atomic_fmax_num:
@@ -1607,10 +1604,10 @@ bool GCNTTIImpl::isProfitableToSinkOperands(Instruction *I,
 bool GCNTTIImpl::areInlineCompatible(const Function *Caller,
                                      const Function *Callee) const {
   const TargetMachine &TM = getTLI()->getTargetMachine();
-  const GCNSubtarget *CallerST
-    = static_cast<const GCNSubtarget *>(TM.getSubtargetImpl(*Caller));
-  const GCNSubtarget *CalleeST
-    = static_cast<const GCNSubtarget *>(TM.getSubtargetImpl(*Callee));
+  const GCNSubtarget *CallerST =
+      static_cast<const GCNSubtarget *>(TM.getSubtargetImpl(*Caller));
+  const GCNSubtarget *CalleeST =
+      static_cast<const GCNSubtarget *>(TM.getSubtargetImpl(*Callee));
 
   if (!BaseT::areInlineCompatible(Caller, Callee))
     return false;
@@ -1684,7 +1681,7 @@ static unsigned adjustInliningThresholdUsingCallee(const CallBase *CB,
 
   // The penalty cost is computed relative to the cost of instructions and does
   // not model any storage costs.
-  const auto &Ctx = CB->getContext().getOptionsContext();
+  const auto &Ctx = CB->getContext().getOptions<AnalysisOptions>();
   adjustThreshold += std::max(0, SGPRsInUse - NrOfSGPRUntilSpill) *
                      ArgStackCost.getValue() *
                      InlineConstants::getInstrCost(Ctx);
@@ -1799,10 +1796,9 @@ int GCNTTIImpl::getTransInstrCost(TTI::TargetCostKind CostKind) const {
 }
 
 int GCNTTIImpl::get64BitInstrCost(TTI::TargetCostKind CostKind) const {
-  return ST->hasFullRate64Ops()
-             ? getFullRateInstrCost()
-             : ST->hasHalfRate64Ops() ? getHalfRateInstrCost(CostKind)
-                                      : getQuarterRateInstrCost(CostKind);
+  return ST->hasFullRate64Ops()   ? getFullRateInstrCost()
+         : ST->hasHalfRate64Ops() ? getHalfRateInstrCost(CostKind)
+                                  : getQuarterRateInstrCost(CostKind);
 }
 
 std::pair<InstructionCost, MVT>

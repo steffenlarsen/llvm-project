@@ -6,18 +6,11 @@
 //
 //===----------------------------------------------------------------------===//
 
-include "llvm/Support/CLV2Options.td"
+include "llvm/Option/OptParser.td"
 
-def RemarksOptsReg : Registry<"llvm::remarks"> {
-  // Getter bodies are compiled once, in RemarksOptionsGetters.cpp.
-  let OutOfLineGetters = 1;
-}
+def RemarksOptions : OptionsStruct<"llvm"> {}
 
-def REM_RemarksSection : Option<
-    "remarks-section",
+defm REM_RemarksSection : OptionalValueField<
+    "remarks-section", "bool", "true",
     "Emit a section containing remark diagnostics metadata. By default, this "
-    "is enabled for the following formats: bitstream.",
-    "std::optional<bool>"> {
-  let Registry = RemarksOptsReg;
-  let Hidden = 1;
-}
+    "is enabled for the following formats: bitstream.", /*hidden=*/1>;

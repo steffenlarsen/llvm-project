@@ -39,9 +39,8 @@
 #include "llvm/Support/CodeGen.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/Mips/MipsOptionsOptInfos.h"
+#include "llvm/Target/Mips/MipsOptions.h"
 #include "llvm/Target/TargetOptions.h"
 #include <optional>
 #include <string>
@@ -49,16 +48,6 @@
 using namespace llvm;
 
 #define DEBUG_TYPE "mips"
-
-static bool getEnableMulMulFix(const Function &F) {
-  return clv2::getOptValOr<&clv2::MipsOptsReg, &clv2::MIPS_EnableMulMulFix>(
-      F.getContext().getOptionsContext(), false);
-}
-
-static bool getEnableMulMulFix(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::MipsOptsReg, &clv2::MIPS_EnableMulMulFix>(
-      Ctx, false);
-}
 
 extern "C" LLVM_ABI LLVM_EXTERNAL_VISIBILITY void LLVMInitializeMipsTarget() {
   // Register the target.
@@ -291,7 +280,7 @@ void MipsPassConfig::addPreEmitPass() {
 
   // This pass inserts a nop instruction between two back-to-back multiplication
   // instructions when the "mfix4300" flag is passed.
-  if (getEnableMulMulFix(getMipsTargetMachine().getOptionsContext()))
+  if (MipsOptions::Current.MIPS_EnableMulMulFix)
     addPass(createMipsMulMulBugPass());
 
   // The delay slot filler pass can potientially create forbidden slot hazards

@@ -31,58 +31,43 @@
 #include "llvm/IR/PassManager.h"
 #include "llvm/IR/Type.h"
 #include "llvm/IR/TypeFinder.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Transforms/Utils/UtilsOptionsOptInfos.h"
+#include "llvm/Transforms/Utils/UtilsOptions.h"
 
 using namespace llvm;
 
 static const std::string &getRenameExcludeFunctionPrefixes(const Module &M) {
-  if (auto *O = clv2::getView<&clv2::TransformUtilsOptsReg>(
-          M.getContext().getOptionsContext()))
-    if (O->specified<&clv2::TU_RenameExcludeFunctionPrefixes>())
-      return O->get<&clv2::TU_RenameExcludeFunctionPrefixes>();
-  static const std::string Default;
-  return Default;
+  return M.getContext()
+      .getOptions<UtilsOptions>()
+      .TU_RenameExcludeFunctionPrefixes;
 }
 
 static const std::string &getRenameExcludeAliasPrefixes(const Module &M) {
-  if (auto *O = clv2::getView<&clv2::TransformUtilsOptsReg>(
-          M.getContext().getOptionsContext()))
-    if (O->specified<&clv2::TU_RenameExcludeAliasPrefixes>())
-      return O->get<&clv2::TU_RenameExcludeAliasPrefixes>();
-  static const std::string Default;
-  return Default;
+  return M.getContext()
+      .getOptions<UtilsOptions>()
+      .TU_RenameExcludeAliasPrefixes;
 }
 
 static const std::string &getRenameExcludeGlobalPrefixes(const Module &M) {
-  if (auto *O = clv2::getView<&clv2::TransformUtilsOptsReg>(
-          M.getContext().getOptionsContext()))
-    if (O->specified<&clv2::TU_RenameExcludeGlobalPrefixes>())
-      return O->get<&clv2::TU_RenameExcludeGlobalPrefixes>();
-  static const std::string Default;
-  return Default;
+  return M.getContext()
+      .getOptions<UtilsOptions>()
+      .TU_RenameExcludeGlobalPrefixes;
 }
 
 static const std::string &getRenameExcludeStructPrefixes(const Module &M) {
-  if (auto *O = clv2::getView<&clv2::TransformUtilsOptsReg>(
-          M.getContext().getOptionsContext()))
-    if (O->specified<&clv2::TU_RenameExcludeStructPrefixes>())
-      return O->get<&clv2::TU_RenameExcludeStructPrefixes>();
-  static const std::string Default;
-  return Default;
+  return M.getContext()
+      .getOptions<UtilsOptions>()
+      .TU_RenameExcludeStructPrefixes;
 }
 
 static bool getRenameOnlyInst(const Module &M) {
-  return clv2::getOptValIfSpecified<&clv2::TransformUtilsOptsReg,
-                                    &clv2::TU_RenameOnlyInst>(
-      M.getContext().getOptionsContext(), false);
+  return M.getContext().getOptions<UtilsOptions>().TU_RenameOnlyInst;
 }
 
 static const char *const metaNames[] = {
-  // See http://en.wikipedia.org/wiki/Metasyntactic_variable
-  "foo", "bar", "baz", "quux", "barney", "snork", "zot", "blam", "hoge",
-  "wibble", "wobble", "widget", "wombat", "ham", "eggs", "pluto", "spam"
-};
+    // See http://en.wikipedia.org/wiki/Metasyntactic_variable
+    "foo",    "bar",  "baz",  "quux",   "barney", "snork",
+    "zot",    "blam", "hoge", "wibble", "wobble", "widget",
+    "wombat", "ham",  "eggs", "pluto",  "spam"};
 
 namespace {
 // This PRNG is from the ISO C spec. It is intentionally simple and

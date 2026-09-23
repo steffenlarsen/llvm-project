@@ -24,9 +24,7 @@
 
 namespace llvm {
 
-namespace clv2 {
-class OptionsContext;
-} // namespace clv2
+class AnalysisOptions;
 
 class AAResults;
 class DataLayout;
@@ -43,24 +41,24 @@ struct VectorizerParams {
 
   /// VF as overridden by the user.
   LLVM_ABI static ElementCount
-  getVectorizationFactor(const clv2::OptionsContext &Ctx);
+  getVectorizationFactor(const AnalysisOptions &Opts);
   /// Interleave factor as overridden by the user.
   LLVM_ABI static unsigned
-  getVectorizationInterleave(const clv2::OptionsContext &Ctx);
+  getVectorizationInterleave(const AnalysisOptions &Opts);
   /// True if force-vector-interleave was specified by the user.
-  LLVM_ABI static bool isInterleaveForced(const clv2::OptionsContext &Ctx);
+  LLVM_ABI static bool isInterleaveForced(const AnalysisOptions &Opts);
 
   /// \When performing memory disambiguation checks at runtime do not
   /// make more than this number of comparisons.
   LLVM_ABI static unsigned
-  getRuntimeMemoryCheckThreshold(const clv2::OptionsContext &Ctx);
+  getRuntimeMemoryCheckThreshold(const AnalysisOptions &Opts);
 
   // When creating runtime checks for nested loops, where possible try to
   // write the checks in a form that allows them to be easily hoisted out of
   // the outermost loop. For example, we can do this by expanding the range of
   // addresses considered to include the entire nested loop so that they are
   // loop invariant.
-  LLVM_ABI static bool getHoistRuntimeChecks(const clv2::OptionsContext &Ctx);
+  LLVM_ABI static bool getHoistRuntimeChecks(const AnalysisOptions &Opts);
 };
 
 /// Maps a pointer to its symbolic (non-constant) stride. Strides are loop

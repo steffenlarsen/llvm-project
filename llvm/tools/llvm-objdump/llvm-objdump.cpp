@@ -30,6 +30,7 @@
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/BinaryFormat/Wasm.h"
+#include "llvm/Config/Targets.h"
 #include "llvm/DebugInfo/BTF/BTFParser.h"
 #include "llvm/DebugInfo/DWARF/DWARFContext.h"
 #include "llvm/DebugInfo/Symbolize/Symbolize.h"
@@ -45,6 +46,7 @@
 #include "llvm/MC/MCInstrAnalysis.h"
 #include "llvm/MC/MCInstrInfo.h"
 #include "llvm/MC/MCObjectFileInfo.h"
+#include "llvm/MC/MCOptions.h"
 #include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/MC/MCTargetOptions.h"
 #include "llvm/MC/MCTargetOptionsCommandFlags.h"
@@ -58,11 +60,11 @@
 #include "llvm/Object/FaultMapParser.h"
 #include "llvm/Object/MachO.h"
 #include "llvm/Object/MachOUniversal.h"
-#include "llvm/Object/ObjectOptionsOptInfos.h"
 #include "llvm/Object/OffloadBinary.h"
 #include "llvm/Object/Wasm.h"
 #include "llvm/Option/Arg.h"
 #include "llvm/Option/ArgList.h"
+#include "llvm/Option/LibraryOptions.h"
 #include "llvm/Option/Option.h"
 #include "llvm/Support/Allocator.h"
 #include "llvm/Support/Casting.h"
@@ -75,6 +77,7 @@
 #include "llvm/Support/LLVMDriver.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/OptionsContext.h"
+#include "llvm/Support/PluginLoaderOptions.h"
 #include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/StringSaver.h"
@@ -82,28 +85,32 @@
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/WithColor.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/AArch64/AArch64OptionsOptInfos.h"
-#include "llvm/Target/AMDGPU/AMDGPUOptionsOptInfos.h"
-#include "llvm/Target/ARM/ARMOptionsOptInfos.h"
-#include "llvm/Target/BPF/BPFOptionsOptInfos.h"
-#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
-#include "llvm/Target/Lanai/LanaiOptionsOptInfos.h"
-#include "llvm/Target/LoongArch/LoongArchOptionsOptInfos.h"
-#include "llvm/Target/MSP430/MSP430OptionsOptInfos.h"
-#include "llvm/Target/Mips/MipsOptionsOptInfos.h"
-#include "llvm/Target/NVPTX/NVPTXOptionsOptInfos.h"
-#include "llvm/Target/PowerPC/PowerPCOptionsOptInfos.h"
-#include "llvm/Target/RISCV/RISCVOptionsOptInfos.h"
-#include "llvm/Target/SPIRV/SPIRVOptionsOptInfos.h"
-#include "llvm/Target/Sparc/SparcOptionsOptInfos.h"
-#include "llvm/Target/SystemZ/SystemZOptionsOptInfos.h"
-#include "llvm/Target/WebAssembly/WebAssemblyOptionsOptInfos.h"
-#include "llvm/Target/X86/X86OptionsOptInfos.h"
-#include "llvm/Target/XCore/XCoreOptionsOptInfos.h"
+#include "llvm/Target/AArch64/AArch64Options.h"
+#include "llvm/Target/AMDGPU/AMDGPUOptions.h"
+#include "llvm/Target/ARM/ARMOptions.h"
+#include "llvm/Target/BPF/BPFOptions.h"
+#include "llvm/Target/Hexagon/HexagonOptions.h"
+#include "llvm/Target/Lanai/LanaiOptions.h"
+#include "llvm/Target/LoongArch/LoongArchOptions.h"
+#include "llvm/Target/MSP430/MSP430Options.h"
+#include "llvm/Target/Mips/MipsOptions.h"
+#include "llvm/Target/NVPTX/NVPTXOptions.h"
+#include "llvm/Target/PowerPC/PowerPCOptions.h"
+#include "llvm/Target/RISCV/RISCVOptions.h"
+#include "llvm/Target/SPIRV/SPIRVOptions.h"
+#include "llvm/Target/Sparc/SparcOptions.h"
+#include "llvm/Target/SystemZ/SystemZOptions.h"
+#include "llvm/Target/WebAssembly/WebAssemblyOptions.h"
+#include "llvm/Target/X86/X86Options.h"
+#if LLVM_HAS_ARC_TARGET
+#include "llvm/Target/ARC/ARCOptions.h"
+#endif
+#include "llvm/Target/XCore/XCoreOptions.h"
 #include "llvm/TargetParser/AVRTargetParser.h"
 #include "llvm/TargetParser/Host.h"
 #include "llvm/TargetParser/RISCVISAInfo.h"
 #include "llvm/TargetParser/Triple.h"
+#include "llvm/Transforms/ObjCARC/ObjCARCOptions.h"
 #include <algorithm>
 #include <cctype>
 #include <cstring>
@@ -665,8 +672,8 @@ static StringRef getRelocTypeName(const RelocationRef &Rel,
     // Per RISC-V psABI, R_RISCV_VENDOR must be placed immediately before the
     // vendor-specific relocation at the same offset. Clear the vendor symbol
     // if this relocation doesn't form a valid pair.
-    if (Offset != CurrentRISCVVendorOffset ||
-        Type < ELF::R_RISCV_CUSTOM192 || Type > ELF::R_RISCV_CUSTOM255) {
+    if (Offset != CurrentRISCVVendorOffset || Type < ELF::R_RISCV_CUSTOM192 ||
+        Type > ELF::R_RISCV_CUSTOM255) {
       CurrentRISCVVendorSymbol.clear();
     } else {
       // Valid vendor relocation pair - use vendor-specific name.
@@ -2983,8 +2990,7 @@ void Dumper::printRelocations() {
     uint32_t OffsetPadding = (O.getBytesInAddress() > 4 ? 16 : 8);
     uint32_t TypePadding = 24;
     outs() << left_justify("OFFSET", OffsetPadding) << " "
-           << left_justify("TYPE", TypePadding) << " "
-           << "VALUE\n";
+           << left_justify("TYPE", TypePadding) << " " << "VALUE\n";
 
     for (SectionRef Section : P.second) {
       // CREL sections require decoding, each section may have its own specific
@@ -3005,9 +3011,9 @@ void Dumper::printRelocations() {
         SmallString<32> ValueStr;
         if (Address < StartAddress || Address > StopAddress || getHidden(Reloc))
           continue;
-        StringRef Name = getRelocTypeName(Reloc, RelocName,
-                                          CurrentRISCVVendorSymbol,
-                                          CurrentRISCVVendorOffset);
+        StringRef Name =
+            getRelocTypeName(Reloc, RelocName, CurrentRISCVVendorSymbol,
+                             CurrentRISCVVendorOffset);
         if (Error E = getRelocationValueString(Reloc, Opts.SymbolDescription,
                                                ValueStr))
           reportUniqueWarning(std::move(E));
@@ -3473,8 +3479,7 @@ static void printFileHeaders(const ObjectFile *O) {
   uint64_t Address = unwrapOrError(O->getStartAddress(), O->getFileName());
 
   StringRef Fmt = O->getBytesInAddress() > 4 ? "%016" PRIx64 : "%08" PRIx64;
-  outs() << "start address: "
-         << "0x" << format(Fmt.data(), Address) << "\n";
+  outs() << "start address: " << "0x" << format(Fmt.data(), Address) << "\n";
 }
 
 static void printArchiveChild(StringRef Filename, const Archive::Child &C) {
@@ -3650,8 +3655,7 @@ static void dumpObject(const COFFImportFile *I, const Archive *A,
   if (!RawClangAST)
     outs() << '\n'
            << ArchiveName << "(" << I->getFileName() << ")"
-           << ":\tfile format COFF-import-file"
-           << "\n\n";
+           << ":\tfile format COFF-import-file" << "\n\n";
 
   if (Opts.ArchiveHeaders && !MachOOpt && C)
     printArchiveChild(ArchiveName, *C);
@@ -4006,54 +4010,53 @@ static void parseObjdumpOptions(const llvm::opt::InputArgList &InputArgs) {
     if (!MllvmArgs.empty()) {
       clv2::OptionParser P;
       RegisterAllLLVMOptions(P);
-      P.add<&clv2::X86OptsReg>();
-      P.add<&clv2::AArch64OptsReg>();
-      P.add<&clv2::AMDGPUOptsReg>();
-      P.add<&clv2::ARMOptsReg>();
-      P.add<&clv2::HexagonOptsReg>();
-      P.add<&clv2::RISCVOptsReg>();
-      P.add<&clv2::PowerPCOptsReg>();
-      P.add<&clv2::MipsOptsReg>();
-      P.add<&clv2::SystemZOptsReg>();
-      P.add<&clv2::SparcOptsReg>();
-      P.add<&clv2::WebAssemblyOptsReg>();
-      P.add<&clv2::LoongArchOptsReg>();
-      P.add<&clv2::NVPTXOptsReg>();
-      P.add<&clv2::LanaiOptsReg>();
-      P.add<&clv2::BPFOptsReg>();
-      P.add<&clv2::SPIRVOptsReg>();
-      P.add<&clv2::MSP430OptsReg>();
-      P.add<&clv2::XCoreOptsReg>();
       BumpPtrAllocator Alloc;
       StringSaver Saver(Alloc);
       SmallVector<const char *> Argv;
       Argv.push_back(Saver.save("llvm-objdump").data());
       for (StringRef A : MllvmArgs)
         Argv.push_back(Saver.save(A).data());
-      ParsedOptsCtx = P.parse(Argv.size(), Argv.data());
+      std::vector<const char *> ArgsAfterPlugins =
+          loadPluginsAndStripArgs(static_cast<int>(Argv.size()), Argv.data());
+      // llvm::XCoreOptions, llvm::ObjCARCOptions, llvm::ARCOptions,
+      // llvm::LanaiOptions, llvm::SystemZOptions, llvm::MSP430Options,
+      // llvm::SparcOptions, and llvm::MCLibraryOptions have migrated off
+      // clv2 onto the new per-library OptTable struct design (see
+      // llvm/include/llvm/Option/LibraryOptions.h) and are no longer among
+      // the clv2::OptionParser registries configured above. Parse their
+      // options out of the -mllvm args first, forwarding whatever they don't
+      // recognize to the legacy clv2 parser unchanged.
+      SmallVector<const char *, 32> XCoreOptsRest;
+      {
+        std::string XCoreOptsErrs;
+        raw_string_ostream XCoreOptsErrsOS(XCoreOptsErrs);
+        if (Error Err = parseLibraryOptionsChain<
+#if LLVM_HAS_ARC_TARGET
+                ARCOptions,
+#endif
+#if LLVM_HAS_LANAI_TARGET
+                LanaiOptions,
+#endif
+                XCoreOptions, ObjCARCOptions, SystemZOptions, MSP430Options,
+                SparcOptions, WebAssemblyOptions, SPIRVOptions, BPFOptions,
+                LoongArchOptions, MipsOptions, NVPTXOptions, AArch64Options,
+                ARMOptions, RISCVOptions, X86Options, PowerPCOptions,
+                HexagonOptions, MCLibraryOptions, AMDGPUOptions>(
+                ArrayRef<const char *>(ArgsAfterPlugins).drop_front(),
+                XCoreOptsRest, XCoreOptsErrsOS))
+          reportCmdLineError(toString(std::move(Err)));
+        errs() << XCoreOptsErrs;
+      }
+      SmallVector<const char *, 32> ArgvAfterXCoreOpts;
+      ArgvAfterXCoreOpts.push_back(ArgsAfterPlugins[0]);
+      ArgvAfterXCoreOpts.append(XCoreOptsRest.begin(), XCoreOptsRest.end());
+      ParsedOptsCtx = P.parse(static_cast<int>(ArgvAfterXCoreOpts.size()),
+                              ArgvAfterXCoreOpts.data());
     } else {
       // Even without -mllvm, create a default OptionsContext so target
       // options (like AsmWriter variants) have valid defaults.
       clv2::OptionParser P;
       RegisterAllLLVMOptions(P);
-      P.add<&clv2::X86OptsReg>();
-      P.add<&clv2::AArch64OptsReg>();
-      P.add<&clv2::AMDGPUOptsReg>();
-      P.add<&clv2::ARMOptsReg>();
-      P.add<&clv2::HexagonOptsReg>();
-      P.add<&clv2::RISCVOptsReg>();
-      P.add<&clv2::PowerPCOptsReg>();
-      P.add<&clv2::MipsOptsReg>();
-      P.add<&clv2::SystemZOptsReg>();
-      P.add<&clv2::SparcOptsReg>();
-      P.add<&clv2::WebAssemblyOptsReg>();
-      P.add<&clv2::LoongArchOptsReg>();
-      P.add<&clv2::NVPTXOptsReg>();
-      P.add<&clv2::LanaiOptsReg>();
-      P.add<&clv2::BPFOptsReg>();
-      P.add<&clv2::SPIRVOptsReg>();
-      P.add<&clv2::MSP430OptsReg>();
-      P.add<&clv2::XCoreOptsReg>();
       const char *Dummy[] = {"llvm-objdump"};
       ParsedOptsCtx = P.parse(1, Dummy);
     }

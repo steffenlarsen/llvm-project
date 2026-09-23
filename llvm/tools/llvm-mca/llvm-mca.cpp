@@ -38,7 +38,7 @@
 #include "llvm/MC/MCCodeEmitter.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCObjectFileInfo.h"
-#include "llvm/MC/MCOptionsOptInfos.h"
+#include "llvm/MC/MCOptions.h"
 #include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/MC/MCSchedule.h"
 #include "llvm/MC/MCSubtargetInfo.h"
@@ -52,6 +52,7 @@
 #include "llvm/MCA/Stages/EntryStage.h"
 #include "llvm/MCA/Stages/InstructionTables.h"
 #include "llvm/MCA/Support.h"
+#include "llvm/Option/LibraryOptions.h"
 #include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -64,24 +65,24 @@
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/ToolOutputFile.h"
 #include "llvm/Support/WithColor.h"
-#include "llvm/Target/AArch64/AArch64OptionsOptInfos.h"
-#include "llvm/Target/AMDGPU/AMDGPUOptionsOptInfos.h"
-#include "llvm/Target/ARM/ARMOptionsOptInfos.h"
-#include "llvm/Target/BPF/BPFOptionsOptInfos.h"
-#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
-#include "llvm/Target/Lanai/LanaiOptionsOptInfos.h"
-#include "llvm/Target/LoongArch/LoongArchOptionsOptInfos.h"
-#include "llvm/Target/MSP430/MSP430OptionsOptInfos.h"
-#include "llvm/Target/Mips/MipsOptionsOptInfos.h"
-#include "llvm/Target/NVPTX/NVPTXOptionsOptInfos.h"
-#include "llvm/Target/PowerPC/PowerPCOptionsOptInfos.h"
-#include "llvm/Target/RISCV/RISCVOptionsOptInfos.h"
-#include "llvm/Target/SPIRV/SPIRVOptionsOptInfos.h"
-#include "llvm/Target/Sparc/SparcOptionsOptInfos.h"
-#include "llvm/Target/SystemZ/SystemZOptionsOptInfos.h"
-#include "llvm/Target/WebAssembly/WebAssemblyOptionsOptInfos.h"
-#include "llvm/Target/X86/X86OptionsOptInfos.h"
-#include "llvm/Target/XCore/XCoreOptionsOptInfos.h"
+#include "llvm/Target/AArch64/AArch64Options.h"
+#include "llvm/Target/AMDGPU/AMDGPUOptions.h"
+#include "llvm/Target/ARM/ARMOptions.h"
+#include "llvm/Target/BPF/BPFOptions.h"
+#include "llvm/Target/Hexagon/HexagonOptions.h"
+#include "llvm/Target/Lanai/LanaiOptions.h"
+#include "llvm/Target/LoongArch/LoongArchOptions.h"
+#include "llvm/Target/MSP430/MSP430Options.h"
+#include "llvm/Target/Mips/MipsOptions.h"
+#include "llvm/Target/NVPTX/NVPTXOptions.h"
+#include "llvm/Target/PowerPC/PowerPCOptions.h"
+#include "llvm/Target/RISCV/RISCVOptions.h"
+#include "llvm/Target/SPIRV/SPIRVOptions.h"
+#include "llvm/Target/Sparc/SparcOptions.h"
+#include "llvm/Target/SystemZ/SystemZOptions.h"
+#include "llvm/Target/WebAssembly/WebAssemblyOptions.h"
+#include "llvm/Target/X86/X86Options.h"
+#include "llvm/Target/XCore/XCoreOptions.h"
 #include "llvm/TargetParser/Host.h"
 
 using namespace llvm;
@@ -445,34 +446,41 @@ int main(int argc, char **argv) {
   clv2::OptionParser P;
   P.add<&MCAToolReg>();
   RegisterCoreLLVMOptions(P);
-  // MC scheduling options (e.g. the reservation-station scale factor) are
-  // read via MCSchedModel; without this the flags parse as dynamic entries
-  // but their view never reaches the OptionsContext, so reads see defaults.
-  P.add<&MCOptsReg>();
-  P.add<&X86OptsReg>();
-  P.add<&AArch64OptsReg>();
-  P.add<&AMDGPUOptsReg>();
-  P.add<&ARMOptsReg>();
-  P.add<&HexagonOptsReg>();
-  P.add<&RISCVOptsReg>();
-  P.add<&PowerPCOptsReg>();
-  P.add<&MipsOptsReg>();
-  P.add<&SystemZOptsReg>();
-  P.add<&SparcOptsReg>();
-  P.add<&WebAssemblyOptsReg>();
-  P.add<&LoongArchOptsReg>();
-  P.add<&NVPTXOptsReg>();
-  P.add<&LanaiOptsReg>();
-  P.add<&BPFOptsReg>();
-  P.add<&SPIRVOptsReg>();
-  P.add<&MSP430OptsReg>();
-  P.add<&XCoreOptsReg>();
+  // llvm::XCoreOptions, llvm::LanaiOptions, llvm::SystemZOptions,
+  // llvm::MSP430Options, llvm::SparcOptions, and llvm::MCLibraryOptions have
+  // migrated off clv2 onto the new per-library OptTable struct design (see
+  // llvm/include/llvm/Option/LibraryOptions.h) and are no longer among the
+  // clv2::OptionParser registries configured above. Parse their options out
+  // of argv first, forwarding whatever they don't recognize to the legacy
+  // clv2 parser unchanged. (MC scheduling options, e.g. the
+  // reservation-station scale factor, are read via MCSchedModel from
+  // MCLibraryOptions::Current, which this chain populates.)
+  SmallVector<const char *, 32> XCoreOptsRest;
+  {
+    std::string XCoreOptsErrs;
+    raw_string_ostream XCoreOptsErrsOS(XCoreOptsErrs);
+    if (Error Err = opt::parseLibraryOptionsChain<
+            XCoreOptions, LanaiOptions, SystemZOptions, MSP430Options,
+            SparcOptions, WebAssemblyOptions, SPIRVOptions, BPFOptions,
+            LoongArchOptions, MipsOptions, NVPTXOptions, AArch64Options,
+            ARMOptions, RISCVOptions, X86Options, PowerPCOptions,
+            HexagonOptions, MCLibraryOptions, AMDGPUOptions>(
+            ArrayRef<const char *>(argv + 1, argv + argc), XCoreOptsRest,
+            XCoreOptsErrsOS)) {
+      errs() << toString(std::move(Err)) << "\n";
+      return 1;
+    }
+    errs() << XCoreOptsErrs;
+  }
+  SmallVector<const char *, 32> ArgvAfterXCoreOpts;
+  ArgvAfterXCoreOpts.push_back(argv[0]);
+  ArgvAfterXCoreOpts.append(XCoreOptsRest.begin(), XCoreOptsRest.end());
   P.enableGlobalDynamicEntries();
-  P.hideUnrelatedOptions(
-      {&ToolCategory, &ViewCategory, &clv2::MCScheduleOptionsCategory});
-  auto OptsCtx =
-      P.parse(argc, argv, "llvm machine code performance analyzer.\n", nullptr,
-              "", nullptr, PrintVersions);
+  P.hideUnrelatedOptions({&ToolCategory, &ViewCategory});
+  auto OptsCtx = P.parse(static_cast<int>(ArgvAfterXCoreOpts.size()),
+                         ArgvAfterXCoreOpts.data(),
+                         "llvm machine code performance analyzer.\n", nullptr,
+                         "", nullptr, PrintVersions);
   auto *ParsedOpts = OptsCtx->getViewPtr<&MCAToolReg>();
 
   MCAArgs Args;

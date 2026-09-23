@@ -1,6 +1,5 @@
 add_llvm_component_library(LLVMBitReader
-  BitcodeOptionsGetters.cpp
-  BitcodeOptionsRegistration.cpp
+  BitcodeMemProfOptions.cpp
   BitcodeAnalyzer.cpp
   BitcodeOptions.cpp
   BitReader.cpp
@@ -13,10 +12,13 @@ add_llvm_component_library(LLVMBitReader
 
   DEPENDS
   intrinsics_gen
+  BitcodeMemProfOptParserTableGen
+  BitcodeOptParserTableGen
 
   LINK_COMPONENTS
   BitstreamReader
   Core
+  Option
   Support
   TargetParser
   )

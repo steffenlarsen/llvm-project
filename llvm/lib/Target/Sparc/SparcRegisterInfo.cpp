@@ -21,8 +21,7 @@
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Type.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/Sparc/SparcOptionsOptInfos.h"
+#include "llvm/Target/Sparc/SparcOptions.h"
 
 using namespace llvm;
 
@@ -32,8 +31,7 @@ using namespace llvm;
 static bool ReserveAppRegisters = false;
 
 static bool getReserveAppRegisters(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SPARC_ReserveAppRegisters>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<SparcOptions>().SPARC_ReserveAppRegisters;
 }
 
 SparcRegisterInfo::SparcRegisterInfo(const SparcSubtarget &STI)

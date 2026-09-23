@@ -37,8 +37,7 @@
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/IR/Function.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/LoongArch/LoongArchOptionsOptInfos.h"
+#include "llvm/Target/LoongArch/LoongArchOptions.h"
 
 using namespace llvm;
 
@@ -50,13 +49,11 @@ STATISTIC(NumTransformedToWInstrs,
           "Number of instructions transformed to W-ops");
 
 static bool getDisableSExtWRemoval(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::LA_DisableSExtWRemoval>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<LoongArchOptions>().LA_DisableSExtWRemoval;
 }
 
 static bool getDisableCvtToDSuffix(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::LA_DisableCvtToDSuffix>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<LoongArchOptions>().LA_DisableCvtToDSuffix;
 }
 
 namespace {

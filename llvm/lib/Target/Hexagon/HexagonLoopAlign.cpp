@@ -14,53 +14,43 @@
 #include "llvm/CodeGen/MachineBlockFrequencyInfo.h"
 #include "llvm/CodeGen/MachineBranchProbabilityInfo.h"
 #include "llvm/IR/Function.h"
-#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
+#include "llvm/Target/Hexagon/HexagonOptions.h"
 
 #define DEBUG_TYPE "hexagon-loop-align"
 
 using namespace llvm;
 
 static unsigned getLoopEdgeThreshold(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_LoopEdgeThreshold>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_LoopEdgeThreshold;
 }
 
 static bool getDisableLoopAlign(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_DisableLoopAlign>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_DisableLoopAlign;
 }
 
 static unsigned getHVXLoopAlignLimitUB(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_HVXLoopAlignLimitUB>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_HVXLoopAlignLimitUB;
 }
 
 static unsigned getTinyLoopAlignLimitUB(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_TinyLoopAlignLimitUB>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_TinyLoopAlignLimitUB;
 }
 
 static unsigned getLoopAlignLimitUB(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_LoopAlignLimitUB>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_LoopAlignLimitUB;
 }
 
 static unsigned getLoopAlignLimitLB(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_LoopAlignLimitLB>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_LoopAlignLimitLB;
 }
 
 static unsigned getLoopBndlAlignLimit(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_LoopBndlAlignLimit>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_LoopBndlAlignLimit;
 }
 
 static unsigned getTinyLoopBndlAlignLimit(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_TinyLoopBndlAlignLimit>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_TinyLoopBndlAlignLimit;
 }
 
 namespace {

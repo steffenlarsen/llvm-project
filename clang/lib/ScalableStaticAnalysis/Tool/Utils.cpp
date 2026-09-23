@@ -16,6 +16,7 @@
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/Path.h"
+#include "llvm/Support/PluginLoaderOptions.h"
 #include "llvm/Support/Process.h"
 #include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/WithColor.h"
@@ -197,7 +198,10 @@ std::unique_ptr<llvm::clv2::OptionsContext> clang::ssaf::initTool(
   if (ConfigureParser)
     ConfigureParser(P);
   P.hideUnrelatedOptions({&Category});
-  return P.parse(argc, argv, Overview);
+  std::vector<const char *> ArgsAfterPlugins =
+      llvm::loadPluginsAndStripArgs(argc, argv);
+  return P.parse(static_cast<int>(ArgsAfterPlugins.size()),
+                 ArgsAfterPlugins.data(), Overview);
 }
 
 clang::ssaf::FormatFile

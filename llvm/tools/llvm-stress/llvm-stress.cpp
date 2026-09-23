@@ -37,6 +37,7 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/InitLLVM.h"
+#include "llvm/Support/PluginLoaderOptions.h"
 #include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/ToolOutputFile.h"
 #include "llvm/Support/WithColor.h"
@@ -774,7 +775,11 @@ int main(int argc, char **argv) {
   P.add<&StressToolReg>();
   RegisterAllLLVMOptions(P);
   P.hideUnrelatedOptions({&StressCategory, &getColorCategory()});
-  auto OptsCtx = P.parse(argc, argv, "llvm codegen stress-tester\n");
+  std::vector<const char *> ArgsAfterPlugins =
+      loadPluginsAndStripArgs(argc, argv);
+  auto OptsCtx =
+      P.parse(static_cast<int>(ArgsAfterPlugins.size()),
+              ArgsAfterPlugins.data(), "llvm codegen stress-tester\n");
   auto *Opts = OptsCtx->getViewPtr<&StressToolReg>();
 
   StressArgs Args;

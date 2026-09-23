@@ -104,8 +104,7 @@
 #include "llvm/IR/DebugLoc.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/AArch64/AArch64OptionsOptInfos.h"
+#include "llvm/Target/AArch64/AArch64Options.h"
 #include "llvm/Target/TargetMachine.h"
 #include <cassert>
 
@@ -116,8 +115,7 @@ using namespace llvm;
 #define AARCH64_SPECULATION_HARDENING_NAME "AArch64 speculation hardening pass"
 
 static bool getHardenLoads(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::A64_HardenLoads>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<AArch64Options>().A64_HardenLoads;
 }
 
 namespace {
@@ -286,7 +284,7 @@ bool AArch64SpeculationHardening::instrumentControlFlow(
   RegScavenger RS;
   RS.enterBasicBlockEnd(MBB);
 
-  for (MachineBasicBlock::iterator I = MBB.end(); I != MBB.begin(); ) {
+  for (MachineBasicBlock::iterator I = MBB.end(); I != MBB.begin();) {
     MachineInstr &MI = *--I;
     if (!MI.isReturn() && !MI.isCall())
       continue;

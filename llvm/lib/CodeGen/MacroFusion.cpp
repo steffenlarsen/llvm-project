@@ -13,16 +13,14 @@
 
 #include "llvm/CodeGen/MacroFusion.h"
 #include "llvm/ADT/Statistic.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsMachine2.h"
 #include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGen/ScheduleDAG.h"
 #include "llvm/CodeGen/ScheduleDAGInstrs.h"
 #include "llvm/CodeGen/ScheduleDAGMutation.h"
 #include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/IR/Function.h"
-#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 
 #define DEBUG_TYPE "machine-scheduler"
@@ -34,8 +32,8 @@ STATISTIC(NumFusionConflicts,
 
 using namespace llvm;
 
-static bool getMischedFusion(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_MischedFusion>(Ctx);
+static bool getMischedFusion(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenMachine2Options>().CGPASS_MischedFusion;
 }
 
 static bool isHazard(const SDep &Dep) {
@@ -231,7 +229,7 @@ bool MacroFusion::scheduleAdjacentImpl(ScheduleDAGInstrs &DAG, SUnit &AnchorSU) 
 }
 
 std::unique_ptr<ScheduleDAGMutation>
-llvm::createMacroFusionDAGMutation(const clv2::OptionsContext &Ctx,
+llvm::createMacroFusionDAGMutation(const LLVMContext &Ctx,
                                    ArrayRef<MacroFusionPredTy> Predicates,
                                    bool BranchOnly) {
   if (getMischedFusion(Ctx))

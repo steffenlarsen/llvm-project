@@ -20,8 +20,7 @@
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/User.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
+#include "llvm/Target/Hexagon/HexagonOptions.h"
 #include "llvm/Transforms/Utils/LoopPeel.h"
 #include "llvm/Transforms/Utils/UnrollLoop.h"
 
@@ -34,28 +33,23 @@ static bool EmitLookupTables = true;
 static bool HexagonMaskedVMem = true;
 
 static bool getHexagonAutoHVX(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_AutoHVX>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_AutoHVX;
 }
 
 static bool getHexagonAllowScatterGatherHVX(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_AllowScatterGatherHVX>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_AllowScatterGatherHVX;
 }
 
 static bool getEnableV68FloatAutoHVX(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_EnableV68FloatAutoHVX>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_EnableV68FloatAutoHVX;
 }
 
 static bool getEmitLookupTables(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_EmitLookupTables>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_EmitLookupTables;
 }
 
 static bool getHexagonMaskedVMem(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_MaskedVMem>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_MaskedVMem;
 }
 
 // Constant "cost factor" to make floating point operations more expensive

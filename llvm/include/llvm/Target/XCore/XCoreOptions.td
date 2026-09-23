@@ -1,4 +1,4 @@
-//===- XCoreOptions.td - XCore target options -*- tablegen -*-===//
+//===- XCoreOptions.td - XCore options -------------------*- tablegen -*-===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -6,20 +6,11 @@
 //
 //===----------------------------------------------------------------------===//
 
-include "llvm/Support/CLV2Options.td"
+include "llvm/Option/OptParser.td"
 
-def XCoreOptsReg : Registry<"llvm::xcore_opts"> {
-  let ContextTypes = [CTX_Module];
-  // Getter bodies are compiled once, in XCoreOptionsGetters.cpp.
-  let OutOfLineGetters = 1;
-}
+def XCoreOptions : OptionsStruct<"llvm"> {}
 
-def XCORE_MaxThreads : Option<
-    "xcore-max-threads",
+defm XCORE_MaxThreads : ValueField<
+    "xcore-max-threads", "unsigned", "8",
     "Maximum number of threads (for emulation thread-local storage)",
-    "unsigned"> {
-  let Registry = XCoreOptsReg;
-  let Default = "8";
-  let Hidden = 1;
-  let ValueDesc = "number";
-}
+    /*hidden=*/1>;

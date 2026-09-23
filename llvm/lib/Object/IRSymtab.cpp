@@ -23,6 +23,7 @@
 #include "llvm/IR/Module.h"
 #include "llvm/MC/StringTableBuilder.h"
 #include "llvm/Object/ModuleSymbolTable.h"
+#include "llvm/Object/ObjectOptions.h"
 #include "llvm/Object/SymbolicFile.h"
 #include "llvm/Support/Allocator.h"
 #include "llvm/Support/Casting.h"
@@ -41,8 +42,6 @@
 
 using namespace llvm;
 using namespace irsymtab;
-
-#include "llvm/Object/ObjectOptionsOptInfos.h"
 
 namespace {
 
@@ -385,14 +384,12 @@ static Expected<FileContents> upgrade(ArrayRef<BitcodeModule> BMs) {
   return std::move(FC);
 }
 
-Expected<FileContents> irsymtab::readBitcode(const BitcodeFileContents &BFC,
-                                             const clv2::OptionsContext &Ctx) {
+Expected<FileContents> irsymtab::readBitcode(const BitcodeFileContents &BFC) {
   if (BFC.Mods.empty())
     return make_error<StringError>("Bitcode file does not contain any modules",
                                    inconvertibleErrorCode());
 
-  if (!clv2::getOptValOr<&clv2::ObjectOptsReg,
-                         &clv2::OBJ_DisableBitcodeVersionUpgrade>(Ctx, false)) {
+  if (!ObjectOptions::Current.OBJ_DisableBitcodeVersionUpgrade) {
     if (BFC.StrtabForSymtab.empty() ||
         BFC.Symtab.size() < sizeof(storage::Header))
       return upgrade(BFC.Mods);

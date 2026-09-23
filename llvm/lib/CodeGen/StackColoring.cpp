@@ -28,7 +28,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/ValueTracking.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsCore2.h"
 #include "llvm/CodeGen/LiveInterval.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
@@ -69,18 +69,17 @@ using namespace llvm;
 
 #define DEBUG_TYPE "stack-coloring"
 
-static bool getNoStackColoring(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_NoStackColoring>(Ctx);
+static bool getNoStackColoring(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore2Options>().CGPASS_NoStackColoring;
 }
 
-static bool getProtectFromEscapedAllocas(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_ProtectFromEscapedAllocas>(Ctx);
+static bool getProtectFromEscapedAllocas(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore2Options>().CGPASS_ProtectFromEscapedAllocas;
 }
 
-static bool
-getStackcoloringLifetimeStartOnFirstUse(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<
-      &clv2::CGPASS_StackcoloringLifetimeStartOnFirstUse>(Ctx);
+static bool getStackcoloringLifetimeStartOnFirstUse(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore2Options>()
+      .CGPASS_StackcoloringLifetimeStartOnFirstUse;
 }
 
 STATISTIC(NumMarkerSeen,  "Number of lifetime markers found.");
@@ -458,9 +457,8 @@ private:
   /// this slot (if FALSE, then the start marker is treated as start of lifetime).
   bool applyFirstUse(int Slot) {
     if (!getStackcoloringLifetimeStartOnFirstUse(
-            MF->getFunction().getContext().getOptionsContext()) ||
-        getProtectFromEscapedAllocas(
-            MF->getFunction().getContext().getOptionsContext()))
+            MF->getFunction().getContext()) ||
+        getProtectFromEscapedAllocas(MF->getFunction().getContext()))
       return false;
     if (ConservativeSlots.test(Slot))
       return false;
@@ -596,9 +594,8 @@ bool StackColoring::isLifetimeStartOrEnd(const MachineInstr &MI,
       return true;
     }
   } else if (getStackcoloringLifetimeStartOnFirstUse(
-                 MF->getFunction().getContext().getOptionsContext()) &&
-             !getProtectFromEscapedAllocas(
-                 MF->getFunction().getContext().getOptionsContext())) {
+                 MF->getFunction().getContext()) &&
+             !getProtectFromEscapedAllocas(MF->getFunction().getContext())) {
     if (!MI.isDebugInstr()) {
       bool found = false;
       for (const MachineOperand &MO : MI.operands()) {
@@ -1034,8 +1031,7 @@ void StackColoring::remapInstructions(DenseMap<int, int> &SlotRemap) {
         // If we *don't* protect the user from escaped allocas, don't bother
         // validating the instructions.
         if (!I.isDebugInstr() && TouchesMemory &&
-            getProtectFromEscapedAllocas(
-                MF->getFunction().getContext().getOptionsContext())) {
+            getProtectFromEscapedAllocas(MF->getFunction().getContext())) {
           SlotIndex Index = Indexes->getInstructionIndex(I);
           const LiveInterval *Interval = &*Intervals[FromSlot];
           assert(Interval->find(Index) != Interval->end() &&
@@ -1245,8 +1241,7 @@ bool StackColoring::run(MachineFunction &Func, bool OnlyRemoveMarkers) {
   // stack is too small, or we are told not to optimize the slots, or
   // opt-bisect-limit is skipping this pass.
   if (NumMarkers < 2 || TotalSize < 16 ||
-      getNoStackColoring(MF->getFunction().getContext().getOptionsContext()) ||
-      OnlyRemoveMarkers) {
+      getNoStackColoring(MF->getFunction().getContext()) || OnlyRemoveMarkers) {
     LLVM_DEBUG(dbgs() << "Will not try to merge slots.\n");
     return removeAllMarkers();
   }
@@ -1269,8 +1264,7 @@ bool StackColoring::run(MachineFunction &Func, bool OnlyRemoveMarkers) {
 
   // Search for allocas which are used outside of the declared lifetime
   // markers.
-  if (getProtectFromEscapedAllocas(
-          MF->getFunction().getContext().getOptionsContext()))
+  if (getProtectFromEscapedAllocas(MF->getFunction().getContext()))
     removeInvalidSlotRanges();
 
   // Maps old slots to new slots.

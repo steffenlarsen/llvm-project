@@ -1,4 +1,4 @@
-//===- InstrumentationOptions.td - CLV2 option defs for Instrumentation -*- tablegen -*-===//
+//===- InstrumentationOptions.td - Options -*- tablegen -*-===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -6,129 +6,59 @@
 //
 //===----------------------------------------------------------------------===//
 
-include "llvm/Support/CLV2Options.td"
+include "llvm/Option/OptParser.td"
 
-def InstrumentationOptsReg : Registry<"llvm::inst_opts"> { let OutOfLineGetters = 1; }
+def InstrumentationOptions : OptionsStruct<"llvm"> {}
 
 // =========================================================================
 // External enum types
 // =========================================================================
 
 // --- AddressSanitizerOptions.h: AsanDetectStackUseAfterReturnMode ---
-
-def AsanUARModeNever : EnumValue<"never",
-    "Never detect stack use after return."> {
-  let CppName = "Never";
-  let Value = 0;
-}
-
-def AsanUARModeRuntime : EnumValue<"runtime",
-    "Detect stack use after return if binary flag "
-    "'ASAN_OPTIONS=detect_stack_use_after_return' is set."> {
-  let CppName = "Runtime";
-  let Value = 1;
-}
-
-def AsanUARModeAlways : EnumValue<"always",
-    "Always detect stack use after return."> {
-  let CppName = "Always";
-  let Value = 2;
-}
-
 // Original C++ enum: { Never=0, Runtime=1, Always=2, Invalid=3 }
 
-def AsanUARModeInvalid : EnumValue<"__invalid",
-    "Not a valid detect mode."> {
-  let CppName = "Invalid";
-  let Value = 3;
-}
-
 def AsanDetectStackUseAfterReturnModeEnum :
-    EnumType<"AsanDetectStackUseAfterReturnMode",
-    [AsanUARModeNever, AsanUARModeRuntime, AsanUARModeAlways,
-     AsanUARModeInvalid]> {
+    OptionEnum<"AsanDetectStackUseAfterReturnMode", [
+    EnumMember<"Never", "never">,
+    EnumMember<"Runtime", "runtime">,
+    EnumMember<"Always", "always">,
+    EnumMember<"Invalid", "__invalid">]> {
   let External = 1;
 }
 
 // --- AddressSanitizerOptions.h: AsanCtorKind ---
 
-def AsanCtorKindNone : EnumValue<"none", "No constructors"> {
-  let CppName = "None";
-}
-
-def AsanCtorKindGlobal : EnumValue<"global", "Use global constructors"> {
-  let CppName = "Global";
-}
-
-def AsanCtorKindEnum : EnumType<"AsanCtorKind",
-    [AsanCtorKindNone, AsanCtorKindGlobal]> {
+def AsanCtorKindEnum : OptionEnum<"AsanCtorKind", [
+    EnumMember<"None", "none">,
+    EnumMember<"Global", "global">]> {
   let External = 1;
 }
 
 // --- AddressSanitizerOptions.h: AsanDtorKind ---
 // Original C++ enum: { None=0, Global=1, Invalid=2 }
 
-def AsanDtorKindNone : EnumValue<"none", "No destructors"> {
-  let CppName = "None";
-  let Value = 0;
-}
-
-def AsanDtorKindGlobal : EnumValue<"global", "Use global destructors"> {
-  let CppName = "Global";
-  let Value = 1;
-}
-
-def AsanDtorKindInvalid : EnumValue<"__invalid", "Not a valid destructor kind"> {
-  let CppName = "Invalid";
-  let Value = 2;
-}
-
-def AsanDtorKindEnum : EnumType<"AsanDtorKind",
-    [AsanDtorKindNone, AsanDtorKindGlobal, AsanDtorKindInvalid]> {
+def AsanDtorKindEnum : OptionEnum<"AsanDtorKind", [
+    EnumMember<"None", "none">,
+    EnumMember<"Global", "global">,
+    EnumMember<"Invalid", "__invalid">]> {
   let External = 1;
 }
 
 // --- ProfCorrelatorKind.h: ProfCorrelatorKind ---
 
-def ProfCorrelatorKindNone : EnumValue<"",
-    "No profile correlation"> {
-  let CppName = "NONE";
-}
-
-def ProfCorrelatorKindDebugInfo : EnumValue<"debug-info",
-    "Use debug info to correlate"> {
-  let CppName = "DEBUG_INFO";
-}
-
-def ProfCorrelatorKindBinary : EnumValue<"binary",
-    "Use binary to correlate"> {
-  let CppName = "BINARY";
-}
-
-def ProfCorrelatorKindEnum :
-    EnumType<"ProfCorrelatorKind",
-    [ProfCorrelatorKindNone, ProfCorrelatorKindDebugInfo,
-     ProfCorrelatorKindBinary]> {
+def ProfCorrelatorKindEnum : OptionEnum<"ProfCorrelatorKind", [
+    EnumMember<"NONE", "">,
+    EnumMember<"DEBUG_INFO", "debug-info">,
+    EnumMember<"BINARY", "binary">]> {
   let External = 1;
 }
 
 // --- BlockFrequencyInfo.h: PGOViewCountsType ---
 
-def INST_PGOViewCountsTypeNone : EnumValue<"none", "do not show."> {
-  let CppName = "PGOVCT_None";
-}
-
-def INST_PGOViewCountsTypeGraph : EnumValue<"graph", "show a graph."> {
-  let CppName = "PGOVCT_Graph";
-}
-
-def INST_PGOViewCountsTypeText : EnumValue<"text", "show in text."> {
-  let CppName = "PGOVCT_Text";
-}
-
-def INST_PGOViewCountsTypeEnum : EnumType<"PGOViewCountsType",
-    [INST_PGOViewCountsTypeNone, INST_PGOViewCountsTypeGraph,
-     INST_PGOViewCountsTypeText]> {
+def PGOViewCountsTypeEnum : OptionEnum<"PGOViewCountsType", [
+    EnumMember<"PGOVCT_None", "none">,
+    EnumMember<"PGOVCT_Graph", "graph">,
+    EnumMember<"PGOVCT_Text", "text">]> {
   let External = 1;
 }
 
@@ -139,110 +69,57 @@ def INST_PGOViewCountsTypeEnum : EnumType<"PGOViewCountsType",
 // --- HWAddressSanitizer.cpp: OffsetKind ---
 // Original C++ enum: { kFixed=0, kGlobal=1, kIfunc=2, kTls=3 }
 
-def HwasanOffsetKindFixed : EnumValue<"__fixed", "Use fixed offset"> {
-  let CppName = "kFixed";
-  let Value = 0;
-}
-
-def HwasanOffsetKindGlobal : EnumValue<"global", "Use global"> {
-  let CppName = "kGlobal";
-  let Value = 1;
-}
-
-def HwasanOffsetKindIfunc : EnumValue<"ifunc", "Use ifunc global"> {
-  let CppName = "kIfunc";
-  let Value = 2;
-}
-
-def HwasanOffsetKindTls : EnumValue<"tls", "Use TLS"> {
-  let CppName = "kTls";
-  let Value = 3;
-}
-
-def HwasanOffsetKindEnum : EnumType<"OffsetKind",
-    [HwasanOffsetKindFixed, HwasanOffsetKindGlobal, HwasanOffsetKindIfunc,
-     HwasanOffsetKindTls]>;
+def OffsetKindEnum : OptionEnum<"OffsetKind", [
+    EnumMember<"kFixed", "__fixed">,
+    EnumMember<"kGlobal", "global">,
+    EnumMember<"kIfunc", "ifunc">,
+    EnumMember<"kTls", "tls">]>;
 
 // --- HWAddressSanitizer.cpp: RecordStackHistoryMode ---
 
-def HwasanRecordStackHistoryNone : EnumValue<"none",
-    "Do not record stack ring history"> {
-  let CppName = "none";
-}
-
-def HwasanRecordStackHistoryInstr : EnumValue<"instr",
-    "Insert instructions into the prologue for "
-    "storing into the stack ring buffer directly"> {
-  let CppName = "instr";
-}
-
-def HwasanRecordStackHistoryLibcall : EnumValue<"libcall",
-    "Add a call to __hwasan_add_frame_record for "
-    "storing into the stack ring buffer"> {
-  let CppName = "libcall";
-}
-
-def HwasanRecordStackHistoryModeEnum : EnumType<"RecordStackHistoryMode",
-    [HwasanRecordStackHistoryNone, HwasanRecordStackHistoryInstr,
-     HwasanRecordStackHistoryLibcall]>;
+def RecordStackHistoryModeEnum : OptionEnum<"RecordStackHistoryMode", [
+    EnumMember<"none", "none">,
+    EnumMember<"instr", "instr">,
+    EnumMember<"libcall", "libcall">]>;
 
 // =========================================================================
 // List options
 // =========================================================================
 
-def INST_AsanInstrumentAddrSpaces : ListOption<
-    "asan-instrument-address-spaces",
+defm INST_AsanInstrumentAddrSpaces : ListField<
+    "asan-instrument-address-spaces", "unsigned",
     "Only instrument variables in the specified address spaces.",
-    "unsigned"> {
-  let Registry = InstrumentationOptsReg;
-  let Hidden = 1;
-  let CommaSeparated = 1;
-}
+    /*commaJoined=*/1, /*appendEquals=*/1, /*hidden=*/1>;
 
-def INST_DfsanABIListFiles : ListOption<
-    "dfsan-abilist",
+defm INST_DfsanABIListFiles : ListField<
+    "dfsan-abilist", "std::string",
     "File listing native ABI functions and how the pass treats them",
-    "std::string"> {
-  let Registry = InstrumentationOptsReg;
-  let Hidden = 1;
-}
+    /*commaJoined=*/0, /*appendEquals=*/1, /*hidden=*/1>;
 
-def INST_DfsanCombineTaintLookupTable : ListOption<
-    "dfsan-combine-taint-lookup-table",
+defm INST_DfsanCombineTaintLookupTable : ListField<
+    "dfsan-combine-taint-lookup-table", "std::string",
     "When dfsan-combine-offset-labels-on-gep and/or "
     "dfsan-combine-pointer-labels-on-load are false, this flag can "
     "be used to re-enable combining offset and/or pointer taint when "
     "loading specific constant global variables (i.e. lookup tables).",
-    "std::string"> {
-  let Registry = InstrumentationOptsReg;
-  let Hidden = 1;
-}
+    /*commaJoined=*/0, /*appendEquals=*/1, /*hidden=*/1>;
 
-def INST_ICPIgnoredBaseTypes : ListOption<
-    "icp-ignored-base-types",
+defm INST_ICPIgnoredBaseTypes : ListField<
+    "icp-ignored-base-types", "std::string",
     "A list of mangled base type names. If a virtual call's base type "
     "is in this list, the call will not be promoted.",
-    "std::string"> {
-  let Registry = InstrumentationOptsReg;
-  let Hidden = 1;
-}
+    /*commaJoined=*/0, /*appendEquals=*/1, /*hidden=*/1>;
 
-def INST_ProfileContextRoot : ListOption<
-    "profile-context-root",
+defm INST_ProfileContextRoot : ListField<
+    "profile-context-root", "std::string",
     "A set of context roots.",
-    "std::string"> {
-  let Registry = InstrumentationOptsReg;
-  let Hidden = 1;
-}
+    /*commaJoined=*/0, /*appendEquals=*/1, /*hidden=*/1>;
 
-def INST_CtxPGOSkipCallsiteInstrument : ListOption<
-    "ctx-prof-skip-callsite-instr",
+defm INST_CtxPGOSkipCallsiteInstrument : ListField<
+    "ctx-prof-skip-callsite-instr", "std::string",
     "Do not instrument callsites to functions in this list. Intended "
     "for testing.",
-    "std::string"> {
-  let Registry = InstrumentationOptsReg;
-  let Hidden = 1;
-}
+    /*commaJoined=*/0, /*appendEquals=*/1, /*hidden=*/1>;
 
 // =========================================================================
 // Options
@@ -250,2582 +127,1271 @@ def INST_CtxPGOSkipCallsiteInstrument : ListOption<
 
 // ===== AddressSanitizer.cpp =====
 
-def INST_AsanKernel : Option<
-    "asan-kernel",
-    "Enable KernelAddressSanitizer instrumentation",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+defm INST_AsanKernel : OptionalValueField<
+    "asan-kernel", "bool", "true",
+    "Enable KernelAddressSanitizer instrumentation", /*hidden=*/1>;
 
-def INST_AsanRecover : Option<
-    "asan-recover",
-    "Enable recovery mode (continue-after-error).",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+defm INST_AsanRecover : OptionalValueField<
+    "asan-recover", "bool", "true",
+    "Enable recovery mode (continue-after-error).", /*hidden=*/1>;
 
-def INST_AsanGuardAgainstVersionMismatch : Option<
-    "asan-guard-against-version-mismatch",
-    "Guard against compiler/runtime version mismatch.",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm INST_AsanGuardAgainstVersionMismatch : OptionalValueField<
+    "asan-guard-against-version-mismatch", "bool", "true",
+    "Guard against compiler/runtime version mismatch.", /*hidden=*/1>;
 
-def INST_AsanInstrumentReads : Option<
-    "asan-instrument-reads",
-    "instrument read instructions",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm INST_AsanInstrumentReads : BoolField<
+    "asan-instrument-reads", "true",
+    "instrument read instructions", /*hidden=*/1>;
 
-def INST_AsanInstrumentWrites : Option<
-    "asan-instrument-writes",
-    "instrument write instructions",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm INST_AsanInstrumentWrites : BoolField<
+    "asan-instrument-writes", "true",
+    "instrument write instructions", /*hidden=*/1>;
 
-def INST_AsanUseStackSafety : Option<
-    "asan-use-stack-safety",
-    "Use Stack Safety analysis results",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm INST_AsanUseStackSafety : BoolField<
+    "asan-use-stack-safety", "true",
+    "Use Stack Safety analysis results", /*hidden=*/1>;
 
-def INST_AsanInstrumentAtomics : Option<
-    "asan-instrument-atomics",
-    "instrument atomic instructions (rmw, cmpxchg)",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm INST_AsanInstrumentAtomics : BoolField<
+    "asan-instrument-atomics", "true",
+    "instrument atomic instructions (rmw, cmpxchg)", /*hidden=*/1>;
 
-def INST_AsanInstrumentByval : Option<
-    "asan-instrument-byval",
-    "instrument byval call arguments",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm INST_AsanInstrumentByval : BoolField<
+    "asan-instrument-byval", "true",
+    "instrument byval call arguments", /*hidden=*/1>;
 
-def INST_AsanAlwaysSlowPath : Option<
-    "asan-always-slow-path",
-    "use instrumentation with slow path for all accesses",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+defm INST_AsanAlwaysSlowPath : BoolField<
+    "asan-always-slow-path", "false",
+    "use instrumentation with slow path for all accesses", /*hidden=*/1>;
 
-def INST_AsanForceDynamicShadow : Option<
-    "asan-force-dynamic-shadow",
-    "Load shadow address into a local variable for each function",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+defm INST_AsanForceDynamicShadow : BoolField<
+    "asan-force-dynamic-shadow", "false",
+    "Load shadow address into a local variable for each function", /*hidden=*/1>;
 
-def INST_AsanWithIfunc : Option<
-    "asan-with-ifunc",
+defm INST_AsanWithIfunc : BoolField<
+    "asan-with-ifunc", "true",
     "Access dynamic shadow through an ifunc global on "
-    "platforms that support this",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+    "platforms that support this", /*hidden=*/1>;
 
-def INST_AsanShadowAddrSpace : Option<
-    "asan-shadow-addr-space",
-    "Address space for pointers to the shadow map",
-    "int"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+defm INST_AsanShadowAddrSpace : ValueField<
+    "asan-shadow-addr-space", "int", "0",
+    "Address space for pointers to the shadow map", /*hidden=*/1>;
 
-def INST_AsanWithIfuncSuppressRemat : Option<
-    "asan-with-ifunc-suppress-remat",
+defm INST_AsanWithIfuncSuppressRemat : BoolField<
+    "asan-with-ifunc-suppress-remat", "true",
     "Suppress rematerialization of dynamic shadow address by passing "
-    "it through inline asm in prologue.",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+    "it through inline asm in prologue.", /*hidden=*/1>;
 
-def INST_AsanMaxInsPerBB : Option<
-    "asan-max-ins-per-bb",
-    "maximal number of instructions to instrument in any given BB",
-    "int"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "10000";
-  let Hidden = 1;
-}
+defm INST_AsanMaxInsPerBB : ValueField<
+    "asan-max-ins-per-bb", "int", "10000",
+    "maximal number of instructions to instrument in any given BB", /*hidden=*/1>;
 
-def INST_AsanStack : Option<
-    "asan-stack",
-    "Handle stack memory",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm INST_AsanStack : BoolField<
+    "asan-stack", "true",
+    "Handle stack memory", /*hidden=*/1>;
 
-def INST_AsanMaxInlinePoisoningSize : Option<
-    "asan-max-inline-poisoning-size",
-    "Inline shadow poisoning for blocks up to the given size in bytes.",
-    "uint32_t"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "uint32_t(64)";
-  let Hidden = 1;
-}
+defm INST_AsanMaxInlinePoisoningSize : OptionalField<
+    "asan-max-inline-poisoning-size", "uint32_t",
+    "Inline shadow poisoning for blocks up to the given size in bytes.", /*hidden=*/1>;
 
-def INST_AsanUseAfterReturn : Option<
-    "asan-use-after-return",
-    "Sets the mode of detection for stack-use-after-return.",
-    "AsanDetectStackUseAfterReturnMode"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "runtime";
-  let Hidden = 1;
-}
+// std::optional<AsanDetectStackUseAfterReturnMode>: genuine tri-state, see migration notes.
+def INST_AsanUseAfterReturn : Joined<["-", "--"], "asan-use-after-return=">,
+    HelpText<"Sets the mode of detection for stack-use-after-return.">,
+    Flags<[HelpHidden]>,
+    Field<"std::optional<AsanDetectStackUseAfterReturnMode>", "INST_AsanUseAfterReturn", "std::nullopt">,
+    FieldEnum<AsanDetectStackUseAfterReturnModeEnum>;
+def INST_AsanUseAfterReturn_sep : Separate<["-", "--"], "asan-use-after-return">, Flags<[HelpHidden]>,
+    Alias<!cast<Option>(INST_AsanUseAfterReturn)>;
 
-def INST_AsanRedzoneByvalArgs : Option<
-    "asan-redzone-byval-args",
-    "Create redzones for byval arguments (extra copy required)",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm INST_AsanRedzoneByvalArgs : BoolField<
+    "asan-redzone-byval-args", "true",
+    "Create redzones for byval arguments (extra copy required)", /*hidden=*/1>;
 
-def INST_AsanUseAfterScope : Option<
-    "asan-use-after-scope",
-    "Check stack-use-after-scope",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+defm INST_AsanUseAfterScope : BoolField<
+    "asan-use-after-scope", "false",
+    "Check stack-use-after-scope", /*hidden=*/1>;
 
-def INST_AsanGlobals : Option<
-    "asan-globals",
-    "Handle global objects",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm INST_AsanGlobals : BoolField<
+    "asan-globals", "true",
+    "Handle global objects", /*hidden=*/1>;
 
-def INST_AsanInitializers : Option<
-    "asan-initialization-order",
-    "Handle C++ initializer order",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm INST_AsanInitializers : BoolField<
+    "asan-initialization-order", "true",
+    "Handle C++ initializer order", /*hidden=*/1>;
 
-def INST_AsanDetectInvalidPointerPair : Option<
-    "asan-detect-invalid-pointer-pair",
-    "Instrument <, <=, >, >=, - with pointer operands",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+defm INST_AsanDetectInvalidPointerPair : BoolField<
+    "asan-detect-invalid-pointer-pair", "false",
+    "Instrument <, <=, >, >=, - with pointer operands", /*hidden=*/1>;
 
-def INST_AsanDetectInvalidPointerCmp : Option<
-    "asan-detect-invalid-pointer-cmp",
-    "Instrument <, <=, >, >= with pointer operands",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+defm INST_AsanDetectInvalidPointerCmp : BoolField<
+    "asan-detect-invalid-pointer-cmp", "false",
+    "Instrument <, <=, >, >= with pointer operands", /*hidden=*/1>;
 
-def INST_AsanDetectInvalidPointerSub : Option<
-    "asan-detect-invalid-pointer-sub",
-    "Instrument - operations with pointer operands",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+defm INST_AsanDetectInvalidPointerSub : BoolField<
+    "asan-detect-invalid-pointer-sub", "false",
+    "Instrument - operations with pointer operands", /*hidden=*/1>;
 
-def INST_AsanRealignStack : Option<
-    "asan-realign-stack",
-    "Realign stack to the value of this flag (power of two)",
-    "unsigned"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "32";
-  let Hidden = 1;
-}
+defm INST_AsanRealignStack : ValueField<
+    "asan-realign-stack", "unsigned", "32u",
+    "Realign stack to the value of this flag (power of two)", /*hidden=*/1>;
 
-def INST_AsanInstrumentationWithCallThreshold : Option<
-    "asan-instrumentation-with-call-threshold",
+defm INST_AsanInstrumentationWithCallThreshold : OptionalField<
+    "asan-instrumentation-with-call-threshold", "int",
     "If the function being instrumented contains more than "
     "this number of memory accesses, use callbacks instead of "
-    "inline checks (-1 means never use callbacks).",
-    "int"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "7000";
-  let Hidden = 1;
-}
+    "inline checks (-1 means never use callbacks).", /*hidden=*/1>;
 
-def INST_AsanMemoryAccessCallbackPrefix : Option<
-    "asan-memory-access-callback-prefix",
-    "Prefix for memory access callbacks",
-    "std::string"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "\"__asan_\"";
-  let Hidden = 1;
-}
+// Getter fallback literal matches this option's plain default with no other genuine specified-consumer; collapses to a plain field.
+defm INST_AsanMemoryAccessCallbackPrefix : ValueField<
+    "asan-memory-access-callback-prefix", "std::string", "\"__asan_\"",
+    "Prefix for memory access callbacks", /*hidden=*/1>;
 
-def INST_AsanKernelMemIntrinsicPrefix : Option<
-    "asan-kernel-mem-intrinsic-prefix",
-    "Use prefix for memory intrinsics in KASAN mode",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+defm INST_AsanKernelMemIntrinsicPrefix : BoolField<
+    "asan-kernel-mem-intrinsic-prefix", "false",
+    "Use prefix for memory intrinsics in KASAN mode", /*hidden=*/1>;
 
-def INST_AsanInstrumentDynamicAllocas : Option<
-    "asan-instrument-dynamic-allocas",
-    "instrument dynamic allocas",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm INST_AsanInstrumentDynamicAllocas : BoolField<
+    "asan-instrument-dynamic-allocas", "true",
+    "instrument dynamic allocas", /*hidden=*/1>;
 
-def INST_AsanSkipPromotableAllocas : Option<
-    "asan-skip-promotable-allocas",
-    "Do not instrument promotable allocas",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm INST_AsanSkipPromotableAllocas : BoolField<
+    "asan-skip-promotable-allocas", "true",
+    "Do not instrument promotable allocas", /*hidden=*/1>;
 
-def INST_AsanConstructorKind : Option<
-    "asan-constructor-kind",
-    "Sets the ASan constructor kind",
-    "AsanCtorKind"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "global";
-  let Hidden = 1;
-}
+// std::optional<AsanCtorKind>: genuine tri-state, see migration notes.
+def INST_AsanConstructorKind : Joined<["-", "--"], "asan-constructor-kind=">,
+    HelpText<"Sets the ASan constructor kind">,
+    Flags<[HelpHidden]>,
+    Field<"std::optional<AsanCtorKind>", "INST_AsanConstructorKind", "std::nullopt">,
+    FieldEnum<AsanCtorKindEnum>;
+def INST_AsanConstructorKind_sep : Separate<["-", "--"], "asan-constructor-kind">, Flags<[HelpHidden]>,
+    Alias<!cast<Option>(INST_AsanConstructorKind)>;
 
-def INST_AsanMappingScale : Option<
-    "asan-mapping-scale",
-    "scale of asan shadow mapping",
-    "int"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+defm INST_AsanMappingScale : OptionalField<
+    "asan-mapping-scale", "int",
+    "scale of asan shadow mapping", /*hidden=*/1>;
 
-def INST_AsanMappingOffset : Option<
-    "asan-mapping-offset",
-    "offset of asan shadow mapping [EXPERIMENTAL]",
-    "uint64_t"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "uint64_t{0}";
-  let Hidden = 1;
-}
+defm INST_AsanMappingOffset : OptionalField<
+    "asan-mapping-offset", "uint64_t",
+    "offset of asan shadow mapping [EXPERIMENTAL]", /*hidden=*/1>;
 
-def INST_AsanOpt : Option<
-    "asan-opt",
-    "Optimize instrumentation",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm INST_AsanOpt : BoolField<
+    "asan-opt", "true",
+    "Optimize instrumentation", /*hidden=*/1>;
 
-def INST_AsanOptimizeCallbacks : Option<
-    "asan-optimize-callbacks",
-    "Optimize callbacks",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+defm INST_AsanOptimizeCallbacks : BoolField<
+    "asan-optimize-callbacks", "false",
+    "Optimize callbacks", /*hidden=*/1>;
 
-def INST_AsanOptSameTemp : Option<
-    "asan-opt-same-temp",
-    "Instrument the same temp just once",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm INST_AsanOptSameTemp : BoolField<
+    "asan-opt-same-temp", "true",
+    "Instrument the same temp just once", /*hidden=*/1>;
 
-def INST_AsanOptGlobals : Option<
-    "asan-opt-globals",
-    "Don't instrument scalar globals",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm INST_AsanOptGlobals : BoolField<
+    "asan-opt-globals", "true",
+    "Don't instrument scalar globals", /*hidden=*/1>;
 
-def INST_AsanOptStack : Option<
-    "asan-opt-stack",
-    "Don't instrument scalar stack variables",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+defm INST_AsanOptStack : BoolField<
+    "asan-opt-stack", "false",
+    "Don't instrument scalar stack variables", /*hidden=*/1>;
 
-def INST_AsanDynamicAllocaStack : Option<
-    "asan-stack-dynamic-alloca",
-    "Use dynamic alloca to represent stack variables",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm INST_AsanDynamicAllocaStack : BoolField<
+    "asan-stack-dynamic-alloca", "true",
+    "Use dynamic alloca to represent stack variables", /*hidden=*/1>;
 
-def INST_AsanForceExperiment : Option<
-    "asan-force-experiment",
-    "Force optimization experiment (for testing)",
-    "uint32_t"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "uint32_t(0)";
-  let Hidden = 1;
-}
+defm INST_AsanForceExperiment : ValueField<
+    "asan-force-experiment", "uint32_t", "(uint32_t)0",
+    "Force optimization experiment (for testing)", /*hidden=*/1>;
 
-def INST_AsanUsePrivateAlias : Option<
-    "asan-use-private-alias",
-    "Use private aliases for global variables",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm INST_AsanUsePrivateAlias : OptionalValueField<
+    "asan-use-private-alias", "bool", "true",
+    "Use private aliases for global variables", /*hidden=*/1>;
 
-def INST_AsanUseOdrIndicator : Option<
-    "asan-use-odr-indicator",
-    "Use odr indicators to improve ODR reporting",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm INST_AsanUseOdrIndicator : OptionalValueField<
+    "asan-use-odr-indicator", "bool", "true",
+    "Use odr indicators to improve ODR reporting", /*hidden=*/1>;
 
-def INST_AsanGlobalsLiveSupport : Option<
-    "asan-globals-live-support",
-    "Use linker features to support dead code stripping of globals",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+// Dead: the generated specified-wrapper for this option is never called anywhere; collapses to a plain flag (see migration notes).
+defm INST_AsanGlobalsLiveSupport : BoolField<
+    "asan-globals-live-support", "true",
+    "Use linker features to support dead code stripping of globals", /*hidden=*/1>;
 
-def INST_AsanWithComdat : Option<
-    "asan-with-comdat",
-    "Place ASan constructors in comdat sections",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm INST_AsanWithComdat : BoolField<
+    "asan-with-comdat", "true",
+    "Place ASan constructors in comdat sections", /*hidden=*/1>;
 
-def INST_AsanDestructorKind : Option<
-    "asan-destructor-kind",
+defm INST_AsanDestructorKind : EnumField<
+    "asan-destructor-kind", AsanDtorKindEnum, "AsanDtorKind::Invalid",
     "Sets the ASan destructor kind. The default is to use the value "
-    "provided to the pass constructor",
-    "AsanDtorKind"> {
-  let Registry = InstrumentationOptsReg;
-  let Hidden = 1;
-}
+    "provided to the pass constructor", /*hidden=*/1>;
 
-def INST_AsanDebug : Option<
-    "asan-debug", "debug",
-    "int"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+defm INST_AsanDebug : ValueField<
+    "asan-debug", "int", "0",
+    "debug", /*hidden=*/1>;
 
-def INST_AsanDebugStack : Option<
-    "asan-debug-stack", "debug stack",
-    "int"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+defm INST_AsanDebugStack : ValueField<
+    "asan-debug-stack", "int", "0",
+    "debug stack", /*hidden=*/1>;
 
-def INST_AsanDebugFunc : Option<
-    "asan-debug-func", "Debug func",
-    "std::string"> {
-  let Registry = InstrumentationOptsReg;
-  let Hidden = 1;
-}
+// Getter fallback literal matches this option's plain default with no other genuine specified-consumer; collapses to a plain field.
+defm INST_AsanDebugFunc : ValueField<
+    "asan-debug-func", "std::string", "\"\"",
+    "Debug func", /*hidden=*/1>;
 
-def INST_AsanDebugMin : Option<
-    "asan-debug-min", "Debug min inst",
-    "int"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "-1";
-  let Hidden = 1;
-}
+defm INST_AsanDebugMin : ValueField<
+    "asan-debug-min", "int", "-1",
+    "Debug min inst", /*hidden=*/1>;
 
-def INST_AsanDebugMax : Option<
-    "asan-debug-max", "Debug max inst",
-    "int"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "-1";
-  let Hidden = 1;
-}
+defm INST_AsanDebugMax : ValueField<
+    "asan-debug-max", "int", "-1",
+    "Debug max inst", /*hidden=*/1>;
 
 // ===== AllocToken.cpp =====
 
-def INST_AllocTokenPrefix : Option<
-    "alloc-token-prefix",
-    "The allocation function prefix",
-    "std::string"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "\"__alloc_token_\"";
-  let Hidden = 1;
-}
+defm INST_AllocTokenPrefix : ValueField<
+    "alloc-token-prefix", "std::string", "\"__alloc_token_\"",
+    "The allocation function prefix", /*hidden=*/1>;
 
-def INST_AllocTokenMax : Option<
-    "alloc-token-max",
-    "Maximum number of tokens (0 = target SIZE_MAX)",
-    "uint64_t"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "uint64_t{0}";
-  let Hidden = 1;
-}
+defm INST_AllocTokenMax : OptionalField<
+    "alloc-token-max", "uint64_t",
+    "Maximum number of tokens (0 = target SIZE_MAX)", /*hidden=*/1>;
 
-def INST_AllocTokenFastABI : Option<
-    "alloc-token-fast-abi",
-    "The token ID is encoded in the function name",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+defm INST_AllocTokenFastABI : OptionalValueField<
+    "alloc-token-fast-abi", "bool", "true",
+    "The token ID is encoded in the function name", /*hidden=*/1>;
 
-def INST_AllocTokenExtended : Option<
-    "alloc-token-extended",
-    "Extend coverage to custom allocation functions",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+defm INST_AllocTokenExtended : OptionalValueField<
+    "alloc-token-extended", "bool", "true",
+    "Extend coverage to custom allocation functions", /*hidden=*/1>;
 
-def INST_AllocTokenCoverReplaceableNew : Option<
-    "alloc-token-cover-replaceable-new",
-    "Cover replaceable operator new",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm INST_AllocTokenCoverReplaceableNew : BoolField<
+    "alloc-token-cover-replaceable-new", "true",
+    "Cover replaceable operator new", /*hidden=*/1>;
 
-def INST_AllocTokenFallback : Option<
-    "alloc-token-fallback",
-    "The default fallback token where none could be determined",
-    "uint64_t"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "uint64_t{0}";
-  let Hidden = 1;
-}
+defm INST_AllocTokenFallback : ValueField<
+    "alloc-token-fallback", "uint64_t", "uint64_t{0}",
+    "The default fallback token where none could be determined", /*hidden=*/1>;
 
 // ===== BoundsChecking.cpp =====
 
-def INST_BoundsCheckingSingleTrap : Option<
-    "bounds-checking-single-trap",
-    "Use one trap block per function",
-    "bool"> {
-  let Default = "false";
-  let Registry = InstrumentationOptsReg;
-}
+defm INST_BoundsCheckingSingleTrap : BoolField<
+    "bounds-checking-single-trap", "false",
+    "Use one trap block per function", /*hidden=*/0>;
 
 // ===== ControlHeightReduction.cpp =====
 
-def INST_DisableCHR : Option<
-    "disable-chr",
-    "Disable CHR for all functions",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+defm INST_DisableCHR : BoolField<
+    "disable-chr", "false",
+    "Disable CHR for all functions", /*hidden=*/1>;
 
-def INST_ForceCHR : Option<
-    "force-chr",
-    "Apply CHR for all functions",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+defm INST_ForceCHR : BoolField<
+    "force-chr", "false",
+    "Apply CHR for all functions", /*hidden=*/1>;
 
-def INST_CHRBiasThreshold : Option<
-    "chr-bias-threshold",
-    "CHR considers a branch bias greater than this ratio as biased",
-    "double"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0.99";
-  let Hidden = 1;
-}
+defm INST_CHRBiasThreshold : ValueField<
+    "chr-bias-threshold", "double", "0.99",
+    "CHR considers a branch bias greater than this ratio as biased", /*hidden=*/1>;
 
-def INST_CHRMergeThreshold : Option<
-    "chr-merge-threshold",
-    "CHR merges a group of N branches/selects where N >= this value",
-    "unsigned"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "2";
-  let Hidden = 1;
-}
+defm INST_CHRMergeThreshold : ValueField<
+    "chr-merge-threshold", "unsigned", "2",
+    "CHR merges a group of N branches/selects where N >= this value", /*hidden=*/1>;
 
-def INST_CHRModuleList : Option<
-    "chr-module-list",
-    "Specify file to retrieve the list of modules to apply CHR to",
-    "std::string"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "\"\"";
-  let Hidden = 1;
-}
+defm INST_CHRModuleList : ValueField<
+    "chr-module-list", "std::string", "\"\"",
+    "Specify file to retrieve the list of modules to apply CHR to", /*hidden=*/1>;
 
-def INST_CHRFunctionList : Option<
-    "chr-function-list",
-    "Specify file to retrieve the list of functions to apply CHR to",
-    "std::string"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "\"\"";
-  let Hidden = 1;
-}
+defm INST_CHRFunctionList : ValueField<
+    "chr-function-list", "std::string", "\"\"",
+    "Specify file to retrieve the list of functions to apply CHR to", /*hidden=*/1>;
 
-def INST_CHRDupThreshold : Option<
-    "chr-dup-threshold",
-    "Max number of duplications by CHR for a region",
-    "unsigned"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "3";
-  let Hidden = 1;
-}
+defm INST_CHRDupThreshold : ValueField<
+    "chr-dup-threshold", "unsigned", "3",
+    "Max number of duplications by CHR for a region", /*hidden=*/1>;
 
 // ===== DataFlowSanitizer.cpp =====
 
-def INST_DfsanPreserveAlignment : Option<
-    "dfsan-preserve-alignment",
-    "respect alignment requirements provided by input IR",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+defm INST_DfsanPreserveAlignment : BoolField<
+    "dfsan-preserve-alignment", "false",
+    "respect alignment requirements provided by input IR", /*hidden=*/1>;
 
-def INST_DfsanCombinePointerLabelsOnLoad : Option<
-    "dfsan-combine-pointer-labels-on-load",
+defm INST_DfsanCombinePointerLabelsOnLoad : BoolField<
+    "dfsan-combine-pointer-labels-on-load", "true",
     "Combine the label of the pointer with the label of the data when "
-    "loading from memory.",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+    "loading from memory.", /*hidden=*/1>;
 
-def INST_DfsanCombinePointerLabelsOnStore : Option<
-    "dfsan-combine-pointer-labels-on-store",
+defm INST_DfsanCombinePointerLabelsOnStore : BoolField<
+    "dfsan-combine-pointer-labels-on-store", "false",
     "Combine the label of the pointer with the label of the data when "
-    "storing in memory.",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+    "storing in memory.", /*hidden=*/1>;
 
-def INST_DfsanCombineOffsetLabelsOnGEP : Option<
-    "dfsan-combine-offset-labels-on-gep",
+defm INST_DfsanCombineOffsetLabelsOnGEP : BoolField<
+    "dfsan-combine-offset-labels-on-gep", "true",
     "Combine the label of the offset with the label of the pointer when "
-    "doing pointer arithmetic.",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+    "doing pointer arithmetic.", /*hidden=*/1>;
 
-def INST_DfsanDebugNonzeroLabels : Option<
-    "dfsan-debug-nonzero-labels",
+defm INST_DfsanDebugNonzeroLabels : BoolField<
+    "dfsan-debug-nonzero-labels", "false",
     "Insert calls to __dfsan_nonzero_label on observing a parameter, "
-    "load or return with a nonzero label",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Hidden = 1;
-}
+    "load or return with a nonzero label", /*hidden=*/1>;
 
-def INST_DfsanEventCallbacks : Option<
-    "dfsan-event-callbacks",
-    "Insert calls to __dfsan_*_callback functions on data events.",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+defm INST_DfsanEventCallbacks : BoolField<
+    "dfsan-event-callbacks", "false",
+    "Insert calls to __dfsan_*_callback functions on data events.", /*hidden=*/1>;
 
-def INST_DfsanConditionalCallbacks : Option<
-    "dfsan-conditional-callbacks",
-    "Insert calls to callback functions on conditionals.",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+defm INST_DfsanConditionalCallbacks : BoolField<
+    "dfsan-conditional-callbacks", "false",
+    "Insert calls to callback functions on conditionals.", /*hidden=*/1>;
 
-def INST_DfsanReachesFunctionCallbacks : Option<
-    "dfsan-reaches-function-callbacks",
-    "Insert calls to callback functions on data reaching a function.",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+defm INST_DfsanReachesFunctionCallbacks : BoolField<
+    "dfsan-reaches-function-callbacks", "false",
+    "Insert calls to callback functions on data reaching a function.", /*hidden=*/1>;
 
-def INST_DfsanTrackSelectControlFlow : Option<
-    "dfsan-track-select-control-flow",
+defm INST_DfsanTrackSelectControlFlow : BoolField<
+    "dfsan-track-select-control-flow", "true",
     "Propagate labels from condition values of select instructions "
-    "to results.",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+    "to results.", /*hidden=*/1>;
 
-def INST_DfsanInstrumentWithCallThreshold : Option<
-    "dfsan-instrument-with-call-threshold",
+defm INST_DfsanInstrumentWithCallThreshold : ValueField<
+    "dfsan-instrument-with-call-threshold", "int", "3500",
     "If the function being instrumented requires more than "
     "this number of origin stores, use callbacks instead of "
-    "inline checks (-1 means never use callbacks).",
-    "int"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "3500";
-  let Hidden = 1;
-}
+    "inline checks (-1 means never use callbacks).", /*hidden=*/1>;
 
-def INST_DfsanTrackOrigins : Option<
-    "dfsan-track-origins",
-    "Track origins of labels",
-    "int"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+defm INST_DfsanTrackOrigins : ValueField<
+    "dfsan-track-origins", "int", "0",
+    "Track origins of labels", /*hidden=*/1>;
 
-def INST_DfsanIgnorePersonalityRoutine : Option<
-    "dfsan-ignore-personality-routine",
+defm INST_DfsanIgnorePersonalityRoutine : BoolField<
+    "dfsan-ignore-personality-routine", "false",
     "If a personality routine is marked uninstrumented from the ABI "
-    "list, don't create a wrapper for it.",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+    "list, don't create a wrapper for it.", /*hidden=*/1>;
 
-def INST_DfsanAddGlobalNameSuffix : Option<
-    "dfsan-add-global-name-suffix",
-    "Whether to add .dfsan suffix to global names",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm INST_DfsanAddGlobalNameSuffix : BoolField<
+    "dfsan-add-global-name-suffix", "true",
+    "Whether to add .dfsan suffix to global names", /*hidden=*/1>;
 
 // ===== GCOVProfiling.cpp =====
 
-def INST_DefaultGCOVVersion : Option<
-    "default-gcov-version", "",
-    "std::string"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "\"0000\"";
-  let Hidden = 1;
-}
+defm INST_DefaultGCOVVersion : OptionalField<
+    "default-gcov-version", "std::string",
+    "", /*hidden=*/1>;
 
-def INST_GcovAtomicCounter : Option<
-    "gcov-atomic-counter",
-    "Make counter updates atomic",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Hidden = 1;
-}
+defm INST_GcovAtomicCounter : OptionalValueField<
+    "gcov-atomic-counter", "bool", "true",
+    "Make counter updates atomic", /*hidden=*/1>;
 
 // ===== HWAddressSanitizer.cpp =====
 
-def INST_HwasanMemoryAccessCallbackPrefix : Option<
-    "hwasan-memory-access-callback-prefix",
-    "Prefix for memory access callbacks",
-    "std::string"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "\"__hwasan_\"";
-  let Hidden = 1;
-}
+// Getter fallback literal matches this option's plain default with no other genuine specified-consumer; collapses to a plain field.
+defm INST_HwasanMemoryAccessCallbackPrefix : ValueField<
+    "hwasan-memory-access-callback-prefix", "std::string", "\"__hwasan_\"",
+    "Prefix for memory access callbacks", /*hidden=*/1>;
 
-def INST_HwasanKernelMemIntrinsicPrefix : Option<
-    "hwasan-kernel-mem-intrinsic-prefix",
-    "Use prefix for memory intrinsics in KASAN mode",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+defm INST_HwasanKernelMemIntrinsicPrefix : BoolField<
+    "hwasan-kernel-mem-intrinsic-prefix", "false",
+    "Use prefix for memory intrinsics in KASAN mode", /*hidden=*/1>;
 
-def INST_HwasanInstrumentWithCalls : Option<
-    "hwasan-instrument-with-calls",
-    "instrument reads and writes with callbacks",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+defm INST_HwasanInstrumentWithCalls : OptionalValueField<
+    "hwasan-instrument-with-calls", "bool", "true",
+    "instrument reads and writes with callbacks", /*hidden=*/1>;
 
-def INST_HwasanInstrumentReads : Option<
-    "hwasan-instrument-reads",
-    "instrument read instructions",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm INST_HwasanInstrumentReads : BoolField<
+    "hwasan-instrument-reads", "true",
+    "instrument read instructions", /*hidden=*/1>;
 
-def INST_HwasanInstrumentWrites : Option<
-    "hwasan-instrument-writes",
-    "instrument write instructions",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm INST_HwasanInstrumentWrites : BoolField<
+    "hwasan-instrument-writes", "true",
+    "instrument write instructions", /*hidden=*/1>;
 
-def INST_HwasanInstrumentAtomics : Option<
-    "hwasan-instrument-atomics",
-    "instrument atomic instructions (rmw, cmpxchg)",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm INST_HwasanInstrumentAtomics : BoolField<
+    "hwasan-instrument-atomics", "true",
+    "instrument atomic instructions (rmw, cmpxchg)", /*hidden=*/1>;
 
-def INST_HwasanInstrumentByval : Option<
-    "hwasan-instrument-byval",
-    "instrument byval arguments",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm INST_HwasanInstrumentByval : BoolField<
+    "hwasan-instrument-byval", "true",
+    "instrument byval arguments", /*hidden=*/1>;
 
-def INST_HwasanRecover : Option<
-    "hwasan-recover",
-    "Enable recovery mode (continue-after-error).",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+defm INST_HwasanRecover : OptionalValueField<
+    "hwasan-recover", "bool", "true",
+    "Enable recovery mode (continue-after-error).", /*hidden=*/1>;
 
-def INST_HwasanInstrumentStack : Option<
-    "hwasan-instrument-stack",
-    "instrument stack (allocas)",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm INST_HwasanInstrumentStack : BoolField<
+    "hwasan-instrument-stack", "true",
+    "instrument stack (allocas)", /*hidden=*/1>;
 
-def INST_HwasanUseStackSafety : Option<
-    "hwasan-use-stack-safety",
-    "Use Stack Safety analysis results",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm INST_HwasanUseStackSafety : OptionalValueField<
+    "hwasan-use-stack-safety", "bool", "true",
+    "Use Stack Safety analysis results", /*hidden=*/1>;
 
-def INST_HwasanMaxLifetimes : Option<
-    "hwasan-max-lifetimes-for-alloca",
-    "How many lifetime ends to handle for a single alloca.",
-    "size_t"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "size_t(3)";
-  let Hidden = 1;
-  let ReallyHidden = 1;
-}
+defm INST_HwasanMaxLifetimes : ValueField<
+    "hwasan-max-lifetimes-for-alloca", "size_t", "(size_t)3",
+    "How many lifetime ends to handle for a single alloca.", /*hidden=*/1>;
 
-def INST_HwasanUseAfterScope : Option<
-    "hwasan-use-after-scope",
-    "detect use after scope within function",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm INST_HwasanUseAfterScope : BoolField<
+    "hwasan-use-after-scope", "true",
+    "detect use after scope within function", /*hidden=*/1>;
 
-def INST_HwasanStrictUseAfterScope : Option<
-    "hwasan-strict-use-after-scope",
-    "for complicated lifetimes, tag both on end and return",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm INST_HwasanStrictUseAfterScope : BoolField<
+    "hwasan-strict-use-after-scope", "true",
+    "for complicated lifetimes, tag both on end and return", /*hidden=*/1>;
 
-def INST_HwasanGenerateTagsWithCalls : Option<
-    "hwasan-generate-tags-with-calls",
-    "generate new tags with runtime library calls",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+defm INST_HwasanGenerateTagsWithCalls : BoolField<
+    "hwasan-generate-tags-with-calls", "false",
+    "generate new tags with runtime library calls", /*hidden=*/1>;
 
-def INST_HwasanGlobals : Option<
-    "hwasan-globals",
-    "Instrument globals",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+defm INST_HwasanGlobals : OptionalValueField<
+    "hwasan-globals", "bool", "true",
+    "Instrument globals", /*hidden=*/1>;
 
-def INST_HwasanAllGlobals : Option<
-    "hwasan-all-globals",
-    "Instrument globals, even those within user-defined sections.",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+defm INST_HwasanAllGlobals : BoolField<
+    "hwasan-all-globals", "false",
+    "Instrument globals, even those within user-defined sections.", /*hidden=*/1>;
 
-def INST_HwasanMatchAllTag : Option<
-    "hwasan-match-all-tag",
-    "don't report bad accesses via pointers with this tag",
-    "int"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "-1";
-  let Hidden = 1;
-}
+defm INST_HwasanMatchAllTag : OptionalField<
+    "hwasan-match-all-tag", "int",
+    "don't report bad accesses via pointers with this tag", /*hidden=*/1>;
 
-def INST_HwasanKernel : Option<
-    "hwasan-kernel",
-    "Enable KernelHWAddressSanitizer instrumentation",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+defm INST_HwasanKernel : OptionalValueField<
+    "hwasan-kernel", "bool", "true",
+    "Enable KernelHWAddressSanitizer instrumentation", /*hidden=*/1>;
 
-def INST_HwasanMappingOffset : Option<
-    "hwasan-mapping-offset",
-    "HWASan shadow mapping offset [EXPERIMENTAL]",
-    "uint64_t"> {
-  let Registry = InstrumentationOptsReg;
-  let Hidden = 1;
-}
+defm INST_HwasanMappingOffset : OptionalField<
+    "hwasan-mapping-offset", "uint64_t",
+    "HWASan shadow mapping offset [EXPERIMENTAL]", /*hidden=*/1>;
 
-def INST_HwasanMappingOffsetDynamic : Option<
-    "hwasan-mapping-offset-dynamic",
-    "HWASan shadow mapping dynamic offset location",
-    "OffsetKind"> {
-  let Registry = InstrumentationOptsReg;
-  let Hidden = 1;
-}
+// std::optional<OffsetKind>: genuine tri-state, see migration notes.
+def INST_HwasanMappingOffsetDynamic : Joined<["-", "--"], "hwasan-mapping-offset-dynamic=">,
+    HelpText<"HWASan shadow mapping dynamic offset location">,
+    Flags<[HelpHidden]>,
+    Field<"std::optional<OffsetKind>", "INST_HwasanMappingOffsetDynamic", "std::nullopt">,
+    FieldEnum<OffsetKindEnum>;
+def INST_HwasanMappingOffsetDynamic_sep : Separate<["-", "--"], "hwasan-mapping-offset-dynamic">, Flags<[HelpHidden]>,
+    Alias<!cast<Option>(INST_HwasanMappingOffsetDynamic)>;
 
-def INST_HwasanFrameRecords : Option<
-    "hwasan-with-frame-record",
-    "Use ring buffer for stack allocations",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Hidden = 1;
-}
+defm INST_HwasanFrameRecords : OptionalValueField<
+    "hwasan-with-frame-record", "bool", "true",
+    "Use ring buffer for stack allocations", /*hidden=*/1>;
 
-def INST_HwasanPercentileCutoffHot : Option<
-    "hwasan-percentile-cutoff-hot",
-    "Hot percentile cutoff.",
-    "int"> {
-  let Registry = InstrumentationOptsReg;
-}
+defm INST_HwasanPercentileCutoffHot : OptionalField<
+    "hwasan-percentile-cutoff-hot", "int",
+    "Hot percentile cutoff.", /*hidden=*/0>;
 
-def INST_HwasanRandomRate : Option<
-    "hwasan-random-rate",
+defm INST_HwasanRandomRate : OptionalField<
+    "hwasan-random-rate", "float",
     "Probability value in the range [0.0, 1.0] "
-    "to keep instrumentation of a function.",
-    "float"> {
-  let Registry = InstrumentationOptsReg;
-}
+    "to keep instrumentation of a function.", /*hidden=*/0>;
 
-def INST_HwasanStaticLinking : Option<
-    "hwasan-static-linking",
+defm INST_HwasanStaticLinking : BoolField<
+    "hwasan-static-linking", "false",
     "Don't use .note.hwasan.globals section to instrument globals "
-    "from loadable libraries.",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+    "from loadable libraries.", /*hidden=*/1>;
 
-def INST_HwasanRecordStackHistory : Option<
-    "hwasan-record-stack-history",
-    "Record stack frames with tagged allocations in a thread-local "
-    "ring buffer",
-    "RecordStackHistoryMode"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "instr";
-  let Hidden = 1;
-}
+// std::optional<RecordStackHistoryMode>: genuine tri-state, see migration notes.
+def INST_HwasanRecordStackHistory : Joined<["-", "--"], "hwasan-record-stack-history=">,
+    HelpText<"Record stack frames with tagged allocations in a thread-local "
+    "ring buffer">,
+    Flags<[HelpHidden]>,
+    Field<"std::optional<RecordStackHistoryMode>", "INST_HwasanRecordStackHistory", "std::nullopt">,
+    FieldEnum<RecordStackHistoryModeEnum>;
+def INST_HwasanRecordStackHistory_sep : Separate<["-", "--"], "hwasan-record-stack-history">, Flags<[HelpHidden]>,
+    Alias<!cast<Option>(INST_HwasanRecordStackHistory)>;
 
-def INST_HwasanInstrumentMemIntrinsics : Option<
-    "hwasan-instrument-mem-intrinsics",
-    "instrument memory intrinsics",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm INST_HwasanInstrumentMemIntrinsics : BoolField<
+    "hwasan-instrument-mem-intrinsics", "true",
+    "instrument memory intrinsics", /*hidden=*/1>;
 
-def INST_HwasanInstrumentLandingPads : Option<
-    "hwasan-instrument-landing-pads",
-    "instrument landing pads",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+defm INST_HwasanInstrumentLandingPads : OptionalValueField<
+    "hwasan-instrument-landing-pads", "bool", "true",
+    "instrument landing pads", /*hidden=*/1>;
 
-def INST_HwasanUseShortGranules : Option<
-    "hwasan-use-short-granules",
-    "use short granules in allocas and outlined checks",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+defm INST_HwasanUseShortGranules : OptionalValueField<
+    "hwasan-use-short-granules", "bool", "true",
+    "use short granules in allocas and outlined checks", /*hidden=*/1>;
 
-def INST_HwasanInstrumentPersonalityFunctions : Option<
-    "hwasan-instrument-personality-functions",
-    "instrument personality functions",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Hidden = 1;
-}
+defm INST_HwasanInstrumentPersonalityFunctions : OptionalValueField<
+    "hwasan-instrument-personality-functions", "bool", "true",
+    "instrument personality functions", /*hidden=*/1>;
 
-def INST_HwasanInlineAllChecks : Option<
-    "hwasan-inline-all-checks",
-    "inline all checks",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+defm INST_HwasanInlineAllChecks : OptionalValueField<
+    "hwasan-inline-all-checks", "bool", "true",
+    "inline all checks", /*hidden=*/1>;
 
-def INST_HwasanInlineFastPathChecks : Option<
-    "hwasan-inline-fast-path-checks",
-    "inline all checks",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+defm INST_HwasanInlineFastPathChecks : OptionalValueField<
+    "hwasan-inline-fast-path-checks", "bool", "true",
+    "inline all checks", /*hidden=*/1>;
 
-def INST_HwasanUsePageAliases : Option<
-    "hwasan-experimental-use-page-aliases",
-    "Use page aliasing in HWASan",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+defm INST_HwasanUsePageAliases : BoolField<
+    "hwasan-experimental-use-page-aliases", "false",
+    "Use page aliasing in HWASan", /*hidden=*/1>;
 
-def INST_HwasanTagBits : Option<
-    "hwasan-tag-bits",
-    "Restrict tag to at most N bits. Needs to be > 4.",
-    "uint64_t"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "uint64_t{0}";
-  let Hidden = 1;
-}
+defm INST_HwasanTagBits : ValueField<
+    "hwasan-tag-bits", "uint64_t", "(uint64_t)0",
+    "Restrict tag to at most N bits. Needs to be > 4.", /*hidden=*/1>;
 
 // ===== IndirectCallPromotion.cpp =====
 
-def INST_DisableICP : Option<
-    "disable-icp",
-    "Disable indirect call promotion",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+defm INST_DisableICP : BoolField<
+    "disable-icp", "false",
+    "Disable indirect call promotion", /*hidden=*/1>;
 
-def INST_ICPCutOff : Option<
-    "icp-cutoff",
-    "Max number of promotions for this compilation",
-    "unsigned"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+defm INST_ICPCutOff : ValueField<
+    "icp-cutoff", "unsigned", "0",
+    "Max number of promotions for this compilation", /*hidden=*/1>;
 
-def INST_ICPCSSkip : Option<
-    "icp-csskip",
-    "Skip Callsite up to this number for this compilation",
-    "unsigned"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+defm INST_ICPCSSkip : ValueField<
+    "icp-csskip", "unsigned", "0",
+    "Skip Callsite up to this number for this compilation", /*hidden=*/1>;
 
-def INST_ICPAllowDecls : Option<
-    "icp-allow-decls",
+defm INST_ICPAllowDecls : BoolField<
+    "icp-allow-decls", "false",
     "Promote the target candidate even when the definition "
-    "is not available.",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+    "is not available.", /*hidden=*/1>;
 
-def INST_HotFuncCutoffForICP : Option<
-    "hot-func-cutoff-for-icp",
+defm INST_HotFuncCutoffForICP : ValueField<
+    "hot-func-cutoff-for-icp", "int", "-1",
     "A count is hot for indirect call promotion if it exceeds the minimum "
     "count to reach this percentile of total counts. Note that this percentile "
     "is specified as percentile * 10000 = HotFuncCutoffForICP. Default value "
     "-1 means that if the flag is unspecified then the value of "
-    "ProfileSummaryCutoffHot will be used instead.",
-    "int"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "-1";
-  let Hidden = 1;
-}
+    "ProfileSummaryCutoffHot will be used instead.", /*hidden=*/1>;
 
-def INST_ICPAllowHotOnly : Option<
-    "icp-allow-hot-only",
+defm INST_ICPAllowHotOnly : BoolField<
+    "icp-allow-hot-only", "true",
     "Promote the target candidate only if it is a "
-    "hot callsite.",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+    "hot callsite.", /*hidden=*/1>;
 
-def INST_ICPAllowCandidateSkip : Option<
-    "icp-allow-candidate-skip",
+defm INST_ICPAllowCandidateSkip : BoolField<
+    "icp-allow-candidate-skip", "false",
     "Continue with the remaining targets instead of exiting "
-    "when encountering an unpromotable target.",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+    "when encountering an unpromotable target.", /*hidden=*/1>;
 
-def INST_ICPLTOMode : Option<
-    "icp-lto",
-    "Run indirect-call promotion in LTO mode",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+defm INST_ICPLTOMode : BoolField<
+    "icp-lto", "false",
+    "Run indirect-call promotion in LTO mode", /*hidden=*/1>;
 
-def INST_ICPSamplePGOMode : Option<
-    "icp-samplepgo",
-    "Run indirect-call promotion in SamplePGO mode",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+defm INST_ICPSamplePGOMode : BoolField<
+    "icp-samplepgo", "false",
+    "Run indirect-call promotion in SamplePGO mode", /*hidden=*/1>;
 
-def INST_ICPCallOnly : Option<
-    "icp-call-only",
-    "Run indirect-call promotion for call instructions only",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+defm INST_ICPCallOnly : BoolField<
+    "icp-call-only", "false",
+    "Run indirect-call promotion for call instructions only", /*hidden=*/1>;
 
-def INST_ICPInvokeOnly : Option<
-    "icp-invoke-only",
-    "Run indirect-call promotion for invoke instructions only",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+defm INST_ICPInvokeOnly : BoolField<
+    "icp-invoke-only", "false",
+    "Run indirect-call promotion for invoke instructions only", /*hidden=*/1>;
 
-def INST_ICPDumpAfter : Option<
-    "icp-dumpafter",
-    "Dump IR after transformation happens",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+defm INST_ICPDumpAfter : BoolField<
+    "icp-dumpafter", "false",
+    "Dump IR after transformation happens", /*hidden=*/1>;
 
-def INST_ICPVTablePercentageThreshold : Option<
-    "icp-vtable-percentage-threshold",
+defm INST_ICPVTablePercentageThreshold : ValueField<
+    "icp-vtable-percentage-threshold", "float", "0.995f",
     "The percentage threshold of vtable-count / function-count for "
-    "comparing vtable candidate with function candidate.",
-    "float"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0.995f";
-  let Hidden = 1;
-}
+    "comparing vtable candidate with function candidate.", /*hidden=*/1>;
 
-def INST_ICPMaxNumVTableLastCandidate : Option<
-    "icp-max-num-vtable-last-candidate",
-    "The maximum number of vtable for the last candidate.",
-    "int"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm INST_ICPMaxNumVTableLastCandidate : ValueField<
+    "icp-max-num-vtable-last-candidate", "int", "1",
+    "The maximum number of vtable for the last candidate.", /*hidden=*/1>;
 
 // ===== InstrProfiling.cpp =====
 
-def INST_ProfileCorrelate : Option<
-    "profile-correlate",
-    "Use debug info or binary file to correlate profiles.",
-    "ProfCorrelatorKind"> {
-  let Registry = InstrumentationOptsReg;
-}
+// std::optional<ProfCorrelatorKind>: genuine tri-state, see migration notes.
+def INST_ProfileCorrelate : Joined<["-", "--"], "profile-correlate=">,
+    HelpText<"Use debug info or binary file to correlate profiles.">,
+    Flags<[]>,
+    Field<"std::optional<ProfCorrelatorKind>", "INST_ProfileCorrelate", "std::nullopt">,
+    FieldEnum<ProfCorrelatorKindEnum>;
+def INST_ProfileCorrelate_sep : Separate<["-", "--"], "profile-correlate">, Flags<[HelpHidden]>,
+    Alias<!cast<Option>(INST_ProfileCorrelate)>;
 
-def INST_DoHashBasedCounterSplit : Option<
-    "hash-based-counter-split",
-    "Rename counter variable of a comdat function based on cfg hash",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "1";
-}
+defm INST_DoHashBasedCounterSplit : BoolField<
+    "hash-based-counter-split", "true",
+    "Rename counter variable of a comdat function based on cfg hash", /*hidden=*/0>;
 
-def INST_RuntimeCounterRelocation : Option<
-    "runtime-counter-relocation",
-    "Enable relocating counters at runtime.",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-}
+defm INST_RuntimeCounterRelocation : OptionalValueField<
+    "runtime-counter-relocation", "bool", "true",
+    "Enable relocating counters at runtime.", /*hidden=*/0>;
 
-def INST_ValueProfileStaticAlloc : Option<
-    "vp-static-alloc",
-    "Do static counter allocation for value profiler",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "1";
-}
+defm INST_ValueProfileStaticAlloc : BoolField<
+    "vp-static-alloc", "true",
+    "Do static counter allocation for value profiler", /*hidden=*/0>;
 
-def INST_NumCountersPerValueSite : Option<
-    "vp-counters-per-site",
+defm INST_NumCountersPerValueSite : ValueField<
+    "vp-counters-per-site", "double", "1.0",
     "The average number of profile counters allocated "
-    "per value profiling site.",
-    "double"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "1.0";
-}
+    "per value profiling site.", /*hidden=*/0>;
 
-def INST_AtomicCounterUpdateAll : Option<
-    "instrprof-atomic-counter-update-all",
-    "Make all profile counter updates atomic (for testing only)",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-}
+defm INST_AtomicCounterUpdateAll : BoolField<
+    "instrprof-atomic-counter-update-all", "false",
+    "Make all profile counter updates atomic (for testing only)", /*hidden=*/0>;
 
-def INST_VerifyAtomicPromotion : Option<
-    "verify-atomic-counter-promoted",
+defm INST_VerifyAtomicPromotion : BoolField<
+    "verify-atomic-counter-promoted", "false",
     "Check that all profile counter updates were made atomic; no-op "
-    "if atomic updates are not requested (-fprofile-update=atomic)",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-}
+    "if atomic updates are not requested (-fprofile-update=atomic)", /*hidden=*/0>;
 
-def INST_AtomicCounterUpdatePromoted : Option<
-    "atomic-counter-update-promoted",
+defm INST_AtomicCounterUpdatePromoted : BoolField<
+    "atomic-counter-update-promoted", "false",
     "Do counter update using atomic fetch add "
-    "for promoted counters only",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-}
+    "for promoted counters only", /*hidden=*/0>;
 
-def INST_AtomicFirstCounter : Option<
-    "atomic-first-counter",
+defm INST_AtomicFirstCounter : BoolField<
+    "atomic-first-counter", "false",
     "Use atomic fetch add for first counter in a function (usually "
-    "the entry counter)",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-}
+    "the entry counter)", /*hidden=*/0>;
 
-def INST_ConditionalCounterUpdate : Option<
-    "conditional-counter-update",
-    "Do conditional counter updates in single byte counters mode)",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-}
+defm INST_ConditionalCounterUpdate : BoolField<
+    "conditional-counter-update", "false",
+    "Do conditional counter updates in single byte counters mode)", /*hidden=*/0>;
 
-def INST_DoCounterPromotion : Option<
-    "do-counter-promotion",
-    "Do counter register promotion",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-}
+defm INST_DoCounterPromotion : OptionalValueField<
+    "do-counter-promotion", "bool", "true",
+    "Do counter register promotion", /*hidden=*/0>;
 
-def INST_MaxNumOfPromotionsPerLoop : Option<
-    "max-counter-promotions-per-loop",
+defm INST_MaxNumOfPromotionsPerLoop : ValueField<
+    "max-counter-promotions-per-loop", "unsigned", "20",
     "Max number counter promotions per loop to avoid "
-    "increasing register pressure too much",
-    "unsigned"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "20";
-}
+    "increasing register pressure too much", /*hidden=*/0>;
 
-def INST_MaxNumOfPromotions : Option<
-    "max-counter-promotions",
-    "Max number of allowed counter promotions",
-    "int"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "-1";
-}
+defm INST_MaxNumOfPromotions : ValueField<
+    "max-counter-promotions", "int", "-1",
+    "Max number of allowed counter promotions", /*hidden=*/0>;
 
-def INST_SpeculativeCounterPromotionMaxExiting : Option<
-    "speculative-counter-promotion-max-exiting",
+defm INST_SpeculativeCounterPromotionMaxExiting : ValueField<
+    "speculative-counter-promotion-max-exiting", "unsigned", "3",
     "The max number of exiting blocks of a loop to allow "
-    "speculative counter promotion",
-    "unsigned"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "3";
-}
+    "speculative counter promotion", /*hidden=*/0>;
 
-def INST_SpeculativeCounterPromotionToLoop : Option<
-    "speculative-counter-promotion-to-loop",
+defm INST_SpeculativeCounterPromotionToLoop : BoolField<
+    "speculative-counter-promotion-to-loop", "false",
     "When the option is false, if the target block is in a loop, "
     "the promotion will be disallowed unless the promoted counter "
     "update can be further/iteratively promoted into an acyclic "
-    "region.",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-}
+    "region.", /*hidden=*/0>;
 
-def INST_OffloadPGOSampling : Option<
-    "offload-pgo-sampling",
+defm INST_OffloadPGOSampling : ValueField<
+    "offload-pgo-sampling", "unsigned", "3",
     "Log2 of the sampling period for offload PGO instrumentation. "
     "Only 1 in every 2^N blocks is instrumented. "
     "0 = all blocks, 1 = 50%, 2 = 25%, 3 = 12.5% (default). "
-    "Higher values reduce overhead at the cost of sparser profiles.",
-    "unsigned"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "3";
-}
+    "Higher values reduce overhead at the cost of sparser profiles.", /*hidden=*/0>;
 
-def INST_IterativeCounterPromotion : Option<
-    "iterative-counter-promotion",
-    "Allow counter promotion across the whole loop nest.",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "1";
-}
+defm INST_IterativeCounterPromotion : BoolField<
+    "iterative-counter-promotion", "true",
+    "Allow counter promotion across the whole loop nest.", /*hidden=*/0>;
 
-def INST_SkipRetExitBlock : Option<
-    "skip-ret-exit-block",
-    "Suppress counter promotion if exit blocks contain ret.",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "1";
-}
+defm INST_SkipRetExitBlock : BoolField<
+    "skip-ret-exit-block", "true",
+    "Suppress counter promotion if exit blocks contain ret.", /*hidden=*/0>;
 
-def INST_SampledInstrumentation : Option<
-    "sampled-instrumentation",
-    "Do PGO instrumentation sampling",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-}
+defm INST_SampledInstrumentation : OptionalValueField<
+    "sampled-instrumentation", "bool", "true",
+    "Do PGO instrumentation sampling", /*hidden=*/0>;
 
-def INST_SampledInstrPeriod : Option<
-    "sampled-instr-period",
-    "Set the profile instrumentation sample period.",
-    "unsigned"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "65536";
-}
+defm INST_SampledInstrPeriod : ValueField<
+    "sampled-instr-period", "unsigned", "65536",
+    "Set the profile instrumentation sample period.", /*hidden=*/0>;
 
-def INST_SampledInstrBurstDuration : Option<
-    "sampled-instr-burst-duration",
+defm INST_SampledInstrBurstDuration : ValueField<
+    "sampled-instr-burst-duration", "unsigned", "200",
     "Set the profile instrumentation burst duration, which can range "
-    "from 1 to the value of 'sampled-instr-period' (0 is invalid).",
-    "unsigned"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "200";
-}
+    "from 1 to the value of 'sampled-instr-period' (0 is invalid).", /*hidden=*/0>;
 
 // ===== LowerAllowCheckPass.cpp =====
 
-def INST_LowerAllowCheckPercentileCutoffHot : Option<
-    "lower-allow-check-percentile-cutoff-hot",
-    "Hot percentile cutoff.",
-    "int"> {
-  let Registry = InstrumentationOptsReg;
-}
+defm INST_LowerAllowCheckPercentileCutoffHot : OptionalField<
+    "lower-allow-check-percentile-cutoff-hot", "int",
+    "Hot percentile cutoff.", /*hidden=*/0>;
 
-def INST_LowerAllowCheckRandomRate : Option<
-    "lower-allow-check-random-rate",
+defm INST_LowerAllowCheckRandomRate : OptionalField<
+    "lower-allow-check-random-rate", "float",
     "Probability value in the range [0.0, 1.0] of "
-    "keeping a check.",
-    "float"> {
-  let Registry = InstrumentationOptsReg;
-}
+    "keeping a check.", /*hidden=*/0>;
 
 // ===== MemorySanitizer.cpp =====
 
-def INST_MsanTrackOrigins : Option<
-    "msan-track-origins",
-    "Track origins (allocation sites) of poisoned memory",
-    "int"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+defm INST_MsanTrackOrigins : OptionalField<
+    "msan-track-origins", "int",
+    "Track origins (allocation sites) of poisoned memory", /*hidden=*/1>;
 
-def INST_MsanKeepGoing : Option<
-    "msan-keep-going",
-    "keep going after reporting a UMR",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+defm INST_MsanKeepGoing : OptionalValueField<
+    "msan-keep-going", "bool", "true",
+    "keep going after reporting a UMR", /*hidden=*/1>;
 
-def INST_MsanPoisonStack : Option<
-    "msan-poison-stack",
-    "poison uninitialized stack variables",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm INST_MsanPoisonStack : BoolField<
+    "msan-poison-stack", "true",
+    "poison uninitialized stack variables", /*hidden=*/1>;
 
-def INST_MsanPoisonStackWithCall : Option<
-    "msan-poison-stack-with-call",
-    "poison uninitialized stack variables with a call",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+defm INST_MsanPoisonStackWithCall : BoolField<
+    "msan-poison-stack-with-call", "false",
+    "poison uninitialized stack variables with a call", /*hidden=*/1>;
 
-def INST_MsanPoisonStackPattern : Option<
-    "msan-poison-stack-pattern",
-    "poison uninitialized stack variables with the given pattern",
-    "int"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "255";
-  let Hidden = 1;
-}
+defm INST_MsanPoisonStackPattern : ValueField<
+    "msan-poison-stack-pattern", "int", "0xff",
+    "poison uninitialized stack variables with the given pattern", /*hidden=*/1>;
 
-def INST_MsanPrintStackNames : Option<
-    "msan-print-stack-names",
-    "Print name of local stack variable",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm INST_MsanPrintStackNames : BoolField<
+    "msan-print-stack-names", "true",
+    "Print name of local stack variable", /*hidden=*/1>;
 
-def INST_MsanPoisonUndef : Option<
-    "msan-poison-undef",
-    "Poison fully undef temporary values.",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm INST_MsanPoisonUndef : BoolField<
+    "msan-poison-undef", "true",
+    "Poison fully undef temporary values.", /*hidden=*/1>;
 
-def INST_MsanPoisonUndefVectors : Option<
-    "msan-poison-undef-vectors",
-    "Precisely poison partially undefined constant vectors.",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+defm INST_MsanPoisonUndefVectors : BoolField<
+    "msan-poison-undef-vectors", "false",
+    "Precisely poison partially undefined constant vectors.", /*hidden=*/1>;
 
-def INST_MsanPreciseDisjointOr : Option<
-    "msan-precise-disjoint-or",
-    "Precisely poison disjoint OR.",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+defm INST_MsanPreciseDisjointOr : BoolField<
+    "msan-precise-disjoint-or", "false",
+    "Precisely poison disjoint OR.", /*hidden=*/1>;
 
-def INST_MsanHandleICmp : Option<
-    "msan-handle-icmp",
-    "propagate shadow through ICmpEQ and ICmpNE",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm INST_MsanHandleICmp : BoolField<
+    "msan-handle-icmp", "true",
+    "propagate shadow through ICmpEQ and ICmpNE", /*hidden=*/1>;
 
-def INST_MsanHandleICmpExact : Option<
-    "msan-handle-icmp-exact",
-    "exact handling of relational integer ICmp",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm INST_MsanHandleICmpExact : BoolField<
+    "msan-handle-icmp-exact", "true",
+    "exact handling of relational integer ICmp", /*hidden=*/1>;
 
-def INST_MsanSwitchPrecision : Option<
-    "msan-switch-precision",
+defm INST_MsanSwitchPrecision : ValueField<
+    "msan-switch-precision", "int", "99",
     "Controls the number of cases considered by MSan for LLVM switch "
-    "instructions.",
-    "int"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "99";
-  let Hidden = 1;
-}
+    "instructions.", /*hidden=*/1>;
 
-def INST_MsanHandleLifetimeIntrinsics : Option<
-    "msan-handle-lifetime-intrinsics",
+defm INST_MsanHandleLifetimeIntrinsics : BoolField<
+    "msan-handle-lifetime-intrinsics", "true",
     "when possible, poison scoped variables at the beginning of the "
-    "scope (slower, but more precise)",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+    "scope (slower, but more precise)", /*hidden=*/1>;
 
-def INST_MsanHandleAsmConservative : Option<
-    "msan-handle-asm-conservative",
-    "conservative handling of inline assembly",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm INST_MsanHandleAsmConservative : BoolField<
+    "msan-handle-asm-conservative", "true",
+    "conservative handling of inline assembly", /*hidden=*/1>;
 
-def INST_MsanCheckAccessAddress : Option<
-    "msan-check-access-address",
-    "report accesses through a pointer which has poisoned shadow",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm INST_MsanCheckAccessAddress : BoolField<
+    "msan-check-access-address", "true",
+    "report accesses through a pointer which has poisoned shadow", /*hidden=*/1>;
 
-def INST_MsanEagerChecks : Option<
-    "msan-eager-checks",
-    "check arguments and return values at function call boundaries",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+defm INST_MsanEagerChecks : OptionalValueField<
+    "msan-eager-checks", "bool", "true",
+    "check arguments and return values at function call boundaries", /*hidden=*/1>;
 
-def INST_MsanDumpStrictInstructions : Option<
-    "msan-dump-strict-instructions",
-    "print out instructions with default strict semantics",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+defm INST_MsanDumpStrictInstructions : BoolField<
+    "msan-dump-strict-instructions", "false",
+    "print out instructions with default strict semantics", /*hidden=*/1>;
 
-def INST_MsanDumpHeuristicInstructions : Option<
-    "msan-dump-heuristic-instructions",
-    "Prints 'unknown' instructions that were handled heuristically.",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+defm INST_MsanDumpHeuristicInstructions : BoolField<
+    "msan-dump-heuristic-instructions", "false",
+    "Prints 'unknown' instructions that were handled heuristically.", /*hidden=*/1>;
 
-def INST_MsanInstrumentationWithCallThreshold : Option<
-    "msan-instrumentation-with-call-threshold",
+defm INST_MsanInstrumentationWithCallThreshold : ValueField<
+    "msan-instrumentation-with-call-threshold", "int", "3500",
     "If the function being instrumented requires more than "
-    "this number of checks, use callbacks instead of inline checks.",
-    "int"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "3500";
-  let Hidden = 1;
-}
+    "this number of checks, use callbacks instead of inline checks.", /*hidden=*/1>;
 
-def INST_MsanKernel : Option<
-    "msan-kernel",
-    "Enable KernelMemorySanitizer instrumentation",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+defm INST_MsanKernel : OptionalValueField<
+    "msan-kernel", "bool", "true",
+    "Enable KernelMemorySanitizer instrumentation", /*hidden=*/1>;
 
-def INST_MsanDisableChecks : Option<
-    "msan-disable-checks",
-    "Apply no_sanitize to the whole file",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+defm INST_MsanDisableChecks : BoolField<
+    "msan-disable-checks", "false",
+    "Apply no_sanitize to the whole file", /*hidden=*/1>;
 
-def INST_MsanCheckConstantShadow : Option<
-    "msan-check-constant-shadow",
-    "Insert checks for constant shadow values",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm INST_MsanCheckConstantShadow : BoolField<
+    "msan-check-constant-shadow", "true",
+    "Insert checks for constant shadow values", /*hidden=*/1>;
 
-def INST_MsanWithComdat : Option<
-    "msan-with-comdat",
-    "Place MSan constructors in comdat sections",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+defm INST_MsanWithComdat : BoolField<
+    "msan-with-comdat", "false",
+    "Place MSan constructors in comdat sections", /*hidden=*/1>;
 
-def INST_MsanAndMask : Option<
-    "msan-and-mask",
-    "Define custom MSan AndMask",
-    "uint64_t"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "uint64_t{0}";
-  let Hidden = 1;
-}
+defm INST_MsanAndMask : ValueField<
+    "msan-and-mask", "uint64_t", "0",
+    "Define custom MSan AndMask", /*hidden=*/1>;
 
-def INST_MsanXorMask : Option<
-    "msan-xor-mask",
-    "Define custom MSan XorMask",
-    "uint64_t"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "uint64_t{0}";
-  let Hidden = 1;
-}
+defm INST_MsanXorMask : ValueField<
+    "msan-xor-mask", "uint64_t", "0",
+    "Define custom MSan XorMask", /*hidden=*/1>;
 
-def INST_MsanShadowBase : Option<
-    "msan-shadow-base",
-    "Define custom MSan ShadowBase",
-    "uint64_t"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "uint64_t{0}";
-  let Hidden = 1;
-}
+defm INST_MsanShadowBase : OptionalField<
+    "msan-shadow-base", "uint64_t",
+    "Define custom MSan ShadowBase", /*hidden=*/1>;
 
-def INST_MsanOriginBase : Option<
-    "msan-origin-base",
-    "Define custom MSan OriginBase",
-    "uint64_t"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "uint64_t{0}";
-  let Hidden = 1;
-}
+defm INST_MsanOriginBase : OptionalField<
+    "msan-origin-base", "uint64_t",
+    "Define custom MSan OriginBase", /*hidden=*/1>;
 
-def INST_MsanDisambiguateWarning : Option<
-    "msan-disambiguate-warning-threshold",
+defm INST_MsanDisambiguateWarning : ValueField<
+    "msan-disambiguate-warning-threshold", "int", "3",
     "Define threshold for number of checks per "
-    "debug location to force origin update.",
-    "int"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "3";
-  let Hidden = 1;
-}
+    "debug location to force origin update.", /*hidden=*/1>;
 
 // ===== MemProfInstrumentation.cpp =====
 
-def INST_MemprofGuardAgainstVersionMismatch : Option<
-    "memprof-guard-against-version-mismatch",
-    "Guard against compiler/runtime version mismatch.",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm INST_MemprofGuardAgainstVersionMismatch : BoolField<
+    "memprof-guard-against-version-mismatch", "true",
+    "Guard against compiler/runtime version mismatch.", /*hidden=*/1>;
 
-def INST_MemprofInstrumentReads : Option<
-    "memprof-instrument-reads",
-    "instrument read instructions",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm INST_MemprofInstrumentReads : BoolField<
+    "memprof-instrument-reads", "true",
+    "instrument read instructions", /*hidden=*/1>;
 
-def INST_MemprofInstrumentWrites : Option<
-    "memprof-instrument-writes",
-    "instrument write instructions",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm INST_MemprofInstrumentWrites : BoolField<
+    "memprof-instrument-writes", "true",
+    "instrument write instructions", /*hidden=*/1>;
 
-def INST_MemprofInstrumentAtomics : Option<
-    "memprof-instrument-atomics",
-    "instrument atomic instructions (rmw, cmpxchg)",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm INST_MemprofInstrumentAtomics : BoolField<
+    "memprof-instrument-atomics", "true",
+    "instrument atomic instructions (rmw, cmpxchg)", /*hidden=*/1>;
 
-def INST_MemprofUseCallbacks : Option<
-    "memprof-use-callbacks",
-    "Use callbacks instead of inline instrumentation sequences.",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+defm INST_MemprofUseCallbacks : BoolField<
+    "memprof-use-callbacks", "false",
+    "Use callbacks instead of inline instrumentation sequences.", /*hidden=*/1>;
 
-def INST_MemprofMemoryAccessCallbackPrefix : Option<
-    "memprof-memory-access-callback-prefix",
-    "Prefix for memory access callbacks",
-    "std::string"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "\"__memprof_\"";
-  let Hidden = 1;
-}
+// Getter fallback literal matches this option's plain default with no other genuine specified-consumer; collapses to a plain field.
+defm INST_MemprofMemoryAccessCallbackPrefix : ValueField<
+    "memprof-memory-access-callback-prefix", "std::string", "\"__memprof_\"",
+    "Prefix for memory access callbacks", /*hidden=*/1>;
 
-def INST_MemprofMappingScale : Option<
-    "memprof-mapping-scale",
-    "scale of memprof shadow mapping",
-    "int"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "3";
-  let Hidden = 1;
-}
+defm INST_MemprofMappingScale : ValueField<
+    "memprof-mapping-scale", "int", "3",
+    "scale of memprof shadow mapping", /*hidden=*/1>;
 
-def INST_MemprofMappingGranularity : Option<
-    "memprof-mapping-granularity",
-    "granularity of memprof shadow mapping",
-    "int"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "64";
-  let Hidden = 1;
-}
+defm INST_MemprofMappingGranularity : ValueField<
+    "memprof-mapping-granularity", "int", "64",
+    "granularity of memprof shadow mapping", /*hidden=*/1>;
 
-def INST_MemprofInstrumentStack : Option<
-    "memprof-instrument-stack",
-    "Instrument scalar stack variables",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+defm INST_MemprofInstrumentStack : BoolField<
+    "memprof-instrument-stack", "false",
+    "Instrument scalar stack variables", /*hidden=*/1>;
 
-def INST_MemprofDebug : Option<
-    "memprof-debug", "debug",
-    "int"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+defm INST_MemprofDebug : ValueField<
+    "memprof-debug", "int", "0",
+    "debug", /*hidden=*/1>;
 
-def INST_MemprofDebugFunc : Option<
-    "memprof-debug-func", "Debug func",
-    "std::string"> {
-  let Registry = InstrumentationOptsReg;
-  let Hidden = 1;
-}
+// Getter fallback literal matches this option's plain default with no other genuine specified-consumer; collapses to a plain field.
+defm INST_MemprofDebugFunc : ValueField<
+    "memprof-debug-func", "std::string", "\"\"",
+    "Debug func", /*hidden=*/1>;
 
-def INST_MemprofDebugMin : Option<
-    "memprof-debug-min", "Debug min inst",
-    "int"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "-1";
-  let Hidden = 1;
-}
+defm INST_MemprofDebugMin : ValueField<
+    "memprof-debug-min", "int", "-1",
+    "Debug min inst", /*hidden=*/1>;
 
-def INST_MemprofDebugMax : Option<
-    "memprof-debug-max", "Debug max inst",
-    "int"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "-1";
-  let Hidden = 1;
-}
+defm INST_MemprofDebugMax : ValueField<
+    "memprof-debug-max", "int", "-1",
+    "Debug max inst", /*hidden=*/1>;
 
-def INST_MemprofHistogram : Option<
-    "memprof-histogram",
-    "Collect access count histograms",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+defm INST_MemprofHistogram : BoolField<
+    "memprof-histogram", "false",
+    "Collect access count histograms", /*hidden=*/1>;
 
-def INST_MemprofRuntimeDefaultOptions : Option<
-    "memprof-runtime-default-options",
-    "The default memprof options",
-    "std::string"> {
-  let Registry = InstrumentationOptsReg;
-  let Hidden = 1;
-}
+// Getter fallback literal matches this option's plain default with no other genuine specified-consumer; collapses to a plain field.
+defm INST_MemprofRuntimeDefaultOptions : ValueField<
+    "memprof-runtime-default-options", "std::string", "\"\"",
+    "The default memprof options", /*hidden=*/1>;
 
 // ===== MemProfUse.cpp =====
 
-def INST_MemprofMatchHotColdNew : Option<
-    "memprof-match-hot-cold-new",
-    "Match allocation profiles onto existing hot/cold operator new calls",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+defm INST_MemprofMatchHotColdNew : BoolField<
+    "memprof-match-hot-cold-new", "false",
+    "Match allocation profiles onto existing hot/cold operator new calls", /*hidden=*/1>;
 
-def INST_MemprofPrintMatchInfo : Option<
-    "memprof-print-match-info",
+defm INST_MemprofPrintMatchInfo : BoolField<
+    "memprof-print-match-info", "false",
     "Print matching stats for each allocation context in this "
-    "module's profiles",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+    "module's profiles", /*hidden=*/1>;
 
-def INST_MemprofPrintMatchedAllocStack : Option<
-    "memprof-print-matched-alloc-stack",
+defm INST_MemprofPrintMatchedAllocStack : BoolField<
+    "memprof-print-matched-alloc-stack", "false",
     "Print full stack context for matched allocations "
-    "with -memprof-print-match-info.",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+    "with -memprof-print-match-info.", /*hidden=*/1>;
 
-def INST_MemprofPrintFunctionGuids : Option<
-    "memprof-print-function-guids",
-    "Print function GUIDs computed for matching",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+defm INST_MemprofPrintFunctionGuids : BoolField<
+    "memprof-print-function-guids", "false",
+    "Print function GUIDs computed for matching", /*hidden=*/1>;
 
-def INST_MemprofSalvageStaleProfile : Option<
-    "memprof-salvage-stale-profile",
-    "Salvage stale MemProf profile",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+defm INST_MemprofSalvageStaleProfile : BoolField<
+    "memprof-salvage-stale-profile", "false",
+    "Salvage stale MemProf profile", /*hidden=*/1>;
 
-def INST_MemprofAttachCalleeGuids : Option<
-    "memprof-attach-calleeguids",
-    "Attach calleeguids as value profile metadata for indirect calls.",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm INST_MemprofAttachCalleeGuids : BoolField<
+    "memprof-attach-calleeguids", "true",
+    "Attach calleeguids as value profile metadata for indirect calls.", /*hidden=*/1>;
 
-def INST_MemprofMatchingColdThreshold : Option<
-    "memprof-matching-cold-threshold",
-    "Min percent of cold bytes matched to hint allocation cold",
-    "unsigned"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "100";
-  let Hidden = 1;
-}
+defm INST_MemprofMatchingColdThreshold : ValueField<
+    "memprof-matching-cold-threshold", "unsigned", "100u",
+    "Min percent of cold bytes matched to hint allocation cold", /*hidden=*/1>;
 
-def INST_MemprofAnnotateStaticDataPrefix : Option<
-    "memprof-annotate-static-data-prefix",
-    "If true, annotate the static data section prefix",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+defm INST_MemprofAnnotateStaticDataPrefix : BoolField<
+    "memprof-annotate-static-data-prefix", "false",
+    "If true, annotate the static data section prefix", /*hidden=*/1>;
 
 // ===== NumericalStabilitySanitizer.cpp =====
 
-def INST_NsanShadowTypeMapping : Option<
-    "nsan-shadow-type-mapping",
+defm INST_NsanShadowTypeMapping : ValueField<
+    "nsan-shadow-type-mapping", "std::string", "\"dqq\"",
     "One shadow type id for each of `float`, `double`, `long double`. "
     "`d`,`l`,`q`,`e` mean double, x86_fp80, fp128 (quad) and "
-    "ppc_fp128 (extended double) respectively.",
-    "std::string"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "\"dqq\"";
-  let Hidden = 1;
-}
+    "ppc_fp128 (extended double) respectively.", /*hidden=*/1>;
 
-def INST_NsanInstrumentFCmp : Option<
-    "nsan-instrument-fcmp",
-    "Instrument floating-point comparisons",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm INST_NsanInstrumentFCmp : BoolField<
+    "nsan-instrument-fcmp", "true",
+    "Instrument floating-point comparisons", /*hidden=*/1>;
 
-def INST_CheckFunctionsFilter : Option<
-    "check-functions-filter",
+defm INST_CheckFunctionsFilter : ValueField<
+    "check-functions-filter", "std::string", "\"\"",
     "Only emit checks for arguments of functions "
-    "whose names match the given regular expression",
-    "std::string"> {
-  let Registry = InstrumentationOptsReg;
-  let ValueDesc = "regex";
-}
+    "whose names match the given regular expression", /*hidden=*/0, "regex">;
 
-def INST_NsanTruncateFCmpEq : Option<
-    "nsan-truncate-fcmp-eq",
-    "This flag controls the behaviour of fcmp equality comparisons.",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm INST_NsanTruncateFCmpEq : BoolField<
+    "nsan-truncate-fcmp-eq", "true",
+    "This flag controls the behaviour of fcmp equality comparisons.", /*hidden=*/1>;
 
-def INST_NsanCheckLoads : Option<
-    "nsan-check-loads",
-    "Check floating-point load",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Hidden = 1;
-}
+defm INST_NsanCheckLoads : BoolField<
+    "nsan-check-loads", "false",
+    "Check floating-point load", /*hidden=*/1>;
 
-def INST_NsanCheckStores : Option<
-    "nsan-check-stores",
-    "Check floating-point stores",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm INST_NsanCheckStores : BoolField<
+    "nsan-check-stores", "true",
+    "Check floating-point stores", /*hidden=*/1>;
 
-def INST_NsanCheckRet : Option<
-    "nsan-check-ret",
-    "Check floating-point return values",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm INST_NsanCheckRet : BoolField<
+    "nsan-check-ret", "true",
+    "Check floating-point return values", /*hidden=*/1>;
 
-def INST_NsanPropagateNonFTConstStoresAsFT : Option<
-    "nsan-propagate-non-ft-const-stores-as-ft",
+defm INST_NsanPropagateNonFTConstStoresAsFT : BoolField<
+    "nsan-propagate-non-ft-const-stores-as-ft", "false",
     "Propagate non floating-point const stores as floating point values. "
-    "For debugging purposes only",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Hidden = 1;
-}
+    "For debugging purposes only", /*hidden=*/1>;
 
 // ===== PGOCtxProfLowering.cpp =====
 
-// (ProfileContextRoot and CtxPGOSkipCallsiteInstrument are list options above)
-
 // ===== PGOInstrumentation.cpp =====
 
-def INST_PGOTestProfileFile : Option<
-    "pgo-test-profile-file",
+defm INST_PGOTestProfileFile : OptionalField<
+    "pgo-test-profile-file", "std::string",
     "Specify the path of profile data file. This is "
-    "mainly for test purpose.",
-    "std::string"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "\"\"";
-  let Hidden = 1;
-  let ValueDesc = "filename";
-}
+    "mainly for test purpose.", /*hidden=*/1, "filename">;
 
-def INST_PGOTestProfileRemappingFile : Option<
-    "pgo-test-profile-remapping-file",
+defm INST_PGOTestProfileRemappingFile : OptionalField<
+    "pgo-test-profile-remapping-file", "std::string",
     "Specify the path of profile remapping file. This is mainly for "
-    "test purpose.",
-    "std::string"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "\"\"";
-  let Hidden = 1;
-  let ValueDesc = "filename";
-}
+    "test purpose.", /*hidden=*/1, "filename">;
 
-def INST_DisableValueProfiling : Option<
-    "disable-vp",
-    "Disable Value Profiling",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+defm INST_DisableValueProfiling : BoolField<
+    "disable-vp", "false",
+    "Disable Value Profiling", /*hidden=*/1>;
 
-def INST_ICPMaxAnnotations : Option<
-    "icp-max-annotations",
+defm INST_ICPMaxAnnotations : ValueField<
+    "icp-max-annotations", "unsigned", "3u",
     "Max number of annotations for a single indirect "
-    "call callsite",
-    "unsigned"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "3";
-  let Hidden = 1;
-}
+    "call callsite", /*hidden=*/1>;
 
-def INST_MemopMaxAnnotations : Option<
-    "memop-max-annotations",
+defm INST_MemopMaxAnnotations : ValueField<
+    "memop-max-annotations", "unsigned", "4u",
     "Max number of precise value annotations for a single memop "
-    "intrinsic",
-    "unsigned"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "4";
-  let Hidden = 1;
-}
+    "intrinsic", /*hidden=*/1>;
 
-def INST_DoComdatRenaming : Option<
-    "do-comdat-renaming",
+defm INST_DoComdatRenaming : BoolField<
+    "do-comdat-renaming", "false",
     "Append function hash to the name of COMDAT function to avoid "
-    "function hash mismatch due to the preinliner",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+    "function hash mismatch due to the preinliner", /*hidden=*/1>;
 
-def INST_PGOWarnMissing : Option<
-    "pgo-warn-missing-function",
+defm INST_PGOWarnMissing : BoolField<
+    "pgo-warn-missing-function", "false",
     "Use this option to turn on/off warnings about missing profile "
-    "data for functions.",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+    "data for functions.", /*hidden=*/1>;
 
-def INST_NoPGOWarnMismatch : Option<
-    "no-pgo-warn-mismatch",
-    "Use this option to turn off/on warnings about profile cfg mismatch.",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+defm INST_NoPGOWarnMismatch : BoolField<
+    "no-pgo-warn-mismatch", "false",
+    "Use this option to turn off/on warnings about profile cfg mismatch.", /*hidden=*/1>;
 
-def INST_NoPGOWarnMismatchComdatWeak : Option<
-    "no-pgo-warn-mismatch-comdat-weak",
+defm INST_NoPGOWarnMismatchComdatWeak : BoolField<
+    "no-pgo-warn-mismatch-comdat-weak", "true",
     "The option is used to turn on/off warnings about hash mismatch "
-    "for comdat or weak functions.",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+    "for comdat or weak functions.", /*hidden=*/1>;
 
-def INST_PGOInstrSelect : Option<
-    "pgo-instr-select",
-    "Use this option to turn on/off SELECT instruction instrumentation.",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm INST_PGOInstrSelect : BoolField<
+    "pgo-instr-select", "true",
+    "Use this option to turn on/off SELECT instruction instrumentation.", /*hidden=*/1>;
 
-def INST_PGOViewRawCounts : Option<
-    "pgo-view-raw-counts",
+defm INST_PGOViewRawCounts : EnumField<
+    "pgo-view-raw-counts", PGOViewCountsTypeEnum, "PGOViewCountsType::PGOVCT_None",
     "A boolean option to show CFG dag or text "
     "with raw profile counts from "
     "profile data. See also option "
     "-pgo-view-counts. To limit graph "
     "display to only one function, use "
-    "filtering option -view-bfi-func-name.",
-    "PGOViewCountsType"> {
-  let Registry = InstrumentationOptsReg;
-  let Hidden = 1;
-}
+    "filtering option -view-bfi-func-name.", /*hidden=*/1>;
 
-def INST_PGOInstrMemOP : Option<
-    "pgo-instr-memop",
+defm INST_PGOInstrMemOP : BoolField<
+    "pgo-instr-memop", "true",
     "Use this option to turn on/off "
-    "memory intrinsic size profiling.",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+    "memory intrinsic size profiling.", /*hidden=*/1>;
 
-def INST_PGOEmitBranchProb : Option<
-    "pgo-emit-branch-prob",
+defm INST_PGOEmitBranchProb : BoolField<
+    "pgo-emit-branch-prob", "false",
     "When this option is on, the annotated branch probability will be "
-    "emitted as optimization remarks.",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+    "emitted as optimization remarks.", /*hidden=*/1>;
 
-def INST_PGOInstrumentEntry : Option<
-    "pgo-instrument-entry",
-    "Force to instrument function entry basicblock.",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+defm INST_PGOInstrumentEntry : OptionalValueField<
+    "pgo-instrument-entry", "bool", "true",
+    "Force to instrument function entry basicblock.", /*hidden=*/1>;
 
-def INST_PGOInstrumentLoopEntries : Option<
-    "pgo-instrument-loop-entries",
-    "Force to instrument loop entries.",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+defm INST_PGOInstrumentLoopEntries : OptionalValueField<
+    "pgo-instrument-loop-entries", "bool", "true",
+    "Force to instrument loop entries.", /*hidden=*/1>;
 
-def INST_PGOFunctionEntryCoverage : Option<
-    "pgo-function-entry-coverage",
-    "Use this option to enable function entry coverage instrumentation.",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Hidden = 1;
-}
+defm INST_PGOFunctionEntryCoverage : BoolField<
+    "pgo-function-entry-coverage", "false",
+    "Use this option to enable function entry coverage instrumentation.", /*hidden=*/1>;
 
-def INST_PGOBlockCoverage : Option<
-    "pgo-block-coverage",
-    "Use this option to enable basic block coverage instrumentation",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-}
+defm INST_PGOBlockCoverage : BoolField<
+    "pgo-block-coverage", "false",
+    "Use this option to enable basic block coverage instrumentation", /*hidden=*/0>;
 
-def INST_PGOViewBlockCoverageGraph : Option<
-    "pgo-view-block-coverage-graph",
-    "Create a dot file of CFGs with block coverage inference information",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-}
+defm INST_PGOViewBlockCoverageGraph : BoolField<
+    "pgo-view-block-coverage-graph", "false",
+    "Create a dot file of CFGs with block coverage inference information", /*hidden=*/0>;
 
-def INST_PGOTemporalInstrumentation : Option<
-    "pgo-temporal-instrumentation",
-    "Use this option to enable temporal instrumentation",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-}
+defm INST_PGOTemporalInstrumentation : BoolField<
+    "pgo-temporal-instrumentation", "false",
+    "Use this option to enable temporal instrumentation", /*hidden=*/0>;
 
-def INST_PGOFixEntryCount : Option<
-    "pgo-fix-entry-count",
-    "Fix function entry count in profile use.",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm INST_PGOFixEntryCount : BoolField<
+    "pgo-fix-entry-count", "true",
+    "Fix function entry count in profile use.", /*hidden=*/1>;
 
-def INST_PGOVerifyHotBFI : Option<
-    "pgo-verify-hot-bfi",
+defm INST_PGOVerifyHotBFI : BoolField<
+    "pgo-verify-hot-bfi", "false",
     "Print out the non-match BFI count if a hot raw profile count "
-    "becomes non-hot, or a cold raw profile count becomes hot.",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+    "becomes non-hot, or a cold raw profile count becomes hot.", /*hidden=*/1>;
 
-def INST_PGOVerifyBFI : Option<
-    "pgo-verify-bfi",
-    "Print out mismatched BFI counts after setting profile metadata.",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+defm INST_PGOVerifyBFI : BoolField<
+    "pgo-verify-bfi", "false",
+    "Print out mismatched BFI counts after setting profile metadata.", /*hidden=*/1>;
 
-def INST_PGOVerifyBFIRatio : Option<
-    "pgo-verify-bfi-ratio",
+defm INST_PGOVerifyBFIRatio : ValueField<
+    "pgo-verify-bfi-ratio", "unsigned", "2u",
     "Set the threshold for pgo-verify-bfi:  only print out "
     "mismatched BFI if the difference percentage is greater than "
-    "this value (in percentage).",
-    "unsigned"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "2";
-  let Hidden = 1;
-}
+    "this value (in percentage).", /*hidden=*/1>;
 
-def INST_PGOVerifyBFICutoff : Option<
-    "pgo-verify-bfi-cutoff",
+defm INST_PGOVerifyBFICutoff : ValueField<
+    "pgo-verify-bfi-cutoff", "unsigned", "5u",
     "Set the threshold for pgo-verify-bfi: skip the counts whose "
-    "profile count value is below.",
-    "unsigned"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "5";
-  let Hidden = 1;
-}
+    "profile count value is below.", /*hidden=*/1>;
 
-def INST_PGOTraceFuncHash : Option<
-    "pgo-trace-func-hash",
-    "Trace the hash of the function with this name.",
-    "std::string"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "\"-\"";
-  let Hidden = 1;
-  let ValueDesc = "function name";
-}
+defm INST_PGOTraceFuncHash : ValueField<
+    "pgo-trace-func-hash", "std::string", "std::string(\"-\")",
+    "Trace the hash of the function with this name.", /*hidden=*/1, "function name">;
 
-def INST_PGOFunctionSizeThreshold : Option<
-    "pgo-function-size-threshold",
-    "Do not instrument functions smaller than this threshold.",
-    "unsigned"> {
-  let Registry = InstrumentationOptsReg;
-  let Hidden = 1;
-}
+defm INST_PGOFunctionSizeThreshold : ValueField<
+    "pgo-function-size-threshold", "unsigned", "0u",
+    "Do not instrument functions smaller than this threshold.", /*hidden=*/1>;
 
-def INST_PGOFunctionCriticalEdgeThreshold : Option<
-    "pgo-critical-edge-threshold",
+defm INST_PGOFunctionCriticalEdgeThreshold : ValueField<
+    "pgo-critical-edge-threshold", "unsigned", "20000u",
     "Do not instrument functions with the number of critical edges "
-    "greater than this threshold.",
-    "unsigned"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "20000";
-  let Hidden = 1;
-}
+    "greater than this threshold.", /*hidden=*/1>;
 
-def INST_PGOColdInstrumentEntryThreshold : Option<
-    "pgo-cold-instrument-entry-threshold",
+defm INST_PGOColdInstrumentEntryThreshold : ValueField<
+    "pgo-cold-instrument-entry-threshold", "uint64_t", "uint64_t{0}",
     "For cold function instrumentation, skip instrumenting functions "
-    "whose entry count is above the given value.",
-    "uint64_t"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "uint64_t{0}";
-  let Hidden = 1;
-}
+    "whose entry count is above the given value.", /*hidden=*/1>;
 
-def INST_PGOTreatUnknownAsCold : Option<
-    "pgo-treat-unknown-as-cold",
+defm INST_PGOTreatUnknownAsCold : BoolField<
+    "pgo-treat-unknown-as-cold", "false",
     "For cold function instrumentation, treat count unknown(e.g. "
-    "unprofiled) functions as cold.",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+    "unprofiled) functions as cold.", /*hidden=*/1>;
 
-def INST_PGOInstrumentColdFunctionOnly : Option<
-    "pgo-instrument-cold-function-only",
-    "Enable cold function only instrumentation.",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+defm INST_PGOInstrumentColdFunctionOnly : BoolField<
+    "pgo-instrument-cold-function-only", "false",
+    "Enable cold function only instrumentation.", /*hidden=*/1>;
 
 // ===== PGOMemOPSizeOpt.cpp =====
 
-def INST_PGOMemopCountThreshold : Option<
-    "pgo-memop-count-threshold",
-    "The minimum count to optimize memory intrinsic calls",
-    "unsigned"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "1000";
-  let Hidden = 1;
-}
+defm INST_PGOMemopCountThreshold : ValueField<
+    "pgo-memop-count-threshold", "unsigned", "1000",
+    "The minimum count to optimize memory intrinsic calls", /*hidden=*/1>;
 
-def INST_DisableMemopOpt : Option<
-    "disable-memop-opt",
-    "Disable optimize",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+defm INST_DisableMemopOpt : BoolField<
+    "disable-memop-opt", "false",
+    "Disable optimize", /*hidden=*/1>;
 
-def INST_PGOMemopPercentThreshold : Option<
-    "pgo-memop-percent-threshold",
+defm INST_PGOMemopPercentThreshold : ValueField<
+    "pgo-memop-percent-threshold", "unsigned", "40",
     "The percentage threshold for the memory intrinsic calls "
-    "optimization",
-    "unsigned"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "40";
-  let Hidden = 1;
-}
+    "optimization", /*hidden=*/1>;
 
-def INST_PGOMemopMaxVersion : Option<
-    "pgo-memop-max-version",
-    "The max version for the optimized memory intrinsic calls",
-    "unsigned"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "3";
-  let Hidden = 1;
-}
+defm INST_PGOMemopMaxVersion : ValueField<
+    "pgo-memop-max-version", "unsigned", "3",
+    "The max version for the optimized memory intrinsic calls", /*hidden=*/1>;
 
-def INST_PGOMemopScaleCount : Option<
-    "pgo-memop-scale-count",
-    "Scale the memop size counts using the basic block count value",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm INST_PGOMemopScaleCount : BoolField<
+    "pgo-memop-scale-count", "true",
+    "Scale the memop size counts using the basic block count value", /*hidden=*/1>;
 
-def INST_PGOMemopOptMemcmpBcmp : Option<
-    "pgo-memop-optimize-memcmp-bcmp",
-    "Size-specialize memcmp and bcmp calls",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm INST_PGOMemopOptMemcmpBcmp : BoolField<
+    "pgo-memop-optimize-memcmp-bcmp", "true",
+    "Size-specialize memcmp and bcmp calls", /*hidden=*/1>;
 
-def INST_MemopValueProfMaxOptSize : Option<
-    "memop-value-prof-max-opt-size",
-    "Optimize the memop size <= this value",
-    "unsigned"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "128";
-  let Hidden = 1;
-}
+defm INST_MemopValueProfMaxOptSize : ValueField<
+    "memop-value-prof-max-opt-size", "unsigned", "128",
+    "Optimize the memop size <= this value", /*hidden=*/1>;
 
 // ===== SanitizerBinaryMetadata.cpp =====
 
-def INST_SanitizerMetadataWeakCallbacks : Option<
-    "sanitizer-metadata-weak-callbacks",
-    "Declare callbacks extern weak, and only call if non-null.",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm INST_SanitizerMetadataWeakCallbacks : BoolField<
+    "sanitizer-metadata-weak-callbacks", "true",
+    "Declare callbacks extern weak, and only call if non-null.", /*hidden=*/1>;
 
-def INST_SanitizerMetadataNosanitize : Option<
-    "sanitizer-metadata-nosanitize-attr",
+defm INST_SanitizerMetadataNosanitize : BoolField<
+    "sanitizer-metadata-nosanitize-attr", "true",
     "Mark some metadata features uncovered in functions with "
-    "disable_sanitizer_instrumentation attribute.",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+    "disable_sanitizer_instrumentation attribute.", /*hidden=*/1>;
 
-def INST_SanitizerMetadataCovered : Option<
-    "sanitizer-metadata-covered",
-    "Emit PCs for covered functions.",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+defm INST_SanitizerMetadataCovered : BoolField<
+    "sanitizer-metadata-covered", "false",
+    "Emit PCs for covered functions.", /*hidden=*/1>;
 
-def INST_SanitizerMetadataAtomics : Option<
-    "sanitizer-metadata-atomics",
-    "Emit PCs for atomic operations.",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+defm INST_SanitizerMetadataAtomics : BoolField<
+    "sanitizer-metadata-atomics", "false",
+    "Emit PCs for atomic operations.", /*hidden=*/1>;
 
-def INST_SanitizerMetadataUAR : Option<
-    "sanitizer-metadata-uar",
+defm INST_SanitizerMetadataUAR : BoolField<
+    "sanitizer-metadata-uar", "false",
     "Emit PCs for start of functions that are subject to "
-    "use-after-return checking.",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+    "use-after-return checking.", /*hidden=*/1>;
 
 // ===== SanitizerCoverage.cpp =====
 
-def INST_SanCovLevel : Option<
-    "sanitizer-coverage-level",
+defm INST_SanCovLevel : ValueField<
+    "sanitizer-coverage-level", "int", "0",
     "Sanitizer Coverage. 0: none, 1: entry block, 2: all blocks, "
-    "3: all blocks and critical edges",
-    "int"> {
-  let Default = "0";
-  let Registry = InstrumentationOptsReg;
-  let Hidden = 1;
-}
+    "3: all blocks and critical edges", /*hidden=*/1>;
 
-def INST_SanCovTracePC : Option<
-    "sanitizer-coverage-trace-pc",
-    "Experimental pc tracing",
-    "bool"> {
-  let Default = "false";
-  let Registry = InstrumentationOptsReg;
-  let Hidden = 1;
-}
+defm INST_SanCovTracePC : BoolField<
+    "sanitizer-coverage-trace-pc", "false",
+    "Experimental pc tracing", /*hidden=*/1>;
 
-def INST_SanCovTracePCEntryExit : Option<
-    "sanitizer-coverage-trace-pc-entry-exit",
-    "pc tracing with separate entry/exit callbacks",
-    "bool"> {
-  let Default = "false";
-  let Registry = InstrumentationOptsReg;
-  let Hidden = 1;
-}
+defm INST_SanCovTracePCEntryExit : BoolField<
+    "sanitizer-coverage-trace-pc-entry-exit", "false",
+    "pc tracing with separate entry/exit callbacks", /*hidden=*/1>;
 
-def INST_SanCovTracePCGuard : Option<
-    "sanitizer-coverage-trace-pc-guard",
-    "pc tracing with a guard",
-    "bool"> {
-  let Default = "false";
-  let Registry = InstrumentationOptsReg;
-  let Hidden = 1;
-}
+defm INST_SanCovTracePCGuard : BoolField<
+    "sanitizer-coverage-trace-pc-guard", "false",
+    "pc tracing with a guard", /*hidden=*/1>;
 
-def INST_SanCovCreatePCTable : Option<
-    "sanitizer-coverage-pc-table",
-    "create a static PC table",
-    "bool"> {
-  let Default = "false";
-  let Registry = InstrumentationOptsReg;
-  let Hidden = 1;
-}
+defm INST_SanCovCreatePCTable : BoolField<
+    "sanitizer-coverage-pc-table", "false",
+    "create a static PC table", /*hidden=*/1>;
 
-def INST_SanCovInline8bitCounters : Option<
-    "sanitizer-coverage-inline-8bit-counters",
-    "increments 8-bit counter for every edge",
-    "bool"> {
-  let Default = "false";
-  let Registry = InstrumentationOptsReg;
-  let Hidden = 1;
-}
+defm INST_SanCovInline8bitCounters : BoolField<
+    "sanitizer-coverage-inline-8bit-counters", "false",
+    "increments 8-bit counter for every edge", /*hidden=*/1>;
 
-def INST_SanCovDropCtors : Option<
-    "sanitizer-coverage-drop-ctors",
-    "do not emit module ctors for global counters",
-    "bool"> {
-  let Default = "false";
-  let Registry = InstrumentationOptsReg;
-  let Hidden = 1;
-}
+defm INST_SanCovDropCtors : BoolField<
+    "sanitizer-coverage-drop-ctors", "false",
+    "do not emit module ctors for global counters", /*hidden=*/1>;
 
-def INST_SanCovInlineBoolFlag : Option<
-    "sanitizer-coverage-inline-bool-flag",
-    "sets a boolean flag for every edge",
-    "bool"> {
-  let Default = "false";
-  let Registry = InstrumentationOptsReg;
-  let Hidden = 1;
-}
+defm INST_SanCovInlineBoolFlag : BoolField<
+    "sanitizer-coverage-inline-bool-flag", "false",
+    "sets a boolean flag for every edge", /*hidden=*/1>;
 
-def INST_SanCovTraceCompares : Option<
-    "sanitizer-coverage-trace-compares",
-    "Tracing of CMP and similar instructions",
-    "bool"> {
-  let Default = "false";
-  let Registry = InstrumentationOptsReg;
-  let Hidden = 1;
-}
+defm INST_SanCovTraceCompares : BoolField<
+    "sanitizer-coverage-trace-compares", "false",
+    "Tracing of CMP and similar instructions", /*hidden=*/1>;
 
-def INST_SanCovTraceDivs : Option<
-    "sanitizer-coverage-trace-divs",
-    "Tracing of DIV instructions",
-    "bool"> {
-  let Default = "false";
-  let Registry = InstrumentationOptsReg;
-  let Hidden = 1;
-}
+defm INST_SanCovTraceDivs : BoolField<
+    "sanitizer-coverage-trace-divs", "false",
+    "Tracing of DIV instructions", /*hidden=*/1>;
 
-def INST_SanCovTraceLoads : Option<
-    "sanitizer-coverage-trace-loads",
-    "Tracing of load instructions",
-    "bool"> {
-  let Default = "false";
-  let Registry = InstrumentationOptsReg;
-  let Hidden = 1;
-}
+defm INST_SanCovTraceLoads : BoolField<
+    "sanitizer-coverage-trace-loads", "false",
+    "Tracing of load instructions", /*hidden=*/1>;
 
-def INST_SanCovTraceStores : Option<
-    "sanitizer-coverage-trace-stores",
-    "Tracing of store instructions",
-    "bool"> {
-  let Default = "false";
-  let Registry = InstrumentationOptsReg;
-  let Hidden = 1;
-}
+defm INST_SanCovTraceStores : BoolField<
+    "sanitizer-coverage-trace-stores", "false",
+    "Tracing of store instructions", /*hidden=*/1>;
 
-def INST_SanCovTraceGeps : Option<
-    "sanitizer-coverage-trace-geps",
-    "Tracing of GEP instructions",
-    "bool"> {
-  let Default = "false";
-  let Registry = InstrumentationOptsReg;
-  let Hidden = 1;
-}
+defm INST_SanCovTraceGeps : BoolField<
+    "sanitizer-coverage-trace-geps", "false",
+    "Tracing of GEP instructions", /*hidden=*/1>;
 
-def INST_SanCovPruneBlocks : Option<
-    "sanitizer-coverage-prune-blocks",
-    "Reduce the number of instrumented blocks",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm INST_SanCovPruneBlocks : BoolField<
+    "sanitizer-coverage-prune-blocks", "true",
+    "Reduce the number of instrumented blocks", /*hidden=*/1>;
 
-def INST_SanCovStackDepth : Option<
-    "sanitizer-coverage-stack-depth",
-    "max stack depth tracing",
-    "bool"> {
-  let Default = "false";
-  let Registry = InstrumentationOptsReg;
-  let Hidden = 1;
-}
+defm INST_SanCovStackDepth : BoolField<
+    "sanitizer-coverage-stack-depth", "false",
+    "max stack depth tracing", /*hidden=*/1>;
 
-def INST_SanCovStackDepthCallbackMin : Option<
-    "sanitizer-coverage-stack-depth-callback-min",
+defm INST_SanCovStackDepthCallbackMin : ValueField<
+    "sanitizer-coverage-stack-depth-callback-min", "int", "0",
     "max stack depth tracing should use callback and only when "
-    "stack depth more than specified",
-    "int"> {
-  let Default = "0";
-  let Registry = InstrumentationOptsReg;
-  let Hidden = 1;
-}
+    "stack depth more than specified", /*hidden=*/1>;
 
-def INST_SanCovControlFlow : Option<
-    "sanitizer-coverage-control-flow",
-    "collect control flow for each function",
-    "bool"> {
-  let Default = "false";
-  let Registry = InstrumentationOptsReg;
-  let Hidden = 1;
-}
+defm INST_SanCovControlFlow : BoolField<
+    "sanitizer-coverage-control-flow", "false",
+    "collect control flow for each function", /*hidden=*/1>;
 
-def INST_SanCovGatedCallbacks : Option<
-    "sanitizer-coverage-gated-trace-callbacks",
+defm INST_SanCovGatedCallbacks : BoolField<
+    "sanitizer-coverage-gated-trace-callbacks", "false",
     "Gate the invocation of the tracing callbacks on a global variable. "
-    "Currently only supported for trace-pc-guard and trace-cmp.",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+    "Currently only supported for trace-pc-guard and trace-cmp.", /*hidden=*/1>;
 
 // ===== ThreadSanitizer.cpp =====
 
-def INST_TsanInstrumentMemoryAccesses : Option<
-    "tsan-instrument-memory-accesses",
-    "Instrument memory accesses",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm INST_TsanInstrumentMemoryAccesses : BoolField<
+    "tsan-instrument-memory-accesses", "true",
+    "Instrument memory accesses", /*hidden=*/1>;
 
-def INST_TsanInstrumentFuncEntryExit : Option<
-    "tsan-instrument-func-entry-exit",
-    "Instrument function entry and exit",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm INST_TsanInstrumentFuncEntryExit : BoolField<
+    "tsan-instrument-func-entry-exit", "true",
+    "Instrument function entry and exit", /*hidden=*/1>;
 
-def INST_TsanHandleCxxExceptions : Option<
-    "tsan-handle-cxx-exceptions",
-    "Handle C++ exceptions (insert cleanup blocks for unwinding)",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm INST_TsanHandleCxxExceptions : BoolField<
+    "tsan-handle-cxx-exceptions", "true",
+    "Handle C++ exceptions (insert cleanup blocks for unwinding)", /*hidden=*/1>;
 
-def INST_TsanInstrumentAtomics : Option<
-    "tsan-instrument-atomics",
-    "Instrument atomics",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm INST_TsanInstrumentAtomics : BoolField<
+    "tsan-instrument-atomics", "true",
+    "Instrument atomics", /*hidden=*/1>;
 
-def INST_TsanInstrumentMemIntrinsics : Option<
-    "tsan-instrument-memintrinsics",
-    "Instrument memintrinsics (memset/memcpy/memmove)",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm INST_TsanInstrumentMemIntrinsics : BoolField<
+    "tsan-instrument-memintrinsics", "true",
+    "Instrument memintrinsics (memset/memcpy/memmove)", /*hidden=*/1>;
 
-def INST_TsanDistinguishVolatile : Option<
-    "tsan-distinguish-volatile",
-    "Emit special instrumentation for accesses to volatiles",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+defm INST_TsanDistinguishVolatile : BoolField<
+    "tsan-distinguish-volatile", "false",
+    "Emit special instrumentation for accesses to volatiles", /*hidden=*/1>;
 
-def INST_TsanInstrumentReadBeforeWrite : Option<
-    "tsan-instrument-read-before-write",
-    "Do not eliminate read instrumentation for read-before-writes",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+defm INST_TsanInstrumentReadBeforeWrite : OptionalValueField<
+    "tsan-instrument-read-before-write", "bool", "true",
+    "Do not eliminate read instrumentation for read-before-writes", /*hidden=*/1>;
 
-def INST_TsanCompoundReadBeforeWrite : Option<
-    "tsan-compound-read-before-write",
-    "Emit special compound instrumentation for reads-before-writes",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+defm INST_TsanCompoundReadBeforeWrite : OptionalValueField<
+    "tsan-compound-read-before-write", "bool", "true",
+    "Emit special compound instrumentation for reads-before-writes", /*hidden=*/1>;
 
-def INST_TsanOmitNonCaptured : Option<
-    "tsan-omit-by-pointer-capturing",
-    "Omit accesses due to pointer capturing",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+defm INST_TsanOmitNonCaptured : BoolField<
+    "tsan-omit-by-pointer-capturing", "true",
+    "Omit accesses due to pointer capturing", /*hidden=*/1>;
 
 // ===== TypeSanitizer.cpp =====
 
-def INST_TysanWritesAlwaysSetType : Option<
-    "tysan-writes-always-set-type",
-    "Writes always set the type",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+defm INST_TysanWritesAlwaysSetType : BoolField<
+    "tysan-writes-always-set-type", "false",
+    "Writes always set the type", /*hidden=*/1>;
 
-def INST_TysanOutlineInstrumentation : Option<
-    "tysan-outline-instrumentation",
+defm INST_TysanOutlineInstrumentation : BoolField<
+    "tysan-outline-instrumentation", "true",
     "Uses function calls for all TySan instrumentation, reducing "
-    "ELF size",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+    "ELF size", /*hidden=*/1>;
 
-def INST_TysanVerifyOutlinedInstrumentation : Option<
-    "tysan-verify-outlined-instrumentation",
+defm INST_TysanVerifyOutlinedInstrumentation : BoolField<
+    "tysan-verify-outlined-instrumentation", "false",
     "Check types twice with both inlined instrumentation and "
-    "function calls. This verifies that they behave the same.",
-    "bool"> {
-  let Registry = InstrumentationOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
-
-// Apply function declaration is in InstrumentationOptionsOptInfos.h
+    "function calls. This verifies that they behave the same.", /*hidden=*/1>;

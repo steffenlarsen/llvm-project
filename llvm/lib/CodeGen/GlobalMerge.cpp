@@ -69,7 +69,7 @@
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/Twine.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsCore1.h"
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Constants.h"
@@ -90,10 +90,7 @@
 #include "llvm/MC/SectionKind.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLineCompat.h"
-#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetLoweringObjectFile.h"
 #include "llvm/Target/TargetMachine.h"
@@ -110,41 +107,41 @@ using namespace llvm;
 
 #define DEBUG_TYPE "global-merge"
 
-static bool getEnableGlobalMerge(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_EnableGlobalMerge>(Ctx);
+static bool getEnableGlobalMerge(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore1Options>().CGPASS_EnableGlobalMerge;
 }
 
-static unsigned getGlobalMergeMaxOffset(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_GlobalMergeMaxOffset>(Ctx);
+static std::optional<unsigned>
+getGlobalMergeMaxOffset(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore1Options>().CGPASS_GlobalMergeMaxOffset;
 }
 
-static bool getGlobalMergeGroupByUse(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_GlobalMergeGroupByUse>(Ctx);
+static bool getGlobalMergeGroupByUse(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore1Options>().CGPASS_GlobalMergeGroupByUse;
 }
 
-static bool getGlobalMergeAllConst(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_GlobalMergeAllConst>(Ctx);
+static std::optional<bool> getGlobalMergeAllConst(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore1Options>().CGPASS_GlobalMergeAllConst;
 }
 
-static bool getGlobalMergeIgnoreSingleUse(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_GlobalMergeIgnoreSingleUse>(
-      Ctx);
+static bool getGlobalMergeIgnoreSingleUse(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore1Options>()
+      .CGPASS_GlobalMergeIgnoreSingleUse;
 }
 
-static bool getGlobalMergeOnConst(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_GlobalMergeOnConst>(Ctx);
+static bool getGlobalMergeOnConst(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore1Options>().CGPASS_GlobalMergeOnConst;
 }
 
-static unsigned getGlobalMergeMinDataSize(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_GlobalMergeMinDataSize>(Ctx);
+static std::optional<unsigned>
+getGlobalMergeMinDataSize(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore1Options>().CGPASS_GlobalMergeMinDataSize;
 }
 
-static cl::boolOrDefault
-getGlobalMergeOnExternal(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::CGPassCore1Reg,
-                           &clv2::CGPASS_GlobalMergeOnExternal>(
-      Ctx, cl::boolOrDefault());
-}
+// Note: getGlobalMergeOnExternal (CGPASS_GlobalMergeOnExternal) has no
+// LLVMContext-based getter here: its only reader is createGlobalMergePass,
+// which has no LLVMContext reachable and reads CodeGenCore1Options::Current
+// directly instead (see below).
 
 STATISTIC(NumMerged, "Number of globals merged");
 
@@ -152,16 +149,11 @@ namespace {
 
 class GlobalMergeImpl {
   const TargetMachine *TM = nullptr;
-  const clv2::OptionsContext *OptsCtx = &clv2::defaultOptionsContext();
+  const LLVMContext *Ctx = nullptr;
   GlobalMergeOptions Opt;
   bool IsMachO = false;
 
 private:
-  /// Get the OptionsContext, preferring TM's context.
-  const clv2::OptionsContext &getOptsCtx() const {
-    return TM ? TM->getOptionsContext() : *OptsCtx;
-  }
-
   bool doMerge(SmallVectorImpl<GlobalVariable *> &Globals, Module &M,
                bool isConst, unsigned AddrSpace) const;
 
@@ -190,8 +182,8 @@ private:
 
 public:
   GlobalMergeImpl(const TargetMachine *TM, GlobalMergeOptions Opt,
-                  const clv2::OptionsContext &Ctx)
-      : TM(TM), Opt(Opt), OptsCtx(&Ctx) {}
+                  const LLVMContext &Ctx)
+      : TM(TM), Ctx(&Ctx), Opt(Opt) {}
   bool run(Module &M);
 };
 
@@ -203,12 +195,12 @@ public:
   static char ID; // Pass identification, replacement for typeid.
 
   explicit GlobalMerge() : FunctionPass(ID) {
-    Opt.MaxOffset =
-        getGlobalMergeMaxOffset(llvm::clv2::defaultOptionsContext());
-    Opt.MergeConstantGlobals =
-        getGlobalMergeOnConst(llvm::clv2::defaultOptionsContext());
-    Opt.MergeConstAggressive =
-        getGlobalMergeAllConst(llvm::clv2::defaultOptionsContext());
+    // No LLVMContext is reachable at this call site, so this reads the
+    // process-wide default rather than a context-specific override.
+    const CodeGenCore1Options &Opts = CodeGenCore1Options::Current;
+    Opt.MaxOffset = Opts.CGPASS_GlobalMergeMaxOffset.value_or(0u);
+    Opt.MergeConstantGlobals = Opts.CGPASS_GlobalMergeOnConst;
+    Opt.MergeConstAggressive = Opts.CGPASS_GlobalMergeAllConst.value_or(false);
   }
 
   explicit GlobalMerge(const TargetMachine *TM, unsigned MaximalOffset,
@@ -229,20 +221,17 @@ public:
         return std::nullopt;
       return mdconst::extract<ConstantInt>(SDL)->getZExtValue();
     };
-    const clv2::OptionsContext &Ctx =
-        TM ? TM->getOptionsContext() : M.getContext().getOptionsContext();
+    const LLVMContext &Ctx = M.getContext();
     // Re-read constructor options from the Module context when TM is null,
     // since the default constructor uses nullptr which may not have the
     // tool-parsed values.
     if (!TM) {
-      Opt.MaxOffset = getGlobalMergeMaxOffset(Ctx);
+      Opt.MaxOffset = getGlobalMergeMaxOffset(Ctx).value_or(0u);
       Opt.MergeConstantGlobals = getGlobalMergeOnConst(Ctx);
-      Opt.MergeConstAggressive = getGlobalMergeAllConst(Ctx);
+      Opt.MergeConstAggressive = getGlobalMergeAllConst(Ctx).value_or(false);
     }
-    if (false ||
-        clv2::wasOptSpecified<&clv2::CGPassCore1Reg,
-                              &clv2::CGPASS_GlobalMergeMinDataSize>(Ctx))
-      Opt.MinSize = getGlobalMergeMinDataSize(Ctx);
+    if (auto MinDataSize = getGlobalMergeMinDataSize(Ctx))
+      Opt.MinSize = *MinDataSize;
     else if (auto SDL = GetSmallDataLimit(M); SDL && *SDL > 0)
       Opt.MinSize = *SDL + 1;
     else
@@ -264,7 +253,7 @@ public:
 } // end anonymous namespace
 
 PreservedAnalyses GlobalMergePass::run(Module &M, ModuleAnalysisManager &) {
-  GlobalMergeImpl P(TM, Options, M.getContext().getOptionsContext());
+  GlobalMergeImpl P(TM, Options, M.getContext());
   bool Changed = P.run(M);
   if (!Changed)
     return PreservedAnalyses::all();
@@ -290,7 +279,7 @@ bool GlobalMergeImpl::doMerge(SmallVectorImpl<GlobalVariable *> &Globals,
       });
 
   // If we want to just blindly group all globals together, do so.
-  if (!getGlobalMergeGroupByUse(getOptsCtx()) ||
+  if (!getGlobalMergeGroupByUse(*Ctx) ||
       (Opt.MergeConstAggressive && isConst)) {
     BitVector AllGlobals(Globals.size(), true);
     return doMerge(Globals, AllGlobals, M, isConst, AddrSpace);
@@ -446,7 +435,7 @@ bool GlobalMergeImpl::doMerge(SmallVectorImpl<GlobalVariable *> &Globals,
   // We can choose to merge all globals together, but ignore globals never used
   // with another global.  This catches the obviously non-profitable cases of
   // having a single global, but is aggressive enough for any other case.
-  if (getGlobalMergeIgnoreSingleUse(getOptsCtx())) {
+  if (getGlobalMergeIgnoreSingleUse(*Ctx)) {
     BitVector AllGlobals(Globals.size());
     for (const UsedGlobalSet &UGS : UsedGlobalSets) {
       if (UGS.UsageCount == 0)
@@ -692,8 +681,7 @@ static bool isSpecialMachOSection(StringRef Section) {
 }
 
 bool GlobalMergeImpl::run(Module &M) {
-  const clv2::OptionsContext &Ctx = getOptsCtx();
-  if (!getEnableGlobalMerge(Ctx))
+  if (!getEnableGlobalMerge(*Ctx))
     return false;
 
   IsMachO = M.getTargetTriple().isOSBinFormatMachO();
@@ -798,31 +786,18 @@ Pass *llvm::createGlobalMergePass(const TargetMachine *TM, unsigned Offset,
                                   bool MergeExternalByDefault,
                                   bool MergeConstantByDefault,
                                   bool MergeConstAggressiveByDefault) {
-  bool MergeExternal, MergeConstant, MergeConstAggressive;
-  unsigned PreferOffset;
-  if (TM) {
-    const clv2::OptionsContext &Ctx = TM->getOptionsContext();
-    MergeExternal =
-        (getGlobalMergeOnExternal(Ctx) == cl::boolOrDefault::BOU_UNSET)
-            ? MergeExternalByDefault
-            : (getGlobalMergeOnExternal(Ctx) == cl::boolOrDefault::BOU_TRUE);
-    MergeConstant = getGlobalMergeOnConst(Ctx) || MergeConstantByDefault;
-    MergeConstAggressive =
-        clv2::wasOptSpecified<&clv2::CGPassCore1Reg,
-                              &clv2::CGPASS_GlobalMergeAllConst>(Ctx)
-            ? getGlobalMergeAllConst(Ctx)
-            : MergeConstAggressiveByDefault;
-    PreferOffset =
-        clv2::wasOptSpecified<&clv2::CGPassCore1Reg,
-                              &clv2::CGPASS_GlobalMergeMaxOffset>(Ctx)
-            ? getGlobalMergeMaxOffset(Ctx)
-            : Offset;
-  } else {
-    MergeExternal = MergeExternalByDefault;
-    MergeConstant = MergeConstantByDefault;
-    MergeConstAggressive = MergeConstAggressiveByDefault;
-    PreferOffset = Offset;
-  }
+  // No LLVMContext is reachable at this call site (TM's OptionsContext is a
+  // separate, clv2-based mechanism that cannot supply CodeGenCore1Options),
+  // so this reads the process-wide default rather than a context-specific
+  // override, regardless of whether TM is null. This is a deliberate,
+  // narrow behavior change: TM's OptionsContext is no longer consulted here.
+  const CodeGenCore1Options &Opts = CodeGenCore1Options::Current;
+  bool MergeExternal =
+      Opts.CGPASS_GlobalMergeOnExternal.value_or(MergeExternalByDefault);
+  bool MergeConstant = Opts.CGPASS_GlobalMergeOnConst || MergeConstantByDefault;
+  bool MergeConstAggressive =
+      Opts.CGPASS_GlobalMergeAllConst.value_or(MergeConstAggressiveByDefault);
+  unsigned PreferOffset = Opts.CGPASS_GlobalMergeMaxOffset.value_or(Offset);
   return new GlobalMerge(TM, PreferOffset, OnlyOptimizeForSize, MergeExternal,
                          MergeConstant, MergeConstAggressive);
 }

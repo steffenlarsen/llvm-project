@@ -21,15 +21,13 @@
 #include "llvm/CodeGen/MachineModuleInfo.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/IR/Function.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/Sparc/SparcOptionsOptInfos.h"
+#include "llvm/Target/Sparc/SparcOptions.h"
 #include "llvm/Target/TargetOptions.h"
 
 using namespace llvm;
 
 static bool getDisableLeafProc(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SPARC_DisableLeafProc>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<SparcOptions>().SPARC_DisableLeafProc;
 }
 
 SparcFrameLowering::SparcFrameLowering(const SparcSubtarget &ST)

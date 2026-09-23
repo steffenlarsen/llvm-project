@@ -18,6 +18,18 @@
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/RuntimeLibcallInfo.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
+#include "llvm/AsmParser/AsmParserOptions.h"
+#include "llvm/CGData/CGDataOptions.h"
+#include "llvm/CodeGen/CodeGenPassOptionsAsmPrint.h"
+#include "llvm/CodeGen/CodeGenPassOptionsCore1.h"
+#include "llvm/CodeGen/CodeGenPassOptionsCore2.h"
+#include "llvm/CodeGen/CodeGenPassOptionsGISel.h"
+#include "llvm/CodeGen/CodeGenPassOptionsMachine1.h"
+#include "llvm/CodeGen/CodeGenPassOptionsMachine2.h"
+#include "llvm/CodeGen/CodeGenPassOptionsRegAlloc.h"
+#include "llvm/CodeGen/CodeGenPassOptionsSched1.h"
+#include "llvm/CodeGen/CodeGenPassOptionsSched2.h"
+#include "llvm/CodeGen/CodeGenPassOptionsSelDAG.h"
 #include "llvm/CodeGen/CommandFlags.h"
 #include "llvm/CodeGen/LinkAllAsmWriterComponents.h"
 #include "llvm/CodeGen/LinkAllCodegenComponents.h"
@@ -26,10 +38,12 @@
 #include "llvm/CodeGen/MachineModuleInfo.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
+#include "llvm/Config/Targets.h"
 #include "llvm/IR/AutoUpgrade.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/DiagnosticInfo.h"
 #include "llvm/IR/DiagnosticPrinter.h"
+#include "llvm/IR/IROptions.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/LLVMRemarkStreamer.h"
 #include "llvm/IR/LegacyPassManager.h"
@@ -37,11 +51,17 @@
 #include "llvm/IR/Verifier.h"
 #include "llvm/IRReader/IRReader.h"
 #include "llvm/InitializePasses.h"
+#include "llvm/LTO/LTOOptions.h"
+#include "llvm/MC/MCOptions.h"
 #include "llvm/MC/MCTargetOptionsCommandFlags.h"
 #include "llvm/MC/TargetRegistry.h"
+#include "llvm/Option/LibraryOptions.h"
 #include "llvm/Pass.h"
-#include "llvm/Passes/PassesOptionsOptInfos.h"
+#include "llvm/Passes/PassesOptions.h"
 #include "llvm/Plugins/PassPlugin.h"
+#include "llvm/ProfileData/ProfileDataOptions.h"
+#include "llvm/Remarks/RemarksOptions.h"
+#include "llvm/Support/ColorOptions.h"
 #include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
@@ -50,19 +70,54 @@
 #include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/PGOOptions.h"
 #include "llvm/Support/Path.h"
+#include "llvm/Support/PluginLoaderOptions.h"
 #include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/SourceMgr.h"
+#include "llvm/Support/SupportOptions.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/TimeProfiler.h"
 #include "llvm/Support/ToolOutputFile.h"
 #include "llvm/Support/WithColor.h"
+#include "llvm/Target/AArch64/AArch64Options.h"
+#include "llvm/Target/AMDGPU/AMDGPUOptions.h"
+#include "llvm/Target/BPF/BPFOptions.h"
 #include "llvm/Target/CGPassBuilderOption.h"
+#if LLVM_HAS_ARC_TARGET
+#include "llvm/Target/ARC/ARCOptions.h"
+#endif
+#if LLVM_HAS_CSKY_TARGET
+#include "llvm/Target/CSKY/CSKYOptions.h"
+#endif
+#if LLVM_HAS_LANAI_TARGET
+#include "llvm/Target/Lanai/LanaiOptions.h"
+#endif
+#if LLVM_HAS_SYSTEMZ_TARGET
+#include "llvm/Target/SystemZ/SystemZOptions.h"
+#endif
+#include "llvm/Target/ARM/ARMOptions.h"
+#include "llvm/Target/Hexagon/HexagonOptions.h"
+#include "llvm/Target/LoongArch/LoongArchOptions.h"
+#include "llvm/Target/MSP430/MSP430Options.h"
+#include "llvm/Target/Mips/MipsOptions.h"
+#include "llvm/Target/NVPTX/NVPTXOptions.h"
+#include "llvm/Target/PowerPC/PowerPCOptions.h"
+#include "llvm/Target/RISCV/RISCVOptions.h"
+#include "llvm/Target/SPIRV/SPIRVOptions.h"
+#include "llvm/Target/Sparc/SparcOptions.h"
 #include "llvm/Target/TargetLoweringObjectFile.h"
 #include "llvm/Target/TargetMachine.h"
+#include "llvm/Target/WebAssembly/WebAssemblyOptions.h"
+#include "llvm/Target/X86/X86Options.h"
+#include "llvm/Target/XCore/XCoreOptions.h"
 #include "llvm/TargetParser/Host.h"
 #include "llvm/TargetParser/SubtargetFeature.h"
 #include "llvm/TargetParser/Triple.h"
+#include "llvm/Transforms/IPO/IPOOptions.h"
+#include "llvm/Transforms/Instrumentation/InstrumentationOptions.h"
+#include "llvm/Transforms/ObjCARC/ObjCARCOptions.h"
+#include "llvm/Transforms/Scalar/ScalarOptions.h"
 #include "llvm/Transforms/Utils/Cloning.h"
+#include "llvm/Transforms/Utils/UtilsOptions.h"
 #include <cassert>
 #include <memory>
 #include <optional>
@@ -460,10 +515,68 @@ extern "C" int llcMain(int argc, char **argv) {
   // Register the target printer for --version.
   cl::AddExtraVersionPrinter(TargetRegistry::printRegisteredTargetsForVersion);
 
+  // llvm::PassesOptions, llvm::PluginLoaderOptions, and llvm::ColorOptions
+  // have migrated off clv2 onto the new per-library OptTable/hand-written
+  // struct design (see llvm/include/llvm/Option/LibraryOptions.h) and are no
+  // longer among the clv2::OptionParser registries configured above
+  // (RegisterAllLLVMOptions() no longer wires up -load). Parse them out of
+  // argv first, forwarding whatever none of them recognizes to the legacy
+  // clv2 parser unchanged.
+  SmallVector<const char *, 32> LibraryOptsRest;
+  {
+    std::string LibraryOptsErrs;
+    raw_string_ostream LibraryOptsErrsOS(LibraryOptsErrs);
+    if (Error Err = opt::parseLibraryOptionsChain<
+            PluginLoaderOptions, SupportOptions, PassesOptions, ColorOptions,
+            CodeGenAsmPrintOptions, CodeGenGISelOptions, CodeGenMachine1Options,
+            CodeGenMachine2Options, CodeGenRegAllocOptions,
+            CodeGenSched1Options, CodeGenSched2Options, CodeGenSelDAGOptions,
+            CodeGenCore2Options, CodeGenCore1Options, RemarksOptions,
+            AsmParserOptions, XCoreOptions, ObjCARCOptions, MSP430Options,
+            SparcOptions, WebAssemblyOptions, SPIRVOptions, CGDataOptions,
+            BPFOptions, LoongArchOptions, LTOOptions, MipsOptions, NVPTXOptions,
+            AArch64Options, ARMOptions, RISCVOptions, X86Options,
+            PowerPCOptions, HexagonOptions, ProfileDataOptions,
+            MCLibraryOptions, IROptions, UtilsOptions, AMDGPUOptions,
+            InstrumentationOptions, IPOOptions, ScalarOptions
+#if LLVM_HAS_ARC_TARGET
+            ,
+            ARCOptions
+#endif
+#if LLVM_HAS_CSKY_TARGET
+            ,
+            CSKYOptions
+#endif
+#if LLVM_HAS_LANAI_TARGET
+            ,
+            LanaiOptions
+#endif
+#if LLVM_HAS_SYSTEMZ_TARGET
+            ,
+            SystemZOptions
+#endif
+            >(ArrayRef<const char *>(argv + 1, argv + argc), LibraryOptsRest,
+              LibraryOptsErrsOS)) {
+      errs() << "llc: " << toString(std::move(Err)) << "\n";
+      return 1;
+    }
+    errs() << LibraryOptsErrs;
+  }
+  // IROptions has no automatic apply step (unlike the other libraries in the
+  // chain above, which are read on demand via Ctx.getOptions<T>()); it must
+  // sync a couple of legacy globals (TimePassesIsEnabled/TimePassesPerRun and
+  // the OptBisect singleton) explicitly. See llvm/lib/IR/IROptions.cpp.
+  llvm::ir_opts::applyIROptions();
+  loadRequestedPlugins();
+  SmallVector<const char *, 32> ArgvAfterPasses;
+  ArgvAfterPasses.push_back(argv[0]);
+  ArgvAfterPasses.append(LibraryOptsRest.begin(), LibraryOptsRest.end());
+
   clv2::OptionParser P;
   configureLLCRegistries(P);
-  auto OptsCtxOwner =
-      P.parse(argc, argv, "llvm system compiler\n", /*Errs=*/nullptr);
+  auto OptsCtxOwner = P.parse(static_cast<int>(ArgvAfterPasses.size()),
+                              ArgvAfterPasses.data(), "llvm system compiler\n",
+                              /*Errs=*/nullptr);
   const auto &OptsCtx = *OptsCtxOwner;
   const auto *Opts = OptsCtx.getViewPtr<&LLCToolReg>();
 
@@ -872,13 +985,12 @@ static int compileModule(char **argv, SmallVectorImpl<PassPlugin> &PluginList,
     // NewPMDriver.cpp uses for the same option
     // (llvm/tools/opt/NewPMDriver.cpp).
     StringRef PrintPipelinePasses;
-    if (auto *PassesOpts = clv2::getView<&clv2::PassesOptsReg>(OptsCtx)) {
-      if (PassesOpts->specified<&clv2::PAS_PrintPipelinePasses>()) {
-        const std::string &Val =
-            PassesOpts->get<&clv2::PAS_PrintPipelinePasses>();
-        PrintPipelinePasses = Val.empty() ? StringRef("text") : StringRef(Val);
-      }
-    }
+    const std::optional<std::string> &PrintPipelinePassesOpt =
+        Context.getOptions<PassesOptions>().PAS_PrintPipelinePasses;
+    if (PrintPipelinePassesOpt)
+      PrintPipelinePasses = PrintPipelinePassesOpt->empty()
+                                ? StringRef("text")
+                                : StringRef(*PrintPipelinePassesOpt);
     return compileModuleWithNewPM(
         argv[0], std::move(M), std::move(MIR), std::move(Target),
         std::move(Out), std::move(DwoOut), Context, TLII, VK, PassPipelineStr,
@@ -935,10 +1047,10 @@ static int compileModule(char **argv, SmallVectorImpl<PassPlugin> &PluginList,
       }
       TargetPassConfig *PTPC = Target->createPassConfig(PM);
       TargetPassConfig &TPC = *PTPC;
-      if (TargetPassConfig::hasLimitedCodeGenPipeline(OptsCtx)) {
+      if (TargetPassConfig::hasLimitedCodeGenPipeline(&Context)) {
         WithColor::error(errs(), argv[0])
             << "run-pass cannot be used with "
-            << TargetPassConfig::getLimitedCodeGenPipelineReason(OptsCtx)
+            << TargetPassConfig::getLimitedCodeGenPipelineReason(&Context)
             << ".\n";
         delete PTPC;
         delete MMIWP;

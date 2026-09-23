@@ -22,9 +22,7 @@
 namespace llvm {
 
 class Function;
-namespace clv2 {
-class OptionsContext;
-}
+class LLVMContext;
 
 namespace WebAssembly {
 // Exception handling / setjmp-longjmp handling option getters
@@ -33,11 +31,11 @@ LLVM_ABI bool getWasmEnableEmSjLj(const Function *F = nullptr);
 LLVM_ABI bool getWasmEnableEH(const Function *F = nullptr);
 LLVM_ABI bool getWasmEnableSjLj(const Function *F = nullptr);
 LLVM_ABI bool getWasmUseLegacyEH(const Function *F = nullptr);
-LLVM_ABI bool getWasmEnableEmEH(const clv2::OptionsContext &Ctx);
-LLVM_ABI bool getWasmEnableEmSjLj(const clv2::OptionsContext &Ctx);
-LLVM_ABI bool getWasmEnableEH(const clv2::OptionsContext &Ctx);
-LLVM_ABI bool getWasmEnableSjLj(const clv2::OptionsContext &Ctx);
-LLVM_ABI bool getWasmUseLegacyEH(const clv2::OptionsContext &Ctx);
+LLVM_ABI bool getWasmEnableEmEH(const LLVMContext &Ctx);
+LLVM_ABI bool getWasmEnableEmSjLj(const LLVMContext &Ctx);
+LLVM_ABI bool getWasmEnableEH(const LLVMContext &Ctx);
+LLVM_ABI bool getWasmEnableSjLj(const LLVMContext &Ctx);
+LLVM_ABI bool getWasmUseLegacyEH(const LLVMContext &Ctx);
 } // namespace WebAssembly
 
 class WebAssemblyTargetMachine final : public CodeGenTargetMachineImpl {

@@ -56,7 +56,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/iterator_range.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsMachine1.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
@@ -67,14 +67,13 @@
 #include "llvm/CodeGen/TargetRegisterInfo.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/LLVMContext.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/MC/MCRegister.h"
 #include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/DebugCounter.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cassert>
 #include <iterator>
@@ -91,15 +90,15 @@ STATISTIC(NumSpillageChains, "Number of spillage chains");
 DEBUG_COUNTER(FwdCounter, "machine-cp-fwd",
               "Controls which register COPYs are forwarded");
 
-static bool getMcpUseIsCopyInstr(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_McpUseIsCopyInstr>(Ctx);
+static bool getMcpUseIsCopyInstr(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenMachine1Options>().CGPASS_McpUseIsCopyInstr;
 }
 
-static cl::boolOrDefault
-getEnableSpillCopyElim(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOr<&clv2::CGPassMachine1Reg,
-                           &clv2::CGPASS_EnableSpillCopyElim>(
-      Ctx, cl::boolOrDefault::BOU_UNSET);
+// std::optional<bool>: was cl::opt<cl::boolOrDefault>; this needs to
+// distinguish "left unset" (fall back to a target query) from "explicitly
+// specified" (including explicitly false).
+static std::optional<bool> getEnableSpillCopyElim(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenMachine1Options>().CGPASS_EnableSpillCopyElim;
 }
 
 namespace {
@@ -1630,23 +1629,12 @@ bool MachineCopyPropagation::run(MachineFunction &MF) {
   // This cannot be done in the constructor because no Function is available
   // there (constructor runs during pass pipeline setup).
   if (!UseCopyInstr)
-    UseCopyInstr =
-        getMcpUseIsCopyInstr(MF.getFunction().getContext().getOptionsContext());
+    UseCopyInstr = getMcpUseIsCopyInstr(MF.getFunction().getContext());
 
-  bool IsSpillageCopyElimEnabled = false;
-  switch (getEnableSpillCopyElim(
-      MF.getFunction().getContext().getOptionsContext())) {
-  case cl::boolOrDefault::BOU_UNSET:
-    IsSpillageCopyElimEnabled =
-        MF.getSubtarget().enableSpillageCopyElimination();
-    break;
-  case cl::boolOrDefault::BOU_TRUE:
-    IsSpillageCopyElimEnabled = true;
-    break;
-  case cl::boolOrDefault::BOU_FALSE:
-    IsSpillageCopyElimEnabled = false;
-    break;
-  }
+  std::optional<bool> EnableSpillCopyElimOpt =
+      getEnableSpillCopyElim(MF.getFunction().getContext());
+  bool IsSpillageCopyElimEnabled = EnableSpillCopyElimOpt.value_or(
+      MF.getSubtarget().enableSpillageCopyElimination());
 
   Changed = false;
 

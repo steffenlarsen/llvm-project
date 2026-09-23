@@ -28,13 +28,11 @@
 #include "llvm/IR/DebugLoc.h"
 #include "llvm/IR/Function.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
+#include "llvm/Target/Hexagon/HexagonOptions.h"
 #include <algorithm>
 #include <cassert>
 #include <cstdint>
@@ -52,18 +50,15 @@ static int MaxHSDR = -1;
 static bool MemRefsFixed = true;
 
 static bool getSplitAll(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_SplitAll>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_SplitAll;
 }
 
 static int getMaxHSDR(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_MaxHSDR>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_MaxHSDR;
 }
 
 static bool getMemRefsFixed(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_MemRefsFixed>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_MemRefsFixed;
 }
 
 namespace {

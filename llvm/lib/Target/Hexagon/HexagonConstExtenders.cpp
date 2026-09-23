@@ -19,9 +19,8 @@
 #include "llvm/IR/Function.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
+#include "llvm/Target/Hexagon/HexagonOptions.h"
 #include <map>
 #include <set>
 #include <utility>
@@ -34,18 +33,15 @@ using namespace llvm;
 static unsigned CountThreshold = 3;
 
 static unsigned getCountThreshold(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_CExtThreshold>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_CExtThreshold;
 }
 
 static unsigned getReplaceLimit(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::HEX_CExtLimit>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_CExtLimit.value_or(0);
 }
 
 static bool getReplaceLimitWasSpecified(const Function &F) {
-  return clv2::wasOptSpecified<&clv2::HexagonOptsReg, &clv2::HEX_CExtLimit>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<HexagonOptions>().HEX_CExtLimit.has_value();
 }
 
 static int32_t adjustUp(int32_t V, uint8_t A, uint8_t O) {

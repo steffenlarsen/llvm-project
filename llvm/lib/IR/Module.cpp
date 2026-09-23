@@ -42,10 +42,9 @@
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/MemoryBuffer.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/RandomNumberGenerator.h"
-#include "llvm/Support/SupportOptionsOptInfos.h"
+#include "llvm/Support/SupportOptions.h"
 #include "llvm/Support/TimeProfiler.h"
 #include "llvm/Support/VersionTuple.h"
 #include <cassert>
@@ -169,10 +168,8 @@ Module::createRNG(const StringRef Name) const {
   // store salt metadata from the Module constructor.
   Salt += sys::path::filename(getModuleIdentifier());
 
-  // The seed is per-LLVMContext rather than process-wide, so concurrent
-  // compilations in one process can use different -rng-seed values.
-  uint64_t Seed = clv2::getOptValOr<&clv2::SupportOptsReg, &clv2::SUP_RngSeed>(
-      getContext().getOptionsContext(), uint64_t(0));
+  // -rng-seed is process-wide, like every other LLVMSupport option.
+  uint64_t Seed = SupportOptions::Current.RngSeed;
 
   return std::unique_ptr<RandomNumberGenerator>(
       new RandomNumberGenerator(Salt, Seed));

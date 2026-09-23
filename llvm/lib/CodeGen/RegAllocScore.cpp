@@ -13,7 +13,6 @@
 //===----------------------------------------------------------------------===//
 
 #include "RegAllocScore.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineBlockFrequencyInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
@@ -21,34 +20,15 @@
 #include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/LLVMContext.h"
 #include "llvm/MC/MCInstrDesc.h"
-#include "llvm/Support/CommandLineV2.h"
-#include "llvm/Support/OptionsContext.h"
 
 using namespace llvm;
 
-static double getRegallocCopyWeight(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_RegallocCopyWeight>(Ctx);
-}
-
-static double getRegallocLoadWeight(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_RegallocLoadWeight>(Ctx);
-}
-
-static double getRegallocStoreWeight(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_RegallocStoreWeight>(Ctx);
-}
-
-static double getRegallocCheapRematWeight(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_RegallocCheapRematWeight>(Ctx);
-}
-
-static double getRegallocExpensiveRematWeight(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_RegallocExpensiveRematWeight>(
-      Ctx);
-}
-
 #define DEBUG_TYPE "regalloc-score"
+
+RegAllocScore::RegAllocScore(const LLVMContext &Ctx)
+    : Opts(&Ctx.getOptions<CodeGenRegAllocOptions>()) {}
 
 RegAllocScore &RegAllocScore::operator+=(const RegAllocScore &Other) {
   CopyCounts += Other.copyCounts();
@@ -75,13 +55,13 @@ bool RegAllocScore::operator!=(const RegAllocScore &Other) const {
 
 double RegAllocScore::getScore() const {
   double Ret = 0.0;
-  Ret += getRegallocCopyWeight(*Ctx) * copyCounts();
-  Ret += getRegallocLoadWeight(*Ctx) * loadCounts();
-  Ret += getRegallocStoreWeight(*Ctx) * storeCounts();
-  Ret += (getRegallocLoadWeight(*Ctx) + getRegallocStoreWeight(*Ctx)) *
+  Ret += Opts->CGPASS_RegallocCopyWeight * copyCounts();
+  Ret += Opts->CGPASS_RegallocLoadWeight * loadCounts();
+  Ret += Opts->CGPASS_RegallocStoreWeight * storeCounts();
+  Ret += (Opts->CGPASS_RegallocLoadWeight + Opts->CGPASS_RegallocStoreWeight) *
          loadStoreCounts();
-  Ret += getRegallocCheapRematWeight(*Ctx) * cheapRematCounts();
-  Ret += getRegallocExpensiveRematWeight(*Ctx) * expensiveRematCounts();
+  Ret += Opts->CGPASS_RegallocCheapRematWeight * cheapRematCounts();
+  Ret += Opts->CGPASS_RegallocExpensiveRematWeight * expensiveRematCounts();
 
   return Ret;
 }
@@ -104,7 +84,7 @@ RegAllocScore llvm::calculateRegAllocScore(
     llvm::function_ref<double(const MachineBasicBlock &)> GetBBFreq,
     llvm::function_ref<bool(const MachineInstr &)>
         IsTriviallyRematerializable) {
-  const auto &Ctx = MF.getFunction().getContext().getOptionsContext();
+  const LLVMContext &Ctx = MF.getFunction().getContext();
   RegAllocScore Total(Ctx);
 
   for (const MachineBasicBlock &MBB : MF) {

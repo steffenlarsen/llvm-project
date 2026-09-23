@@ -14,7 +14,6 @@ tablegen(LLVM ARCGenSubtargetInfo.inc -gen-subtarget)
 add_public_tablegen_target(ARCCommonTableGen)
 
 add_llvm_target(ARCCodeGen
-  ARCOptionsGetters.cpp
   ARCAsmPrinter.cpp
   ARCBranchFinalize.cpp
   ARCExpandPseudos.cpp
@@ -47,6 +46,9 @@ add_llvm_target(ARCCodeGen
 
   ADD_TO_COMPONENT
   ARC
+
+  DEPENDS
+  ARCOptParserTableGen
   )
 
 add_subdirectory(Disassembler)

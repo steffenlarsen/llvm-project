@@ -6,46 +6,27 @@
 //
 //===----------------------------------------------------------------------===//
 
-include "llvm/Support/CLV2Options.td"
+include "llvm/Option/OptParser.td"
 
-def LanaiOptsReg : Registry<"llvm::lanai_opts"> {
-  // Getter bodies are compiled once, in LanaiOptionsGetters.cpp.
-  let OutOfLineGetters = 1;
-}
+def LanaiOptions : OptionsStruct<"llvm"> {}
 
-def LANAI_SSThreshold : Option<
-    "lanai-ssection-threshold",
+defm LANAI_SSThreshold : ValueField<
+    "lanai-ssection-threshold", "unsigned", "0",
     "Small data and bss section threshold size (default=0)",
-    "unsigned"> {
-  let Registry = LanaiOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def LANAI_NopDelaySlotFiller : Option<
-    "lanai-nop-delay-filler",
+defm LANAI_NopDelaySlotFiller : BoolField<
+    "lanai-nop-delay-filler", "false",
     "Fill Lanai delay slots with NOPs.",
-    "bool"> {
-  let Registry = LanaiOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def LANAI_LowerConstantMulThreshold : Option<
-    "lanai-constant-mul-threshold",
+defm LANAI_LowerConstantMulThreshold : ValueField<
+    "lanai-constant-mul-threshold", "int", "14",
     "Maximum number of instruction to generate when lowering constant "
     "multiplication instead of calling library function [default=14]",
-    "int"> {
-  let Registry = LanaiOptsReg;
-  let Default = "14";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def LANAI_DisableMemAluCombiner : Option<
-    "disable-lanai-mem-alu-combiner",
+defm LANAI_DisableMemAluCombiner : BoolField<
+    "disable-lanai-mem-alu-combiner", "false",
     "Do not combine ALU and memory operators",
-    "bool"> {
-  let Registry = LanaiOptsReg;
-  let Default = "0";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;

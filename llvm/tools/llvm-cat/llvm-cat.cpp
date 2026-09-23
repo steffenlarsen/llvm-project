@@ -22,6 +22,7 @@
 #include "llvm/Support/Error.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/PluginLoaderOptions.h"
 #include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/raw_ostream.h"
@@ -51,7 +52,10 @@ int main(int argc, char **argv) {
   P.add<&CatToolReg>();
   RegisterAllLLVMOptions(P);
   P.hideUnrelatedOptions({&CatCategory});
-  auto OptsCtx = P.parse(argc, argv, "Module concatenation");
+  std::vector<const char *> ArgsAfterPlugins =
+      loadPluginsAndStripArgs(argc, argv);
+  auto OptsCtx = P.parse(static_cast<int>(ArgsAfterPlugins.size()),
+                          ArgsAfterPlugins.data(), "Module concatenation");
   auto *Opts = OptsCtx->getViewPtr<&CatToolReg>();
 
   ExitOnError ExitOnErr("llvm-cat: ");

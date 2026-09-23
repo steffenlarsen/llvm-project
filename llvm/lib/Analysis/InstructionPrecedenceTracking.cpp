@@ -18,11 +18,10 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Analysis/InstructionPrecedenceTracking.h"
-#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
+#include "llvm/Analysis/AnalysisOptions.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/PatternMatch.h"
 #include "llvm/Support/CommandLineCompat.h"
-#include "llvm/Support/OptionsContext.h"
 
 using namespace llvm;
 
@@ -30,8 +29,7 @@ using namespace llvm;
 static bool ExpensiveAsserts = false;
 
 static bool getExpensiveAsserts(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AN_ExpensiveAsserts>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<AnalysisOptions>().AN_ExpensiveAsserts;
 }
 #endif
 
@@ -135,8 +133,7 @@ bool ImplicitControlFlowTracking::isSpecialInstruction(
   return !isGuaranteedToTransferExecutionToSuccessor(Insn);
 }
 
-bool MemoryWriteTracking::isSpecialInstruction(
-    const Instruction *Insn) const {
+bool MemoryWriteTracking::isSpecialInstruction(const Instruction *Insn) const {
   using namespace PatternMatch;
   if (match(Insn, m_Intrinsic<Intrinsic::experimental_widenable_condition>()))
     return false;

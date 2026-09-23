@@ -32,17 +32,14 @@
 
 #include "llvm/Remarks/RemarkSerializer.h"
 #include "llvm/Support/Error.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/Regex.h"
 #include <memory>
 #include <optional>
 
 namespace llvm {
 
+class LLVMContext;
 class raw_ostream;
-namespace clv2 {
-class OptionsContext;
-}
 
 namespace remarks {
 class RemarkStreamer final {
@@ -81,9 +78,9 @@ public:
   /// Check wether the string matches the filter.
   LLVM_ABI bool matchesFilter(StringRef Str);
   /// Check if the remarks NEED to have metadata in an object section
-  LLVM_ABI bool needsSection(const clv2::OptionsContext &Ctx) const;
+  LLVM_ABI bool needsSection(const LLVMContext &Ctx) const;
   /// Check if the remarks should store associated metadata if suppported
-  LLVM_ABI bool wantsSection(const clv2::OptionsContext &Ctx) const;
+  LLVM_ABI bool wantsSection(const LLVMContext &Ctx) const;
 };
 } // end namespace remarks
 } // end namespace llvm

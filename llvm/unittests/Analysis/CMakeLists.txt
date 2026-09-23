@@ -72,6 +72,8 @@ endif()
 add_llvm_unittest_with_input_files(AnalysisTests
   ${ANALYSIS_TEST_SOURCES}
 
+  DEPENDS UtilsOptParserTableGen
+
   EXPORT_SYMBOLS
   )
 

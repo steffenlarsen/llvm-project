@@ -1,6 +1,4 @@
 add_llvm_component_library(LLVMTransformUtils
-  UtilsOptionsRegistration.cpp
-  UtilsOptionsGetters.cpp
   AddDiscriminators.cpp
   AMDGPUEmitPrintf.cpp
   ASanStackFrameLayout.cpp
@@ -108,10 +106,12 @@ add_llvm_component_library(LLVMTransformUtils
 
   DEPENDS
   intrinsics_gen
+  UtilsOptParserTableGen
 
   LINK_COMPONENTS
   Analysis
   Core
+  Option
   ProfileData
   Support
   TargetParser

@@ -49,8 +49,7 @@
 #include "llvm/IR/Function.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/MC/MCInstrDesc.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/X86/X86OptionsOptInfos.h"
+#include "llvm/Target/X86/X86Options.h"
 
 using namespace llvm;
 
@@ -59,13 +58,11 @@ using namespace llvm;
 static unsigned X86AvoidSFBInspectionLimit = 20;
 
 static bool getDisableAvoidSFB(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::X86_DisableAvoidSFB>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<X86Options>().X86_DisableAvoidSFB;
 }
 
 static unsigned getSFBInspectionLimit(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::X86_SFBInspectionLimit>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<X86Options>().X86_SFBInspectionLimit;
 }
 
 namespace {
@@ -74,7 +71,7 @@ using DisplacementSizeMap = std::map<int64_t, unsigned>;
 
 class X86AvoidSFBImpl {
 public:
-  X86AvoidSFBImpl(AliasAnalysis *AA) : AA(AA) {};
+  X86AvoidSFBImpl(AliasAnalysis *AA) : AA(AA){};
   bool runOnMachineFunction(MachineFunction &MF);
 
 private:
@@ -322,7 +319,8 @@ static bool isRelevantAddressingMode(MachineInstr *MI) {
   const MachineOperand &Disp = getDispOperand(MI);
   const MachineOperand &Scale = MI->getOperand(AddrOffset + X86::AddrScaleAmt);
   const MachineOperand &Index = MI->getOperand(AddrOffset + X86::AddrIndexReg);
-  const MachineOperand &Segment = MI->getOperand(AddrOffset + X86::AddrSegmentReg);
+  const MachineOperand &Segment =
+      MI->getOperand(AddrOffset + X86::AddrSegmentReg);
 
   if (!((Base.isReg() && Base.getReg() != X86::NoRegister) || Base.isFI()))
     return false;
@@ -545,8 +543,8 @@ void X86AvoidSFBImpl::findPotentiallylBlockedCopies(MachineFunction &MF) {
         if (StoreMI.getParent() == MI.getParent() &&
             isPotentialBlockedMemCpyPair(MI.getOpcode(), StoreMI.getOpcode()) &&
             isRelevantAddressingMode(&MI) &&
-            isRelevantAddressingMode(&StoreMI) &&
-            MI.hasOneMemOperand() && StoreMI.hasOneMemOperand()) {
+            isRelevantAddressingMode(&StoreMI) && MI.hasOneMemOperand() &&
+            StoreMI.hasOneMemOperand()) {
           // Don't split volatile or atomic accesses.
           const MachineMemOperand *LMMO = *MI.memoperands_begin();
           const MachineMemOperand *SMMO = *StoreMI.memoperands_begin();

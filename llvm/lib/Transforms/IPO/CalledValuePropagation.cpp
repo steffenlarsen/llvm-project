@@ -22,9 +22,8 @@
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/MDBuilder.h"
 #include "llvm/IR/Module.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Transforms/IPO.h"
-#include "llvm/Transforms/IPO/IPOOptionsOptInfos.h"
+#include "llvm/Transforms/IPO/IPOOptions.h"
 
 using namespace llvm;
 
@@ -38,8 +37,7 @@ using namespace llvm;
 /// likely can't do anything useful for call sites with a large number of
 /// possible targets, anyway.
 static unsigned getMaxFunctionsPerValue(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::IPO_MaxFunctionsPerValue>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<IPOOptions>().IPO_MaxFunctionsPerValue;
 }
 
 namespace {

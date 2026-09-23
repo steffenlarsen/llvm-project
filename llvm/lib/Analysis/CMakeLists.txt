@@ -50,8 +50,6 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
 endif()
 
 add_llvm_component_library(LLVMAnalysis
-  AnalysisOptionsRegistration.cpp
-  AnalysisOptionsGetters.cpp
   AliasAnalysis.cpp
   AliasAnalysisEvaluator.cpp
   AliasSetTracker.cpp
@@ -113,7 +111,6 @@ add_llvm_component_library(LLVMAnalysis
   KernelInfo.cpp
   LastRunTrackingAnalysis.cpp
   LazyBranchProbabilityInfo.cpp
-  AnalysisOptions.cpp
   LazyBlockFrequencyInfo.cpp
   LazyCallGraph.cpp
   LazyValueInfo.cpp
@@ -187,6 +184,8 @@ add_llvm_component_library(LLVMAnalysis
   DEPENDS
   analysis_gen
   intrinsics_gen
+  AnalysisOptParserTableGen
+  ProfileDataOptParserTableGen
   ${MLDeps}
 
   LINK_LIBS

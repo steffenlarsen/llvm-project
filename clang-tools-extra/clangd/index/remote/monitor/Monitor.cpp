@@ -12,6 +12,7 @@
 #include "support/Logger.h"
 #include "clang/Basic/Version.h"
 #include "llvm/Support/CommandLineV2.h"
+#include "llvm/Support/PluginLoaderOptions.h"
 #include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/Signals.h"
 
@@ -48,7 +49,10 @@ int main(int argc, char *argv[]) {
   llvm::clv2::OptionParser P;
   P.add<&MonitorReg>();
   llvm::RegisterAllLLVMOptions(P);
-  auto OptsCtx = P.parse(argc, argv, Overview);
+  std::vector<const char *> ArgsAfterPlugins =
+      llvm::loadPluginsAndStripArgs(argc, argv);
+  auto OptsCtx = P.parse(static_cast<int>(ArgsAfterPlugins.size()),
+                         ArgsAfterPlugins.data(), Overview);
   if (!OptsCtx)
     return 1;
   if (const auto *O = OptsCtx->getViewPtr<&MonitorReg>())

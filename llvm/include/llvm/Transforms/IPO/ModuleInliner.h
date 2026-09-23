@@ -9,11 +9,11 @@
 #ifndef LLVM_TRANSFORMS_IPO_MODULEINLINER_H
 #define LLVM_TRANSFORMS_IPO_MODULEINLINER_H
 
+#include "llvm/Analysis/AnalysisOptions.h"
 #include "llvm/Analysis/InlineAdvisor.h"
 #include "llvm/Analysis/InlineCost.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/Support/Compiler.h"
-#include "llvm/Support/OptionsContext.h"
 
 namespace llvm {
 
@@ -29,7 +29,7 @@ namespace llvm {
 class ModuleInlinerPass : public OptionalPassInfoMixin<ModuleInlinerPass> {
 public:
   ModuleInlinerPass(InlineParams Params =
-                        getInlineParams(llvm::clv2::defaultOptionsContext()),
+                        getInlineParams(AnalysisOptions::Current),
                     InliningAdvisorMode Mode = InliningAdvisorMode::Default,
                     ThinOrFullLTOPhase LTOPhase = ThinOrFullLTOPhase::None)
       : Params(Params), Mode(Mode), LTOPhase(LTOPhase) {};

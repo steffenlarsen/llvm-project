@@ -9,9 +9,13 @@ add_llvm_component_library(LLVMBPFDesc
   LINK_COMPONENTS
   MC
   BPFInfo
+  Option
   Support
   TargetParser
 
   ADD_TO_COMPONENT
   BPF
+
+  DEPENDS
+  BPFOptParserTableGen
   )

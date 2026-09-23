@@ -1,4 +1,3 @@
-
 set(LLVM_LINK_COMPONENTS
   AllOptions
   AllTargetsDescs
@@ -25,4 +24,20 @@ add_llvm_tool(llvm-profgen
   ProfiledBinary.cpp
   ProfileGenerator.cpp
   MissingFrameInferrer.cpp
+
+  DEPENDS
+  AArch64OptParserTableGen
+  AMDGPUOptParserTableGen
+  BPFOptParserTableGen
+  BitcodeMemProfOptParserTableGen
+  HexagonOptParserTableGen
+  InstCombineOptParserTableGen
+  InstrumentationOptParserTableGen
+  IPOOptParserTableGen
+  ScalarOptParserTableGen
+  LTOOptParserTableGen
+  LoongArchOptParserTableGen
+  NVPTXOptParserTableGen
+  ProfileDataOptParserTableGen
+  UtilsOptParserTableGen
   )

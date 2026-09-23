@@ -126,9 +126,8 @@
 
 #include "InstrRefBasedImpl.h"
 #include "LiveDebugValues.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
-#include "llvm/Support/CommandLineV2.h"
-#include "llvm/Support/OptionsContext.h"
+#include "llvm/CodeGen/CodeGenPassOptionsGISel.h"
+#include "llvm/IR/LLVMContext.h"
 #include <optional>
 
 using namespace llvm;
@@ -140,16 +139,15 @@ using namespace LiveDebugValues;
 
 // Act more like the VarLoc implementation, by propagating some locations too
 // far and ignoring some transfers.
-static bool getEmulateOldLivedebugvalues(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_EmulateOldLivedebugvalues>(Ctx);
+static bool getEmulateOldLivedebugvalues(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenGISelOptions>().CGPASS_EmulateOldLivedebugvalues;
 }
 
 // Limit for the maximum number of stack slots we should track, past which we
 // will ignore any spills.
-static unsigned
-getLivedebugvaluesMaxStackSlots(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::CGPASS_LivedebugvaluesMaxStackSlots>(
-      Ctx);
+static unsigned getLivedebugvaluesMaxStackSlots(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenGISelOptions>()
+      .CGPASS_LivedebugvaluesMaxStackSlots;
 }
 
 DbgOpID DbgOpID::UndefID = DbgOpID(0xffffffff);
@@ -953,8 +951,7 @@ public:
 
     // XXX XXX XXX "pretend to be old LDV" means dropping all tracking data
     // about the old location.
-    if (getEmulateOldLivedebugvalues(
-            MF.getFunction().getContext().getOptionsContext()))
+    if (getEmulateOldLivedebugvalues(MF.getFunction().getContext()))
       VarLocs[Src.asU64()] = ValueIDNum::EmptyValue;
   }
 
@@ -1138,8 +1135,7 @@ std::optional<SpillLocationNo> MLocTracker::getOrTrackSpillLoc(SpillLoc L) {
     // If there is no location, and we have reached the limit of how many stack
     // slots to track, then don't track this one.
     if (SpillLocs.size() >=
-        getLivedebugvaluesMaxStackSlots(
-            MF.getFunction().getContext().getOptionsContext()))
+        getLivedebugvaluesMaxStackSlots(MF.getFunction().getContext()))
       return std::nullopt;
 
     // Spill location is untracked: create record for this one, and all
@@ -2066,8 +2062,7 @@ bool InstrRefBasedLDV::transferSpillOrRestoreInst(MachineInstr &MI) {
   // XXX -- it's too difficult to implement VarLocBasedImpl's  stack location
   // limitations under the new model. Therefore, when comparing them, compare
   // versions that don't attempt spills or restores at all.
-  if (getEmulateOldLivedebugvalues(
-          MI.getMF()->getFunction().getContext().getOptionsContext()))
+  if (getEmulateOldLivedebugvalues(MI.getMF()->getFunction().getContext()))
     return false;
 
   // Strictly limit ourselves to plain loads and stores, not all instructions
@@ -2203,7 +2198,7 @@ bool InstrRefBasedLDV::transferRegisterCopy(MachineInstr &MI) {
   //
   // For InstrRefBasedImpl, we can track multiple locations per value, so
   // ignore this condition.
-  const auto &Ctx = MI.getMF()->getFunction().getContext().getOptionsContext();
+  const auto &Ctx = MI.getMF()->getFunction().getContext();
   if (getEmulateOldLivedebugvalues(Ctx) && !isCalleeSavedReg(DestReg))
     return false;
 

@@ -21,22 +21,17 @@
 #include "llvm/Support/EndianStream.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/LEB128.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/RISCV/RISCVOptionsOptInfos.h"
+#include "llvm/Target/RISCV/RISCVOptions.h"
 
 using namespace llvm;
 
 // Temporary workaround for old linkers that do not support ULEB128 relocations,
 // which are abused by DWARF v5 DW_LLE_offset_pair/DW_RLE_offset_pair
 // implemented in Clang/LLVM.
-static bool getULEB128Reloc(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::RV_ULEB128Reloc>(Ctx);
-}
+static bool getULEB128Reloc() { return RISCVOptions::Current.RV_ULEB128Reloc; }
 
-static bool getAlignRvc(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::RV_AlignRvc>(Ctx);
-}
+static bool getAlignRvc() { return RISCVOptions::Current.RV_AlignRvc; }
 
 RISCVAsmBackend::RISCVAsmBackend(const MCSubtargetInfo &STI, uint8_t OSABI,
                                  bool Is64Bit, bool IsLittleEndian,
@@ -342,10 +337,8 @@ bool RISCVAsmBackend::relaxAlign(MCFragment &F, unsigned &Size) {
 
   // Use default handling unless the alignment is larger than the nop size.
   const MCSubtargetInfo *STI = F.getSubtargetInfo();
-  unsigned MinNopLen = getAlignRvc(getContext().getOptionsContext()) ||
-                               STI->hasFeature(RISCV::FeatureStdExtZca)
-                           ? 2
-                           : 4;
+  unsigned MinNopLen =
+      getAlignRvc() || STI->hasFeature(RISCV::FeatureStdExtZca) ? 2 : 4;
   if (F.getAlignment() <= MinNopLen)
     return false;
 
@@ -464,7 +457,7 @@ std::pair<bool, bool> RISCVAsmBackend::relaxLEB128(MCFragment &LF,
   if (LF.isLEBSigned())
     return std::make_pair(false, false);
   const MCExpr &Expr = LF.getLEBValue();
-  if (getULEB128Reloc(getContext().getOptionsContext())) {
+  if (getULEB128Reloc()) {
     LF.setVarFixups({MCFixup::create(0, &Expr, FK_Data_leb128)});
   }
   return std::make_pair(Expr.evaluateKnownAbsolute(Value, *Asm), false);
@@ -587,14 +580,14 @@ static uint64_t adjustFixupValue(const MCFixup &Fixup, uint64_t Value,
     if (!isInt<12>(Value))
       Ctx.reportError(Fixup.getLoc(), "fixup value out of range");
     // Need to produce offset[11|4|9:8|10|6|7|3:1|5] from the 11-bit Value.
-    unsigned Bit11  = (Value >> 11) & 0x1;
-    unsigned Bit4   = (Value >> 4) & 0x1;
+    unsigned Bit11 = (Value >> 11) & 0x1;
+    unsigned Bit4 = (Value >> 4) & 0x1;
     unsigned Bit9_8 = (Value >> 8) & 0x3;
-    unsigned Bit10  = (Value >> 10) & 0x1;
-    unsigned Bit6   = (Value >> 6) & 0x1;
-    unsigned Bit7   = (Value >> 7) & 0x1;
+    unsigned Bit10 = (Value >> 10) & 0x1;
+    unsigned Bit6 = (Value >> 6) & 0x1;
+    unsigned Bit7 = (Value >> 7) & 0x1;
     unsigned Bit3_1 = (Value >> 1) & 0x7;
-    unsigned Bit5   = (Value >> 5) & 0x1;
+    unsigned Bit5 = (Value >> 5) & 0x1;
     Value = (Bit11 << 10) | (Bit4 << 9) | (Bit9_8 << 7) | (Bit10 << 6) |
             (Bit6 << 5) | (Bit7 << 4) | (Bit3_1 << 1) | Bit5;
     return Value;
@@ -603,9 +596,9 @@ static uint64_t adjustFixupValue(const MCFixup &Fixup, uint64_t Value,
     if (!isInt<9>(Value))
       Ctx.reportError(Fixup.getLoc(), "fixup value out of range");
     // Need to produce offset[8|4:3], [reg 3 bit], offset[7:6|2:1|5]
-    unsigned Bit8   = (Value >> 8) & 0x1;
+    unsigned Bit8 = (Value >> 8) & 0x1;
     unsigned Bit7_6 = (Value >> 6) & 0x3;
-    unsigned Bit5   = (Value >> 5) & 0x1;
+    unsigned Bit5 = (Value >> 5) & 0x1;
     unsigned Bit4_3 = (Value >> 3) & 0x3;
     unsigned Bit2_1 = (Value >> 1) & 0x3;
     Value = (Bit8 << 12) | (Bit4_3 << 10) | (Bit7_6 << 5) | (Bit2_1 << 3) |

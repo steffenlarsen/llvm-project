@@ -101,11 +101,10 @@
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/SpecialCaseList.h"
 #include "llvm/Support/VirtualFileSystem.h"
 #include "llvm/TargetParser/Triple.h"
-#include "llvm/Transforms/Instrumentation/InstrumentationOptionsOptInfos.h"
+#include "llvm/Transforms/Instrumentation/InstrumentationOptions.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Instrumentation.h"
 #include "llvm/Transforms/Utils/Local.h"
@@ -131,69 +130,45 @@ static const Align MinOriginAlignment = Align(4);
 static const unsigned ArgTLSSize = 800;
 static const unsigned RetvalTLSSize = 800;
 
-// Getters check the clv2 override first, then fall back to literal defaults.
-
-#define DFSAN_GETTER(RetType, GetterName, DescName, Default)                   \
+#define DFSAN_GETTER(RetType, GetterName, FieldName)                           \
   static RetType GetterName(const Module &M) {                                 \
-    if (auto *O = clv2::getView<&clv2::InstrumentationOptsReg>(                \
-            M.getContext().getOptionsContext()))                               \
-      if (O->specified<&clv2::DescName>())                                     \
-        return O->get<&clv2::DescName>();                                      \
-    return Default;                                                            \
+    return M.getContext().getOptions<InstrumentationOptions>().FieldName;      \
   }
 
-DFSAN_GETTER(bool, getClPreserveAlignment, INST_DfsanPreserveAlignment, false)
+DFSAN_GETTER(bool, getClPreserveAlignment, INST_DfsanPreserveAlignment)
 DFSAN_GETTER(bool, getClCombinePointerLabelsOnLoad,
-             INST_DfsanCombinePointerLabelsOnLoad, true)
+             INST_DfsanCombinePointerLabelsOnLoad)
 DFSAN_GETTER(bool, getClCombinePointerLabelsOnStore,
-             INST_DfsanCombinePointerLabelsOnStore, false)
+             INST_DfsanCombinePointerLabelsOnStore)
 DFSAN_GETTER(bool, getClCombineOffsetLabelsOnGEP,
-             INST_DfsanCombineOffsetLabelsOnGEP, true)
-DFSAN_GETTER(bool, getClDebugNonzeroLabels, INST_DfsanDebugNonzeroLabels, false)
-DFSAN_GETTER(bool, getClEventCallbacks, INST_DfsanEventCallbacks, false)
-DFSAN_GETTER(bool, getClConditionalCallbacks, INST_DfsanConditionalCallbacks,
-             false)
+             INST_DfsanCombineOffsetLabelsOnGEP)
+DFSAN_GETTER(bool, getClDebugNonzeroLabels, INST_DfsanDebugNonzeroLabels)
+DFSAN_GETTER(bool, getClEventCallbacks, INST_DfsanEventCallbacks)
+DFSAN_GETTER(bool, getClConditionalCallbacks, INST_DfsanConditionalCallbacks)
 DFSAN_GETTER(bool, getClReachesFunctionCallbacks,
-             INST_DfsanReachesFunctionCallbacks, false)
+             INST_DfsanReachesFunctionCallbacks)
 DFSAN_GETTER(bool, getClTrackSelectControlFlow,
-             INST_DfsanTrackSelectControlFlow, true)
+             INST_DfsanTrackSelectControlFlow)
 DFSAN_GETTER(int, getClInstrumentWithCallThreshold,
-             INST_DfsanInstrumentWithCallThreshold, 3500)
-DFSAN_GETTER(int, getClTrackOrigins, INST_DfsanTrackOrigins, 0)
+             INST_DfsanInstrumentWithCallThreshold)
+DFSAN_GETTER(int, getClTrackOrigins, INST_DfsanTrackOrigins)
 DFSAN_GETTER(bool, getClIgnorePersonalityRoutine,
-             INST_DfsanIgnorePersonalityRoutine, false)
-DFSAN_GETTER(bool, getClAddGlobalNameSuffix, INST_DfsanAddGlobalNameSuffix,
-             true)
+             INST_DfsanIgnorePersonalityRoutine)
+DFSAN_GETTER(bool, getClAddGlobalNameSuffix, INST_DfsanAddGlobalNameSuffix)
 
 #undef DFSAN_GETTER
 
 static const std::vector<std::string> &getClABIListFiles(const Module &M) {
-  if (auto *O = clv2::getView<&clv2::InstrumentationOptsReg>(
-          M.getContext().getOptionsContext())) {
-    if (O->specified<&clv2::INST_DfsanABIListFiles>()) {
-      static std::vector<std::string> cached;
-      const auto &v = O->get<&clv2::INST_DfsanABIListFiles>();
-      cached.assign(v.begin(), v.end());
-      return cached;
-    }
-  }
-  static const std::vector<std::string> Default;
-  return Default;
+  return M.getContext()
+      .getOptions<InstrumentationOptions>()
+      .INST_DfsanABIListFiles;
 }
 
 static const std::vector<std::string> &
 getClCombineTaintLookupTables(const Module &M) {
-  if (auto *O = clv2::getView<&clv2::InstrumentationOptsReg>(
-          M.getContext().getOptionsContext())) {
-    if (O->specified<&clv2::INST_DfsanCombineTaintLookupTable>()) {
-      static std::vector<std::string> cached;
-      const auto &v = O->get<&clv2::INST_DfsanCombineTaintLookupTable>();
-      cached.assign(v.begin(), v.end());
-      return cached;
-    }
-  }
-  static const std::vector<std::string> Default;
-  return Default;
+  return M.getContext()
+      .getOptions<InstrumentationOptions>()
+      .INST_DfsanCombineTaintLookupTable;
 }
 
 static StringRef getGlobalTypeString(const GlobalValue &G) {

@@ -14,7 +14,6 @@
 
 #include "llvm/Analysis/ObjCARCAnalysisUtils.h"
 #include "llvm/Analysis/AliasAnalysis.h"
-#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
 #include "llvm/Support/CommandLineCompat.h"
 
 using namespace llvm;

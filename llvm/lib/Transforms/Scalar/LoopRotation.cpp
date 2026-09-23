@@ -1,5 +1,3 @@
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
 //===- LoopRotation.cpp - Loop Rotation Pass ------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -22,8 +20,10 @@
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/IR/Function.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Scalar/LoopRotation.h"
+#include "llvm/Transforms/Scalar/ScalarOptions.h"
 #include "llvm/Transforms/Utils/LoopRotationUtils.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
 #include <optional>
@@ -32,14 +32,11 @@ using namespace llvm;
 #define DEBUG_TYPE "loop-rotate"
 
 static unsigned getDefaultRotationThreshold(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_RotationMaxHeaderSize>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<ScalarOptions>().SC_RotationMaxHeaderSize;
 }
 
 static bool getPrepareForLTOOption(const Function &F) {
-  return clv2::getOptValOr<&clv2::ScalarOptsReg,
-                           &clv2::SC_RotationPrepareForLto>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext().getOptions<ScalarOptions>().SC_RotationPrepareForLto;
 }
 
 // Experimentally allow loop header duplication. This should allow for better
@@ -48,9 +45,9 @@ static bool getPrepareForLTOOption(const Function &F) {
 // this flag and make a code generation option that can be controlled
 // independent of the opt level and exposed through the frontend.
 static bool getEnableLoopHeaderDuplicationAtMinSize(const Function &F) {
-  return clv2::getOptValOr<&clv2::ScalarOptsReg,
-                           &clv2::SC_EnableLoopHeaderDuplicationAtMinSize>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_EnableLoopHeaderDuplicationAtMinSize;
 }
 
 LoopRotatePass::LoopRotatePass(bool EnableHeaderDuplication, bool PrepareForLTO,

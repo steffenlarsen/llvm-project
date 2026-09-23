@@ -30,6 +30,7 @@
 #include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/Path.h"
+#include "llvm/Support/PluginLoaderOptions.h"
 #include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/SystemUtils.h"
@@ -452,7 +453,10 @@ int main(int argc, char **argv) {
   P.add<&LinkToolReg>();
   RegisterAllLLVMOptions(P);
   P.hideUnrelatedOptions({&LinkCategory, &getColorCategory()});
-  auto OptsCtx = P.parse(argc, argv, "llvm linker\n");
+  std::vector<const char *> ArgsAfterPlugins =
+      loadPluginsAndStripArgs(argc, argv);
+  auto OptsCtx = P.parse(static_cast<int>(ArgsAfterPlugins.size()),
+                          ArgsAfterPlugins.data(), "llvm linker\n");
   auto *Opts = OptsCtx->getViewPtr<&LinkToolReg>();
 
   LinkOpts LOpts{

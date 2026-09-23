@@ -38,8 +38,7 @@
 #include "llvm/IR/ProfDataUtils.h"
 #include "llvm/Support/BranchProbability.h"
 #include "llvm/Support/FormatVariadic.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Transforms/Utils/UtilsOptionsOptInfos.h"
+#include "llvm/Transforms/Utils/UtilsOptions.h"
 #include <algorithm>
 #include <cstdint>
 #include <functional>
@@ -53,16 +52,12 @@ using namespace misexpect;
 // Command line option to enable/disable the warning when profile data suggests
 // a mismatch with the use of the llvm.expect intrinsic
 static bool getPGOWarnMisExpect(const Function &F) {
-  return clv2::getOptValIfSpecified<&clv2::TransformUtilsOptsReg,
-                                    &clv2::TU_PGOWarnMisExpect>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext().getOptions<UtilsOptions>().TU_PGOWarnMisExpect;
 }
 
 // Command line option for setting the diagnostic tolerance threshold
 static unsigned getMisExpectToleranceOpt(const Function &F) {
-  return clv2::getOptValIfSpecified<&clv2::TransformUtilsOptsReg,
-                                    &clv2::TU_MisExpectTolerance>(
-      F.getContext().getOptionsContext(), 0);
+  return F.getContext().getOptions<UtilsOptions>().TU_MisExpectTolerance;
 }
 
 static bool isMisExpectDiagEnabled(const Function &F) {

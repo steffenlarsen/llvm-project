@@ -43,6 +43,7 @@
 #include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/LogicalResult.h"
 #include "llvm/Support/ManagedStatic.h"
+#include "llvm/Support/PluginLoaderOptions.h"
 #include "llvm/Support/Process.h"
 #include "llvm/Support/Regex.h"
 #include "llvm/Support/RegisterLLVMOptions.h"
@@ -617,7 +618,10 @@ mlir::CLIParseResult mlir::parseCLIOptions(int argc, char **argv,
   P.enableGlobalDynamicEntries();
   clOptionsConfig->registerDynamicOptions(P);
   registerPassManagerCLOptions(P);
-  auto parsedCtx = P.parse(argc, argv, helpHeader);
+  std::vector<const char *> ArgsAfterPlugins =
+      loadPluginsAndStripArgs(argc, argv);
+  auto parsedCtx = P.parse(static_cast<int>(ArgsAfterPlugins.size()),
+                           ArgsAfterPlugins.data(), helpHeader);
 
   // Read straight out of the parse rather than via file-scope state.  parse()
   // returns null when it reported an error, in which case the declared

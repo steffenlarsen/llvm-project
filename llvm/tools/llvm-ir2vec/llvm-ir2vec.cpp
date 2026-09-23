@@ -56,9 +56,7 @@
 
 #include "lib/Utils.h"
 #include "llvm/ADT/ArrayRef.h"
-#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
 #include "llvm/Analysis/IR2Vec.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/CodeGen/CommandFlags.h"
 #include "llvm/CodeGen/CommandFlagsOptInfos.h"
 #include "llvm/CodeGen/MIR2Vec.h"
@@ -155,7 +153,7 @@ namespace ir2vec {
 /// isEmbeddings: true = embeddings mode, false = triplets mode.
 static Error processModule(Module &M, raw_ostream &OS, bool isEmbeddings,
                            StringRef FuncName, EmbeddingLevel Lvl) {
-  const auto &Ctx = M.getContext().getOptionsContext();
+  const auto &Ctx = M.getContext().getOptions<AnalysisOptions>();
   IR2VecTool Tool(M);
 
   if (isEmbeddings) {
@@ -364,10 +362,9 @@ int main(int argc, char **argv) {
 
   clv2::OptionParser P;
   P.add<&IR2VecToolReg>();
-  P.add<&clv2::AnalysisOptsReg>();
   RegisterCoreLLVMOptions(P);
   P.enableGlobalDynamicEntries();
-  const clv2::OptionCategory *Cats[] = {&CommonCategory, &clv2::IR2VecCategory,
+  const clv2::OptionCategory *Cats[] = {&CommonCategory,
                                         &clv2::MIR2VecCategory};
   P.hideUnrelatedOptions(Cats);
   P.showOptions({"mir2vec-common-operand-weight", "mir2vec-kind",

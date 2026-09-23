@@ -22,16 +22,14 @@ using namespace llvm;
 #define GET_SUBTARGETINFO_TARGET_DESC
 #define GET_SUBTARGETINFO_CTOR
 #include "LoongArchGenSubtargetInfo.inc"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/LoongArch/LoongArchOptionsOptInfos.h"
+#include "llvm/Target/LoongArch/LoongArchOptions.h"
 
 void LoongArchSubtarget::anchor() {}
 
 // Enable use of alias analysis during code generation (during MI scheduling,
 // DAGCombine, etc.).
 bool LoongArchSubtarget::useAA() const {
-  return clv2::getOptValOr<&clv2::LoongArchOptsReg, &clv2::LA_UseAA>(
-      getTargetLowering()->getTargetMachine().getOptionsContext(), true);
+  return LoongArchOptions::Current.LA_UseAA;
 }
 
 LoongArchSubtarget &LoongArchSubtarget::initializeSubtargetDependencies(

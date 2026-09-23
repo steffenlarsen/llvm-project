@@ -36,7 +36,7 @@
 #include "llvm/Support/Error.h"
 #include "llvm/Support/OptionsContext.h"
 #include "llvm/Target/CGPassBuilderOption.h"
-#include "llvm/Target/WebAssembly/WebAssemblyOptionsOptInfos.h"
+#include "llvm/Target/WebAssembly/WebAssemblyOptions.h"
 #include "llvm/Transforms/Utils/LowerGlobalDtors.h"
 #include "llvm/Transforms/Utils/LowerInvoke.h"
 
@@ -116,10 +116,12 @@ void WebAssemblyCodeGenPassBuilder::addIRPasses(PassManagerWrapper &PMW) {
   // TargetPassConfig::addPassesToHandleExceptions, but that runs after these IR
   // passes and Emscripten SjLj handling expects all invokes to be lowered
   // before.
+  // No Function/Module is reachable here (this runs at pass-pipeline
+  // configuration time), so these read the process-wide default.
   bool EnableEmEH =
       TM.Options.ExceptionModel == ExceptionHandling::Emscripten ||
-      WebAssembly::getWasmEnableEmEH(TM.getOptionsContext());
-  if (!EnableEmEH && !WebAssembly::getWasmEnableEH(TM.getOptionsContext())) {
+      WebAssembly::getWasmEnableEmEH();
+  if (!EnableEmEH && !WebAssembly::getWasmEnableEH()) {
     addFunctionPass(LowerInvokePass(), PMW);
     // The lower invoke pass may create unreachable code. Remove it in order not
     // to process dead blocks in setjmp/longjmp handling.
@@ -130,8 +132,8 @@ void WebAssemblyCodeGenPassBuilder::addIRPasses(PassManagerWrapper &PMW) {
   // done in WasmEHPrepare pass, Wasm SjLj preparation shares libraries and
   // transformation algorithms with Emscripten SjLj, so we run
   // LowerEmscriptenEHSjLj pass also when Wasm SjLj is enabled.
-  if (EnableEmEH || WebAssembly::getWasmEnableEmSjLj(TM.getOptionsContext()) ||
-      WebAssembly::getWasmEnableSjLj(TM.getOptionsContext())) {
+  if (EnableEmEH || WebAssembly::getWasmEnableEmSjLj() ||
+      WebAssembly::getWasmEnableSjLj()) {
     flushFPMsToMPM(PMW);
     addModulePass(WebAssemblyLowerEmscriptenEHSjLjPass(EnableEmEH), PMW);
   }
@@ -289,8 +291,7 @@ void WebAssemblyCodeGenPassBuilder::addPreEmitPass(PassManagerWrapper &PMW) {
   addMachineFunctionPass(WebAssemblyCFGStackifyPass(), PMW);
 
   // Insert explicit local.get and local.set operators.
-  if (!clv2::getOptValOrDefault<&clv2::WASM_DisableExplicitLocals>(
-          TM.getOptionsContext()))
+  if (!WebAssemblyOptions::Current.WASM_DisableExplicitLocals)
     addMachineFunctionPass(WebAssemblyExplicitLocalsPass(), PMW);
 
   // Lower br_unless into br_if.
@@ -304,8 +305,7 @@ void WebAssemblyCodeGenPassBuilder::addPreEmitPass(PassManagerWrapper &PMW) {
   addMachineFunctionPass(WebAssemblyRegNumberingPass(), PMW);
 
   // Fix debug_values whose defs have been stackified.
-  if (!clv2::getOptValOrDefault<&clv2::WASM_DisableExplicitLocals>(
-          TM.getOptionsContext()))
+  if (!WebAssemblyOptions::Current.WASM_DisableExplicitLocals)
     addMachineFunctionPass(WebAssemblyDebugFixupPass(), PMW);
 
   // Collect information to prepare for MC lowering / asm printing.

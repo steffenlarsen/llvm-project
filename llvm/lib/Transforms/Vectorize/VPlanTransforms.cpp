@@ -44,9 +44,8 @@ using namespace llvm;
 using namespace VPlanPatternMatch;
 using namespace SCEVPatternMatch;
 
-static bool getUsePartialReductionsByDefault(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::VEC_UsePartialReductionsByDefault>(
-      Ctx);
+static bool getUsePartialReductionsByDefault() {
+  return VectorizeOptions::Current.VEC_UsePartialReductionsByDefault;
 }
 
 /// If the pointer operand \p Addr of a memory access is an affine AddRec
@@ -2163,15 +2162,13 @@ static bool replaceMaskWithCompareForScalarPlan(VPlan &Plan,
 /// Incoming values of all ActiveLaneMaskPHIs are updated to use the
 /// new extracts from the first active lane mask, which has it's last
 /// operand (multiplier) set to UF.
-static bool getEnableWideActiveLaneMask(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::VEC_EnableWideActiveLaneMask>(Ctx);
+static bool getEnableWideActiveLaneMask() {
+  return VectorizeOptions::Current.VEC_EnableWideActiveLaneMask;
 }
 
 static bool tryToReplaceALMWithWideALM(VPlan &Plan, ElementCount VF,
                                        unsigned UF) {
-  const Function *F = Plan.getScalarHeader()->getIRBasicBlock()->getParent();
-  bool WideALM =
-      getEnableWideActiveLaneMask(F->getContext().getOptionsContext());
+  bool WideALM = getEnableWideActiveLaneMask();
   if (!WideALM || !VF.isVector() || UF == 1)
     return false;
 
@@ -5405,9 +5402,7 @@ void VPlanTransforms::createPartialReductions(VPlan &Plan,
       ChainsByPhi;
   VPBasicBlock *HeaderVPBB = Plan.getVectorLoopRegion()->getEntryBasicBlock();
   SmallVector<VPReductionPHIRecipe *, 4> UnorderedReductions;
-  const Function *F = Plan.getScalarHeader()->getIRBasicBlock()->getParent();
-  bool UsePartialReductionsByDefault =
-      getUsePartialReductionsByDefault(F->getContext().getOptionsContext());
+  bool UsePartialReductionsByDefault = getUsePartialReductionsByDefault();
   for (VPRecipeBase &R : HeaderVPBB->phis()) {
     auto *RedPhiR = dyn_cast<VPReductionPHIRecipe>(&R);
     if (!RedPhiR)

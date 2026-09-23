@@ -32,6 +32,7 @@
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Parallel.h"
 #include "llvm/Support/Path.h"
+#include "llvm/Support/PluginLoaderOptions.h"
 #include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/Signals.h"
 #include "llvm/Support/raw_ostream.h"
@@ -256,7 +257,10 @@ int main(int Argc, const char **Argv) {
   P.add<&RemapReg>();
   llvm::RegisterAllLLVMOptions(P);
   P.hideUnrelatedOptions({&RemapCategory});
-  auto OptsCtx = P.parse(Argc, Argv,
+  std::vector<const char *> ArgsAfterPlugins =
+      llvm::loadPluginsAndStripArgs(Argc, Argv);
+  auto OptsCtx = P.parse(static_cast<int>(ArgsAfterPlugins.size()),
+                         ArgsAfterPlugins.data(),
                          "clangd-remap: rewrite paths inside "
                          "background-index .idx shards\n");
   if (!OptsCtx)

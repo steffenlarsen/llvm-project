@@ -15,26 +15,18 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/CodeGen/BasicTTIImpl.h"
-#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CodeGenPassOptionsCore1.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/IR/Function.h"
-#include "llvm/Support/CommandLineV2.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Target/TargetMachine.h"
 
 using namespace llvm;
 
 // This flag is used by the template base class for BasicTTIImpl, and here to
 // provide a definition.
-unsigned llvm::getPartialUnrollingThreshold(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValIfSpecified<&clv2::CGPassCore1Reg,
-                                    &clv2::CGPASS_PartialUnrollingThreshold>(
-      Ctx, 0);
-}
-bool llvm::getPartialUnrollingThresholdWasSpecified(
-    const clv2::OptionsContext &Ctx) {
-  return clv2::wasOptSpecified<&clv2::CGPassCore1Reg,
-                               &clv2::CGPASS_PartialUnrollingThreshold>(Ctx);
+std::optional<unsigned>
+llvm::getPartialUnrollingThreshold(const LLVMContext &Ctx) {
+  return Ctx.getOptions<CodeGenCore1Options>().CGPASS_PartialUnrollingThreshold;
 }
 
 BasicTTIImpl::BasicTTIImpl(const TargetMachine *TM, const Function &F)

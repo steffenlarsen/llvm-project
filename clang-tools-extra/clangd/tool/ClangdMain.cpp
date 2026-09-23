@@ -39,6 +39,7 @@
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/Path.h"
+#include "llvm/Support/PluginLoaderOptions.h"
 #include "llvm/Support/Process.h"
 #include "llvm/Support/Program.h"
 #include "llvm/Support/RegisterLLVMOptions.h"
@@ -922,8 +923,10 @@ clangd accepts flags on the commandline, and in the CLANGD_FLAGS environment var
   registerCheckOptions(P);
   llvm::RegisterAllLLVMOptions(P);
   P.hideUnrelatedOptions(ClangdCategories);
-  auto OptsCtx = P.parse(static_cast<int>(ExpandedArgv.size()),
-                         ExpandedArgv.data(), Overview);
+  std::vector<const char *> ArgsAfterPlugins = llvm::loadPluginsAndStripArgs(
+      static_cast<int>(ExpandedArgv.size()), ExpandedArgv.data());
+  auto OptsCtx = P.parse(static_cast<int>(ArgsAfterPlugins.size()),
+                         ArgsAfterPlugins.data(), Overview);
   if (!OptsCtx)
     return 1;
   applyClangdOptions(*OptsCtx);

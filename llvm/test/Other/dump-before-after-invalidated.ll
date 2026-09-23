@@ -1,5 +1,5 @@
 ; RUN: rm -rf %t/logs
-; RUN: opt %s -disable-output -passes=loop-deletion -ir-dump-directory %t/logs -print-after=loop-deletion
+; RUN: opt %s -disable-output -passes=loop-deletion -ir-dump-directory=%t/logs -print-after=loop-deletion
 
 ; RUN: ls %t/logs | FileCheck %s
 ; CHECK: 2-{{[a-z0-9]+}}-loop-{{[a-z0-9]+}}-LoopDeletionPass-invalidated.ll

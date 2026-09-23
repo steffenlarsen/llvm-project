@@ -64,14 +64,13 @@ class Target;
 class Triple;
 class StringRef;
 
-extern bool HexagonDisableDuplex;
 extern const InstrStage HexagonStages[];
 
 MCInstrInfo *createHexagonMCInstrInfo();
 MCRegisterInfo *createHexagonMCRegisterInfo(StringRef TT);
 
 namespace Hexagon_MC {
-StringRef selectHexagonCPU(StringRef CPU, const clv2::OptionsContext &Ctx);
+StringRef selectHexagonCPU(StringRef CPU);
 
 FeatureBitset completeHVXFeatures(const FeatureBitset &FB);
 /// Create a Hexagon MCSubtargetInfo instance. This is exposed so Asm parser,

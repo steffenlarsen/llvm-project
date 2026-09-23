@@ -1,5 +1,3 @@
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
 //===- LoopUnroll.cpp - Loop unroller pass --------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -55,6 +53,7 @@
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Scalar/LoopPassManager.h"
 #include "llvm/Transforms/Scalar/LoopUnrollPass.h"
+#include "llvm/Transforms/Scalar/ScalarOptions.h"
 #include "llvm/Transforms/Utils.h"
 #include "llvm/Transforms/Utils/LoopPeel.h"
 #include "llvm/Transforms/Utils/LoopSimplify.h"
@@ -75,163 +74,171 @@ using namespace llvm;
 
 #define DEBUG_TYPE "loop-unroll"
 
-bool llvm::getForgetSCEVInLoopUnroll() { return false; }
+// No context at the call site (PipelineTuningOptions), so read the
+// process-wide parsed options.
+bool llvm::getForgetSCEVInLoopUnroll() {
+  return ScalarOptions::Current.SC_ForgetScevLoopUnroll;
+}
 
 static unsigned getUnrollThreshold(const Function &F) {
-  return clv2::getOptValOr<&clv2::ScalarOptsReg, &clv2::SC_UnrollThreshold>(
-      F.getContext().getOptionsContext(), 0);
+  return F.getContext().getOptions<ScalarOptions>().SC_UnrollThreshold.value_or(
+      0);
 }
 static bool isUnrollThresholdSpecified(const Function &F) {
-  return clv2::wasOptSpecified<&clv2::ScalarOptsReg, &clv2::SC_UnrollThreshold>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_UnrollThreshold.has_value();
 }
 
 static unsigned getUnrollOptSizeThreshold(const Function &F) {
-  return clv2::getOptValOr<&clv2::ScalarOptsReg,
-                           &clv2::SC_UnrollOptSizeThreshold>(
-      F.getContext().getOptionsContext(), 0);
+  return F.getContext().getOptions<ScalarOptions>().SC_UnrollOptSizeThreshold;
 }
 
 static unsigned getUnrollPartialThreshold(const Function &F) {
-  return clv2::getOptValOr<&clv2::ScalarOptsReg,
-                           &clv2::SC_UnrollPartialThreshold>(
-      F.getContext().getOptionsContext(), 0);
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_UnrollPartialThreshold.value_or(0);
 }
 static bool isUnrollPartialThresholdSpecified(const Function &F) {
-  return clv2::wasOptSpecified<&clv2::ScalarOptsReg,
-                               &clv2::SC_UnrollPartialThreshold>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_UnrollPartialThreshold.has_value();
 }
 
 static unsigned getUnrollMaxPercentThresholdBoost(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_UnrollMaxPercentThresholdBoost>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_UnrollMaxPercentThresholdBoost.value_or(400);
 }
 static bool isUnrollMaxPercentThresholdBoostSpecified(const Function &F) {
-  return clv2::wasOptSpecified<&clv2::ScalarOptsReg,
-                               &clv2::SC_UnrollMaxPercentThresholdBoost>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_UnrollMaxPercentThresholdBoost.has_value();
 }
 
 static unsigned getUnrollMaxIterationsCountToAnalyze(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_UnrollMaxIterationCountToAnalyze>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_UnrollMaxIterationCountToAnalyze.value_or(10);
 }
 static bool isUnrollMaxIterationsCountToAnalyzeSpecified(const Function &F) {
-  return clv2::wasOptSpecified<&clv2::ScalarOptsReg,
-                               &clv2::SC_UnrollMaxIterationCountToAnalyze>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_UnrollMaxIterationCountToAnalyze.has_value();
 }
 
 static unsigned getUnrollCount(const Function &F) {
-  return clv2::getOptValOr<&clv2::ScalarOptsReg, &clv2::SC_UnrollCount>(
-      F.getContext().getOptionsContext(), 0);
+  return F.getContext().getOptions<ScalarOptions>().SC_UnrollCount.value_or(0);
 }
 static bool isUnrollCountSpecified(const Function &F) {
-  return clv2::wasOptSpecified<&clv2::ScalarOptsReg, &clv2::SC_UnrollCount>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<ScalarOptions>().SC_UnrollCount.has_value();
 }
 
 static unsigned getUnrollMaxCount(const Function &F) {
-  return clv2::getOptValOr<&clv2::ScalarOptsReg, &clv2::SC_UnrollMaxCount>(
-      F.getContext().getOptionsContext(), 0);
+  return F.getContext().getOptions<ScalarOptions>().SC_UnrollMaxCount.value_or(
+      0);
 }
 static bool isUnrollMaxCountSpecified(const Function &F) {
-  return clv2::wasOptSpecified<&clv2::ScalarOptsReg, &clv2::SC_UnrollMaxCount>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_UnrollMaxCount.has_value();
 }
 
 static unsigned getUnrollFullMaxCount(const Function &F) {
-  return clv2::getOptValOr<&clv2::ScalarOptsReg, &clv2::SC_UnrollFullMaxCount>(
-      F.getContext().getOptionsContext(), 0);
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_UnrollFullMaxCount.value_or(0);
 }
 static bool isUnrollFullMaxCountSpecified(const Function &F) {
-  return clv2::wasOptSpecified<&clv2::ScalarOptsReg,
-                               &clv2::SC_UnrollFullMaxCount>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_UnrollFullMaxCount.has_value();
 }
 
 static bool getUnrollAllowPartial(const Function &F) {
-  return clv2::getOptValOr<&clv2::ScalarOptsReg, &clv2::SC_UnrollAllowPartial>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_UnrollAllowPartial.value_or(false);
 }
 static bool isUnrollAllowPartialSpecified(const Function &F) {
-  return clv2::wasOptSpecified<&clv2::ScalarOptsReg,
-                               &clv2::SC_UnrollAllowPartial>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_UnrollAllowPartial.has_value();
 }
 
 static bool getUnrollAllowRemainder(const Function &F) {
-  return clv2::getOptValOr<&clv2::ScalarOptsReg,
-                           &clv2::SC_UnrollAllowRemainder>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_UnrollAllowRemainder.value_or(false);
 }
 static bool isUnrollAllowRemainderSpecified(const Function &F) {
-  return clv2::wasOptSpecified<&clv2::ScalarOptsReg,
-                               &clv2::SC_UnrollAllowRemainder>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_UnrollAllowRemainder.has_value();
 }
 
 static bool getUnrollRuntime(const Function &F) {
-  return clv2::getOptValOr<&clv2::ScalarOptsReg, &clv2::SC_UnrollRuntime>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext().getOptions<ScalarOptions>().SC_UnrollRuntime.value_or(
+      false);
 }
 static bool isUnrollRuntimeSpecified(const Function &F) {
-  return clv2::wasOptSpecified<&clv2::ScalarOptsReg, &clv2::SC_UnrollRuntime>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_UnrollRuntime.has_value();
 }
 
 static unsigned getUnrollMaxUpperBound(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_UnrollMaxUpperbound>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_UnrollMaxUpperbound.value_or(8);
 }
 static bool isUnrollMaxUpperBoundSpecified(const Function &F) {
-  return clv2::wasOptSpecified<&clv2::ScalarOptsReg,
-                               &clv2::SC_UnrollMaxUpperbound>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_UnrollMaxUpperbound.has_value();
 }
 
 static unsigned getPragmaUnrollThreshold(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_PragmaUnrollThreshold>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<ScalarOptions>().SC_PragmaUnrollThreshold;
 }
 
 static unsigned getFlatLoopTripCountThreshold(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_FlatLoopTripcountThreshold>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_FlatLoopTripcountThreshold;
 }
 
 static bool getUnrollUnrollRemainder(const Function &F) {
-  return clv2::getOptValOr<&clv2::ScalarOptsReg, &clv2::SC_UnrollRemainder>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext().getOptions<ScalarOptions>().SC_UnrollRemainder.value_or(
+      false);
 }
 static bool isUnrollUnrollRemainderSpecified(const Function &F) {
-  return clv2::wasOptSpecified<&clv2::ScalarOptsReg, &clv2::SC_UnrollRemainder>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_UnrollRemainder.has_value();
 }
 
 // This option isn't ever intended to be enabled, it serves to allow
 // experiments to check the assumptions about when this kind of revisit is
 // necessary.
 static bool getUnrollRevisitChildLoops(const Function &F) {
-  return clv2::getOptValOr<&clv2::ScalarOptsReg,
-                           &clv2::SC_UnrollRevisitChildLoops>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext().getOptions<ScalarOptions>().SC_UnrollRevisitChildLoops;
 }
 
 static unsigned getUnrollThresholdAggressive(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_UnrollThresholdAggressive>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_UnrollThresholdAggressive;
 }
 
 static unsigned getUnrollThresholdDefault(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_UnrollThresholdDefault>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<ScalarOptions>().SC_UnrollThresholdDefault;
 }
 
 static unsigned getPragmaUnrollFullMaxIterations(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_PragmaUnrollFullMaxIterations>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_PragmaUnrollFullMaxIterations;
 }
 
 /// A magic value for use with the Threshold parameter to indicate
@@ -273,8 +280,7 @@ TargetTransformInfo::UnrollingPreferences llvm::gatherUnrollingPreferences(
   UP.UnrollAndJam = false;
   UP.UnrollAndJamInnerLoopThreshold = 60;
   UP.MaxIterationsCountToAnalyze = getUnrollMaxIterationsCountToAnalyze(F);
-  UP.SCEVExpansionBudget =
-      getSCEVCheapExpansionBudget(F.getContext().getOptionsContext());
+  UP.SCEVExpansionBudget = getSCEVCheapExpansionBudget(&F.getContext());
   UP.RuntimeUnrollMultiExit = false;
   UP.AddAdditionalAccumulators = false;
 
@@ -454,9 +460,9 @@ static std::optional<EstimatedUnrollCost> analyzeLoopUnrollCost(
     assert(PHIUsedList.empty() && "Must start with an empty phi used list");
     CostWorklist.push_back(&RootI);
     TargetTransformInfo::TargetCostKind CostKind =
-      RootI.getFunction()->hasMinSize() ?
-      TargetTransformInfo::TCK_CodeSize :
-      TargetTransformInfo::TCK_SizeAndLatency;
+        RootI.getFunction()->hasMinSize()
+            ? TargetTransformInfo::TCK_CodeSize
+            : TargetTransformInfo::TCK_SizeAndLatency;
     for (;; --Iteration) {
       do {
         Instruction *I = CostWorklist.pop_back_val();
@@ -548,8 +554,9 @@ static std::optional<EstimatedUnrollCost> analyzeLoopUnrollCost(
              << "Starting LoopUnroll profitability analysis...\n");
 
   TargetTransformInfo::TargetCostKind CostKind =
-    L->getHeader()->getParent()->hasMinSize() ?
-    TargetTransformInfo::TCK_CodeSize : TargetTransformInfo::TCK_SizeAndLatency;
+      L->getHeader()->getParent()->hasMinSize()
+          ? TargetTransformInfo::TCK_CodeSize
+          : TargetTransformInfo::TCK_SizeAndLatency;
   // Simulate execution of each iteration of the loop counting instructions,
   // which would be simplified.
   // Since the same load will take different values on different iterations,
@@ -607,9 +614,10 @@ static std::optional<EstimatedUnrollCost> analyzeLoopUnrollCost(
         // and if the visitor returns true, mark the instruction as free after
         // unrolling and continue.
         bool IsFree = Analyzer.visit(I);
-        bool Inserted = InstCostMap.insert({&I, (int)Iteration,
-                                           (unsigned)IsFree,
-                                           /*IsCounted*/ false}).second;
+        bool Inserted = InstCostMap
+                            .insert({&I, (int)Iteration, (unsigned)IsFree,
+                                     /*IsCounted*/ false})
+                            .second;
         (void)Inserted;
         assert(Inserted && "Cannot have a state for an unvisited instruction!");
 
@@ -1339,9 +1347,9 @@ tryToUnrollLoop(Loop *L, DominatorTree &DT, LoopInfo *LI, ScalarEvolution &SE,
   // When automatic unrolling is disabled, do not unroll unless overridden for
   // this loop.
   if (OnlyWhenForced && !(TM & TM_Enable)) {
-    LLVM_DEBUG(dbgs().indent(1) << "Not unrolling: automatic unrolling "
-                                << "disabled and loop not explicitly "
-                                << "enabled.\n");
+    LLVM_DEBUG(dbgs().indent(1)
+               << "Not unrolling: automatic unrolling "
+               << "disabled and loop not explicitly " << "enabled.\n");
     return LoopUnrollResult::Unmodified;
   }
 
@@ -1733,7 +1741,7 @@ PreservedAnalyses LoopFullUnrollPass::run(Loop &L, LoopAnalysisManager &AM,
   if (!Changed)
     return PreservedAnalyses::all();
 
-  // The parent must not be damaged by unrolling!
+    // The parent must not be damaged by unrolling!
 #ifndef NDEBUG
   if (ParentL)
     ParentL->verifyLoop();
@@ -1811,8 +1819,9 @@ PreservedAnalyses LoopUnrollPass::run(Function &F,
   auto &MAMProxy = AM.getResult<ModuleAnalysisManagerFunctionProxy>(F);
   ProfileSummaryInfo *PSI =
       MAMProxy.getCachedResult<ProfileSummaryAnalysis>(*F.getParent());
-  auto *BFI = (PSI && PSI->hasProfileSummary()) ?
-      &AM.getResult<BlockFrequencyAnalysis>(F) : nullptr;
+  auto *BFI = (PSI && PSI->hasProfileSummary())
+                  ? &AM.getResult<BlockFrequencyAnalysis>(F)
+                  : nullptr;
 
   bool Changed = false;
 

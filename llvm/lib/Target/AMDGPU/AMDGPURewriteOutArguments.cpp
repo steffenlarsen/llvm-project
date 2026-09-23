@@ -52,28 +52,26 @@
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/AMDGPU/AMDGPUOptionsOptInfos.h"
+#include "llvm/Target/AMDGPU/AMDGPUOptions.h"
 
 #define DEBUG_TYPE "amdgpu-rewrite-out-arguments"
 
 using namespace llvm;
 
 static bool getAnyAddressSpace(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AMDGPU_AnyAddressSpace>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<AMDGPUOptions>().AMDGPU_AnyAddressSpace;
 }
 
 static unsigned getMaxNumRetRegs(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::AMDGPU_MaxNumRetRegs>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<AMDGPUOptions>().AMDGPU_MaxNumRetRegs;
 }
 
 STATISTIC(NumOutArgumentsReplaced,
           "Number out arguments moved to struct return values");
-STATISTIC(NumOutArgumentFunctionsReplaced,
-          "Number of functions with out arguments moved to struct return values");
+STATISTIC(
+    NumOutArgumentFunctionsReplaced,
+    "Number of functions with out arguments moved to struct return values");
 
 namespace {
 
@@ -351,9 +349,8 @@ bool AMDGPURewriteOutArguments::runOnFunction(Function &F) {
   LLVMContext &Ctx = F.getContext();
   StructType *NewRetTy = StructType::create(Ctx, ReturnTypes, F.getName());
 
-  FunctionType *NewFuncTy = FunctionType::get(NewRetTy,
-                                              F.getFunctionType()->params(),
-                                              F.isVarArg());
+  FunctionType *NewFuncTy =
+      FunctionType::get(NewRetTy, F.getFunctionType()->params(), F.isVarArg());
 
   LLVM_DEBUG(dbgs() << "Computed new return type: " << *NewRetTy << '\n');
 

@@ -102,10 +102,11 @@ private:
 /// need to coordinate their uses of OptBisect and OptDisable.
 LLVM_ABI OptPassGate &getGlobalPassGate();
 
-/// Initialize the global OptBisect singleton from clv2-parsed IR options.
-/// Called by ir_opts::applyIROptions() to configure opt-bisect-limit,
-/// opt-bisect intervals, and opt-disable passes.
-/// Declared in IROptionsOptInfos.h; defined in OptBisect.cpp.
+/// Initialize the global OptBisect singleton from IROptions::Current (see
+/// llvm/include/llvm/IR/IROptions.h). Called by ir_opts::applyIROptions() to
+/// configure opt-bisect-limit, opt-bisect intervals, and opt-disable passes.
+/// Defined in OptBisect.cpp.
+LLVM_ABI void initOptBisectFromOptions();
 
 } // end namespace llvm
 

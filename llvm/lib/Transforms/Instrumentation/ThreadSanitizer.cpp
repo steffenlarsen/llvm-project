@@ -41,7 +41,7 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Transforms/Instrumentation/InstrumentationOptionsOptInfos.h"
+#include "llvm/Transforms/Instrumentation/InstrumentationOptions.h"
 #include "llvm/Transforms/Utils/EscapeEnumerator.h"
 #include "llvm/Transforms/Utils/Instrumentation.h"
 #include "llvm/Transforms/Utils/Local.h"
@@ -51,52 +51,44 @@ using namespace llvm;
 
 #define DEBUG_TYPE "tsan"
 
-static bool ClInstrumentReadBeforeWrite = false;
-static bool ClCompoundReadBeforeWrite = false;
-
 static bool getClInstrumentMemoryAccesses(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::INST_TsanInstrumentMemoryAccesses>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<InstrumentationOptions>().INST_TsanInstrumentMemoryAccesses;
 }
 
 static bool getClInstrumentFuncEntryExit(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::INST_TsanInstrumentFuncEntryExit>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<InstrumentationOptions>().INST_TsanInstrumentFuncEntryExit;
 }
 
 static bool getClHandleCxxExceptions(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::INST_TsanHandleCxxExceptions>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<InstrumentationOptions>().INST_TsanHandleCxxExceptions;
 }
 
 static bool getClInstrumentAtomics(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::INST_TsanInstrumentAtomics>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<InstrumentationOptions>().INST_TsanInstrumentAtomics;
 }
 
 static bool getClInstrumentMemIntrinsics(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::INST_TsanInstrumentMemIntrinsics>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<InstrumentationOptions>().INST_TsanInstrumentMemIntrinsics;
 }
 
 static bool getClDistinguishVolatile(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::INST_TsanDistinguishVolatile>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<InstrumentationOptions>().INST_TsanDistinguishVolatile;
 }
 
 static bool getClInstrumentReadBeforeWrite(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::INST_TsanInstrumentReadBeforeWrite>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<InstrumentationOptions>()
+      .INST_TsanInstrumentReadBeforeWrite.value_or(false);
 }
 
 static bool getClCompoundReadBeforeWrite(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::INST_TsanCompoundReadBeforeWrite>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<InstrumentationOptions>()
+      .INST_TsanCompoundReadBeforeWrite.value_or(false);
 }
 
 static bool getClOmitNonCaptured(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::INST_TsanOmitNonCaptured>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<InstrumentationOptions>().INST_TsanOmitNonCaptured;
 }
 
 STATISTIC(NumInstrumentedReads, "Number of instrumented reads");
@@ -124,16 +116,8 @@ namespace {
 /// the module.
 struct ThreadSanitizer {
   ThreadSanitizer(const Function &F) {
-    bool ReadBeforeWrite = ClInstrumentReadBeforeWrite;
-    bool CompoundReadBeforeWrite = ClCompoundReadBeforeWrite;
-    if (auto *O = clv2::getView<&clv2::InstrumentationOptsReg>(
-            F.getContext().getOptionsContext())) {
-      if (O->specified<&clv2::INST_TsanInstrumentReadBeforeWrite>())
-        ReadBeforeWrite = O->get<&clv2::INST_TsanInstrumentReadBeforeWrite>();
-      if (O->specified<&clv2::INST_TsanCompoundReadBeforeWrite>())
-        CompoundReadBeforeWrite =
-            O->get<&clv2::INST_TsanCompoundReadBeforeWrite>();
-    }
+    bool ReadBeforeWrite = getClInstrumentReadBeforeWrite(F);
+    bool CompoundReadBeforeWrite = getClCompoundReadBeforeWrite(F);
     if (ReadBeforeWrite && CompoundReadBeforeWrite) {
       errs()
           << "warning: Option -tsan-compound-read-before-write has no effect "

@@ -90,6 +90,7 @@
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/Path.h"
+#include "llvm/Support/PluginLoaderOptions.h"
 #include "llvm/Support/PrettyStackTrace.h"
 #include "llvm/Support/Process.h"
 #include "llvm/Support/Regex.h"
@@ -1632,7 +1633,11 @@ int main(int Argc, const char **Argv) {
   RegisterAllLLVMOptions(P);
   P.hideUnrelatedOptions({&BY_MsfBytesCat, &BY_DbiBytesCat, &BY_PdbBytesCat,
                           &BY_TypesCat, &BY_ModuleCat});
-  auto OptsCtx = P.parse(Argc, Argv, "LLVM PDB Dumper\n");
+  std::vector<const char *> ArgsAfterPlugins =
+      loadPluginsAndStripArgs(Argc, Argv);
+  auto OptsCtx =
+      P.parse(static_cast<int>(ArgsAfterPlugins.size()),
+              ArgsAfterPlugins.data(), "LLVM PDB Dumper\n");
   auto *Opts = OptsCtx->getViewPtr<&PDBUtilToolReg>();
 
   // --- Extract DiaDump subcommand options ---

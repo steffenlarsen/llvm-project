@@ -1,4 +1,4 @@
-//===- VectorizeOptions.h - Vectorize option bridge API ---------*- C++ -*-===//
+//===- VectorizeOptions.h - Vectorize options ------------------*- C++ -*-===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -6,28 +6,39 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// Bridge API for Vectorize library options. clv2-migrated tools pass the
-// parsed view for VectorizeOptsReg to applyVectorizeOptions().
+// llvm::VectorizeOptions: the plain C++ struct generated from
+// VectorizeOptions.td by -gen-opt-parser-defs. See
+// llvm/include/llvm/Option/OptParser.td and
+// llvm/include/llvm/Option/LibraryOptions.h for the generation and runtime
+// mechanism this relies on.
 //
 //===----------------------------------------------------------------------===//
 
 #ifndef LLVM_TRANSFORMS_VECTORIZE_VECTORIZEOPTIONS_H
 #define LLVM_TRANSFORMS_VECTORIZE_VECTORIZEOPTIONS_H
 
+#include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringRef.h"
+#include "llvm/Analysis/TailFoldingStyle.h"
 #include "llvm/Support/Compiler.h"
-#include "llvm/Transforms/Vectorize/VectorizeOptionsOptInfos.h"
+#include "llvm/Support/Error.h"
+#include "llvm/Support/TypeSize.h"
+#include "llvm/Support/raw_ostream.h"
+#include "llvm/Transforms/Vectorize/LoopIdiomVectorizeStyle.h"
+#include "llvm/Transforms/Vectorize/ScalableForceKind.h"
+#include <cstdint>
+#include <limits>
 
 namespace llvm {
-class Function;
-class LLVMContext;
-class Module;
+namespace opt {
+class Arg;
+class OptTable;
+} // namespace opt
 } // namespace llvm
 
-namespace llvm::vec_opts {
-
-/// The parsed-options view type for the Vectorize library registry.
-using ParsedOpts = decltype(clv2::VectorizeOptsReg)::ParsedOptionsT;
-
-} // namespace llvm::vec_opts
+#define OPTIONS_STRUCT_DECL
+#include "llvm/Transforms/Vectorize/VectorizeOptions.inc"
+#undef OPTIONS_STRUCT_DECL
 
 #endif // LLVM_TRANSFORMS_VECTORIZE_VECTORIZEOPTIONS_H

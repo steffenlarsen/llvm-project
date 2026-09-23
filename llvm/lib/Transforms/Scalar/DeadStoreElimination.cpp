@@ -1,5 +1,3 @@
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
 //===- DeadStoreElimination.cpp - MemorySSA Backed Dead Store Elimination -===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -81,6 +79,7 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Scalar.h"
+#include "llvm/Transforms/Scalar/ScalarOptions.h"
 #include "llvm/Transforms/Utils/AssumeBundleBuilder.h"
 #include "llvm/Transforms/Utils/BuildLibCalls.h"
 #include "llvm/Transforms/Utils/Local.h"
@@ -114,64 +113,63 @@ DEBUG_COUNTER(MemorySSACounter, "dse-memoryssa",
               "Controls which MemoryDefs are eliminated.");
 
 static bool getEnablePartialOverwriteTracking(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_EnableDsePartialOverwriteTracking>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_EnableDsePartialOverwriteTracking;
 }
 
 static bool getEnablePartialStoreMerging(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_EnableDsePartialStoreMerging>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_EnableDsePartialStoreMerging;
 }
 
 static unsigned getMemorySSAScanLimit(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_DseMemoryssaScanlimit>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<ScalarOptions>().SC_DseMemoryssaScanlimit;
 }
 
 static unsigned getMemorySSAUpwardsStepLimit(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_DseMemoryssaWalklimit>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<ScalarOptions>().SC_DseMemoryssaWalklimit;
 }
 
 static unsigned getMemorySSAPartialStoreLimit(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_DseMemoryssaPartialStoreLimit>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_DseMemoryssaPartialStoreLimit;
 }
 
 static unsigned getMemorySSADefsPerBlockLimit(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_DseMemoryssaDefsPerBlockLimit>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_DseMemoryssaDefsPerBlockLimit;
 }
 
 static unsigned getMemorySSASameBBStepCost(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_DseMemoryssaSamebbCost>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<ScalarOptions>().SC_DseMemoryssaSamebbCost;
 }
 
 static unsigned getMemorySSAOtherBBStepCost(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_DseMemoryssaOtherbbCost>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<ScalarOptions>().SC_DseMemoryssaOtherbbCost;
 }
 
 static unsigned getMemorySSAPathCheckLimit(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_DseMemoryssaPathCheckLimit>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_DseMemoryssaPathCheckLimit;
 }
 
 static bool getOptimizeMemorySSA(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_DseOptimizeMemoryssa>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<ScalarOptions>().SC_DseOptimizeMemoryssa;
 }
 
 static bool getEnableInitializesImprovement(const Function &F) {
-  return clv2::getOptValOrDefault<
-      &clv2::SC_EnableDseInitializesAttrImprovement>(
-      F.getContext().getOptionsContext());
+  return F.getContext()
+      .getOptions<ScalarOptions>()
+      .SC_EnableDseInitializesAttrImprovement;
 }
 
 static unsigned getMaxDepthRecursion(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::SC_DseMaxDomCondDepth>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<ScalarOptions>().SC_DseMaxDomCondDepth;
 }
 
 //===----------------------------------------------------------------------===//

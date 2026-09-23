@@ -1,4 +1,4 @@
-//===- X86Options.td - CLV2 option defs for X86 -----------*- tablegen -*-===//
+//===- X86Options.td - X86 target options ----------------*- tablegen -*-===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -6,256 +6,164 @@
 //
 //===----------------------------------------------------------------------===//
 
-include "llvm/Support/CLV2Options.td"
+include "llvm/Option/OptParser.td"
 
-def X86OptsReg : Registry<"llvm::x86_opts"> {
-  // Getter bodies are compiled once, in X86OptionsGetters.cpp.
-  let OutOfLineGetters = 1;
-}
+def X86Options : OptionsStruct<"llvm"> {}
 
 // --- X86AvoidStoreForwardingBlocks.cpp ---
 
-def X86_DisableAvoidSFB : Option<
-    "x86-disable-avoid-SFB",
+defm X86_DisableAvoidSFB : BoolField<
+    "x86-disable-avoid-SFB", "false",
     "X86: Disable Store Forwarding Blocks fixup.",
-    "bool"> {
-  let Default = "false";
-  let Registry = X86OptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def X86_SFBInspectionLimit : Option<
-    "x86-sfb-inspection-limit",
+defm X86_SFBInspectionLimit : ValueField<
+    "x86-sfb-inspection-limit", "unsigned", "20",
     "X86: Number of instructions backward to "
     "inspect for store forwarding blocks.",
-    "unsigned"> {
-  let Registry = X86OptsReg;
-  let Default = "20";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // --- X86CallFrameOptimization.cpp ---
 
-def X86_NoCallFrameOpt : Option<
-    "no-x86-call-frame-opt",
+defm X86_NoCallFrameOpt : BoolField<
+    "no-x86-call-frame-opt", "false",
     "Avoid optimizing x86 call frames for size",
-    "bool"> {
-  let Default = "false";
-  let Registry = X86OptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // --- X86CmovConversion.cpp ---
 
-def X86_CmovConverter : Option<
-    "x86-cmov-converter",
+defm X86_CmovConverter : BoolField<
+    "x86-cmov-converter", "true",
     "Enable the X86 cmov-to-branch optimization.",
-    "bool"> {
-  let Registry = X86OptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def X86_CmovConverterThreshold : Option<
-    "x86-cmov-converter-threshold",
+defm X86_CmovConverterThreshold : ValueField<
+    "x86-cmov-converter-threshold", "unsigned", "4",
     "Minimum gain per loop (in cycles) threshold.",
-    "unsigned"> {
-  let Registry = X86OptsReg;
-  let Default = "4";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def X86_CmovConverterForceMemOperand : Option<
-    "x86-cmov-converter-force-mem-operand",
+defm X86_CmovConverterForceMemOperand : BoolField<
+    "x86-cmov-converter-force-mem-operand", "true",
     "Convert cmovs to branches whenever they have memory operands.",
-    "bool"> {
-  let Registry = X86OptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def X86_CmovConverterForceAll : Option<
-    "x86-cmov-converter-force-all",
+defm X86_CmovConverterForceAll : BoolField<
+    "x86-cmov-converter-force-all", "false",
     "Convert all cmovs to branches.",
-    "bool"> {
-  let Default = "false";
-  let Registry = X86OptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // --- X86DomainReassignment.cpp ---
 
-def X86_DisableDomainReassignment : Option<
-    "disable-x86-domain-reassignment",
+defm X86_DisableDomainReassignment : BoolField<
+    "disable-x86-domain-reassignment", "false",
     "X86: Disable Virtual Register Reassignment.",
-    "bool"> {
-  let Default = "false";
-  let Registry = X86OptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // --- X86FixupBWInsts.cpp ---
 
-def X86_FixupBWInsts : Option<
-    "fixup-byte-word-insts",
+defm X86_FixupBWInsts : BoolField<
+    "fixup-byte-word-insts", "true",
     "Change byte and word instructions to larger sizes",
-    "bool"> {
-  let Registry = X86OptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // --- X86IndirectBranchTracking.cpp ---
 
-def X86_IndirectBranchTracking : Option<
-    "x86-indirect-branch-tracking",
+defm X86_IndirectBranchTracking : BoolField<
+    "x86-indirect-branch-tracking", "false",
     "Enable X86 indirect branch tracking pass.",
-    "bool"> {
-  let Default = "false";
-  let Registry = X86OptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // --- X86InsertVZeroUpper.cpp ---
 
-def X86_UseVZeroUpper : Option<
-    "x86-use-vzeroupper",
+defm X86_UseVZeroUpper : BoolField<
+    "x86-use-vzeroupper", "true",
     "Minimize AVX to SSE transition penalty",
-    "bool"> {
-  let Registry = X86OptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // --- X86InstrInfo.cpp ---
 
-def X86_DisableSpillFusing : Option<
-    "disable-spill-fusing",
+defm X86_DisableSpillFusing : BoolField<
+    "disable-spill-fusing", "false",
     "Disable fusing of spill code into instructions",
-    "bool"> {
-  let Default = "false";
-  let Registry = X86OptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def X86_PrintFailedFusing : Option<
-    "print-failed-fuse-candidates",
+defm X86_PrintFailedFusing : BoolField<
+    "print-failed-fuse-candidates", "false",
     "Print instructions that the allocator wants to"
     " fuse, but the X86 backend currently can't",
-    "bool"> {
-  let Default = "false";
-  let Registry = X86OptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def X86_ReMatPICStubLoad : Option<
-    "remat-pic-stub-load",
+defm X86_ReMatPICStubLoad : BoolField<
+    "remat-pic-stub-load", "false",
     "Re-materialize load from stub in PIC mode",
-    "bool"> {
-  let Default = "false";
-  let Registry = X86OptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def X86_PartialRegUpdateClearance : Option<
-    "partial-reg-update-clearance",
+defm X86_PartialRegUpdateClearance : ValueField<
+    "partial-reg-update-clearance", "unsigned", "64",
     "Clearance between two register writes "
     "for inserting XOR to avoid partial "
     "register update",
-    "unsigned"> {
-  let Registry = X86OptsReg;
-  let Default = "64";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def X86_UndefRegClearance : Option<
-    "undef-reg-clearance",
+defm X86_UndefRegClearance : ValueField<
+    "undef-reg-clearance", "unsigned", "128",
     "How many idle instructions we would like before "
     "certain undef register reads",
-    "unsigned"> {
-  let Registry = X86OptsReg;
-  let Default = "128";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def X86_MaxNFConversions : Option<
-    "x86-max-nf-conversions-for-cmp-reuse",
+defm X86_MaxNFConversions : ValueField<
+    "x86-max-nf-conversions-for-cmp-reuse", "unsigned", "6",
     "Maximum number of NF conversions allowed to reuse EFLAGS from a "
     "producer dominating a multi-predecessor block",
-    "unsigned"> {
-  let Registry = X86OptsReg;
-  let Default = "6";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // --- X86ISelDAGToDAG.cpp ---
 
-def X86_AndImmShrink : Option<
-    "x86-and-imm-shrink",
+defm X86_AndImmShrink : BoolField<
+    "x86-and-imm-shrink", "true",
     "Enable setting constant bits to reduce size of mask immediates",
-    "bool"> {
-  let Registry = X86OptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def X86_PromoteAnyextLoad : Option<
-    "x86-promote-anyext-load",
+defm X86_PromoteAnyextLoad : BoolField<
+    "x86-promote-anyext-load", "true",
     "Enable promoting aligned anyext load to wider load",
-    "bool"> {
-  let Registry = X86OptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // --- X86ISelLowering.cpp ---
 
-def X86_ExperimentalPrefInnermostLoopAlignment : Option<
-    "x86-experimental-pref-innermost-loop-alignment",
+// std::optional<int>: getPrefLoopAlignment() only overrides its computed
+// result when the option was actually specified, so "unspecified" must
+// survive as tri-state rather than be folded into the 4 literal default.
+defm X86_ExperimentalPrefInnermostLoopAlignment : OptionalField<
+    "x86-experimental-pref-innermost-loop-alignment", "int",
     "Sets the preferable loop alignment for experiments (as log2 bytes) "
     "for innermost loops only. If specified, this option overrides "
     "alignment set by x86-experimental-pref-loop-alignment.",
-    "int"> {
-  let Registry = X86OptsReg;
-  let Default = "4";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def X86_BrMergingBaseCost : Option<
-    "x86-br-merging-base-cost",
+defm X86_BrMergingBaseCost : ValueField<
+    "x86-br-merging-base-cost", "int", "2",
     "Sets the cost threshold for when multiple conditionals will be merged "
     "into one branch versus be split in multiple branches. Merging "
     "conditionals saves branches at the cost of additional instructions. "
     "This value sets the instruction cost limit, below which conditionals "
     "will be merged, and above which conditionals will be split. Set to -1 "
     "to never merge branches.",
-    "int"> {
-  let Registry = X86OptsReg;
-  let Default = "2";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def X86_BrMergingCcmpBias : Option<
-    "x86-br-merging-ccmp-bias",
+defm X86_BrMergingCcmpBias : ValueField<
+    "x86-br-merging-ccmp-bias", "int", "6",
     "Increases 'x86-br-merging-base-cost' in cases that the target "
     "supports conditional compare instructions.",
-    "int"> {
-  let Registry = X86OptsReg;
-  let Default = "6";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def X86_WidenShift : Option<
-    "x86-widen-shift",
+defm X86_WidenShift : BoolField<
+    "x86-widen-shift", "true",
     "Replace narrow shifts with wider shifts.",
-    "bool"> {
-  let Registry = X86OptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def X86_BrMergingLikelyBias : Option<
-    "x86-br-merging-likely-bias",
+defm X86_BrMergingLikelyBias : ValueField<
+    "x86-br-merging-likely-bias", "int", "0",
     "Increases 'x86-br-merging-base-cost' in cases that it is likely "
     "that all conditionals will be executed. For example for merging "
     "the conditionals (a == b && c > d), if its known that a == b is "
@@ -263,14 +171,10 @@ def X86_BrMergingLikelyBias : Option<
     "both sides will be executed, so it may be desirable to increase "
     "the instruction cost threshold. Set to -1 to never merge likely "
     "branches.",
-    "int"> {
-  let Default = "0";
-  let Registry = X86OptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def X86_BrMergingUnlikelyBias : Option<
-    "x86-br-merging-unlikely-bias",
+defm X86_BrMergingUnlikelyBias : ValueField<
+    "x86-br-merging-unlikely-bias", "int", "-1",
     "Decreases 'x86-br-merging-base-cost' in cases that it is unlikely "
     "that all conditionals will be executed. For example for merging "
     "the conditionals (a == b && c > d), if its known that a == b is "
@@ -278,456 +182,304 @@ def X86_BrMergingUnlikelyBias : Option<
     "both sides will be executed, so it may be desirable to decrease "
     "the instruction cost threshold. Set to -1 to never merge unlikely "
     "branches.",
-    "int"> {
-  let Registry = X86OptsReg;
-  let Default = "-1";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def X86_MulConstantOptimization : Option<
-    "mul-constant-optimization",
+defm X86_MulConstantOptimization : BoolField<
+    "mul-constant-optimization", "true",
     "Replace 'mul x, Const' with more effective instructions like "
     "SHIFT, LEA, etc.",
-    "bool"> {
-  let Registry = X86OptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // --- X86LoadValueInjectionLoadHardening.cpp ---
 
-def X86_LVILoadOptPlugin : Option<
-    "x86-lvi-load-opt-plugin",
+defm X86_LVILoadOptPlugin : ValueField<
+    "x86-lvi-load-opt-plugin", "std::string", "\"\"",
     "Specify a plugin to optimize LFENCE insertion",
-    "std::string"> {
-  let Default = "\"\"";
-  let Registry = X86OptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def X86_LVILoadNoCBranch : Option<
-    "x86-lvi-load-no-cbranch",
+defm X86_LVILoadNoCBranch : BoolField<
+    "x86-lvi-load-no-cbranch", "false",
     "Don't treat conditional branches as disclosure gadgets. This "
     "may improve performance, at the cost of security.",
-    "bool"> {
-  let Default = "false";
-  let Registry = X86OptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def X86_LVILoadDot : Option<
-    "x86-lvi-load-dot",
+defm X86_LVILoadDot : BoolField<
+    "x86-lvi-load-dot", "false",
     "For each function, emit a dot graph depicting potential LVI gadgets",
-    "bool"> {
-  let Default = "false";
-  let Registry = X86OptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def X86_LVILoadDotOnly : Option<
-    "x86-lvi-load-dot-only",
+defm X86_LVILoadDotOnly : BoolField<
+    "x86-lvi-load-dot-only", "false",
     "For each function, emit a dot graph depicting potential LVI "
     "gadgets, and do not insert any fences",
-    "bool"> {
-  let Default = "false";
-  let Registry = X86OptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def X86_LVILoadDotVerify : Option<
-    "x86-lvi-load-dot-verify",
+defm X86_LVILoadDotVerify : BoolField<
+    "x86-lvi-load-dot-verify", "false",
     "For each function, emit a dot graph to stdout depicting "
     "potential LVI gadgets, used for testing purposes only",
-    "bool"> {
-  let Default = "false";
-  let Registry = X86OptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // --- X86LowerAMXIntrinsics.cpp ---
 
-def X86_ScalarizeAMX : Option<
-    "enable-x86-scalar-amx",
+defm X86_ScalarizeAMX : BoolField<
+    "enable-x86-scalar-amx", "false",
     "X86: enable AMX scalarizition.",
-    "bool"> {
-  let Default = "false";
-  let Registry = X86OptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // --- X86MCInstLower.cpp ---
 
-def X86_EnableBranchHint : Option<
-    "enable-branch-hint",
+defm X86_EnableBranchHint : BoolField<
+    "enable-branch-hint", "false",
     "Enable branch hint.",
-    "bool"> {
-  let Default = "false";
-  let Registry = X86OptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def X86_BranchHintProbabilityThreshold : Option<
-    "branch-hint-probability-threshold",
+defm X86_BranchHintProbabilityThreshold : ValueField<
+    "branch-hint-probability-threshold", "unsigned", "50",
     "The probability threshold of enabling branch hint.",
-    "unsigned"> {
-  let Registry = X86OptsReg;
-  let Default = "50";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // --- X86OptimizeLEAs.cpp ---
 
-def X86_DisableLEAOpt : Option<
-    "disable-x86-lea-opt",
+defm X86_DisableLEAOpt : BoolField<
+    "disable-x86-lea-opt", "false",
     "X86: Disable LEA optimizations.",
-    "bool"> {
-  let Default = "false";
-  let Registry = X86OptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // --- X86RegisterInfo.cpp ---
 
-def X86_UseBasePointer : Option<
-    "x86-use-base-pointer",
+defm X86_UseBasePointer : BoolField<
+    "x86-use-base-pointer", "true",
     "Enable use of a base pointer for complex stack frames",
-    "bool"> {
-  let Registry = X86OptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def X86_DisableRegAllocNDDHints : Option<
-    "x86-disable-regalloc-hints-for-ndd",
+defm X86_DisableRegAllocNDDHints : BoolField<
+    "x86-disable-regalloc-hints-for-ndd", "false",
     "Disable two address hints for register "
     "allocation",
-    "bool"> {
-  let Default = "false";
-  let Registry = X86OptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def X86_SetjmpCSRWarningThreshold : Option<
-    "x86-setjmp-csr-warning-threshold",
+defm X86_SetjmpCSRWarningThreshold : ValueField<
+    "x86-setjmp-csr-warning-threshold", "unsigned", "50",
     "Basic block count threshold for emitting a warning about "
     "callee-saved registers reserved due to setjmp",
-    "unsigned"> {
-  let Registry = X86OptsReg;
-  let Default = "50";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // --- X86SelectionDAGInfo.cpp ---
 
-def X86_UseFSRMForMemcpy : Option<
-    "x86-use-fsrm-for-memcpy",
+defm X86_UseFSRMForMemcpy : BoolField<
+    "x86-use-fsrm-for-memcpy", "false",
     "Use fast short rep mov in memcpy lowering",
-    "bool"> {
-  let Default = "false";
-  let Registry = X86OptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // --- X86SpeculativeExecutionSideEffectSuppression.cpp ---
 
-def X86_SESESEnableWithoutLVICFI : Option<
-    "x86-seses-enable-without-lvi-cfi",
+defm X86_SESESEnableWithoutLVICFI : BoolField<
+    "x86-seses-enable-without-lvi-cfi", "false",
     "Force enable speculative execution side effect suppression. "
     "(Note: User must pass -mlvi-cfi in order to mitigate indirect "
     "branches and returns.)",
-    "bool"> {
-  let Default = "false";
-  let Registry = X86OptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def X86_SESESOneLFENCEPerBB : Option<
-    "x86-seses-one-lfence-per-bb",
+defm X86_SESESOneLFENCEPerBB : BoolField<
+    "x86-seses-one-lfence-per-bb", "false",
     "Omit all lfences other than the first to be placed in a basic block.",
-    "bool"> {
-  let Default = "false";
-  let Registry = X86OptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def X86_SESESOnlyLFENCENonConst : Option<
-    "x86-seses-only-lfence-non-const",
+defm X86_SESESOnlyLFENCENonConst : BoolField<
+    "x86-seses-only-lfence-non-const", "false",
     "Only lfence before groups of terminators where at least one "
     "branch instruction has an input to the addressing mode that is a "
     "register other than %rip.",
-    "bool"> {
-  let Default = "false";
-  let Registry = X86OptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def X86_SESESOmitBranchLFENCEs : Option<
-    "x86-seses-omit-branch-lfences",
+defm X86_SESESOmitBranchLFENCEs : BoolField<
+    "x86-seses-omit-branch-lfences", "false",
     "Omit all lfences before branch instructions.",
-    "bool"> {
-  let Default = "false";
-  let Registry = X86OptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // --- X86SpeculativeLoadHardening.cpp ---
 
-def X86_SpeculativeLoadHardening : Option<
-    "x86-speculative-load-hardening",
+defm X86_SpeculativeLoadHardening : BoolField<
+    "x86-speculative-load-hardening", "false",
     "Force enable speculative load hardening",
-    "bool"> {
-  let Default = "false";
-  let Registry = X86OptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def X86_SLHLfence : Option<
-    "x86-slh-lfence",
+defm X86_SLHLfence : BoolField<
+    "x86-slh-lfence", "false",
     "Use LFENCE along each conditional edge to harden against speculative "
     "loads rather than conditional movs and poisoned pointers.",
-    "bool"> {
-  let Default = "false";
-  let Registry = X86OptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def X86_SLHPostLoad : Option<
-    "x86-slh-post-load",
+defm X86_SLHPostLoad : BoolField<
+    "x86-slh-post-load", "true",
     "Harden the value loaded *after* it is loaded by "
     "flushing the loaded bits to 1. This is hard to do "
     "in general but can be done easily for GPRs.",
-    "bool"> {
-  let Registry = X86OptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def X86_SLHFenceCallAndRet : Option<
-    "x86-slh-fence-call-and-ret",
+defm X86_SLHFenceCallAndRet : BoolField<
+    "x86-slh-fence-call-and-ret", "false",
     "Use a full speculation fence to harden both call and ret edges "
     "rather than a lighter weight mitigation.",
-    "bool"> {
-  let Default = "false";
-  let Registry = X86OptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def X86_SLHInterprocedural : Option<
-    "x86-slh-ip",
+defm X86_SLHInterprocedural : BoolField<
+    "x86-slh-ip", "true",
     "Harden interprocedurally by passing our state in and out of "
     "functions in the high bits of the stack pointer.",
-    "bool"> {
-  let Registry = X86OptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def X86_SLHLoads : Option<
-    "x86-slh-loads",
+defm X86_SLHLoads : BoolField<
+    "x86-slh-loads", "true",
     "Sanitize loads from memory. When disable, no "
     "significant security is provided.",
-    "bool"> {
-  let Registry = X86OptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def X86_SLHIndirect : Option<
-    "x86-slh-indirect",
+defm X86_SLHIndirect : BoolField<
+    "x86-slh-indirect", "true",
     "Harden indirect calls and jumps against using speculatively "
     "stored attacker controlled addresses. This is designed to "
     "mitigate Spectre v1.2 style attacks.",
-    "bool"> {
-  let Registry = X86OptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // --- X86Subtarget.cpp ---
 
-def X86_EarlyIfConv : Option<
-    "x86-early-ifcvt",
+defm X86_EarlyIfConv : BoolField<
+    "x86-early-ifcvt", "false",
     "Enable early if-conversion on X86",
-    "bool"> {
-  let Registry = X86OptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // --- X86SuppressAPXForReloc.cpp ---
 
-def X86_EnableAPXForRelocation : Option<
-    "x86-enable-apx-for-relocation",
+defm X86_EnableAPXForRelocation : BoolField<
+    "x86-enable-apx-for-relocation", "false",
     "Enable APX features (EGPR, NDD and NF) for instructions with "
-    "relocations on x86-64 ELF",
-    "bool"> {
-  let Default = "false";
-  let Registry = X86OptsReg;
-}
+    "relocations on x86-64 ELF">;
 
 // --- X86TargetMachine.cpp ---
 
-def X86_MachineCombiner : Option<
-    "x86-machine-combiner",
+defm X86_MachineCombiner : BoolField<
+    "x86-machine-combiner", "true",
     "Enable the machine combiner pass",
-    "bool"> {
-  let Registry = X86OptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def X86_TileRA : Option<
-    "x86-tile-ra",
+defm X86_TileRA : BoolField<
+    "x86-tile-ra", "true",
     "Enable the tile register allocation pass",
-    "bool"> {
-  let Registry = X86OptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // --- X86WinEHUnwindV2.cpp ---
 
-def X86_WinEHUnwindV2UnwindCodesThreshold : Option<
-    "x86-wineh-unwindv2-unwind-codes-threshold",
+defm X86_WinEHUnwindV2UnwindCodesThreshold : ValueField<
+    "x86-wineh-unwindv2-unwind-codes-threshold", "unsigned", "255",
     "Maximum number of unwind codes before "
     "splitting into a new unwind info.",
-    "unsigned"> {
-  let Registry = X86OptsReg;
-  let Default = "255";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def X86_WinEHUnwindV2ForceMode : Option<
-    "x86-wineh-unwindv2-force-mode",
+// std::optional<unsigned>: runAnalysisOnFuncOrFunclet() branches on
+// wasOptSpecified<> itself (not just the resolved value), so "unspecified"
+// must survive as tri-state rather than be folded into the 0 literal
+// default.
+defm X86_WinEHUnwindV2ForceMode : OptionalField<
+    "x86-wineh-unwindv2-force-mode", "unsigned",
     "Overwrites the Unwind v2 mode for testing purposes.",
-    "unsigned"> {
-  let Default = "0";
-  let Registry = X86OptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def X86_WinEHUnwindV2InstructionCountThreshold : Option<
-    "x86-wineh-unwindv2-instruction-count-threshold",
+defm X86_WinEHUnwindV2InstructionCountThreshold : ValueField<
+    "x86-wineh-unwindv2-instruction-count-threshold", "unsigned", "600",
     "Maximum number of (approximate) instructions before splitting "
     "into a new unwind info.",
-    "unsigned"> {
-  let Registry = X86OptsReg;
-  let Default = "600";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // --- AsmParser/X86AsmParser.cpp ---
 
-def X86_LVIInlineAsmHardening : Option<
-    "x86-experimental-lvi-inline-asm-hardening",
+defm X86_LVIInlineAsmHardening : BoolField<
+    "x86-experimental-lvi-inline-asm-hardening", "false",
     "Harden inline assembly code that may be vulnerable to Load Value"
     " Injection (LVI). This feature is experimental.",
-    "bool"> {
-  let Registry = X86OptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // --- MCTargetDesc/X86AsmBackend.cpp ---
 
-def X86_AlignBranchBoundary : Option<
-    "x86-align-branch-boundary",
+// std::optional<unsigned>: the X86AsmBackend constructor only overrides its
+// computed AlignBoundary when the option was actually specified, so
+// "unspecified" must survive as tri-state rather than be folded into the 0
+// literal default.
+defm X86_AlignBranchBoundary : OptionalField<
+    "x86-align-branch-boundary", "unsigned",
     "Control how the assembler should align branches with NOP. If the "
     "boundary's size is not 0, it should be a power of 2 and no less "
     "than 32. Branches will be aligned to prevent from being across or "
     "against the boundary of specified size. The default value 0 does not "
-    "align branches.",
-    "unsigned"> {
-  let Default = "0";
-  let Registry = X86OptsReg;
-}
+    "align branches.">;
 
-def X86_AlignBranch : Option<
-    "x86-align-branch",
+// std::optional<std::string>: same "override only if specified" reasoning
+// as X86_AlignBranchBoundary above; the plus-separated spelling list is
+// parsed application-side into an X86AlignBranchKind bitmask.
+defm X86_AlignBranch : OptionalField<
+    "x86-align-branch", "std::string",
     "Specify types of branches to align (plus separated list of types):"
     "\njcc      indicates conditional jumps"
     "\nfused    indicates fused conditional jumps"
     "\njmp      indicates direct unconditional jumps"
     "\ncall     indicates direct and indirect calls"
     "\nret      indicates rets"
-    "\nindirect indicates indirect unconditional jumps",
-    "std::string"> {
-  let Registry = X86OptsReg;
-}
+    "\nindirect indicates indirect unconditional jumps">;
 
-def X86_BranchesWithin32BBoundaries : Option<
-    "x86-branches-within-32B-boundaries",
+defm X86_BranchesWithin32BBoundaries : BoolField<
+    "x86-branches-within-32B-boundaries", "false",
     "Align selected instructions to mitigate negative performance impact "
     "of Intel's micro code update for errata skx102.  May break "
     "assumptions about labels corresponding to particular instructions, "
-    "and should be used with caution.",
-    "bool"> {
-  let Default = "false";
-  let Registry = X86OptsReg;
-}
+    "and should be used with caution.">;
 
-def X86_PadMaxPrefixSize : Option<
-    "x86-pad-max-prefix-size",
-    "Maximum number of prefixes to use for padding",
-    "unsigned"> {
-  let Registry = X86OptsReg;
-}
+// std::optional<unsigned>: same "override only if specified" reasoning as
+// X86_AlignBranchBoundary above.
+defm X86_PadMaxPrefixSize : OptionalField<
+    "x86-pad-max-prefix-size", "unsigned",
+    "Maximum number of prefixes to use for padding">;
 
-def X86_PadForAlign : Option<
-    "x86-pad-for-align",
+defm X86_PadForAlign : BoolField<
+    "x86-pad-for-align", "false",
     "Pad previous instructions to implement align directives",
-    "bool"> {
-  let Registry = X86OptsReg;
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
-def X86_PadForBranchAlign : Option<
-    "x86-pad-for-branch-align",
+defm X86_PadForBranchAlign : BoolField<
+    "x86-pad-for-branch-align", "true",
     "Pad previous instructions to implement branch alignment",
-    "bool"> {
-  let Registry = X86OptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // --- MCTargetDesc/X86MCAsmInfo.cpp ---
 
-def X86AsmSyntaxATT : EnumValue<"att", "Emit AT&T-style assembly"> {
-  let CppName = "ATT";
-  let Value = 0;
-}
+def X86AsmSyntaxEnum : OptionEnum<"X86AsmSyntaxKind", [
+    EnumMember<"ATT", "att">,
+    EnumMember<"Intel", "intel">]>;
 
-def X86AsmSyntaxIntel : EnumValue<"intel", "Emit Intel-style assembly"> {
-  let CppName = "Intel";
-  let Value = 1;
-}
+// std::optional<X86AsmSyntaxKind>: getX86AsmSyntax() only overrides the
+// process-wide runtime default (set via setX86AsmSyntax(), itself driven by
+// e.g. llvm-mc's own --x86-asm-syntax-shaped flag) when this option was
+// actually specified, so "unspecified" must survive as tri-state rather
+// than be folded into a literal "att" default. Hand-authored (not
+// EnumField<>) because no multiclass composes std::optional<> field
+// storage with FieldEnum<> tracking.
+def X86_AsmSyntax : Joined<["-", "--"], "x86-asm-syntax=">,
+    HelpText<"Select the assembly style for input">,
+    Flags<[HelpHidden]>,
+    Field<"std::optional<X86AsmSyntaxKind>", "X86_AsmSyntax", "std::nullopt">,
+    FieldEnum<X86AsmSyntaxEnum>;
+def X86_AsmSyntax_sep : Separate<["-", "--"], "x86-asm-syntax">,
+    Flags<[HelpHidden]>, Alias<!cast<Option>(X86_AsmSyntax)>;
 
-def X86AsmSyntaxKind : EnumType<"X86AsmSyntaxKind",
-    [X86AsmSyntaxATT, X86AsmSyntaxIntel]>;
-
-def X86_AsmSyntax : Option<
-    "x86-asm-syntax", "Select the assembly style for input",
-    "X86AsmSyntaxKind"> {
-  let Registry = X86OptsReg;
-  let Default = "att";
-  let Hidden = 1;
-}
-
-def X86_MarkDataRegions : Option<
-    "mark-data-regions",
+defm X86_MarkDataRegions : BoolField<
+    "mark-data-regions", "true",
     "Mark code section jump table data regions.",
-    "bool"> {
-  let Registry = X86OptsReg;
-  let Default = "1";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;
 
 // --- X86WinEHUnwindV3.cpp ---
 
-def X86_ApproxBytesPerInstr : Option<
-    "x86-wineh-unwindv3-instr-avg-size",
+defm X86_ApproxBytesPerInstr : ValueField<
+    "x86-wineh-unwindv3-instr-avg-size", "unsigned", "7",
     "Average size of an instruction. This value is used in determining "
     "split points for chained unwinder info",
-    "unsigned"> {
-  let Registry = X86OptsReg;
-  let Default = "7";
-  let Hidden = 1;
-}
+    /*hidden=*/1>;

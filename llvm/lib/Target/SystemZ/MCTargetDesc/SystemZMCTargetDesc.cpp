@@ -24,7 +24,6 @@
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/SystemZ/SystemZOptionsOptInfos.h"
 
 using namespace llvm;
 

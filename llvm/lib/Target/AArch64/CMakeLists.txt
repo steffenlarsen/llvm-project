@@ -31,8 +31,6 @@ tablegen(LLVM AArch64GenExegesis.inc -gen-exegesis)
 add_public_tablegen_target(AArch64CommonTableGen)
 
 add_llvm_target(AArch64CodeGen
-  AArch64OptionsRegistration.cpp
-  AArch64OptionsGetters.cpp
   GISel/AArch64CallLowering.cpp
   GISel/AArch64GlobalISelUtils.cpp
   GISel/AArch64InstructionSelector.cpp
@@ -102,6 +100,7 @@ add_llvm_target(AArch64CodeGen
 
   DEPENDS
   intrinsics_gen
+  AArch64OptParserTableGen
 
   LINK_COMPONENTS
   AArch64Desc

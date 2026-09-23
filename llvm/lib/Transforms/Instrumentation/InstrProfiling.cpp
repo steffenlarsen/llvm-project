@@ -49,7 +49,7 @@
 #include "llvm/Pass.h"
 #include "llvm/ProfileData/InstrProf.h"
 #include "llvm/ProfileData/InstrProfCorrelator.h"
-#include "llvm/ProfileData/ProfileDataOptionsOptInfos.h"
+#include "llvm/ProfileData/ProfileDataOptions.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/Compiler.h"
@@ -57,7 +57,7 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/OptionsContext.h"
 #include "llvm/TargetParser/Triple.h"
-#include "llvm/Transforms/Instrumentation/InstrumentationOptionsOptInfos.h"
+#include "llvm/Transforms/Instrumentation/InstrumentationOptions.h"
 #include "llvm/Transforms/Instrumentation/PGOInstrumentation.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Instrumentation.h"
@@ -77,52 +77,46 @@ LLVM_ABI InstrProfCorrelator::ProfCorrelatorKind ProfileCorrelate =
     ProfCorrelatorKind::NONE;
 } // namespace llvm
 
-static bool getEnableVTableValueProfiling(const Module &M,
-                                          const clv2::OptionsContext &Ctx) {
-  auto *O = clv2::getView<&clv2::ProfileDataOptsReg>(
-      M.getContext().getOptionsContext());
-  if (!O)
-    O = clv2::getView<&clv2::ProfileDataOptsReg>(Ctx);
-  if (O)
-    return O->get<&clv2::PD_EnableVTableValueProfiling>();
-  return false;
+static bool getEnableVTableValueProfiling(const Module &M) {
+  return M.getContext()
+      .getOptions<ProfileDataOptions>()
+      .PD_EnableVTableValueProfiling;
 }
 
-static bool getDoInstrProfNameCompression(const Module &M,
-                                          const clv2::OptionsContext &Ctx) {
-  auto *O = clv2::getView<&clv2::ProfileDataOptsReg>(
-      M.getContext().getOptionsContext());
-  if (!O)
-    O = clv2::getView<&clv2::ProfileDataOptsReg>(Ctx);
-  if (O)
-    return O->get<&clv2::PD_EnableNameCompression>();
-  return true;
+static bool getDoInstrProfNameCompression(const Module &M) {
+  return M.getContext()
+      .getOptions<ProfileDataOptions>()
+      .PD_EnableNameCompression;
 }
 
 static InstrProfCorrelator::ProfCorrelatorKind
 getProfileCorrelate(const Module &M) {
-  return clv2::getOptValIfSpecified<&clv2::InstrumentationOptsReg,
-                                    &clv2::INST_ProfileCorrelate>(
-      M.getContext().getOptionsContext(), ProfileCorrelate);
+  return M.getContext()
+      .getOptions<InstrumentationOptions>()
+      .INST_ProfileCorrelate.value_or(ProfileCorrelate);
 }
 
 namespace {
 
-// Getters check the clv2 override first, then return a literal default.
+// Plain (non-tristate) options: the field already carries the right default.
+#define INSTRPROF_GETTER(RetTy, FnName, DescName, Default)                    \
+  static RetTy get##FnName(const Module &M) {                                 \
+    return M.getContext().getOptions<InstrumentationOptions>().DescName;      \
+  }
 
-#define INSTRPROF_GETTER(RetTy, FnName, DescName, Default)                     \
-  static RetTy get##FnName(const Module &M) {                                  \
-    if (auto *O = clv2::getView<&clv2::InstrumentationOptsReg>(                \
-            M.getContext().getOptionsContext()))                               \
-      if (O->specified<&clv2::DescName>())                                     \
-        return O->get<&clv2::DescName>();                                      \
-    return Default;                                                            \
+// Tristate options: unspecified reads as std::nullopt, so the literal
+// default is applied here instead of in the schema.
+#define INSTRPROF_OPTIONAL_GETTER(RetTy, FnName, DescName, Default)           \
+  static RetTy get##FnName(const Module &M) {                                 \
+    return M.getContext()                                                    \
+        .getOptions<InstrumentationOptions>()                                \
+        .DescName.value_or(Default);                                         \
   }
 
 INSTRPROF_GETTER(bool, DoHashBasedCounterSplit, INST_DoHashBasedCounterSplit,
                  true)
-INSTRPROF_GETTER(bool, RuntimeCounterRelocation, INST_RuntimeCounterRelocation,
-                 false)
+INSTRPROF_OPTIONAL_GETTER(bool, RuntimeCounterRelocation,
+                          INST_RuntimeCounterRelocation, false)
 INSTRPROF_GETTER(bool, ValueProfileStaticAlloc, INST_ValueProfileStaticAlloc,
                  true)
 INSTRPROF_GETTER(double, NumCountersPerValueSite, INST_NumCountersPerValueSite,
@@ -134,7 +128,8 @@ INSTRPROF_GETTER(bool, AtomicCounterUpdatePromoted,
 INSTRPROF_GETTER(bool, AtomicFirstCounter, INST_AtomicFirstCounter, false)
 INSTRPROF_GETTER(bool, ConditionalCounterUpdate, INST_ConditionalCounterUpdate,
                  false)
-INSTRPROF_GETTER(bool, DoCounterPromotion, INST_DoCounterPromotion, false)
+INSTRPROF_OPTIONAL_GETTER(bool, DoCounterPromotion, INST_DoCounterPromotion,
+                          false)
 INSTRPROF_GETTER(unsigned, MaxNumOfPromotionsPerLoop,
                  INST_MaxNumOfPromotionsPerLoop, 20)
 INSTRPROF_GETTER(int, MaxNumOfPromotions, INST_MaxNumOfPromotions, -1)
@@ -145,37 +140,36 @@ INSTRPROF_GETTER(bool, SpeculativeCounterPromotionToLoop,
 INSTRPROF_GETTER(bool, IterativeCounterPromotion,
                  INST_IterativeCounterPromotion, true)
 INSTRPROF_GETTER(bool, SkipRetExitBlock, INST_SkipRetExitBlock, true)
-INSTRPROF_GETTER(bool, SampledInstr, INST_SampledInstrumentation, false)
+INSTRPROF_OPTIONAL_GETTER(bool, SampledInstr, INST_SampledInstrumentation,
+                          false)
 INSTRPROF_GETTER(unsigned, SampledInstrPeriod, INST_SampledInstrPeriod, 65536)
 INSTRPROF_GETTER(unsigned, SampledInstrBurstDuration,
                  INST_SampledInstrBurstDuration, 200)
 
 static bool isRuntimeCounterRelocationSpecified(const Module &M) {
-  return clv2::wasOptSpecified<&clv2::InstrumentationOptsReg,
-                               &clv2::INST_RuntimeCounterRelocation>(
-      M.getContext().getOptionsContext());
+  return M.getContext()
+      .getOptions<InstrumentationOptions>()
+      .INST_RuntimeCounterRelocation.has_value();
 }
 
 static bool isSampledInstrSpecified(const Module &M) {
-  return clv2::wasOptSpecified<&clv2::InstrumentationOptsReg,
-                               &clv2::INST_SampledInstrumentation>(
-      M.getContext().getOptionsContext());
+  return M.getContext()
+      .getOptions<InstrumentationOptions>()
+      .INST_SampledInstrumentation.has_value();
 }
 
 static bool isDoCounterPromotionSpecified(const Module &M) {
-  return clv2::wasOptSpecified<&clv2::InstrumentationOptsReg,
-                               &clv2::INST_DoCounterPromotion>(
-      M.getContext().getOptionsContext());
+  return M.getContext()
+      .getOptions<InstrumentationOptions>()
+      .INST_DoCounterPromotion.has_value();
 }
 
 static bool getVerifyAtomicPromotion(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::INST_VerifyAtomicPromotion>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<InstrumentationOptions>().INST_VerifyAtomicPromotion;
 }
 
 static unsigned getOffloadPGOSampling(const Module &M) {
-  return clv2::getOptValOrDefault<&clv2::INST_OffloadPGOSampling>(
-      M.getContext().getOptionsContext());
+  return M.getContext().getOptions<InstrumentationOptions>().INST_OffloadPGOSampling;
 }
 
 #undef INSTRPROF_GETTER
@@ -1056,7 +1050,7 @@ bool InstrLowerer::lower() {
     }
   }
 
-  if (getEnableVTableValueProfiling(M, M.getContext().getOptionsContext()))
+  if (getEnableVTableValueProfiling(M))
     for (GlobalVariable &GV : M.globals())
       // Global variables with type metadata are virtual table variables.
       if (GV.hasMetadata(LLVMContext::MD_type))
@@ -2306,10 +2300,8 @@ void InstrLowerer::emitNameData() {
     return;
 
   std::string CompressedNameStr;
-  if (Error E = collectPGOFuncNameStrings(
-          ReferencedNames, CompressedNameStr,
-          getDoInstrProfNameCompression(M,
-                                        M.getContext().getOptionsContext()))) {
+  if (Error E = collectPGOFuncNameStrings(ReferencedNames, CompressedNameStr,
+                                          getDoInstrProfNameCompression(M))) {
     report_fatal_error(Twine(toString(std::move(E))), false);
   }
 
@@ -2368,16 +2360,13 @@ void InstrLowerer::emitNameData() {
 }
 
 void InstrLowerer::emitVTableNames() {
-  if (!getEnableVTableValueProfiling(M, M.getContext().getOptionsContext()) ||
-      ReferencedVTables.empty())
+  if (!getEnableVTableValueProfiling(M) || ReferencedVTables.empty())
     return;
 
   // Collect the PGO names of referenced vtables and compress them.
   std::string CompressedVTableNames;
-  if (Error E =
-          collectVTableStrings(ReferencedVTables, CompressedVTableNames,
-                               getDoInstrProfNameCompression(
-                                   M, M.getContext().getOptionsContext()))) {
+  if (Error E = collectVTableStrings(ReferencedVTables, CompressedVTableNames,
+                                     getDoInstrProfNameCompression(M))) {
     report_fatal_error(Twine(toString(std::move(E))), false);
   }
 

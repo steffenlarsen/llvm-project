@@ -44,25 +44,23 @@ namespace llvm {
 static bool UseIterativeBFIInference = false;
 } // namespace llvm
 
-#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
-#include "llvm/Support/OptionsContext.h"
+#include "llvm/Analysis/AnalysisOptions.h"
 
 namespace llvm {
 bool getUseIterativeBFIInference(const Function &F) {
-  return clv2::getOptValIfSpecified<&clv2::AnalysisOptsReg,
-                                    &clv2::AN_UseIterativeBFIInference>(
-      F.getContext().getOptionsContext(), false);
+  return F.getContext()
+      .getOptions<AnalysisOptions>()
+      .AN_UseIterativeBFIInference;
 }
 void setUseIterativeBFIInference(bool V) { UseIterativeBFIInference = V; }
-bool getCheckBFIUnknownBlockQueries(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::AN_CheckBFIUnknownBlockQueries>(Ctx);
+bool getCheckBFIUnknownBlockQueries(const AnalysisOptions &Opts) {
+  return Opts.AN_CheckBFIUnknownBlockQueries;
 }
-unsigned getIterativeBFIMaxIterationsPerBlock(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::AN_IterativeBFIMaxIterationsPerBlock>(
-      Ctx);
+unsigned getIterativeBFIMaxIterationsPerBlock(const AnalysisOptions &Opts) {
+  return Opts.AN_IterativeBFIMaxIterationsPerBlock;
 }
-double getIterativeBFIPrecision(const clv2::OptionsContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::AN_IterativeBFIPrecision>(Ctx);
+double getIterativeBFIPrecision(const AnalysisOptions &Opts) {
+  return Opts.AN_IterativeBFIPrecision;
 }
 } // namespace llvm
 
@@ -269,8 +267,8 @@ void Distribution::normalize() {
     // sum of the weights, but let's double-check.
     assert(Total == std::accumulate(Weights.begin(), Weights.end(), UINT64_C(0),
                                     [](uint64_t Sum, const Weight &W) {
-                      return Sum + W.Amount;
-                    }) &&
+                                      return Sum + W.Amount;
+                                    }) &&
            "Expected total to be correct");
     return;
   }
@@ -330,8 +328,7 @@ void BlockFrequencyInfoImplBase::addToDist(Distribution &Dist,
 
 #ifndef NDEBUG
   auto debugSuccessor = [&](const char *Type) {
-    dbgs() << "  =>"
-           << " [" << Type << "] weight = " << Weight;
+    dbgs() << "  =>" << " [" << Type << "] weight = " << Weight;
     if (!isLoopHeader(Resolved))
       dbgs() << ", succ = " << getBlockName(Succ);
     dbgs() << ", pred = " << getBlockName(Pred);
@@ -549,7 +546,7 @@ BlockFrequency
 BlockFrequencyInfoImplBase::getBlockFreq(const BlockNode &Node) const {
   if (!Node.isValid()) {
 #ifndef NDEBUG
-    if (getCheckBFIUnknownBlockQueries(*OptsCtx)) {
+    if (getCheckBFIUnknownBlockQueries(*Opts)) {
       SmallString<256> Msg;
       raw_svector_ostream OS(Msg);
       OS << "*** Detected BFI query for unknown block " << getBlockName(Node);
@@ -584,8 +581,7 @@ BlockFrequencyInfoImplBase::getProfileCountFromFreq(const Function &F,
   return BlockCount.getLimitedValue();
 }
 
-bool
-BlockFrequencyInfoImplBase::isIrrLoopHeader(const BlockNode &Node) {
+bool BlockFrequencyInfoImplBase::isIrrLoopHeader(const BlockNode &Node) {
   if (!Node.isValid())
     return false;
   return IsIrrLoopHeader.test(Node.Index);

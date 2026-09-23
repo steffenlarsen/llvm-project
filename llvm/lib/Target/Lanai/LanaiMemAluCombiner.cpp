@@ -33,8 +33,7 @@
 #include "llvm/CodeGen/RegisterScavenging.h"
 #include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/IR/Analysis.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/Lanai/LanaiOptionsOptInfos.h"
+#include "llvm/Target/Lanai/LanaiOptions.h"
 
 using namespace llvm;
 
@@ -45,11 +44,8 @@ using namespace llvm;
 
 STATISTIC(NumLdStAluCombined, "Number of memory and ALU instructions combined");
 
-static bool DisableMemAluCombiner = false;
-
 static bool getDisableMemAluCombiner(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::LANAI_DisableMemAluCombiner>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<LanaiOptions>().LANAI_DisableMemAluCombiner;
 }
 
 namespace {

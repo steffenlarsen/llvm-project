@@ -17,8 +17,7 @@
 #include "llvm/IR/InstIterator.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FileSystem.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Transforms/Coroutines/CoroutinesOptionsOptInfos.h"
+#include "llvm/Transforms/Coroutines/CoroutinesOptions.h"
 #include <optional>
 
 using namespace llvm;
@@ -29,11 +28,9 @@ STATISTIC(NumOfCoroElided, "The # of coroutine get elided.");
 
 #ifndef NDEBUG
 static const std::string &getCoroElideInfoOutputFilename(const Function &F) {
-  if (auto *O = clv2::getView<&clv2::CoroutinesOptsReg>(
-          F.getContext().getOptionsContext()))
-    return O->get<&clv2::CORO_ElideInfoOutputFile>();
-  static const std::string Default;
-  return Default;
+  return F.getContext()
+      .getOptions<CoroutinesOptions>()
+      .CORO_ElideInfoOutputFile;
 }
 #endif
 

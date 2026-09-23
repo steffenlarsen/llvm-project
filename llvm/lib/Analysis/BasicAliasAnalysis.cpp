@@ -19,7 +19,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/AliasAnalysis.h"
-#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
+#include "llvm/Analysis/AnalysisOptions.h"
 #include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/Analysis/CFG.h"
 #include "llvm/Analysis/CaptureTracking.h"
@@ -56,7 +56,6 @@
 #include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/KnownBits.h"
-#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/SaveAndRestore.h"
 #include <cassert>
 #include <cstdint>
@@ -72,15 +71,13 @@ using namespace llvm;
 static bool EnableRecPhiAnalysis = true;
 
 static bool getEnableRecPhiAnalysis(const LLVMContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::AN_EnableRecPhiAnalysis>(
-      Ctx.getOptionsContext());
+  return Ctx.getOptions<AnalysisOptions>().AN_EnableRecPhiAnalysis;
 }
 
 static bool EnableSeparateStorageAnalysis = true;
 
 static bool getEnableSeparateStorageAnalysis(const LLVMContext &Ctx) {
-  return clv2::getOptValOrDefault<&clv2::AN_EnableSeparateStorageAnalysis>(
-      Ctx.getOptionsContext());
+  return Ctx.getOptions<AnalysisOptions>().AN_EnableSeparateStorageAnalysis;
 }
 
 bool BasicAAResult::enableSeparateStorageAnalysis() const {
@@ -360,22 +357,28 @@ struct CastedValue {
   APInt evaluateWith(APInt N) const {
     assert(N.getBitWidth() == V->getType()->getPrimitiveSizeInBits() &&
            "Incompatible bit width");
-    if (TruncBits) N = N.trunc(N.getBitWidth() - TruncBits);
-    if (SExtBits) N = N.sext(N.getBitWidth() + SExtBits);
-    if (ZExtBits) N = N.zext(N.getBitWidth() + ZExtBits);
+    if (TruncBits)
+      N = N.trunc(N.getBitWidth() - TruncBits);
+    if (SExtBits)
+      N = N.sext(N.getBitWidth() + SExtBits);
+    if (ZExtBits)
+      N = N.zext(N.getBitWidth() + ZExtBits);
     return N;
   }
 
   ConstantRange evaluateWith(ConstantRange N) const {
     assert(N.getBitWidth() == V->getType()->getPrimitiveSizeInBits() &&
            "Incompatible bit width");
-    if (TruncBits) N = N.truncate(N.getBitWidth() - TruncBits);
+    if (TruncBits)
+      N = N.truncate(N.getBitWidth() - TruncBits);
     if (IsNonNegative && !N.isAllNonNegative())
       N = N.intersectWith(
           ConstantRange(APInt::getZero(N.getBitWidth()),
                         APInt::getSignedMinValue(N.getBitWidth())));
-    if (SExtBits) N = N.signExtend(N.getBitWidth() + SExtBits);
-    if (ZExtBits) N = N.zeroExtend(N.getBitWidth() + ZExtBits);
+    if (SExtBits)
+      N = N.signExtend(N.getBitWidth() + SExtBits);
+    if (ZExtBits)
+      N = N.zeroExtend(N.getBitWidth() + ZExtBits);
     return N;
   }
 
@@ -432,13 +435,14 @@ struct LinearExpression {
     return LinearExpression(Val, Scale * Other, Offset * Other, NUW, NSW);
   }
 };
-}
+} // namespace
 
 /// Analyzes the specified value as a linear expression: "A*V + B", where A and
 /// B are constant integers.
-static LinearExpression GetLinearExpression(
-    const CastedValue &Val,  const DataLayout &DL, unsigned Depth,
-    AssumptionCache *AC, DominatorTree *DT) {
+static LinearExpression GetLinearExpression(const CastedValue &Val,
+                                            const DataLayout &DL,
+                                            unsigned Depth, AssumptionCache *AC,
+                                            DominatorTree *DT) {
   // Limit our recursion depth.
   if (Depth == 6)
     return Val;
@@ -526,8 +530,8 @@ static LinearExpression GetLinearExpression(
 
   if (isa<SExtInst>(Val.V))
     return GetLinearExpression(
-        Val.withSExtOfValue(cast<CastInst>(Val.V)->getOperand(0)),
-        DL, Depth + 1, AC, DT);
+        Val.withSExtOfValue(cast<CastInst>(Val.V)->getOperand(0)), DL,
+        Depth + 1, AC, DT);
 
   return Val;
 }
@@ -561,16 +565,13 @@ struct VariableGEPIndex {
     dbgs() << "\n";
   }
   void print(raw_ostream &OS) const {
-    OS << "(V=" << Val.V->getName()
-       << ", zextbits=" << Val.ZExtBits
-       << ", sextbits=" << Val.SExtBits
-       << ", truncbits=" << Val.TruncBits
-       << ", scale=" << Scale
-       << ", nsw=" << IsNSW
-       << ", negated=" << IsNegated << ")";
+    OS << "(V=" << Val.V->getName() << ", zextbits=" << Val.ZExtBits
+       << ", sextbits=" << Val.SExtBits << ", truncbits=" << Val.TruncBits
+       << ", scale=" << Scale << ", nsw=" << IsNSW << ", negated=" << IsNegated
+       << ")";
   }
 };
-}
+} // namespace
 
 // Represents the internal structure of a GEP, decomposed into a base pointer,
 // constant offsets, and variable scaled indices.
@@ -1119,10 +1120,12 @@ ModRefInfo BasicAAResult::getModRefInfo(const CallBase *Call1,
 /// We know that V1 is a GEP, but we don't know anything about V2.
 /// UnderlyingV1 is getUnderlyingObject(GEP1), UnderlyingV2 is the same for
 /// V2.
-AliasResult BasicAAResult::aliasGEP(
-    const GEPOperator *GEP1, LocationSize V1Size,
-    const Value *V2, LocationSize V2Size,
-    const Value *UnderlyingV1, const Value *UnderlyingV2, AAQueryInfo &AAQI) {
+AliasResult BasicAAResult::aliasGEP(const GEPOperator *GEP1,
+                                    LocationSize V1Size, const Value *V2,
+                                    LocationSize V2Size,
+                                    const Value *UnderlyingV1,
+                                    const Value *UnderlyingV2,
+                                    AAQueryInfo &AAQI) {
   auto BaseObjectsAlias = [&]() {
     AliasResult BaseAlias =
         AAQI.AAR.alias(MemoryLocation::getBeforeOrAfter(UnderlyingV1),
@@ -1381,10 +1384,9 @@ static AliasResult MergeAliasResults(AliasResult A, AliasResult B) {
 
 /// Provides a bunch of ad-hoc rules to disambiguate a Select instruction
 /// against another.
-AliasResult
-BasicAAResult::aliasSelect(const SelectInst *SI, LocationSize SISize,
-                           const Value *V2, LocationSize V2Size,
-                           AAQueryInfo &AAQI) {
+AliasResult BasicAAResult::aliasSelect(const SelectInst *SI,
+                                       LocationSize SISize, const Value *V2,
+                                       LocationSize V2Size, AAQueryInfo &AAQI) {
   // If the values are Selects with the same condition, we can do a more precise
   // check: just check for aliases between the values on corresponding arms.
   if (const SelectInst *SI2 = dyn_cast<SelectInst>(V2))
@@ -1523,8 +1525,8 @@ AliasResult BasicAAResult::aliasPHI(const PHINode *PN, LocationSize PNSize,
   for (unsigned i = 1, e = V1Srcs.size(); i != e; ++i) {
     Value *V = V1Srcs[i];
 
-    AliasResult ThisAlias = AAQI.AAR.alias(
-        MemoryLocation(V, PNSize), MemoryLocation(V2, V2Size), AAQI);
+    AliasResult ThisAlias = AAQI.AAR.alias(MemoryLocation(V, PNSize),
+                                           MemoryLocation(V2, V2Size), AAQI);
     Alias = MergeAliasResults(ThisAlias, Alias);
     if (Alias == AliasResult::MayAlias)
       break;
@@ -1774,8 +1776,7 @@ AliasResult BasicAAResult::aliasCheck(const Value *V1, LocationSize V1Size,
 }
 
 AliasResult BasicAAResult::aliasCheckRecursive(
-    const Value *V1, LocationSize V1Size,
-    const Value *V2, LocationSize V2Size,
+    const Value *V1, LocationSize V1Size, const Value *V2, LocationSize V2Size,
     AAQueryInfo &AAQI, const Value *O1, const Value *O2) {
   if (const GEPOperator *GV1 = dyn_cast<GEPOperator>(V1)) {
     AliasResult Result = aliasGEP(GV1, V1Size, V2, V2Size, O1, O2, AAQI);
@@ -2092,7 +2093,7 @@ bool BasicAAResult::computeConstantOffsetHeuristic(const DecomposedGEP &GEP,
   APInt MinDiff = E0.Offset - E1.Offset, Wrapped = -MinDiff;
   MinDiff = APIntOps::umin(MinDiff, Wrapped);
   APInt MinDiffBytes =
-    MinDiff.zextOrTrunc(Var0.Scale.getBitWidth()) * Var0.Scale.abs();
+      MinDiff.zextOrTrunc(Var0.Scale.getBitWidth()) * Var0.Scale.abs();
 
   // We can't definitely say whether GEP1 is before or after V2 due to wrapping
   // arithmetic (i.e. for some values of GEP1 and V2 GEP1 < V2, and for other
@@ -2138,8 +2139,8 @@ bool BasicAAWrapperPass::runOnFunction(Function &F) {
   auto &TLIWP = getAnalysis<TargetLibraryInfoWrapperPass>();
   auto &DTWP = getAnalysis<DominatorTreeWrapperPass>();
 
-  Result.reset(new BasicAAResult(F.getDataLayout(), F,
-                                 TLIWP.getTLI(F), ACT.getAssumptionCache(F),
+  Result.reset(new BasicAAResult(F.getDataLayout(), F, TLIWP.getTLI(F),
+                                 ACT.getAssumptionCache(F),
                                  &DTWP.getDomTree()));
 
   return false;

@@ -18,21 +18,33 @@
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/StringSet.h"
+#include "llvm/Config/Targets.h"
+#if LLVM_HAS_ARC_TARGET
+#include "llvm/Target/ARC/ARCOptions.h"
+#endif
 #include "llvm/ADT/Twine.h"
+#include "llvm/Bitcode/BitcodeMemProfOptions.h"
+#include "llvm/Bitcode/BitcodeOptions.h"
 #include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/Bitcode/BitcodeWriter.h"
+#include "llvm/CGData/CGDataOptions.h"
 #include "llvm/CodeGen/CommandFlags.h"
 #include "llvm/IR/DiagnosticInfo.h"
 #include "llvm/IR/DiagnosticPrinter.h"
+#include "llvm/IR/IROptions.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/ModuleSummaryIndex.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/IRReader/IRReader.h"
+#include "llvm/LTO/LTOOptions.h"
 #include "llvm/LTO/legacy/LTOCodeGenerator.h"
 #include "llvm/LTO/legacy/LTOModule.h"
 #include "llvm/LTO/legacy/ThinLTOCodeGenerator.h"
+#include "llvm/MC/MCOptions.h"
 #include "llvm/MC/MCTargetOptionsCommandFlags.h"
+#include "llvm/Option/LibraryOptions.h"
+#include "llvm/Passes/PassesOptions.h"
 #include "llvm/Support/Allocator.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/CommandLineV2.h"
@@ -44,32 +56,39 @@
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/Path.h"
+#include "llvm/Support/PluginLoaderOptions.h"
 #include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/SourceMgr.h"
+#include "llvm/Support/SupportOptions.h"
 #include "llvm/Support/SupportOptionsOptInfos.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/ToolOutputFile.h"
 #include "llvm/Support/WithColor.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/AArch64/AArch64OptionsOptInfos.h"
-#include "llvm/Target/AMDGPU/AMDGPUOptionsOptInfos.h"
-#include "llvm/Target/ARM/ARMOptionsOptInfos.h"
-#include "llvm/Target/BPF/BPFOptionsOptInfos.h"
-#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
-#include "llvm/Target/Lanai/LanaiOptionsOptInfos.h"
-#include "llvm/Target/LoongArch/LoongArchOptionsOptInfos.h"
-#include "llvm/Target/MSP430/MSP430OptionsOptInfos.h"
-#include "llvm/Target/Mips/MipsOptionsOptInfos.h"
-#include "llvm/Target/NVPTX/NVPTXOptionsOptInfos.h"
-#include "llvm/Target/PowerPC/PowerPCOptionsOptInfos.h"
-#include "llvm/Target/RISCV/RISCVOptionsOptInfos.h"
-#include "llvm/Target/SPIRV/SPIRVOptionsOptInfos.h"
-#include "llvm/Target/Sparc/SparcOptionsOptInfos.h"
-#include "llvm/Target/SystemZ/SystemZOptionsOptInfos.h"
+#include "llvm/Target/AArch64/AArch64Options.h"
+#include "llvm/Target/AMDGPU/AMDGPUOptions.h"
+#include "llvm/Target/ARM/ARMOptions.h"
+#include "llvm/Target/BPF/BPFOptions.h"
+#include "llvm/Target/Hexagon/HexagonOptions.h"
+#include "llvm/Target/Lanai/LanaiOptions.h"
+#include "llvm/Target/LoongArch/LoongArchOptions.h"
+#include "llvm/Target/MSP430/MSP430Options.h"
+#include "llvm/Target/Mips/MipsOptions.h"
+#include "llvm/Target/NVPTX/NVPTXOptions.h"
+#include "llvm/Target/PowerPC/PowerPCOptions.h"
+#include "llvm/Target/RISCV/RISCVOptions.h"
+#include "llvm/Target/SPIRV/SPIRVOptions.h"
+#include "llvm/Target/Sparc/SparcOptions.h"
+#include "llvm/Target/SystemZ/SystemZOptions.h"
 #include "llvm/Target/TargetOptions.h"
-#include "llvm/Target/WebAssembly/WebAssemblyOptionsOptInfos.h"
-#include "llvm/Target/X86/X86OptionsOptInfos.h"
-#include "llvm/Target/XCore/XCoreOptionsOptInfos.h"
+#include "llvm/Target/WebAssembly/WebAssemblyOptions.h"
+#include "llvm/Target/X86/X86Options.h"
+#include "llvm/Target/XCore/XCoreOptions.h"
+#include "llvm/Transforms/IPO/IPOOptions.h"
+#include "llvm/Transforms/Instrumentation/InstrumentationOptions.h"
+#include "llvm/Transforms/ObjCARC/ObjCARCOptions.h"
+#include "llvm/Transforms/Scalar/ScalarOptions.h"
+#include "llvm/Transforms/Utils/UtilsOptions.h"
 #include <algorithm>
 #include <cassert>
 #include <cstdint>
@@ -626,7 +645,7 @@ static std::unique_ptr<lto::InputFile>
 loadInputFile(MemoryBufferRef Buffer, const clv2::OptionsContext &OptsCtx) {
   ExitOnError ExitOnErr("llvm-lto: error loading input '" +
                         Buffer.getBufferIdentifier().str() + "': ");
-  return ExitOnErr(lto::InputFile::create(Buffer, OptsCtx));
+  return ExitOnErr(lto::InputFile::create(Buffer));
 }
 
 static std::unique_ptr<Module> loadModuleFromInput(lto::InputFile &File,
@@ -1024,29 +1043,58 @@ private:
 
 int main(int argc, char **argv) {
   InitLLVM X(argc, argv);
+
+  // llvm::PassesOptions, llvm::PluginLoaderOptions, llvm::XCoreOptions,
+  // llvm::ObjCARCOptions, llvm::ARCOptions, llvm::LanaiOptions,
+  // llvm::SystemZOptions, llvm::MSP430Options, llvm::SparcOptions,
+  // llvm::MCLibraryOptions, and llvm::IROptions have migrated off clv2 onto
+  // the new per-library OptTable/hand-written struct design (see
+  // llvm/include/llvm/Option/LibraryOptions.h) and are no longer among the
+  // clv2::OptionParser registries configured below. Parse them out of argv
+  // first, forwarding whatever none of them recognizes to the legacy clv2
+  // parser unchanged.
+  SmallVector<const char *, 32> LibraryOptsRest;
+  {
+    std::string LibraryOptsErrs;
+    raw_string_ostream LibraryOptsErrsOS(LibraryOptsErrs);
+    if (Error Err = opt::parseLibraryOptionsChain<
+            PluginLoaderOptions, SupportOptions, PassesOptions, BitcodeOptions,
+            BitcodeMemProfOptions,
+#if LLVM_HAS_ARC_TARGET
+            ARCOptions,
+#endif
+#if LLVM_HAS_LANAI_TARGET
+            LanaiOptions,
+#endif
+            XCoreOptions, ObjCARCOptions, SystemZOptions, MSP430Options,
+            SparcOptions, WebAssemblyOptions, SPIRVOptions, CGDataOptions,
+            BPFOptions, LoongArchOptions, LTOOptions, MipsOptions, NVPTXOptions,
+            AArch64Options, ARMOptions, RISCVOptions, X86Options,
+            PowerPCOptions, HexagonOptions, MCLibraryOptions, IROptions,
+            UtilsOptions, AMDGPUOptions, InstrumentationOptions, IPOOptions,
+            ScalarOptions>(ArrayRef<const char *>(argv + 1, argv + argc),
+                           LibraryOptsRest, LibraryOptsErrsOS)) {
+      errs() << "llvm-lto: " << toString(std::move(Err)) << "\n";
+      return 1;
+    }
+    errs() << LibraryOptsErrs;
+  }
+  // IROptions has no automatic apply step (unlike the other libraries in the
+  // chain above, which are read on demand via Ctx.getOptions<T>()); it must
+  // sync a couple of legacy globals (TimePassesIsEnabled/TimePassesPerRun and
+  // the OptBisect singleton) explicitly. See llvm/lib/IR/IROptions.cpp.
+  llvm::ir_opts::applyIROptions();
+  loadRequestedPlugins();
+  SmallVector<const char *, 32> ArgvAfterPasses;
+  ArgvAfterPasses.push_back(argv[0]);
+  ArgvAfterPasses.append(LibraryOptsRest.begin(), LibraryOptsRest.end());
+
   clv2::OptionParser P;
   P.add<&LTOToolReg>();
   RegisterAllLLVMOptions(P);
-  P.add<&clv2::X86OptsReg>();
-  P.add<&clv2::AArch64OptsReg>();
-  P.add<&clv2::AMDGPUOptsReg>();
-  P.add<&clv2::ARMOptsReg>();
-  P.add<&clv2::HexagonOptsReg>();
-  P.add<&clv2::RISCVOptsReg>();
-  P.add<&clv2::PowerPCOptsReg>();
-  P.add<&clv2::MipsOptsReg>();
-  P.add<&clv2::SystemZOptsReg>();
-  P.add<&clv2::SparcOptsReg>();
-  P.add<&clv2::WebAssemblyOptsReg>();
-  P.add<&clv2::LoongArchOptsReg>();
-  P.add<&clv2::NVPTXOptsReg>();
-  P.add<&clv2::LanaiOptsReg>();
-  P.add<&clv2::BPFOptsReg>();
-  P.add<&clv2::SPIRVOptsReg>();
-  P.add<&clv2::MSP430OptsReg>();
-  P.add<&clv2::XCoreOptsReg>();
   P.hideUnrelatedOptions({&LTOCategory, &clv2::ColorOptionsCategory});
-  auto OptsCtx = P.parse(argc, argv, "llvm LTO linker\n");
+  auto OptsCtx = P.parse(static_cast<int>(ArgvAfterPasses.size()),
+                         ArgvAfterPasses.data(), "llvm LTO linker\n");
   const auto &ToolOpts = *OptsCtx->getViewPtr<&LTOToolReg>();
 
   if (ToolOpts.get<&OptLevelOpt>() > 3)

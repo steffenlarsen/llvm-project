@@ -22,8 +22,7 @@
 #include "llvm/IR/User.h"
 #include "llvm/IR/Value.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/OptionsContext.h"
-#include "llvm/Target/BPF/BPFOptionsOptInfos.h"
+#include "llvm/Target/BPF/BPFOptions.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 
 #define DEBUG_TYPE "bpf-adjust-opt"
@@ -32,13 +31,11 @@ using namespace llvm;
 using namespace llvm::PatternMatch;
 
 static bool getDisableSerializeICMP(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::BPF_DisableSerializeICMP>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<BPFOptions>().BPF_DisableSerializeICMP;
 }
 
 static bool getDisableAvoidSpeculation(const Function &F) {
-  return clv2::getOptValOrDefault<&clv2::BPF_DisableAvoidSpeculation>(
-      F.getContext().getOptionsContext());
+  return F.getContext().getOptions<BPFOptions>().BPF_DisableAvoidSpeculation;
 }
 
 namespace {
