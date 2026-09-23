@@ -351,6 +351,20 @@ void CIRGenNVCUDARuntime::emitDeviceStub(CIRGenFunction &cgf, cir::FuncOp fn,
     globalOp->removeAttr("sym_visibility");
     globalOp->setAttr("alignment", builder.getI64IntegerAttr(
                                        cgm.getPointerAlign().getQuantity()));
+
+    // The handle must track the kernel stub's linkage/visibility, not the
+    // global-op default (external). In particular, `static __global__` kernel
+    // templates (as used by Kokkos) get internal linkage on the stub, and
+    // each TU is expected to carry its own local handle for those -- if the
+    // handle instead defaulted to external linkage, two TUs instantiating the
+    // same kernel template would produce a genuine multiple-definition link
+    // error. `fn`'s linkage is final by this point (set by
+    // CIRGenModule::setFunctionLinkage before this stub body is emitted).
+    globalOp.setLinkage(fn.getLinkage());
+    mlir::SymbolTable::setSymbolVisibility(
+        globalOp, cgm.getMLIRVisibilityFromCIRLinkage(fn.getLinkage()));
+    globalOp.setDSOLocal(fn.isDSOLocal());
+    globalOp.setGlobalVisibility(fn.getGlobalVisibility());
   }
 
   // CUDA 9.0 changed the way to launch kernels.
@@ -410,6 +424,12 @@ mlir::Operation *CIRGenNVCUDARuntime::getKernelHandle(cir::FuncOp fn,
 
   globalOp->setAttr("alignment", builder.getI64IntegerAttr(
                                      cgm.getPointerAlign().getQuantity()));
+
+  // Note: the handle's linkage/visibility cannot be copied from `fn` here --
+  // this runs on the kernel's first reference, which may precede
+  // CIRGenModule::setFunctionLinkage (that only runs once the stub's
+  // definition is actually emitted). The copy happens in emitDeviceStub
+  // instead, once `fn`'s linkage is final.
 
   // Store references
   kernelHandles[fn.getSymName()] = globalOp;
