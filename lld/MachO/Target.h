@@ -25,6 +25,7 @@
 namespace lld::macho {
 LLVM_ENABLE_BITMASK_ENUMS_IN_NAMESPACE();
 
+struct Ctx;
 class Symbol;
 class Defined;
 class DylibSymbol;
@@ -42,7 +43,7 @@ constexpr uint32_t UNWIND_MODE_MASK = UNWIND_X86_64_MODE_MASK;
 
 class TargetInfo {
 public:
-  template <class LP> TargetInfo(LP) {
+  template <class LP> TargetInfo(Ctx &ctx, LP) : ctx(ctx) {
     // Having these values available in TargetInfo allows us to access them
     // without having to resort to templates.
     magic = LP::magic;
@@ -151,6 +152,8 @@ public:
 
   llvm::ArrayRef<RelocAttrs> relocAttrs;
 
+  Ctx &ctx;
+
   // We contrive this value as sufficiently far from any valid address that it
   // will always be out-of-range for any architecture. UINT64_MAX is not a
   // good choice because it is (a) only 1 away from wrapping to 0, and (b) the
@@ -158,9 +161,9 @@ public:
   static constexpr uint64_t outOfRangeVA = 0xfull << 60;
 };
 
-TargetInfo *createX86_64TargetInfo();
-TargetInfo *createARM64TargetInfo();
-TargetInfo *createARM64_32TargetInfo();
+std::unique_ptr<TargetInfo> createX86_64TargetInfo(Ctx &);
+std::unique_ptr<TargetInfo> createARM64TargetInfo(Ctx &);
+std::unique_ptr<TargetInfo> createARM64_32TargetInfo(Ctx &);
 
 struct LP64 {
   using mach_header = llvm::MachO::mach_header_64;
@@ -193,9 +196,6 @@ struct ILP32 {
   static constexpr uint64_t pageZeroSize = 1ull << 12;
   static constexpr size_t wordSize = 4;
 };
-
-extern TargetInfo *target;
-
 } // namespace lld::macho
 
 #endif

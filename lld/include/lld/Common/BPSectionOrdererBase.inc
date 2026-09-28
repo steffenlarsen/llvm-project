@@ -62,7 +62,7 @@ template <class D> struct BPOrderer {
   //   program startup.
   // * compressionSortStartupFunctions: if profilePath is specified, allocate
   //   extra utility vertices to prioritize nearby function similarity.
-  auto computeOrder(llvm::StringRef profilePath,
+  auto computeOrder(ErrorHandler &eh, llvm::StringRef profilePath,
                     llvm::ArrayRef<BPCompressionSortSpec> compressionSortSpecs,
                     bool forFunctionCompression, bool forDataCompression,
                     bool compressionSortStartupFunctions, bool verbose,
@@ -159,7 +159,8 @@ static SmallVector<std::pair<unsigned, UtilityNodes>> getUnsForCompression(
 
 template <class D>
 auto BPOrderer<D>::computeOrder(
-    StringRef profilePath, ArrayRef<BPCompressionSortSpec> compressionSortSpecs,
+    ErrorHandler &eh, StringRef profilePath,
+    ArrayRef<BPCompressionSortSpec> compressionSortSpecs,
     bool forFunctionCompression, bool forDataCompression,
     bool compressionSortStartupFunctions, bool verbose,
     ArrayRef<Section *> sections,
@@ -182,7 +183,7 @@ auto BPOrderer<D>::computeOrder(
     auto fs = vfs::getRealFileSystem();
     auto readerOrErr = InstrProfReader::create(profilePath, *fs);
     if (!readerOrErr) {
-      lld::error(toString(readerOrErr.takeError()));
+      eh.error(toString(readerOrErr.takeError()));
       return DenseMap<const Section *, int>{};
     }
 

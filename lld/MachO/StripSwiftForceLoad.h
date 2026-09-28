@@ -10,6 +10,7 @@
 #define LLD_MACHO_STRIP_SWIFT_FORCE_LOAD_H
 
 namespace lld::macho {
+struct Ctx;
 
 // Drop `__DATA,__const` sections that exist only to force-load Swift overlays.
 //
@@ -25,8 +26,7 @@ namespace lld::macho {
 // the overlays' LC_LOAD_DYLIB dependencies are preserved.
 //
 // NOTE: Must be run after markLive().
-void stripSwiftForceLoadFixups();
-
+void stripSwiftForceLoadFixups(Ctx &ctx);
 } // namespace lld::macho
 
 #endif

@@ -183,32 +183,32 @@ TpiSource::~TpiSource() {
 }
 
 TpiSource *lld::coff::makeTpiSource(COFFLinkerContext &ctx, ObjFile *file) {
-  return make<TpiSource>(ctx, TpiSource::Regular, file);
+  return ctx.make<TpiSource>(ctx, TpiSource::Regular, file);
 }
 
 TpiSource *lld::coff::makeTypeServerSource(COFFLinkerContext &ctx,
                                            PDBInputFile *pdbInputFile) {
   // Type server sources come in pairs: the TPI stream, and the IPI stream.
-  auto *tpiSource = make<TypeServerSource>(ctx, pdbInputFile);
+  auto *tpiSource = ctx.make<TypeServerSource>(ctx, pdbInputFile);
   if (pdbInputFile->session->getPDBFile().hasPDBIpiStream())
-    tpiSource->ipiSrc = make<TypeServerIpiSource>(ctx);
+    tpiSource->ipiSrc = ctx.make<TypeServerIpiSource>(ctx);
   return tpiSource;
 }
 
 TpiSource *lld::coff::makeUseTypeServerSource(COFFLinkerContext &ctx,
                                               ObjFile *file,
                                               TypeServer2Record ts) {
-  return make<UseTypeServerSource>(ctx, file, ts);
+  return ctx.make<UseTypeServerSource>(ctx, file, ts);
 }
 
 TpiSource *lld::coff::makePrecompSource(COFFLinkerContext &ctx, ObjFile *file) {
-  return make<PrecompSource>(ctx, file);
+  return ctx.make<PrecompSource>(ctx, file);
 }
 
 TpiSource *lld::coff::makeUsePrecompSource(COFFLinkerContext &ctx,
                                            ObjFile *file,
                                            PrecompRecord precomp) {
-  return make<UsePrecompSource>(ctx, file, precomp);
+  return ctx.make<UsePrecompSource>(ctx, file, precomp);
 }
 
 bool TpiSource::remapTypeIndex(TypeIndex &ti, TiRefKind refKind) const {
@@ -615,13 +615,13 @@ void TpiSource::assignGHashesFromVector(
 
 // Faster way to iterate type records. forEachTypeChecked is faster than
 // iterating CVTypeArray. It avoids virtual readBytes calls in inner loops.
-static void forEachTypeChecked(ArrayRef<uint8_t> types,
+static void forEachTypeChecked(COFFLinkerContext &ctx, ArrayRef<uint8_t> types,
                                function_ref<void(const CVType &)> fn) {
-  checkError(
-      forEachCodeViewRecord<CVType>(types, [fn](const CVType &ty) -> Error {
-        fn(ty);
-        return Error::success();
-      }));
+  checkError(ctx.e, forEachCodeViewRecord<CVType>(
+                        types, [fn](const CVType &ty) -> Error {
+                          fn(ty);
+                          return Error::success();
+                        }));
 }
 
 // Walk over file->debugTypes and fill in the isItemIndex bit vector.
@@ -631,7 +631,7 @@ static void forEachTypeChecked(ArrayRef<uint8_t> types,
 void TpiSource::fillIsItemIndexFromDebugT() {
   uint32_t index = 0;
   isItemIndex.resize(ghashes.size());
-  forEachTypeChecked(file->debugTypes, [&](const CVType &ty) {
+  forEachTypeChecked(ctx, file->debugTypes, [&](const CVType &ty) {
     if (isIdRecord(ty.kind()))
       isItemIndex.set(index);
     ++index;
@@ -660,7 +660,7 @@ void TpiSource::mergeTypeRecord(TypeIndex curIndex, CVType ty) {
 
   // Remap the type indices in the new record.
   remapTypesInTypeRecord(newRec);
-  uint32_t pdbHash = check(pdb::hashTypeRecord(CVType(newRec)));
+  uint32_t pdbHash = check(ctx.e, pdb::hashTypeRecord(CVType(newRec)));
   merged.recSizes.push_back(static_cast<uint16_t>(newSize));
   merged.recHashes.push_back(pdbHash);
 
@@ -701,7 +701,7 @@ void TpiSource::mergeUniqueTypeRecords(ArrayRef<uint8_t> typeRecords,
   // Pre-compute the number of elements in advance to avoid std::vector resizes.
   unsigned nbTpiRecs = 0;
   unsigned nbIpiRecs = 0;
-  forEachTypeChecked(typeRecords, [&](const CVType &ty) {
+  forEachTypeChecked(ctx, typeRecords, [&](const CVType &ty) {
     if (nextUniqueIndex != uniqueTypes.end() &&
         *nextUniqueIndex == ghashIndex) {
       assert(ty.length() <= codeview::MaxRecordLength);
@@ -717,7 +717,7 @@ void TpiSource::mergeUniqueTypeRecords(ArrayRef<uint8_t> typeRecords,
   // Do the actual type merge.
   ghashIndex = 0;
   nextUniqueIndex = uniqueTypes.begin();
-  forEachTypeChecked(typeRecords, [&](const CVType &ty) {
+  forEachTypeChecked(ctx, typeRecords, [&](const CVType &ty) {
     if (nextUniqueIndex != uniqueTypes.end() &&
         *nextUniqueIndex == ghashIndex) {
       mergeTypeRecord(beginIndex + ghashIndex, ty);
@@ -785,10 +785,11 @@ void TypeServerSource::loadGHashes() {
 // type servers is faster than iterating all object files compiled with /Z7 with
 // CVTypeArray, which has high overheads due to the virtual interface of
 // BinaryStream::readBytes.
-static ArrayRef<uint8_t> typeArrayToBytes(const CVTypeArray &types) {
+static ArrayRef<uint8_t> typeArrayToBytes(COFFLinkerContext &ctx,
+                                          const CVTypeArray &types) {
   BinaryStreamRef stream = types.getUnderlyingStream();
   ArrayRef<uint8_t> debugTypes;
-  checkError(stream.readBytes(0, stream.getLength(), debugTypes));
+  checkError(ctx.e, stream.readBytes(0, stream.getLength(), debugTypes));
   return debugTypes;
 }
 
@@ -799,18 +800,18 @@ void TypeServerSource::remapTpiWithGHashes(GHashState *g) {
   // IPI merging depends on TPI, so do TPI first, then do IPI.  No need to
   // propagate errors, those should've been handled during ghash loading.
   pdb::PDBFile &pdbFile = pdbInputFile->session->getPDBFile();
-  pdb::TpiStream &tpi = check(pdbFile.getPDBTpiStream());
+  pdb::TpiStream &tpi = check(ctx.e, pdbFile.getPDBTpiStream());
   fillMapFromGHashes(g);
   tpiMap = indexMapStorage;
-  mergeUniqueTypeRecords(typeArrayToBytes(tpi.typeArray()));
+  mergeUniqueTypeRecords(typeArrayToBytes(ctx, tpi.typeArray()));
   if (pdbFile.hasPDBIpiStream()) {
-    pdb::TpiStream &ipi = check(pdbFile.getPDBIpiStream());
+    pdb::TpiStream &ipi = check(ctx.e, pdbFile.getPDBIpiStream());
     ipiSrc->indexMapStorage.resize(ipiSrc->ghashes.size());
     ipiSrc->fillMapFromGHashes(g);
     ipiMap = ipiSrc->indexMapStorage;
     ipiSrc->tpiMap = tpiMap;
     ipiSrc->ipiMap = ipiMap;
-    ipiSrc->mergeUniqueTypeRecords(typeArrayToBytes(ipi.typeArray()));
+    ipiSrc->mergeUniqueTypeRecords(typeArrayToBytes(ctx, ipi.typeArray()));
 
     if (ctx.config.showSummary) {
       nbTypeRecords = ipiSrc->ghashes.size();
@@ -846,7 +847,7 @@ void PrecompSource::loadGHashes() {
 
   uint32_t ghashIdx = 0;
   std::vector<GloballyHashedType> hashVec;
-  forEachTypeChecked(file->debugTypes, [&](const CVType &ty) {
+  forEachTypeChecked(ctx, file->debugTypes, [&](const CVType &ty) {
     // Remember the index of the LF_ENDPRECOMP record so it can be excluded from
     // the PDB. There must be an entry in the list of ghashes so that the type
     // indexes of the following records in the /Yc PCH object line up.
@@ -880,7 +881,7 @@ void UsePrecompSource::loadGHashes() {
   // PCH source so we don't unnecessarily try to deduplicate them.
   std::vector<GloballyHashedType> hashVec =
       pchSrc->ghashes.take_front(precompDependency.getTypesCount());
-  forEachTypeChecked(file->debugTypes, [&](const CVType &ty) {
+  forEachTypeChecked(ctx, file->debugTypes, [&](const CVType &ty) {
     hashVec.push_back(GloballyHashedType::hashType(ty, hashVec, hashVec));
     isItemIndex.push_back(isIdRecord(ty.kind()));
   });

@@ -37,8 +37,6 @@ using namespace llvm::sys;
 using namespace lld;
 using namespace lld::macho;
 
-PriorityBuilder macho::priorityBuilder;
-
 namespace {
 struct Edge {
   int from;
@@ -64,11 +62,12 @@ struct Cluster {
 
 class CallGraphSort {
 public:
-  CallGraphSort(const MapVector<SectionPair, uint64_t> &profile);
+  CallGraphSort(Ctx &ctx, const MapVector<SectionPair, uint64_t> &profile);
 
   DenseMap<const InputSection *, int> run();
 
 private:
+  Ctx &ctx;
   std::vector<Cluster> clusters;
   std::vector<const InputSection *> sections;
 };
@@ -79,7 +78,9 @@ constexpr int MAX_DENSITY_DEGRADATION = 8;
 
 // Take the edge list in callGraphProfile, resolve symbol names to Symbols, and
 // generate a graph between InputSections with the provided weights.
-CallGraphSort::CallGraphSort(const MapVector<SectionPair, uint64_t> &profile) {
+CallGraphSort::CallGraphSort(Ctx &ctx,
+                             const MapVector<SectionPair, uint64_t> &profile)
+    : ctx(ctx) {
   DenseMap<const InputSection *, int> secToCluster;
 
   auto getOrCreateCluster = [&](const InputSection *isec) -> int {
@@ -157,7 +158,7 @@ static void mergeClusters(std::vector<Cluster> &cs, Cluster &into, int intoIdx,
 // Group InputSections into clusters using the Call-Chain Clustering heuristic
 // then sort the clusters by density.
 DenseMap<const InputSection *, int> CallGraphSort::run() {
-  const uint64_t maxClusterSize = target->getPageSize();
+  const uint64_t maxClusterSize = ctx.target->getPageSize();
 
   // Cluster indices sorted by density.
   std::vector<int> sorted(clusters.size());
@@ -217,11 +218,12 @@ DenseMap<const InputSection *, int> CallGraphSort::run() {
         break;
     }
   }
-  if (!config->printSymbolOrder.empty()) {
+  if (!ctx.arg.printSymbolOrder.empty()) {
     std::error_code ec;
-    raw_fd_ostream os(config->printSymbolOrder, ec, sys::fs::OF_None);
+    raw_fd_ostream os(ctx.arg.printSymbolOrder, ec, sys::fs::OF_None);
     if (ec) {
-      error("cannot open " + config->printSymbolOrder + ": " + ec.message());
+      ctx.e.error("cannot open " + ctx.arg.printSymbolOrder + ": " +
+                  ec.message());
       return orderMap;
     }
     // Print the symbols ordered by C3, in the order of decreasing curOrder
@@ -262,10 +264,10 @@ int macho::PriorityBuilder::SymbolPriorityEntry::getPriority(
   // We don't use toString(InputFile *) here because it returns the full path
   // for object files, and we only want the basename.
   StringRef basename = path::filename(f->getName());
-  StringRef filename =
-      f->archiveName.empty()
-          ? basename
-          : saver().save(path::filename(f->archiveName) + "(" + basename + ")");
+  StringRef filename = f->archiveName.empty()
+                           ? basename
+                           : f->ctx.saver.save(path::filename(f->archiveName) +
+                                               "(" + basename + ")");
   return std::min(objectFiles.lookup(filename), anyObjectFile);
 }
 
@@ -291,7 +293,7 @@ macho::PriorityBuilder::getSymbolPriority(const Defined *sym) const {
 void macho::PriorityBuilder::extractCallGraphProfile() {
   TimeTraceScope timeScope("Extract call graph profile");
   bool hasOrderFile = !priorities.empty();
-  for (const InputFile *file : inputFiles) {
+  for (const InputFile *file : ctx.inputFiles) {
     auto *obj = dyn_cast_or_null<ObjFile>(file);
     if (!obj)
       continue;
@@ -311,9 +313,9 @@ void macho::PriorityBuilder::extractCallGraphProfile() {
 void macho::PriorityBuilder::parseOrderFile(StringRef path) {
   assert(callGraphProfile.empty() &&
          "Order file must be parsed before call graph profile is processed");
-  std::optional<MemoryBufferRef> buffer = readFile(path);
+  std::optional<MemoryBufferRef> buffer = readFile(ctx, path);
   if (!buffer) {
-    error("Could not read order file at " + path);
+    ctx.e.error("Could not read order file at " + path);
     return;
   }
 
@@ -333,7 +335,7 @@ void macho::PriorityBuilder::parseOrderFile(StringRef path) {
                           .StartsWith("ppc64:", CPU_TYPE_POWERPC64)
                           .Default(CPU_TYPE_ANY);
 
-    if (cpuType != CPU_TYPE_ANY && cpuType != target->cpuType)
+    if (cpuType != CPU_TYPE_ANY && cpuType != ctx.target->cpuType)
       continue;
     // Drop the CPU type as well as the colon
     if (cpuType != CPU_TYPE_ANY)
@@ -372,17 +374,17 @@ void macho::PriorityBuilder::parseOrderFile(StringRef path) {
 DenseMap<const InputSection *, int>
 macho::PriorityBuilder::buildInputSectionPriorities() {
   DenseMap<const InputSection *, int> sectionPriorities;
-  if (config->bpStartupFunctionSort || config->bpFunctionOrderForCompression ||
-      config->bpDataOrderForCompression ||
-      !config->bpCompressionSortSpecs.empty()) {
+  if (ctx.arg.bpStartupFunctionSort || ctx.arg.bpFunctionOrderForCompression ||
+      ctx.arg.bpDataOrderForCompression ||
+      !ctx.arg.bpCompressionSortSpecs.empty()) {
     TimeTraceScope timeScope("Balanced Partitioning Section Orderer");
     sectionPriorities = runBalancedPartitioning(
-        config->bpStartupFunctionSort ? config->irpgoProfilePath : "",
-        config->bpCompressionSortSpecs, config->bpFunctionOrderForCompression,
-        config->bpDataOrderForCompression,
-        config->bpCompressionSortStartupFunctions,
-        config->bpVerboseSectionOrderer);
-  } else if (config->callGraphProfileSort) {
+        ctx, ctx.arg.bpStartupFunctionSort ? ctx.arg.irpgoProfilePath : "",
+        ctx.arg.bpCompressionSortSpecs, ctx.arg.bpFunctionOrderForCompression,
+        ctx.arg.bpDataOrderForCompression,
+        ctx.arg.bpCompressionSortStartupFunctions,
+        ctx.arg.bpVerboseSectionOrderer);
+  } else if (ctx.arg.callGraphProfileSort) {
     // Sort sections by the profile data provided by __LLVM,__cg_profile
     // sections.
     //
@@ -390,7 +392,7 @@ macho::PriorityBuilder::buildInputSectionPriorities() {
     // sections according to the C³ heuristic. All clusters are then sorted by a
     // density metric to further improve locality.
     TimeTraceScope timeScope("Call graph profile sort");
-    sectionPriorities = CallGraphSort(callGraphProfile).run();
+    sectionPriorities = CallGraphSort(ctx, callGraphProfile).run();
   }
 
   if (priorities.empty())
@@ -408,7 +410,7 @@ macho::PriorityBuilder::buildInputSectionPriorities() {
   };
 
   // TODO: Make sure this handles weak symbols correctly.
-  for (const InputFile *file : inputFiles) {
+  for (const InputFile *file : ctx.inputFiles) {
     if (isa<ObjFile>(file))
       for (Symbol *sym : file->symbols)
         if (auto *d = dyn_cast_or_null<Defined>(sym))

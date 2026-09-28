@@ -49,25 +49,6 @@ void ErrorHandler::flushStreams() {
   errs().flush();
 }
 
-ErrorHandler &lld::errorHandler() { return context().e; }
-
-void lld::error(const Twine &msg) { errorHandler().error(msg); }
-void lld::error(const Twine &msg, ErrorTag tag, ArrayRef<StringRef> args) {
-  errorHandler().error(msg, tag, args);
-}
-void lld::fatal(const Twine &msg) { errorHandler().fatal(msg); }
-void lld::log(const Twine &msg) { errorHandler().log(msg); }
-void lld::message(const Twine &msg, llvm::raw_ostream &s) {
-  errorHandler().message(msg, s);
-}
-void lld::warn(const Twine &msg) { errorHandler().warn(msg); }
-uint64_t lld::errorCount() { return errorHandler().errorCount; }
-
-raw_ostream &lld::outs() {
-  ErrorHandler &e = errorHandler();
-  return e.outs();
-}
-
 raw_ostream &ErrorHandler::outs() {
   if (disableOutput)
     return llvm::nulls();
@@ -80,13 +61,11 @@ raw_ostream &ErrorHandler::errs() {
   return stderrOS ? *stderrOS : llvm::errs();
 }
 
-void lld::exitLld(int val) {
-  if (hasContext()) {
-    ErrorHandler &e = errorHandler();
-    // Delete any temporary file, while keeping the memory mapping open.
-    if (e.outputBuffer)
-      e.outputBuffer->discard();
-  }
+// e is the handler of the link that is exiting, if any.
+[[noreturn]] static void exitLldImpl(ErrorHandler *e, int val) {
+  // Delete any temporary file, while keeping the memory mapping open.
+  if (e && e->outputBuffer)
+    e->outputBuffer->discard();
 
   // Re-throw a possible signal or exception once/if it was caught by
   // safeLldMain().
@@ -99,8 +78,8 @@ void lld::exitLld(int val) {
   if (!CrashRecoveryContext::GetCurrent())
     llvm_shutdown();
 
-  if (hasContext())
-    lld::errorHandler().flushStreams();
+  if (e)
+    e->flushStreams();
 
   // When running inside safeLldMain(), restore the control flow back to the
   // CrashRecoveryContext. Otherwise simply use _exit(), meanning no cleanup,
@@ -108,7 +87,11 @@ void lld::exitLld(int val) {
   llvm::sys::Process::Exit(val, /*NoCleanup=*/true);
 }
 
-void lld::diagnosticHandler(const DiagnosticInfo &di) {
+void lld::exitLld(int val) { exitLldImpl(nullptr, val); }
+
+void lld::exitLld(ErrorHandler &e, int val) { exitLldImpl(&e, val); }
+
+void lld::handleDiagnostic(ErrorHandler &eh, const DiagnosticInfo &di) {
   SmallString<128> s;
   raw_svector_ostream os(s);
   DiagnosticPrinterRawOStream dp(os);
@@ -122,21 +105,16 @@ void lld::diagnosticHandler(const DiagnosticInfo &di) {
   di.print(dp);
   switch (di.getSeverity()) {
   case DS_Error:
-    error(s);
+    eh.error(s);
     break;
   case DS_Warning:
-    warn(s);
+    eh.warn(s);
     break;
   case DS_Remark:
   case DS_Note:
-    message(s);
+    eh.message(s, eh.outs());
     break;
   }
-}
-
-void lld::checkError(Error e) {
-  handleAllErrors(std::move(e),
-                  [&](ErrorInfoBase &eib) { error(eib.message()); });
 }
 
 void lld::checkError(ErrorHandler &eh, Error e) {
@@ -282,7 +260,7 @@ void ErrorHandler::error(const Twine &msg) {
   }
 
   if (exit)
-    exitLld(1);
+    exitLldImpl(this, 1);
 }
 
 void ErrorHandler::error(const Twine &msg, ErrorTag tag,
@@ -332,7 +310,7 @@ void ErrorHandler::error(const Twine &msg, ErrorTag tag,
 
 void ErrorHandler::fatal(const Twine &msg) {
   error(msg);
-  exitLld(1);
+  exitLldImpl(this, 1);
 }
 
 SyncStream::~SyncStream() {

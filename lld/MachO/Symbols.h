@@ -54,7 +54,7 @@ public:
     return symbolKind == LazyArchiveKind || symbolKind == LazyObjectKind;
   }
 
-  virtual uint64_t getVA() const { return 0; }
+  virtual uint64_t getVA(Ctx &ctx) const { return 0; }
 
   virtual bool isWeakDef() const { return false; }
 
@@ -71,17 +71,17 @@ public:
   // Whether this symbol is in the StubsSection.
   bool isInStubs() const { return stubsIndex != UINT32_MAX; }
 
-  uint64_t getStubVA() const;
-  uint64_t getLazyPtrVA() const;
-  uint64_t getGotVA() const;
-  uint64_t resolveBranchVA() const {
+  uint64_t getStubVA(Ctx &ctx) const;
+  uint64_t getLazyPtrVA(Ctx &ctx) const;
+  uint64_t getGotVA(Ctx &ctx) const;
+  uint64_t resolveBranchVA(Ctx &ctx) const {
     assert(isa<Defined>(this) || isa<DylibSymbol>(this));
-    return isInStubs() ? getStubVA() : getVA();
+    return isInStubs() ? getStubVA(ctx) : getVA(ctx);
   }
   // The address of this symbol's non-lazy pointer slot, or the symbol's own
   // address if it has none.
-  uint64_t resolveNonLazyPtrVA() const {
-    return isInGot() ? getGotVA() : getVA();
+  uint64_t resolveNonLazyPtrVA(Ctx &ctx) const {
+    return isInGot() ? getGotVA(ctx) : getVA(ctx);
   }
 
   // The index of this symbol's non-lazy pointer slot in __got.
@@ -94,10 +94,10 @@ public:
   InputFile *getFile() const { return file; }
 
 protected:
-  Symbol(Kind k, StringRef name, InputFile *file)
+  Symbol(Ctx &ctx, Kind k, StringRef name, InputFile *file)
       : symbolKind(k), nameData(name.data()), file(file), nameSize(name.size()),
         isUsedInRegularObj(!file || isa<ObjFile>(file)),
-        used(!config->deadStrip) {}
+        used(!ctx.arg.deadStrip) {}
 
   Kind symbolKind;
   const char *nameData;
@@ -114,9 +114,10 @@ public:
 
 class Defined : public Symbol {
 public:
-  Defined(StringRef name, InputFile *file, InputSection *isec, uint64_t value,
-          uint64_t size, bool isWeakDef, bool isExternal, bool isPrivateExtern,
-          bool includeInSymtab, bool isReferencedDynamically, bool noDeadStrip,
+  Defined(Ctx &ctx, StringRef name, InputFile *file, InputSection *isec,
+          uint64_t value, uint64_t size, bool isWeakDef, bool isExternal,
+          bool isPrivateExtern, bool includeInSymtab,
+          bool isReferencedDynamically, bool noDeadStrip,
           bool canOverrideWeakDef = false, bool isWeakDefCanBeHidden = false,
           bool interposable = false, bool cold = false);
 
@@ -130,7 +131,7 @@ public:
   bool isAbsolute() const { return originalIsec == nullptr; }
   bool isCold() const { return cold; }
 
-  uint64_t getVA() const override;
+  uint64_t getVA(Ctx &ctx) const override;
 
   // Returns the object file that this symbol was defined in. This value differs
   // from `getFile()` if the symbol originated from a bitcode file.
@@ -210,9 +211,9 @@ enum class RefState : uint8_t { Unreferenced = 0, Weak = 1, Strong = 2 };
 
 class Undefined : public Symbol {
 public:
-  Undefined(StringRef name, InputFile *file, RefState refState,
+  Undefined(Ctx &ctx, StringRef name, InputFile *file, RefState refState,
             bool wasBitcodeSymbol)
-      : Symbol(UndefinedKind, name, file), refState(refState),
+      : Symbol(ctx, UndefinedKind, name, file), refState(refState),
         wasBitcodeSymbol(wasBitcodeSymbol) {
     assert(refState != RefState::Unreferenced);
   }
@@ -242,9 +243,9 @@ public:
 // to regular defined symbols in a __common section.
 class CommonSymbol : public Symbol {
 public:
-  CommonSymbol(StringRef name, InputFile *file, uint64_t size, uint32_t align,
-               bool isPrivateExtern)
-      : Symbol(CommonKind, name, file), size(size),
+  CommonSymbol(Ctx &ctx, StringRef name, InputFile *file, uint64_t size,
+               uint32_t align, bool isPrivateExtern)
+      : Symbol(ctx, CommonKind, name, file), size(size),
         align(align != 1 ? align : llvm::PowerOf2Ceil(size)),
         privateExtern(isPrivateExtern) {
     // TODO: cap maximum alignment
@@ -259,15 +260,15 @@ public:
 
 class DylibSymbol : public Symbol {
 public:
-  DylibSymbol(DylibFile *file, StringRef name, bool isWeakDef,
+  DylibSymbol(Ctx &ctx, DylibFile *file, StringRef name, bool isWeakDef,
               RefState refState, bool isTlv)
-      : Symbol(DylibKind, name, file), shouldReexport(false),
+      : Symbol(ctx, DylibKind, name, file), shouldReexport(false),
         refState(refState), weakDef(isWeakDef), tlv(isTlv) {
     if (file && refState > RefState::Unreferenced)
       file->numReferencedSymbols++;
   }
 
-  uint64_t getVA() const override;
+  uint64_t getVA(Ctx &ctx) const override;
   bool isWeakDef() const override { return weakDef; }
 
   // Symbols from weak libraries/frameworks are also weakly-referenced.
@@ -314,8 +315,9 @@ private:
 
 class LazyArchive : public Symbol {
 public:
-  LazyArchive(ArchiveFile *file, const llvm::object::Archive::Symbol &sym)
-      : Symbol(LazyArchiveKind, sym.getName(), file), sym(sym) {}
+  LazyArchive(Ctx &ctx, ArchiveFile *file,
+              const llvm::object::Archive::Symbol &sym)
+      : Symbol(ctx, LazyArchiveKind, sym.getName(), file), sym(sym) {}
 
   ArchiveFile *getFile() const { return cast<ArchiveFile>(file); }
   void fetchArchiveMember();
@@ -330,8 +332,8 @@ private:
 // --end-lib.
 class LazyObject : public Symbol {
 public:
-  LazyObject(InputFile &file, StringRef name)
-      : Symbol(LazyObjectKind, name, &file) {
+  LazyObject(Ctx &ctx, InputFile &file, StringRef name)
+      : Symbol(ctx, LazyObjectKind, name, &file) {
     isUsedInRegularObj = false;
   }
 
@@ -343,9 +345,9 @@ public:
 // types after `createAliases()` runs.
 class AliasSymbol final : public Symbol {
 public:
-  AliasSymbol(InputFile *file, StringRef name, StringRef aliasedName,
+  AliasSymbol(Ctx &ctx, InputFile *file, StringRef name, StringRef aliasedName,
               bool isPrivateExtern)
-      : Symbol(AliasKind, name, file), privateExtern(isPrivateExtern),
+      : Symbol(ctx, AliasKind, name, file), privateExtern(isPrivateExtern),
         aliasedName(aliasedName) {}
 
   StringRef getAliasedName() const { return aliasedName; }
@@ -400,9 +402,9 @@ inline bool isPrivateLabel(StringRef name) {
 }
 } // namespace macho
 
-std::string toString(const macho::Symbol &);
-std::string toMachOString(const llvm::object::Archive::Symbol &);
-
+std::string toString(macho::Ctx &ctx, const macho::Symbol &);
+std::string toMachOString(macho::Ctx &ctx,
+                          const llvm::object::Archive::Symbol &);
 } // namespace lld
 
 #endif

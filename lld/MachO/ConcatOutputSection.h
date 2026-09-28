@@ -24,9 +24,9 @@ namespace lld::macho {
 // in the final binary.
 class ConcatOutputSection : public OutputSection {
 public:
-  explicit ConcatOutputSection(StringRef name,
-                               OutputSection::Kind kind = ConcatKind)
-      : OutputSection(kind, name) {}
+  ConcatOutputSection(Ctx &ctx, StringRef name,
+                      OutputSection::Kind kind = ConcatKind)
+      : OutputSection(ctx, kind, name) {}
 
   const ConcatInputSection *firstSection() const { return inputs.front(); }
   const ConcatInputSection *lastSection() const { return inputs.back(); }
@@ -49,7 +49,8 @@ public:
     return sec->kind() == ConcatKind || sec->kind() == TextKind;
   }
 
-  static ConcatOutputSection *getOrCreateForInput(const InputSection *);
+  static ConcatOutputSection *getOrCreateForInput(Ctx &ctx,
+                                                  const InputSection *);
 
   std::vector<ConcatInputSection *> inputs;
 
@@ -85,8 +86,8 @@ struct ThunkInfo {
 // support thunk insertion.
 class TextOutputSection : public ConcatOutputSection {
 public:
-  explicit TextOutputSection(StringRef name)
-      : ConcatOutputSection(name, TextKind) {}
+  TextOutputSection(Ctx &ctx, StringRef name)
+      : ConcatOutputSection(ctx, name, TextKind) {}
   void finalizeContents() override {}
   void finalize() override;
   bool needsThunks() const;
@@ -126,11 +127,7 @@ private:
   size_t thunkCallCount = 0;
 };
 
-NamePair maybeRenameSection(NamePair key);
-
-// Output sections are added to output segments in iteration order
-// of ConcatOutputSection, so must have deterministic iteration order.
-extern llvm::MapVector<NamePair, ConcatOutputSection *> concatOutputSections;
+NamePair maybeRenameSection(Ctx &ctx, NamePair key);
 
 // Branch-extension thunks are keyed by both the target referent and the
 // branch relocation's addend.  Two call sites that branch to the same
@@ -171,9 +168,6 @@ struct ThunkMapKeyInfo {
     return lhs == rhs;
   }
 };
-
-extern llvm::DenseMap<ThunkKey, ThunkInfo, ThunkMapKeyInfo> thunkMap;
-
 } // namespace lld::macho
 
 #endif

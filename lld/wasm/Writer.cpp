@@ -50,6 +50,7 @@ namespace {
 // The writer writes a SymbolTable result to a file.
 class Writer {
 public:
+  Writer(Ctx &ctx) : ctx(ctx) {}
   void run();
 
 private:
@@ -106,6 +107,8 @@ private:
   void writeSections();
   void writeBuildId();
 
+  Ctx &ctx;
+
   uint64_t fileSize = 0;
 
   std::vector<WasmInitEntry> initFunctions;
@@ -137,7 +140,7 @@ void writeSetTLSBase(const Ctx &ctx, raw_ostream &os) {
 } // anonymous namespace
 
 void Writer::calculateCustomSections() {
-  log("calculateCustomSections");
+  ctx.e.log("calculateCustomSections");
   bool stripDebug = ctx.arg.stripDebug || ctx.arg.stripAll;
   for (ObjFile *file : ctx.objectFiles) {
     for (InputChunk *section : file->customSections) {
@@ -172,15 +175,17 @@ void Writer::calculateCustomSections() {
 }
 
 void Writer::createCustomSections() {
-  log("createCustomSections");
+  ctx.e.log("createCustomSections");
   for (auto &pair : customSectionMapping) {
     StringRef name = pair.first;
     LLVM_DEBUG(dbgs() << "createCustomSection: " << name << "\n");
 
-    OutputSection *sec = make<CustomSection>(std::string(name), pair.second);
+    OutputSection *sec =
+        ctx.make<CustomSection>(ctx, std::string(name), pair.second);
     if (ctx.arg.relocatable || ctx.arg.emitRelocs) {
-      auto *sym = make<OutputSectionSymbol>(sec);
-      out.linkingSec->addToSymtab(sym);
+      auto *sym = ctx.make<OutputSectionSymbol>(sec);
+      sym->referenced = !ctx.arg.gcSections;
+      ctx.out.linkingSec->addToSymtab(sym);
       sec->sectionSym = sym;
     }
     addSection(sec);
@@ -190,7 +195,7 @@ void Writer::createCustomSections() {
 // Create relocations sections in the final output.
 // These are only created when relocatable output is requested.
 void Writer::createRelocSections() {
-  log("createRelocSections");
+  ctx.e.log("createRelocSections");
   // Don't use iterator here since we are adding to OutputSection
   size_t origSize = outputSections.size();
   for (size_t i = 0; i < origSize; i++) {
@@ -208,19 +213,19 @@ void Writer::createRelocSections() {
     else if (sec->type == WASM_SEC_CODE)
       name = "reloc.CODE";
     else if (sec->type == WASM_SEC_CUSTOM)
-      name = saver().save("reloc." + sec->name);
+      name = ctx.saver.save("reloc." + sec->name);
     else
       llvm_unreachable(
           "relocations only supported for code, data, or custom sections");
 
-    addSection(make<RelocSection>(name, sec));
+    addSection(ctx.make<RelocSection>(ctx, name, sec));
   }
 }
 
 void Writer::populateProducers() {
   for (ObjFile *file : ctx.objectFiles) {
     const WasmProducerInfo &info = file->getWasmObj()->getProducerInfo();
-    out.producersSec->addInfo(info);
+    ctx.out.producersSec->addInfo(info);
   }
 }
 
@@ -257,7 +262,8 @@ computeHash(llvm::MutableArrayRef<uint8_t> hashBuf,
   hashFn(hashBuf.data(), hashes);
 }
 
-static void makeUUID(unsigned version, llvm::ArrayRef<uint8_t> fileHash,
+static void makeUUID(Ctx &ctx, unsigned version,
+                     llvm::ArrayRef<uint8_t> fileHash,
                      llvm::MutableArrayRef<uint8_t> output) {
   assert((version == 4 || version == 5) && "Unknown UUID version");
   assert(output.size() == 16 && "Wrong size for UUID output");
@@ -274,7 +280,7 @@ static void makeUUID(unsigned version, llvm::ArrayRef<uint8_t> fileHash,
     std::copy(s.data(), &s.data()[output.size()], output.data());
   } else if (version == 4) {
     if (auto ec = llvm::getRandomBytes(output.data(), output.size()))
-      error("entropy source failure: " + ec.message());
+      ctx.e.error("entropy source failure: " + ec.message());
   }
   // Set the UUID version and variant fields.
   // The version is the upper nibble of byte 6 (0b0101xxxx or 0b0100xxxx)
@@ -286,15 +292,15 @@ static void makeUUID(unsigned version, llvm::ArrayRef<uint8_t> fileHash,
 }
 
 void Writer::writeBuildId() {
-  if (!out.buildIdSec->isNeeded())
+  if (!ctx.out.buildIdSec->isNeeded())
     return;
   if (ctx.arg.buildId == BuildIdKind::Hexstring) {
-    out.buildIdSec->writeBuildId(ctx.arg.buildIdVector);
+    ctx.out.buildIdSec->writeBuildId(ctx.arg.buildIdVector);
     return;
   }
 
   // Compute a hash of all sections of the output file.
-  size_t hashSize = out.buildIdSec->hashSize;
+  size_t hashSize = ctx.out.buildIdSec->hashSize;
   std::vector<uint8_t> buildId(hashSize);
   llvm::ArrayRef<uint8_t> buf{buffer->getBufferStart(), size_t(fileSize)};
 
@@ -304,7 +310,7 @@ void Writer::writeBuildId() {
     computeHash(fileHash, buf, [](uint8_t *dest, ArrayRef<uint8_t> arr) {
       support::endian::write64le(dest, xxh3_64bits(arr));
     });
-    makeUUID(5, fileHash, buildId);
+    makeUUID(ctx, 5, fileHash, buildId);
     break;
   }
   case BuildIdKind::Sha1:
@@ -313,12 +319,12 @@ void Writer::writeBuildId() {
     });
     break;
   case BuildIdKind::Uuid:
-    makeUUID(4, {}, buildId);
+    makeUUID(ctx, 4, {}, buildId);
     break;
   default:
     llvm_unreachable("unknown BuildIdKind");
   }
-  out.buildIdSec->writeBuildId(buildId);
+  ctx.out.buildIdSec->writeBuildId(buildId);
 }
 
 static void setGlobalPtr(DefinedGlobal *g, uint64_t memoryPtr) {
@@ -327,10 +333,10 @@ static void setGlobalPtr(DefinedGlobal *g, uint64_t memoryPtr) {
   g->global->setPointerValue(memoryPtr);
 }
 
-static void checkPageAligned(StringRef name, uint64_t value) {
+static void checkPageAligned(Ctx &ctx, StringRef name, uint64_t value) {
   if (value != alignTo(value, ctx.arg.pageSize))
-    error(name + " must be aligned to the page size (" +
-          Twine(ctx.arg.pageSize) + " bytes)");
+    ctx.e.error(name + " must be aligned to the page size (" +
+                Twine(ctx.arg.pageSize) + " bytes)");
 }
 
 // Fix the memory layout of the output binary.  This assigns memory offsets
@@ -356,22 +362,24 @@ void Writer::layoutMemory() {
     if (ctx.sym.stackLow)
       ctx.sym.stackLow->setVA(memoryPtr);
     if (ctx.arg.zStackSize != alignTo(ctx.arg.zStackSize, stackAlignment))
-      error("stack size must be " + Twine(stackAlignment) + "-byte aligned");
-    log("mem: stack size  = " + Twine(ctx.arg.zStackSize));
-    log("mem: stack base  = " + Twine(memoryPtr));
+      ctx.e.error("stack size must be " + Twine(stackAlignment) +
+                  "-byte aligned");
+    ctx.e.log("mem: stack size  = " + Twine(ctx.arg.zStackSize));
+    ctx.e.log("mem: stack base  = " + Twine(memoryPtr));
     memoryPtr += ctx.arg.zStackSize;
     setGlobalPtr(cast<DefinedGlobal>(ctx.sym.stackPointer), memoryPtr);
     if (ctx.sym.stackHigh)
       ctx.sym.stackHigh->setVA(memoryPtr);
-    log("mem: stack top   = " + Twine(memoryPtr));
+    ctx.e.log("mem: stack top   = " + Twine(memoryPtr));
   };
 
   if (ctx.arg.stackFirst) {
     placeStack();
     if (ctx.arg.globalBase) {
       if (ctx.arg.globalBase < memoryPtr) {
-        error("--global-base cannot be less than stack size when --stack-first "
-              "is used");
+        ctx.e.error(
+            "--global-base cannot be less than stack size when --stack-first "
+            "is used");
         return;
       }
       memoryPtr = ctx.arg.globalBase;
@@ -380,7 +388,7 @@ void Writer::layoutMemory() {
     memoryPtr = ctx.arg.globalBase;
   }
 
-  log("mem: global base = " + Twine(memoryPtr));
+  ctx.e.log("mem: global base = " + Twine(memoryPtr));
   if (ctx.sym.globalBase)
     ctx.sym.globalBase->setVA(memoryPtr);
 
@@ -391,14 +399,15 @@ void Writer::layoutMemory() {
   if (ctx.sym.dsoHandle)
     ctx.sym.dsoHandle->setVA(dataStart);
 
-  out.dylinkSec->memAlign = 0;
+  ctx.out.dylinkSec->memAlign = 0;
   uint64_t fixedTLSBase = memoryPtr;
   for (OutputSegment *seg : segments) {
-    out.dylinkSec->memAlign = std::max(out.dylinkSec->memAlign, seg->alignment);
+    ctx.out.dylinkSec->memAlign =
+        std::max(ctx.out.dylinkSec->memAlign, seg->alignment);
     memoryPtr = alignTo(memoryPtr, 1ULL << seg->alignment);
     seg->startVA = memoryPtr;
-    log(formatv("mem: {0,-15} offset={1,-8} size={2,-8} align={3}", seg->name,
-                memoryPtr, seg->size, seg->alignment));
+    ctx.e.log(formatv("mem: {0,-15} offset={1,-8} size={2,-8} align={3}",
+                      seg->name, memoryPtr, seg->size, seg->alignment));
 
     if (!ctx.arg.relocatable && seg->isTLS()) {
       if (ctx.sym.tlsSize) {
@@ -432,12 +441,12 @@ void Writer::layoutMemory() {
   // Make space for the memory initialization flag
   if (ctx.arg.sharedMemory && hasPassiveInitializedSegments()) {
     memoryPtr = alignTo(memoryPtr, 4);
-    ctx.sym.initMemoryFlag = symtab->addSyntheticDataSymbol(
+    ctx.sym.initMemoryFlag = ctx.symtab->addSyntheticDataSymbol(
         "__wasm_init_memory_flag", WASM_SYMBOL_VISIBILITY_HIDDEN);
     ctx.sym.initMemoryFlag->markLive();
     ctx.sym.initMemoryFlag->setVA(memoryPtr);
-    log(formatv("mem: {0,-15} offset={1,-8} size={2,-8} align={3}",
-                "__wasm_init_memory_flag", memoryPtr, 4, 4));
+    ctx.e.log(formatv("mem: {0,-15} offset={1,-8} size={2,-8} align={3}",
+                      "__wasm_init_memory_flag", memoryPtr, 4, 4));
     memoryPtr += 4;
   }
 
@@ -445,9 +454,9 @@ void Writer::layoutMemory() {
     ctx.sym.dataEnd->setVA(memoryPtr);
 
   uint64_t staticDataSize = memoryPtr - dataStart;
-  log("mem: static data = " + Twine(staticDataSize));
+  ctx.e.log("mem: static data = " + Twine(staticDataSize));
   if (ctx.isPic)
-    out.dylinkSec->memSize = staticDataSize;
+    ctx.out.dylinkSec->memSize = staticDataSize;
 
   if (!ctx.arg.stackFirst)
     placeStack();
@@ -459,7 +468,7 @@ void Writer::layoutMemory() {
     // We'll align the heap base here because memory allocators might expect
     // __heap_base to be aligned already.
     memoryPtr = alignTo(memoryPtr, heapAlignment);
-    log("mem: heap base   = " + Twine(memoryPtr));
+    ctx.e.log("mem: heap base   = " + Twine(memoryPtr));
     ctx.sym.heapBase->setVA(memoryPtr);
   }
 
@@ -471,45 +480,47 @@ void Writer::layoutMemory() {
   }
 
   if (ctx.arg.initialHeap != 0) {
-    checkPageAligned("initial heap", ctx.arg.initialHeap);
+    checkPageAligned(ctx, "initial heap", ctx.arg.initialHeap);
     uint64_t maxInitialHeap = maxMemorySetting - memoryPtr;
     if (ctx.arg.initialHeap > maxInitialHeap)
-      error("initial heap too large, cannot be greater than " +
-            Twine(maxInitialHeap));
+      ctx.e.error("initial heap too large, cannot be greater than " +
+                  Twine(maxInitialHeap));
     memoryPtr += ctx.arg.initialHeap;
   }
 
   if (ctx.arg.initialMemory != 0) {
-    checkPageAligned("initial memory", ctx.arg.initialMemory);
+    checkPageAligned(ctx, "initial memory", ctx.arg.initialMemory);
     if (memoryPtr > ctx.arg.initialMemory)
-      error("initial memory too small, " + Twine(memoryPtr) + " bytes needed");
+      ctx.e.error("initial memory too small, " + Twine(memoryPtr) +
+                  " bytes needed");
     if (ctx.arg.initialMemory > maxMemorySetting)
-      error("initial memory too large, cannot be greater than " +
-            Twine(maxMemorySetting));
+      ctx.e.error("initial memory too large, cannot be greater than " +
+                  Twine(maxMemorySetting));
     memoryPtr = ctx.arg.initialMemory;
   }
 
   memoryPtr = alignTo(memoryPtr, ctx.arg.pageSize);
 
-  out.memorySec->numMemoryPages = memoryPtr / ctx.arg.pageSize;
-  log("mem: total pages = " + Twine(out.memorySec->numMemoryPages));
+  ctx.out.memorySec->numMemoryPages = memoryPtr / ctx.arg.pageSize;
+  ctx.e.log("mem: total pages = " + Twine(ctx.out.memorySec->numMemoryPages));
 
   if (ctx.sym.heapEnd) {
     // Set `__heap_end` to follow the end of the statically allocated linear
     // memory. The fact that this comes last means that a malloc/brk
     // implementation can grow the heap at runtime.
-    log("mem: heap end    = " + Twine(memoryPtr));
+    ctx.e.log("mem: heap end    = " + Twine(memoryPtr));
     ctx.sym.heapEnd->setVA(memoryPtr);
   }
 
   uint64_t maxMemory = 0;
   if (ctx.arg.maxMemory != 0) {
-    checkPageAligned("maximum memory", ctx.arg.maxMemory);
+    checkPageAligned(ctx, "maximum memory", ctx.arg.maxMemory);
     if (memoryPtr > ctx.arg.maxMemory)
-      error("maximum memory too small, " + Twine(memoryPtr) + " bytes needed");
+      ctx.e.error("maximum memory too small, " + Twine(memoryPtr) +
+                  " bytes needed");
     if (ctx.arg.maxMemory > maxMemorySetting)
-      error("maximum memory too large, cannot be greater than " +
-            Twine(maxMemorySetting));
+      ctx.e.error("maximum memory too large, cannot be greater than " +
+                  Twine(maxMemorySetting));
 
     maxMemory = ctx.arg.maxMemory;
   } else if (ctx.arg.noGrowableMemory) {
@@ -526,15 +537,15 @@ void Writer::layoutMemory() {
   }
 
   if (maxMemory != 0) {
-    out.memorySec->maxMemoryPages = maxMemory / ctx.arg.pageSize;
-    log("mem: max pages   = " + Twine(out.memorySec->maxMemoryPages));
+    ctx.out.memorySec->maxMemoryPages = maxMemory / ctx.arg.pageSize;
+    ctx.e.log("mem: max pages   = " + Twine(ctx.out.memorySec->maxMemoryPages));
   }
 }
 
 void Writer::addSection(OutputSection *sec) {
   if (!sec->isNeeded())
     return;
-  log("addSection: " + toString(*sec));
+  ctx.e.log("addSection: " + toString(*sec));
   sec->sectionIndex = outputSections.size();
   outputSections.push_back(sec);
 }
@@ -544,45 +555,45 @@ void Writer::addSection(OutputSection *sec) {
 // __stop_<secname> symbols. They are at beginning and end of the section,
 // respectively. This is not requested by the ELF standard, but GNU ld and
 // gold provide the feature, and used by many programs.
-static void addStartStopSymbols(const OutputSegment *seg) {
+static void addStartStopSymbols(Ctx &ctx, const OutputSegment *seg) {
   StringRef name = seg->name;
   if (!isValidCIdentifier(name))
     return;
   LLVM_DEBUG(dbgs() << "addStartStopSymbols: " << name << "\n");
   uint64_t start = seg->startVA;
   uint64_t stop = start + seg->size;
-  symtab->addOptionalDataSymbol(saver().save("__start_" + name), start);
-  symtab->addOptionalDataSymbol(saver().save("__stop_" + name), stop);
+  ctx.symtab->addOptionalDataSymbol(ctx.saver.save("__start_" + name), start);
+  ctx.symtab->addOptionalDataSymbol(ctx.saver.save("__stop_" + name), stop);
 }
 
 void Writer::addSections() {
-  addSection(out.dylinkSec);
-  addSection(out.typeSec);
-  addSection(out.importSec);
-  addSection(out.functionSec);
-  addSection(out.tableSec);
-  addSection(out.memorySec);
-  addSection(out.tagSec);
-  addSection(out.globalSec);
-  addSection(out.exportSec);
-  addSection(out.startSec);
-  addSection(out.elemSec);
-  addSection(out.dataCountSec);
+  addSection(ctx.out.dylinkSec);
+  addSection(ctx.out.typeSec);
+  addSection(ctx.out.importSec);
+  addSection(ctx.out.functionSec);
+  addSection(ctx.out.tableSec);
+  addSection(ctx.out.memorySec);
+  addSection(ctx.out.tagSec);
+  addSection(ctx.out.globalSec);
+  addSection(ctx.out.exportSec);
+  addSection(ctx.out.startSec);
+  addSection(ctx.out.elemSec);
+  addSection(ctx.out.dataCountSec);
 
-  addSection(make<CodeSection>(out.functionSec->inputFunctions));
-  addSection(make<DataSection>(segments));
+  addSection(ctx.make<CodeSection>(ctx, ctx.out.functionSec->inputFunctions));
+  addSection(ctx.make<DataSection>(ctx, segments));
 
   createCustomSections();
 
-  addSection(out.linkingSec);
+  addSection(ctx.out.linkingSec);
   if (ctx.arg.emitRelocs || ctx.arg.relocatable) {
     createRelocSections();
   }
 
-  addSection(out.nameSec);
-  addSection(out.producersSec);
-  addSection(out.targetFeaturesSec);
-  addSection(out.buildIdSec);
+  addSection(ctx.out.nameSec);
+  addSection(ctx.out.producersSec);
+  addSection(ctx.out.targetFeaturesSec);
+  addSection(ctx.out.buildIdSec);
 }
 
 void Writer::finalizeSections() {
@@ -596,7 +607,7 @@ void Writer::finalizeSections() {
 void Writer::populateTargetFeatures() {
   StringMap<std::string> used;
   StringMap<std::string> disallowed;
-  SmallSet<std::string, 8> &allowed = out.targetFeaturesSec->features;
+  SmallSet<std::string, 8> &allowed = ctx.out.targetFeaturesSec->features;
   bool tlsUsed = false;
 
   if (ctx.isPic) {
@@ -633,8 +644,8 @@ void Writer::populateTargetFeatures() {
         disallowed.insert({feature.Name, std::string(fileName)});
         break;
       default:
-        error("Unrecognized feature policy prefix " +
-              std::to_string(feature.Prefix));
+        ctx.e.error("Unrecognized feature policy prefix " +
+                    std::to_string(feature.Prefix));
       }
     }
 
@@ -651,8 +662,8 @@ void Writer::populateTargetFeatures() {
                  sym->kind() == Symbol::UndefinedGlobalKind &&
                  sym->importModule && sym->importModule == "env";
         }))
-      error(fileName + ": object file uses globals for thread context, "
-                       "but --cooperative-threading was specified");
+      ctx.e.error(fileName + ": object file uses globals for thread context, "
+                             "but --cooperative-threading was specified");
   }
 
   if (inferFeatures)
@@ -664,31 +675,33 @@ void Writer::populateTargetFeatures() {
 
   if (ctx.arg.sharedMemory) {
     if (disallowed.contains("shared-mem"))
-      error("--shared-memory is disallowed by " + disallowed["shared-mem"] +
-            " because it was not compiled with 'atomics' or 'bulk-memory' "
-            "features.");
+      ctx.e.error(
+          "--shared-memory is disallowed by " + disallowed["shared-mem"] +
+          " because it was not compiled with 'atomics' or 'bulk-memory' "
+          "features.");
 
     for (auto feature : {"atomics", "bulk-memory"})
       if (!allowed.contains(feature))
-        error(StringRef("'") + feature +
-              "' feature must be used in order to use shared memory");
+        ctx.e.error(StringRef("'") + feature +
+                    "' feature must be used in order to use shared memory");
   }
 
   if (tlsUsed) {
     if (!allowed.contains("bulk-memory"))
-      error("'bulk-memory' feature must be used in order to use thread-local "
-            "storage");
+      ctx.e.error(
+          "'bulk-memory' feature must be used in order to use thread-local "
+          "storage");
     if (!allowed.contains("atomics") && !ctx.arg.cooperativeThreading)
-      error("'atomics' feature must be used in order to use thread-local "
-            "storage");
+      ctx.e.error("'atomics' feature must be used in order to use thread-local "
+                  "storage");
   }
 
   // Validate that used features are allowed in output
   if (!inferFeatures) {
     for (const auto &feature : used.keys()) {
       if (!allowed.contains(std::string(feature)))
-        error(Twine("Target feature '") + feature + "' used by " +
-              used[feature] + " is not allowed.");
+        ctx.e.error(Twine("Target feature '") + feature + "' used by " +
+                    used[feature] + " is not allowed.");
     }
   }
 
@@ -701,9 +714,9 @@ void Writer::populateTargetFeatures() {
         continue;
       objectFeatures.insert(feature.Name);
       if (disallowed.contains(feature.Name))
-        error(Twine("Target feature '") + feature.Name + "' used in " +
-              fileName + " is disallowed by " + disallowed[feature.Name] +
-              ". Use --no-check-features to suppress.");
+        ctx.e.error(Twine("Target feature '") + feature.Name + "' used in " +
+                    fileName + " is disallowed by " + disallowed[feature.Name] +
+                    ". Use --no-check-features to suppress.");
     }
   }
 
@@ -722,36 +735,38 @@ done:
     ctx.arg.extendedConst = true;
 
   for (auto &feature : allowed)
-    log("Allowed feature: " + feature);
+    ctx.e.log("Allowed feature: " + feature);
 }
 
 void Writer::checkImportExportTargetFeatures() {
   if (ctx.arg.relocatable || !ctx.arg.checkFeatures)
     return;
 
-  if (!out.targetFeaturesSec->features.contains("mutable-globals")) {
-    for (const Symbol *sym : out.importSec->importedSymbols) {
+  if (!ctx.out.targetFeaturesSec->features.contains("mutable-globals")) {
+    for (const Symbol *sym : ctx.out.importSec->importedSymbols) {
       if (auto *global = dyn_cast<GlobalSymbol>(sym)) {
         if (global->getGlobalType()->Mutable) {
-          error(Twine("mutable global imported but 'mutable-globals' feature "
-                      "not present in inputs: `") +
-                toString(*sym) + "`. Use --no-check-features to suppress.");
+          ctx.e.error(
+              Twine("mutable global imported but 'mutable-globals' feature "
+                    "not present in inputs: `") +
+              toString(ctx, *sym) + "`. Use --no-check-features to suppress.");
         }
       }
     }
-    for (const Symbol *sym : out.exportSec->exportedSymbols) {
+    for (const Symbol *sym : ctx.out.exportSec->exportedSymbols) {
       if (auto *global = dyn_cast<GlobalSymbol>(sym)) {
         if (global->getGlobalType()->Mutable) {
-          error(Twine("mutable global exported but 'mutable-globals' feature "
-                      "not present in inputs: `") +
-                toString(*sym) + "`. Use --no-check-features to suppress.");
+          ctx.e.error(
+              Twine("mutable global exported but 'mutable-globals' feature "
+                    "not present in inputs: `") +
+              toString(ctx, *sym) + "`. Use --no-check-features to suppress.");
         }
       }
     }
   }
 }
 
-static bool shouldImport(Symbol *sym) {
+static bool shouldImport(Ctx &ctx, Symbol *sym) {
   // We don't generate imports for data symbols. They however can be imported
   // as GOT entries.
   if (isa<DataSymbol>(sym))
@@ -796,16 +811,16 @@ void Writer::calculateImports() {
   // number 0, so if it is present and is an import, allocate it before any
   // other tables.
   if (ctx.sym.indirectFunctionTable &&
-      shouldImport(ctx.sym.indirectFunctionTable))
-    out.importSec->addImport(ctx.sym.indirectFunctionTable);
+      shouldImport(ctx, ctx.sym.indirectFunctionTable))
+    ctx.out.importSec->addImport(ctx.sym.indirectFunctionTable);
 
-  for (Symbol *sym : symtab->symbols()) {
-    if (!shouldImport(sym))
+  for (Symbol *sym : ctx.symtab->symbols()) {
+    if (!shouldImport(ctx, sym))
       continue;
     if (sym == ctx.sym.indirectFunctionTable)
       continue;
     LLVM_DEBUG(dbgs() << "import: " << sym->getName() << "\n");
-    out.importSec->addImport(sym);
+    ctx.out.importSec->addImport(sym);
   }
 }
 
@@ -814,18 +829,18 @@ void Writer::calculateExports() {
     return;
 
   if (!ctx.arg.relocatable && ctx.arg.memoryExport.has_value()) {
-    out.exportSec->exports.push_back(
+    ctx.out.exportSec->exports.push_back(
         WasmExport{*ctx.arg.memoryExport, WASM_EXTERNAL_MEMORY, 0});
   }
 
-  unsigned globalIndex =
-      out.importSec->getNumImportedGlobals() + out.globalSec->numGlobals();
+  unsigned globalIndex = ctx.out.importSec->getNumImportedGlobals() +
+                         ctx.out.globalSec->numGlobals();
 
   bool hasMutableGlobals =
-      out.targetFeaturesSec->features.contains("mutable-globals");
+      ctx.out.targetFeaturesSec->features.contains("mutable-globals");
 
-  for (Symbol *sym : symtab->symbols()) {
-    if (!sym->isExported())
+  for (Symbol *sym : ctx.symtab->symbols()) {
+    if (!sym->isExported(ctx))
       continue;
     if (!sym->isLive())
       continue;
@@ -855,15 +870,15 @@ void Writer::calculateExports() {
     } else if (auto *t = dyn_cast<DefinedTag>(sym)) {
       export_ = {name, WASM_EXTERNAL_TAG, t->getTagIndex()};
     } else if (auto *d = dyn_cast<DefinedData>(sym)) {
-      out.globalSec->dataAddressGlobals.push_back(d);
+      ctx.out.globalSec->dataAddressGlobals.push_back(d);
       export_ = {name, WASM_EXTERNAL_GLOBAL, globalIndex++};
     } else {
       auto *t = cast<DefinedTable>(sym);
       export_ = {name, WASM_EXTERNAL_TABLE, t->getTableNumber()};
     }
 
-    out.exportSec->exports.push_back(export_);
-    out.exportSec->exportedSymbols.push_back(sym);
+    ctx.out.exportSec->exports.push_back(export_);
+    ctx.out.exportSec->exportedSymbols.push_back(sym);
   }
 }
 
@@ -871,15 +886,15 @@ void Writer::populateSymtab() {
   if (!ctx.arg.relocatable && !ctx.arg.emitRelocs)
     return;
 
-  for (Symbol *sym : symtab->symbols())
+  for (Symbol *sym : ctx.symtab->symbols())
     if (sym->isUsedInRegularObj && sym->isLive() && !sym->isShared())
-      out.linkingSec->addToSymtab(sym);
+      ctx.out.linkingSec->addToSymtab(sym);
 
   for (ObjFile *file : ctx.objectFiles) {
     LLVM_DEBUG(dbgs() << "Local symtab entries: " << file->getName() << "\n");
     for (Symbol *sym : file->getSymbols())
       if (sym->isLocal() && !isa<SectionSymbol>(sym) && sym->isLive())
-        out.linkingSec->addToSymtab(sym);
+        ctx.out.linkingSec->addToSymtab(sym);
   }
 }
 
@@ -895,21 +910,21 @@ void Writer::calculateTypes() {
     ArrayRef<WasmSignature> types = file->getWasmObj()->types();
     for (uint32_t i = 0; i < types.size(); i++)
       if (file->typeIsUsed[i])
-        file->typeMap[i] = out.typeSec->registerType(types[i]);
+        file->typeMap[i] = ctx.out.typeSec->registerType(types[i]);
   }
 
-  for (const Symbol *sym : out.importSec->importedSymbols) {
+  for (const Symbol *sym : ctx.out.importSec->importedSymbols) {
     if (auto *f = dyn_cast<FunctionSymbol>(sym))
-      out.typeSec->registerType(*f->signature);
+      ctx.out.typeSec->registerType(*f->signature);
     else if (auto *t = dyn_cast<TagSymbol>(sym))
-      out.typeSec->registerType(*t->signature);
+      ctx.out.typeSec->registerType(*t->signature);
   }
 
-  for (const InputFunction *f : out.functionSec->inputFunctions)
-    out.typeSec->registerType(f->signature);
+  for (const InputFunction *f : ctx.out.functionSec->inputFunctions)
+    ctx.out.typeSec->registerType(f->signature);
 
-  for (const InputTag *t : out.tagSec->inputTags)
-    out.typeSec->registerType(t->signature);
+  for (const InputTag *t : ctx.out.tagSec->inputTags)
+    ctx.out.typeSec->registerType(t->signature);
 }
 
 // In a command-style link, create a wrapper for each exported symbol
@@ -925,8 +940,8 @@ void Writer::createCommandExportWrappers() {
 
   std::vector<DefinedFunction *> toWrap;
 
-  for (Symbol *sym : symtab->symbols())
-    if (sym->isExported())
+  for (Symbol *sym : ctx.symtab->symbols())
+    if (sym->isExported(ctx))
       if (auto *f = dyn_cast<DefinedFunction>(sym))
         toWrap.push_back(f);
 
@@ -935,14 +950,14 @@ void Writer::createCommandExportWrappers() {
     commandExportWrapperNames.push_back(funcNameStr);
     const std::string &funcName = commandExportWrapperNames.back();
 
-    auto func = make<SyntheticFunction>(*f->getSignature(), funcName);
+    auto func = ctx.make<SyntheticFunction>(ctx, *f->getSignature(), funcName);
     if (f->function->getExportName())
       func->setExportName(f->function->getExportName()->str());
     else
       func->setExportName(f->getName().str());
 
     DefinedFunction *def =
-        symtab->addSyntheticFunction(funcName, f->flags, func);
+        ctx.symtab->addSyntheticFunction(funcName, f->flags, func);
     def->markLive();
 
     def->flags |= WASM_SYMBOL_EXPORTED;
@@ -953,26 +968,26 @@ void Writer::createCommandExportWrappers() {
     f->flags &= ~WASM_SYMBOL_EXPORTED;
     f->forceExport = false;
 
-    out.functionSec->addFunction(func);
+    ctx.out.functionSec->addFunction(func);
 
     createCommandExportWrapper(f->getFunctionIndex(), def);
   }
 }
 
-static void finalizeIndirectFunctionTable() {
+static void finalizeIndirectFunctionTable(Ctx &ctx) {
   if (!ctx.sym.indirectFunctionTable)
     return;
 
-  if (shouldImport(ctx.sym.indirectFunctionTable) &&
+  if (shouldImport(ctx, ctx.sym.indirectFunctionTable) &&
       !ctx.sym.indirectFunctionTable->hasTableNumber()) {
     // Processing -Bsymbolic relocations resulted in a late requirement that the
     // indirect function table be present, and we are running in --import-table
     // mode.  Add the table now to the imports section.  Otherwise it will be
     // added to the tables section later in assignIndexes.
-    out.importSec->addImport(ctx.sym.indirectFunctionTable);
+    ctx.out.importSec->addImport(ctx.sym.indirectFunctionTable);
   }
 
-  uint32_t tableSize = ctx.arg.tableBase + out.elemSec->numEntries();
+  uint32_t tableSize = ctx.arg.tableBase + ctx.out.elemSec->numEntries();
   WasmLimits limits = {0, tableSize, 0, 0};
   if (ctx.sym.indirectFunctionTable->isDefined() && !ctx.arg.growableTable) {
     limits.Flags |= WASM_LIMITS_FLAG_HAS_MAX;
@@ -980,10 +995,10 @@ static void finalizeIndirectFunctionTable() {
   }
   if (ctx.arg.is64.value_or(false))
     limits.Flags |= WASM_LIMITS_FLAG_IS_64;
-  ctx.sym.indirectFunctionTable->setLimits(limits);
+  ctx.sym.indirectFunctionTable->setLimits(ctx, limits);
 }
 
-static void scanRelocations() {
+static void scanRelocations(Ctx &ctx) {
   for (ObjFile *file : ctx.objectFiles) {
     LLVM_DEBUG(dbgs() << "scanRelocations: " << file->getName() << "\n");
     for (InputChunk *chunk : file->functions)
@@ -998,46 +1013,46 @@ static void scanRelocations() {
 void Writer::assignIndexes() {
   // Seal the import section, since other index spaces such as function and
   // global are effected by the number of imports.
-  out.importSec->seal();
+  ctx.out.importSec->seal();
 
   for (InputFunction *func : ctx.syntheticFunctions)
-    out.functionSec->addFunction(func);
+    ctx.out.functionSec->addFunction(func);
 
   for (ObjFile *file : ctx.objectFiles) {
     LLVM_DEBUG(dbgs() << "Functions: " << file->getName() << "\n");
     for (InputFunction *func : file->functions)
-      out.functionSec->addFunction(func);
+      ctx.out.functionSec->addFunction(func);
   }
 
   for (InputGlobal *global : ctx.syntheticGlobals)
-    out.globalSec->addGlobal(global);
+    ctx.out.globalSec->addGlobal(global);
 
   for (ObjFile *file : ctx.objectFiles) {
     LLVM_DEBUG(dbgs() << "Globals: " << file->getName() << "\n");
     for (InputGlobal *global : file->globals)
-      out.globalSec->addGlobal(global);
+      ctx.out.globalSec->addGlobal(global);
   }
 
   for (ObjFile *file : ctx.objectFiles) {
     LLVM_DEBUG(dbgs() << "Tags: " << file->getName() << "\n");
     for (InputTag *tag : file->tags)
-      out.tagSec->addTag(tag);
+      ctx.out.tagSec->addTag(tag);
   }
 
   for (ObjFile *file : ctx.objectFiles) {
     LLVM_DEBUG(dbgs() << "Tables: " << file->getName() << "\n");
     for (InputTable *table : file->tables)
-      out.tableSec->addTable(table);
+      ctx.out.tableSec->addTable(table);
   }
 
   for (InputTable *table : ctx.syntheticTables)
-    out.tableSec->addTable(table);
+    ctx.out.tableSec->addTable(table);
 
-  out.globalSec->assignIndexes();
-  out.tableSec->assignIndexes();
+  ctx.out.globalSec->assignIndexes();
+  ctx.out.tableSec->assignIndexes();
 }
 
-static StringRef getOutputDataSegmentName(const InputChunk &seg) {
+static StringRef getOutputDataSegmentName(Ctx &ctx, const InputChunk &seg) {
   // We always merge .tbss and .tdata into a single TLS segment so all TLS
   // symbols are be relative to single __tls_base.
   if (seg.isTLS())
@@ -1057,7 +1072,7 @@ static StringRef getOutputDataSegmentName(const InputChunk &seg) {
 
 OutputSegment *Writer::createOutputSegment(StringRef name) {
   LLVM_DEBUG(dbgs() << "new segment: " << name << "\n");
-  OutputSegment *s = make<OutputSegment>(name);
+  OutputSegment *s = ctx.make<OutputSegment>(ctx, name);
   // In the shared memory case, all data segments must be passive since they
   // will be initialized once by the main thread and then shared with other
   // threads. In the cooperative threading case, TLS segments need to exist to
@@ -1078,7 +1093,7 @@ void Writer::allocateCommonSymbols() {
     return;
 
   std::vector<CommonSymbol *> commons;
-  for (Symbol *sym : symtab->symbols())
+  for (Symbol *sym : ctx.symtab->symbols())
     if (auto *c = dyn_cast<CommonSymbol>(sym))
       if (c->isLive())
         commons.push_back(c);
@@ -1086,7 +1101,7 @@ void Writer::allocateCommonSymbols() {
   if (commons.empty())
     return;
 
-  log("-- allocateCommonSymbols");
+  ctx.e.log("-- allocateCommonSymbols");
 
   uint64_t size = 0;
   uint32_t alignLog2 = 0;
@@ -1096,13 +1111,14 @@ void Writer::allocateCommonSymbols() {
     alignLog2 = std::max(alignLog2, c->getAlignment());
     size = alignTo(size, 1ULL << c->getAlignment());
     if (size > UINT32_MAX || c->getSize() > UINT32_MAX - size) {
-      error("common symbols section size overflow");
+      ctx.e.error("common symbols section size overflow");
       return;
     }
     size += c->getSize();
   }
 
-  auto *commonSeg = make<SyntheticInputSegment>(".bss.common", alignLog2, 0);
+  auto *commonSeg =
+      ctx.make<SyntheticInputSegment>(ctx, ".bss.common", alignLog2, 0);
   commonSeg->setSize(size);
   commonSeg->live = true;
   ctx.syntheticInputSegments.push_back(commonSeg);
@@ -1112,9 +1128,9 @@ void Writer::allocateCommonSymbols() {
     uint64_t size = c->getSize();
     uint32_t alignLog2 = c->getAlignment();
     offset = alignTo(offset, 1ULL << alignLog2);
-    log(formatv("allocateCommonSymbol: {0} size={1} align={2} offset={3}",
-                c->getName(), size, alignLog2, offset));
-    replaceSymbol<DefinedData>(c, c->getName(), c->flags, c->getFile(),
+    ctx.e.log(formatv("allocateCommonSymbol: {0} size={1} align={2} offset={3}",
+                      c->getName(), size, alignLog2, offset));
+    replaceSymbol<DefinedData>(ctx, c, c->getName(), c->flags, c->getFile(),
                                commonSeg, offset, size);
     offset += size;
   }
@@ -1134,7 +1150,7 @@ void Writer::createOutputSegments() {
     for (InputChunk *segment : file->segments) {
       if (!segment->live)
         continue;
-      StringRef name = getOutputDataSegmentName(*segment);
+      StringRef name = getOutputDataSegmentName(ctx, *segment);
       OutputSegment *s = nullptr;
       // When running in relocatable mode we can't merge segments that are part
       // of comdat groups since the ultimate linker needs to be able exclude or
@@ -1155,7 +1171,7 @@ void Writer::createOutputSegments() {
   for (InputChunk *segment : ctx.syntheticInputSegments) {
     if (!segment->live)
       continue;
-    StringRef name = getOutputDataSegmentName(*segment);
+    StringRef name = getOutputDataSegmentName(ctx, *segment);
     OutputSegment *s = nullptr;
     auto key = getSegmentKey(name, segment->flags);
     if (!segmentMap.contains(key))
@@ -1204,7 +1220,7 @@ void Writer::combineActiveOutputSegments() {
   };
   if (llvm::count_if(segments, isActive) <= 1)
     return;
-  OutputSegment *combined = make<OutputSegment>(".data");
+  OutputSegment *combined = ctx.make<OutputSegment>(ctx, ".data");
   std::vector<OutputSegment *> newSegments = {combined};
   for (OutputSegment *s : segments) {
     if (!isActive(s)) {
@@ -1238,14 +1254,15 @@ void Writer::combineActiveOutputSegments() {
     segments[i]->index = i;
 }
 
-static void createFunction(DefinedFunction *func, StringRef bodyContent) {
+static void createFunction(Ctx &ctx, DefinedFunction *func,
+                           StringRef bodyContent) {
   std::string functionBody;
   {
     raw_string_ostream os(functionBody);
     writeUleb128(os, bodyContent.size(), "function size");
     os << bodyContent;
   }
-  ArrayRef<uint8_t> body = arrayRefFromStringRef(saver().save(functionBody));
+  ArrayRef<uint8_t> body = arrayRefFromStringRef(ctx.saver.save(functionBody));
   cast<SyntheticFunction>(func->function)->setBody(body);
 }
 
@@ -1277,9 +1294,9 @@ void Writer::createSyntheticInitFunctions() {
   // We also initialize bss segments (using memory.fill) as part of this
   // function.
   if (hasPassiveInitializedSegments()) {
-    ctx.sym.initMemory = symtab->addSyntheticFunction(
+    ctx.sym.initMemory = ctx.symtab->addSyntheticFunction(
         "__wasm_init_memory", WASM_SYMBOL_VISIBILITY_HIDDEN,
-        make<SyntheticFunction>(nullSignature, "__wasm_init_memory"));
+        ctx.make<SyntheticFunction>(ctx, nullSignature, "__wasm_init_memory"));
     ctx.sym.initMemory->markLive();
     // __wasm_init_memory uses __tls_base/__wasm_set_tls_base
     if (ctx.sym.setTLSBase)
@@ -1289,11 +1306,11 @@ void Writer::createSyntheticInitFunctions() {
   }
 
   if (ctx.arg.isMultithreaded()) {
-    if (out.globalSec->needsTLSRelocations()) {
-      ctx.sym.applyGlobalTLSRelocs = symtab->addSyntheticFunction(
+    if (ctx.out.globalSec->needsTLSRelocations()) {
+      ctx.sym.applyGlobalTLSRelocs = ctx.symtab->addSyntheticFunction(
           "__wasm_apply_global_tls_relocs", WASM_SYMBOL_VISIBILITY_HIDDEN,
-          make<SyntheticFunction>(nullSignature,
-                                  "__wasm_apply_global_tls_relocs"));
+          ctx.make<SyntheticFunction>(ctx, nullSignature,
+                                      "__wasm_apply_global_tls_relocs"));
       ctx.sym.applyGlobalTLSRelocs->markLive();
       // TLS relocations depend on the __tls_base/__wasm_get_tls_base symbols
       if (ctx.sym.getTLSBase)
@@ -1310,17 +1327,19 @@ void Writer::createSyntheticInitFunctions() {
       return false;
     };
     if (llvm::any_of(segments, hasTLSRelocs)) {
-      ctx.sym.applyTLSRelocs = symtab->addSyntheticFunction(
+      ctx.sym.applyTLSRelocs = ctx.symtab->addSyntheticFunction(
           "__wasm_apply_tls_relocs", WASM_SYMBOL_VISIBILITY_HIDDEN,
-          make<SyntheticFunction>(nullSignature, "__wasm_apply_tls_relocs"));
+          ctx.make<SyntheticFunction>(ctx, nullSignature,
+                                      "__wasm_apply_tls_relocs"));
       ctx.sym.applyTLSRelocs->markLive();
     }
   }
 
-  if (ctx.isPic && out.globalSec->needsRelocations()) {
-    ctx.sym.applyGlobalRelocs = symtab->addSyntheticFunction(
+  if (ctx.isPic && ctx.out.globalSec->needsRelocations()) {
+    ctx.sym.applyGlobalRelocs = ctx.symtab->addSyntheticFunction(
         "__wasm_apply_global_relocs", WASM_SYMBOL_VISIBILITY_HIDDEN,
-        make<SyntheticFunction>(nullSignature, "__wasm_apply_global_relocs"));
+        ctx.make<SyntheticFunction>(ctx, nullSignature,
+                                    "__wasm_apply_global_relocs"));
     ctx.sym.applyGlobalRelocs->markLive();
   }
 
@@ -1328,9 +1347,9 @@ void Writer::createSyntheticInitFunctions() {
   // itself as the Wasm start function, otherwise we need to synthesize
   // a new function to call them in sequence.
   if (ctx.sym.applyGlobalRelocs && ctx.sym.initMemory) {
-    ctx.sym.startFunction = symtab->addSyntheticFunction(
+    ctx.sym.startFunction = ctx.symtab->addSyntheticFunction(
         "__wasm_start", WASM_SYMBOL_VISIBILITY_HIDDEN,
-        make<SyntheticFunction>(nullSignature, "__wasm_start"));
+        ctx.make<SyntheticFunction>(ctx, nullSignature, "__wasm_start"));
     ctx.sym.startFunction->markLive();
   }
 }
@@ -1588,7 +1607,7 @@ void Writer::createInitMemoryFunction() {
     writeU8(os, WASM_OPCODE_END, "END");
   }
 
-  createFunction(ctx.sym.initMemory, bodyContent);
+  createFunction(ctx, ctx.sym.initMemory, bodyContent);
 }
 
 void Writer::createStartFunction() {
@@ -1607,7 +1626,7 @@ void Writer::createStartFunction() {
                    "function index");
       writeU8(os, WASM_OPCODE_END, "END");
     }
-    createFunction(ctx.sym.startFunction, bodyContent);
+    createFunction(ctx, ctx.sym.startFunction, bodyContent);
   } else if (ctx.sym.initMemory) {
     ctx.sym.startFunction = ctx.sym.initMemory;
   } else if (ctx.sym.applyGlobalRelocs) {
@@ -1642,13 +1661,14 @@ void Writer::createApplyDataRelocationsFunction() {
   // __wasm_apply_data_relocs
   // Function that applies relocations to data segment post-instantiation.
   static WasmSignature nullSignature = {{}, {}};
-  auto def = symtab->addSyntheticFunction(
+  auto def = ctx.symtab->addSyntheticFunction(
       "__wasm_apply_data_relocs",
       WASM_SYMBOL_VISIBILITY_DEFAULT | WASM_SYMBOL_EXPORTED,
-      make<SyntheticFunction>(nullSignature, "__wasm_apply_data_relocs"));
+      ctx.make<SyntheticFunction>(ctx, nullSignature,
+                                  "__wasm_apply_data_relocs"));
   def->markLive();
 
-  createFunction(def, bodyContent);
+  createFunction(ctx, def, bodyContent);
 }
 
 void Writer::createApplyTLSRelocationsFunction() {
@@ -1665,7 +1685,7 @@ void Writer::createApplyTLSRelocationsFunction() {
     writeU8(os, WASM_OPCODE_END, "END");
   }
 
-  createFunction(ctx.sym.applyTLSRelocs, bodyContent);
+  createFunction(ctx, ctx.sym.applyTLSRelocs, bodyContent);
 }
 
 // Similar to createApplyDataRelocationsFunction but generates relocation code
@@ -1677,11 +1697,11 @@ void Writer::createApplyGlobalRelocationsFunction() {
   {
     raw_string_ostream os(bodyContent);
     writeUleb128(os, 0, "num locals");
-    out.globalSec->generateRelocationCode(os, false);
+    ctx.out.globalSec->generateRelocationCode(os, false);
     writeU8(os, WASM_OPCODE_END, "END");
   }
 
-  createFunction(ctx.sym.applyGlobalRelocs, bodyContent);
+  createFunction(ctx, ctx.sym.applyGlobalRelocs, bodyContent);
 }
 
 // Similar to createApplyGlobalRelocationsFunction but for
@@ -1693,11 +1713,11 @@ void Writer::createApplyGlobalTLSRelocationsFunction() {
   {
     raw_string_ostream os(bodyContent);
     writeUleb128(os, 0, "num locals");
-    out.globalSec->generateRelocationCode(os, true);
+    ctx.out.globalSec->generateRelocationCode(os, true);
     writeU8(os, WASM_OPCODE_END, "END");
   }
 
-  createFunction(ctx.sym.applyGlobalTLSRelocs, bodyContent);
+  createFunction(ctx, ctx.sym.applyGlobalTLSRelocs, bodyContent);
 }
 
 // Create synthetic "__wasm_call_ctors" function based on ctor functions
@@ -1726,7 +1746,7 @@ void Writer::createCallCtorsFunction() {
     writeU8(os, WASM_OPCODE_END, "END");
   }
 
-  createFunction(ctx.sym.callCtors, bodyContent);
+  createFunction(ctx, ctx.sym.callCtors, bodyContent);
 }
 
 // Create a wrapper around a function export which calls the
@@ -1764,7 +1784,7 @@ void Writer::createCommandExportWrapper(uint32_t functionIndex,
     writeU8(os, WASM_OPCODE_END, "END");
   }
 
-  createFunction(f, bodyContent);
+  createFunction(ctx, f, bodyContent);
 }
 
 void Writer::createInitTLSFunction() {
@@ -1815,7 +1835,7 @@ void Writer::createInitTLSFunction() {
     writeU8(os, WASM_OPCODE_END, "end function");
   }
 
-  createFunction(ctx.sym.initTLS, bodyContent);
+  createFunction(ctx, ctx.sym.initTLS, bodyContent);
 }
 
 // Populate InitFunctions vector with init functions from all input objects.
@@ -1833,8 +1853,9 @@ void Writer::calculateInitFunctions() {
       if (sym->isDiscarded() || !sym->isLive())
         continue;
       if (sym->signature->Params.size() != 0)
-        error("constructor functions cannot take arguments: " + toString(*sym));
-      LLVM_DEBUG(dbgs() << "initFunctions: " << toString(*sym) << "\n");
+        ctx.e.error("constructor functions cannot take arguments: " +
+                    toString(ctx, *sym));
+      LLVM_DEBUG(dbgs() << "initFunctions: " << toString(ctx, *sym) << "\n");
       initFunctions.emplace_back(WasmInitEntry{sym, f.Priority});
     }
   }
@@ -1848,26 +1869,26 @@ void Writer::calculateInitFunctions() {
 }
 
 void Writer::createSyntheticSections() {
-  out.dylinkSec = make<DylinkSection>();
-  out.typeSec = make<TypeSection>();
-  out.importSec = make<ImportSection>();
-  out.functionSec = make<FunctionSection>();
-  out.tableSec = make<TableSection>();
-  out.memorySec = make<MemorySection>();
-  out.tagSec = make<TagSection>();
-  out.globalSec = make<GlobalSection>();
-  out.exportSec = make<ExportSection>();
-  out.startSec = make<StartSection>();
-  out.elemSec = make<ElemSection>();
-  out.producersSec = make<ProducersSection>();
-  out.targetFeaturesSec = make<TargetFeaturesSection>();
-  out.buildIdSec = make<BuildIdSection>();
+  ctx.out.dylinkSec = ctx.make<DylinkSection>(ctx);
+  ctx.out.typeSec = ctx.make<TypeSection>(ctx);
+  ctx.out.importSec = ctx.make<ImportSection>(ctx);
+  ctx.out.functionSec = ctx.make<FunctionSection>(ctx);
+  ctx.out.tableSec = ctx.make<TableSection>(ctx);
+  ctx.out.memorySec = ctx.make<MemorySection>(ctx);
+  ctx.out.tagSec = ctx.make<TagSection>(ctx);
+  ctx.out.globalSec = ctx.make<GlobalSection>(ctx);
+  ctx.out.exportSec = ctx.make<ExportSection>(ctx);
+  ctx.out.startSec = ctx.make<StartSection>(ctx);
+  ctx.out.elemSec = ctx.make<ElemSection>(ctx);
+  ctx.out.producersSec = ctx.make<ProducersSection>(ctx);
+  ctx.out.targetFeaturesSec = ctx.make<TargetFeaturesSection>(ctx);
+  ctx.out.buildIdSec = ctx.make<BuildIdSection>(ctx);
 }
 
 void Writer::createSyntheticSectionsPostLayout() {
-  out.dataCountSec = make<DataCountSection>(segments);
-  out.linkingSec = make<LinkingSection>(initFunctions, segments);
-  out.nameSec = make<NameSection>(segments);
+  ctx.out.dataCountSec = ctx.make<DataCountSection>(ctx, segments);
+  ctx.out.linkingSec = ctx.make<LinkingSection>(ctx, initFunctions, segments);
+  ctx.out.nameSec = ctx.make<NameSection>(ctx, segments);
 }
 
 void Writer::run() {
@@ -1876,25 +1897,25 @@ void Writer::run() {
   if (!ctx.isPic && ctx.sym.tableBase)
     setGlobalPtr(cast<DefinedGlobal>(ctx.sym.tableBase), ctx.arg.tableBase);
 
-  log("-- allocateCommonSymbols");
+  ctx.e.log("-- allocateCommonSymbols");
   allocateCommonSymbols();
-  log("-- createOutputSegments");
+  ctx.e.log("-- createOutputSegments");
   createOutputSegments();
-  log("-- createSyntheticSections");
+  ctx.e.log("-- createSyntheticSections");
   createSyntheticSections();
-  log("-- layoutMemory");
+  ctx.e.log("-- layoutMemory");
   layoutMemory();
 
   if (!ctx.arg.relocatable) {
     // Create linker synthesized __start_SECNAME/__stop_SECNAME symbols
     // This has to be done after memory layout is performed.
     for (const OutputSegment *seg : segments) {
-      addStartStopSymbols(seg);
+      addStartStopSymbols(ctx, seg);
     }
   }
 
   for (auto &pair : ctx.arg.exportedSymbols) {
-    Symbol *sym = symtab->find(pair.first());
+    Symbol *sym = ctx.symtab->find(pair.first());
     if (sym && sym->isDefined())
       sym->forceExport = true;
   }
@@ -1902,16 +1923,16 @@ void Writer::run() {
   // Delay reporting errors about explicit exports until after
   // addStartStopSymbols which can create optional symbols.
   for (auto &name : ctx.arg.requiredExports) {
-    Symbol *sym = symtab->find(name);
+    Symbol *sym = ctx.symtab->find(name);
     if (!sym || !sym->isDefined()) {
       if (ctx.arg.unresolvedSymbols == UnresolvedPolicy::ReportError)
-        error(Twine("symbol exported via --export not found: ") + name);
+        ctx.e.error(Twine("symbol exported via --export not found: ") + name);
       if (ctx.arg.unresolvedSymbols == UnresolvedPolicy::Warn)
-        warn(Twine("symbol exported via --export not found: ") + name);
+        ctx.e.warn(Twine("symbol exported via --export not found: ") + name);
     }
   }
 
-  log("-- populateTargetFeatures");
+  ctx.e.log("-- populateTargetFeatures");
   populateTargetFeatures();
 
   // When outputting PIC code each segment lives at at fixes offset from the
@@ -1919,25 +1940,25 @@ void Writer::run() {
   // can't do addition inside the constant expression, so we much combine the
   // segments into a single one that can live at `__memory_base`.
   if (ctx.isPic && !ctx.arg.extendedConst) {
-    log("-- combineActiveOutputSegments");
+    ctx.e.log("-- combineActiveOutputSegments");
     combineActiveOutputSegments();
   }
 
-  log("-- createSyntheticSectionsPostLayout");
+  ctx.e.log("-- createSyntheticSectionsPostLayout");
   createSyntheticSectionsPostLayout();
-  log("-- populateProducers");
+  ctx.e.log("-- populateProducers");
   populateProducers();
-  log("-- calculateImports");
+  ctx.e.log("-- calculateImports");
   calculateImports();
-  log("-- scanRelocations");
-  scanRelocations();
-  log("-- finalizeIndirectFunctionTable");
-  finalizeIndirectFunctionTable();
-  log("-- createSyntheticInitFunctions");
+  ctx.e.log("-- scanRelocations");
+  scanRelocations(ctx);
+  ctx.e.log("-- finalizeIndirectFunctionTable");
+  finalizeIndirectFunctionTable(ctx);
+  ctx.e.log("-- createSyntheticInitFunctions");
   createSyntheticInitFunctions();
-  log("-- assignIndexes");
+  ctx.e.log("-- assignIndexes");
   assignIndexes();
-  log("-- calculateInitFunctions");
+  ctx.e.log("-- calculateInitFunctions");
   calculateInitFunctions();
 
   if (!ctx.arg.relocatable) {
@@ -1965,81 +1986,86 @@ void Writer::run() {
     // assume ctors and dtors are taken care of already.
     if (!ctx.arg.relocatable && !ctx.isPic &&
         !ctx.sym.callCtors->isUsedInRegularObj &&
-        !ctx.sym.callCtors->isExported()) {
-      log("-- createCommandExportWrappers");
+        !ctx.sym.callCtors->isExported(ctx)) {
+      ctx.e.log("-- createCommandExportWrappers");
       createCommandExportWrappers();
     }
   }
 
   if (ctx.sym.initTLS && ctx.sym.initTLS->isLive()) {
-    log("-- createInitTLSFunction");
+    ctx.e.log("-- createInitTLSFunction");
     createInitTLSFunction();
   }
 
-  if (errorCount())
+  if (ctx.e.errorCount)
     return;
 
-  log("-- calculateTypes");
+  ctx.e.log("-- calculateTypes");
   calculateTypes();
-  log("-- calculateExports");
+  ctx.e.log("-- calculateExports");
   calculateExports();
-  log("-- calculateCustomSections");
+  ctx.e.log("-- calculateCustomSections");
   calculateCustomSections();
-  log("-- populateSymtab");
+  ctx.e.log("-- populateSymtab");
   populateSymtab();
-  log("-- checkImportExportTargetFeatures");
+  ctx.e.log("-- checkImportExportTargetFeatures");
   checkImportExportTargetFeatures();
-  log("-- addSections");
+  ctx.e.log("-- addSections");
   addSections();
 
-  if (errorHandler().verbose) {
-    log("Defined Functions: " + Twine(out.functionSec->inputFunctions.size()));
-    log("Defined Globals  : " + Twine(out.globalSec->numGlobals()));
-    log("Defined Tags     : " + Twine(out.tagSec->inputTags.size()));
-    log("Defined Tables   : " + Twine(out.tableSec->inputTables.size()));
-    log("Function Imports : " +
-        Twine(out.importSec->getNumImportedFunctions()));
-    log("Global Imports   : " + Twine(out.importSec->getNumImportedGlobals()));
-    log("Tag Imports      : " + Twine(out.importSec->getNumImportedTags()));
-    log("Table Imports    : " + Twine(out.importSec->getNumImportedTables()));
+  if (ctx.e.verbose) {
+    ctx.e.log("Defined Functions: " +
+              Twine(ctx.out.functionSec->inputFunctions.size()));
+    ctx.e.log("Defined Globals  : " + Twine(ctx.out.globalSec->numGlobals()));
+    ctx.e.log("Defined Tags     : " + Twine(ctx.out.tagSec->inputTags.size()));
+    ctx.e.log("Defined Tables   : " +
+              Twine(ctx.out.tableSec->inputTables.size()));
+    ctx.e.log("Function Imports : " +
+              Twine(ctx.out.importSec->getNumImportedFunctions()));
+    ctx.e.log("Global Imports   : " +
+              Twine(ctx.out.importSec->getNumImportedGlobals()));
+    ctx.e.log("Tag Imports      : " +
+              Twine(ctx.out.importSec->getNumImportedTags()));
+    ctx.e.log("Table Imports    : " +
+              Twine(ctx.out.importSec->getNumImportedTables()));
   }
 
   createHeader();
-  log("-- finalizeSections");
+  ctx.e.log("-- finalizeSections");
   finalizeSections();
 
-  log("-- writeMapFile");
-  writeMapFile(outputSections);
+  ctx.e.log("-- writeMapFile");
+  writeMapFile(ctx, outputSections);
 
-  log("-- openFile");
+  ctx.e.log("-- openFile");
   openFile();
-  if (errorCount())
+  if (ctx.e.errorCount)
     return;
 
   writeHeader();
 
-  log("-- writeSections");
+  ctx.e.log("-- writeSections");
   writeSections();
   writeBuildId();
-  if (errorCount())
+  if (ctx.e.errorCount)
     return;
 
   if (Error e = buffer->commit())
-    fatal("failed to write output '" + buffer->getPath() +
-          "': " + toString(std::move(e)));
+    ctx.e.fatal("failed to write output '" + buffer->getPath() +
+                "': " + toString(std::move(e)));
 }
 
 // Open a result file.
 void Writer::openFile() {
-  log("writing: " + ctx.arg.outputFile);
+  ctx.e.log("writing: " + ctx.arg.outputFile);
 
   Expected<std::unique_ptr<FileOutputBuffer>> bufferOrErr =
       FileOutputBuffer::create(ctx.arg.outputFile, fileSize,
                                FileOutputBuffer::F_executable);
 
   if (!bufferOrErr)
-    error("failed to open " + ctx.arg.outputFile + ": " +
-          toString(bufferOrErr.takeError()));
+    ctx.e.error("failed to open " + ctx.arg.outputFile + ": " +
+                toString(bufferOrErr.takeError()));
   else
     buffer = std::move(*bufferOrErr);
 }
@@ -2051,6 +2077,5 @@ void Writer::createHeader() {
   fileSize += header.size();
 }
 
-void writeResult() { Writer().run(); }
-
+void writeResult(Ctx &ctx) { Writer(ctx).run(); }
 } // namespace lld::wasm

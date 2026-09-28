@@ -38,28 +38,13 @@ std::pair<Symbol *, bool> SymbolTable::insert(StringRef name,
     sym = symVector[p.first->second];
   } else {
     // Name is a new symbol.
-    sym = reinterpret_cast<Symbol *>(make<SymbolUnion>());
+    sym = reinterpret_cast<Symbol *>(ctx.make<SymbolUnion>());
     symVector.push_back(sym);
   }
 
   sym->isUsedInRegularObj |= !file || isa<ObjFile>(file);
   return {sym, p.second};
 }
-
-namespace {
-struct DuplicateSymbolDiag {
-  // Pair containing source location and source file
-  const std::pair<std::string, std::string> src1;
-  const std::pair<std::string, std::string> src2;
-  const Symbol *sym;
-
-  DuplicateSymbolDiag(const std::pair<std::string, std::string> src1,
-                      const std::pair<std::string, std::string> src2,
-                      const Symbol *sym)
-      : src1(src1), src2(src2), sym(sym) {}
-};
-SmallVector<DuplicateSymbolDiag> dupSymDiags;
-} // namespace
 
 // Move local symbols at \p fromOff in \p fromIsec into \p toIsec, unless that
 // symbol is \p skip, in which case we just remove it.
@@ -179,7 +164,7 @@ Defined *SymbolTable::addDefined(StringRef name, InputFile *file,
               ") in the bitcode file(" + toString(undef->getFile()) +
               ") is overridden by a non-native object (from bitcode): " +
               toString(file);
-          error(message);
+          ctx.e.error(message);
         } else if (!objFile->builtFromBitcode) {
           // Ideally, this should be an object file compiled from a bitcode
           // file. However, this might not hold true if a LC linker option is
@@ -194,7 +179,7 @@ Defined *SymbolTable::addDefined(StringRef name, InputFile *file,
                                 ") is overridden by a post-processed native "
                                 "object (from native archive): " +
                                 toString(file);
-          warn(message);
+          ctx.e.warn(message);
         } else {
           // Preserve the original bitcode file name (instead of using the
           // object file name).
@@ -207,12 +192,12 @@ Defined *SymbolTable::addDefined(StringRef name, InputFile *file,
   }
 
   // With -flat_namespace, all extern symbols in dylibs are interposable.
-  bool interposable = ((config->namespaceKind == NamespaceKind::flat &&
-                        config->outputType != MachO::MH_EXECUTE) ||
-                       config->interposable) &&
+  bool interposable = ((ctx.arg.namespaceKind == NamespaceKind::flat &&
+                        ctx.arg.outputType != MachO::MH_EXECUTE) ||
+                       ctx.arg.interposable) &&
                       !isPrivateExtern;
   Defined *defined = replaceSymbol<Defined>(
-      s, name, file, isec, value, size, isWeakDef, /*isExternal=*/true,
+      s, ctx, name, file, isec, value, size, isWeakDef, /*isExternal=*/true,
       isPrivateExtern, /*includeInSymtab=*/true, isReferencedDynamically,
       noDeadStrip, overridesWeakDef, isWeakDefCanBeHidden, interposable,
       isCold);
@@ -235,7 +220,7 @@ Symbol *SymbolTable::addUndefined(StringRef name, InputFile *file,
   RefState refState = isWeakRef ? RefState::Weak : RefState::Strong;
 
   if (wasInserted)
-    replaceSymbol<Undefined>(s, name, file, refState,
+    replaceSymbol<Undefined>(s, ctx, name, file, refState,
                              /*wasBitcodeSymbol=*/false);
   else if (auto *lazy = dyn_cast<LazyArchive>(s))
     lazy->fetchArchiveMember();
@@ -263,7 +248,7 @@ Symbol *SymbolTable::addCommon(StringRef name, InputFile *file, uint64_t size,
     // a name conflict, we fall through to the replaceSymbol() call below.
   }
 
-  replaceSymbol<CommonSymbol>(s, name, file, size, align, isPrivateExtern);
+  replaceSymbol<CommonSymbol>(s, ctx, name, file, size, align, isPrivateExtern);
   return s;
 }
 
@@ -290,7 +275,7 @@ Symbol *SymbolTable::addDylib(StringRef name, DylibFile *file, bool isWeakDef,
         (!isDynamicLookup && cast<DylibSymbol>(s)->isDynamicLookup())))) {
     if (auto *dynsym = dyn_cast<DylibSymbol>(s))
       dynsym->unreference();
-    replaceSymbol<DylibSymbol>(s, file, name, isWeakDef, refState, isTlv);
+    replaceSymbol<DylibSymbol>(s, ctx, file, name, isWeakDef, refState, isTlv);
   }
 
   return s;
@@ -305,7 +290,7 @@ Symbol *SymbolTable::addLazyArchive(StringRef name, ArchiveFile *file,
   auto [s, wasInserted] = insert(name, file);
 
   if (wasInserted) {
-    replaceSymbol<LazyArchive>(s, file, sym);
+    replaceSymbol<LazyArchive>(s, ctx, file, sym);
   } else if (isa<Undefined>(s)) {
     file->fetch(sym);
   } else if (auto *dysym = dyn_cast<DylibSymbol>(s)) {
@@ -313,7 +298,7 @@ Symbol *SymbolTable::addLazyArchive(StringRef name, ArchiveFile *file,
       if (dysym->getRefState() != RefState::Unreferenced)
         file->fetch(sym);
       else
-        replaceSymbol<LazyArchive>(s, file, sym);
+        replaceSymbol<LazyArchive>(s, ctx, file, sym);
     }
   }
   return s;
@@ -323,7 +308,7 @@ Symbol *SymbolTable::addLazyObject(StringRef name, InputFile &file) {
   auto [s, wasInserted] = insert(name, &file);
 
   if (wasInserted) {
-    replaceSymbol<LazyObject>(s, file, name);
+    replaceSymbol<LazyObject>(s, ctx, file, name);
   } else if (isa<Undefined>(s)) {
     extract(file, name);
   } else if (auto *dysym = dyn_cast<DylibSymbol>(s)) {
@@ -331,7 +316,7 @@ Symbol *SymbolTable::addLazyObject(StringRef name, InputFile &file) {
       if (dysym->getRefState() != RefState::Unreferenced)
         extract(file, name);
       else
-        replaceSymbol<LazyObject>(s, file, name);
+        replaceSymbol<LazyObject>(s, ctx, file, name);
     }
   }
   return s;
@@ -355,14 +340,14 @@ enum class Boundary {
   End,
 };
 
-static Defined *createBoundarySymbol(const Undefined &sym) {
-  return symtab->addSynthetic(
+static Defined *createBoundarySymbol(Ctx &ctx, const Undefined &sym) {
+  return ctx.symtab->addSynthetic(
       sym.getName(), /*isec=*/nullptr, /*value=*/-1, /*isPrivateExtern=*/true,
       /*includeInSymtab=*/false, /*referencedDynamically=*/false);
 }
 
-static void handleSectionBoundarySymbol(const Undefined &sym, StringRef segSect,
-                                        Boundary which) {
+static void handleSectionBoundarySymbol(Ctx &ctx, const Undefined &sym,
+                                        StringRef segSect, Boundary which) {
   auto [segName, sectName] = segSect.split('$');
 
   // Attach the symbol to any InputSection that will end up in the right
@@ -374,14 +359,15 @@ static void handleSectionBoundarySymbol(const Undefined &sym, StringRef segSect,
 
   OutputSection *osec = nullptr;
   // This looks for __TEXT,__cstring etc.
-  for (SyntheticSection *ssec : syntheticSections)
+  for (SyntheticSection *ssec : ctx.syntheticSections)
     if (ssec->segname == segName && ssec->name == sectName) {
       osec = ssec->isec->parent;
       break;
     }
 
   if (!osec) {
-    ConcatInputSection *isec = makeSyntheticInputSection(segName, sectName);
+    ConcatInputSection *isec =
+        makeSyntheticInputSection(ctx, segName, sectName);
 
     // This runs after markLive() and is only called for Undefineds that are
     // live. Marking the isec live ensures an OutputSection is created that the
@@ -391,44 +377,44 @@ static void handleSectionBoundarySymbol(const Undefined &sym, StringRef segSect,
 
     // This runs after gatherInputSections(), so need to explicitly set parent
     // and add to inputSections.
-    osec = isec->parent = ConcatOutputSection::getOrCreateForInput(isec);
-    inputSections.push_back(isec);
+    osec = isec->parent = ConcatOutputSection::getOrCreateForInput(ctx, isec);
+    ctx.inputSections.push_back(isec);
   }
 
   if (which == Boundary::Start)
-    osec->sectionStartSymbols.push_back(createBoundarySymbol(sym));
+    osec->sectionStartSymbols.push_back(createBoundarySymbol(ctx, sym));
   else
-    osec->sectionEndSymbols.push_back(createBoundarySymbol(sym));
+    osec->sectionEndSymbols.push_back(createBoundarySymbol(ctx, sym));
 }
 
-static void handleSegmentBoundarySymbol(const Undefined &sym, StringRef segName,
-                                        Boundary which) {
-  OutputSegment *seg = getOrCreateOutputSegment(segName);
+static void handleSegmentBoundarySymbol(Ctx &ctx, const Undefined &sym,
+                                        StringRef segName, Boundary which) {
+  OutputSegment *seg = getOrCreateOutputSegment(ctx, segName);
   if (which == Boundary::Start)
-    seg->segmentStartSymbols.push_back(createBoundarySymbol(sym));
+    seg->segmentStartSymbols.push_back(createBoundarySymbol(ctx, sym));
   else
-    seg->segmentEndSymbols.push_back(createBoundarySymbol(sym));
+    seg->segmentEndSymbols.push_back(createBoundarySymbol(ctx, sym));
 }
 
 // Try to find a definition for an undefined symbol.
 // Returns true if a definition was found and no diagnostics are needed.
-static bool recoverFromUndefinedSymbol(const Undefined &sym) {
+static bool recoverFromUndefinedSymbol(Ctx &ctx, const Undefined &sym) {
   // Handle start/end symbols.
   StringRef name = sym.getName();
   if (name.consume_front("section$start$")) {
-    handleSectionBoundarySymbol(sym, name, Boundary::Start);
+    handleSectionBoundarySymbol(ctx, sym, name, Boundary::Start);
     return true;
   }
   if (name.consume_front("section$end$")) {
-    handleSectionBoundarySymbol(sym, name, Boundary::End);
+    handleSectionBoundarySymbol(ctx, sym, name, Boundary::End);
     return true;
   }
   if (name.consume_front("segment$start$")) {
-    handleSegmentBoundarySymbol(sym, name, Boundary::Start);
+    handleSegmentBoundarySymbol(ctx, sym, name, Boundary::Start);
     return true;
   }
   if (name.consume_front("segment$end$")) {
-    handleSegmentBoundarySymbol(sym, name, Boundary::End);
+    handleSegmentBoundarySymbol(ctx, sym, name, Boundary::End);
     return true;
   }
 
@@ -437,51 +423,38 @@ static bool recoverFromUndefinedSymbol(const Undefined &sym) {
     return true;
 
   // Handle -U.
-  if (config->explicitDynamicLookups.contains(sym.getName())) {
-    symtab->addDynamicLookup(sym.getName());
+  if (ctx.arg.explicitDynamicLookups.contains(sym.getName())) {
+    ctx.symtab->addDynamicLookup(sym.getName());
     return true;
   }
 
   // Handle -undefined.
-  if (config->undefinedSymbolTreatment ==
+  if (ctx.arg.undefinedSymbolTreatment ==
           UndefinedSymbolTreatment::dynamic_lookup ||
-      config->undefinedSymbolTreatment == UndefinedSymbolTreatment::suppress) {
-    symtab->addDynamicLookup(sym.getName());
+      ctx.arg.undefinedSymbolTreatment == UndefinedSymbolTreatment::suppress) {
+    ctx.symtab->addDynamicLookup(sym.getName());
     return true;
   }
 
   // We do not return true here, as we still need to print diagnostics.
-  if (config->undefinedSymbolTreatment == UndefinedSymbolTreatment::warning)
-    symtab->addDynamicLookup(sym.getName());
+  if (ctx.arg.undefinedSymbolTreatment == UndefinedSymbolTreatment::warning)
+    ctx.symtab->addDynamicLookup(sym.getName());
 
   return false;
 }
 
-namespace {
-struct UndefinedDiag {
-  struct SectionAndOffset {
-    const InputSection *isec;
-    uint64_t offset;
-  };
-
-  std::vector<SectionAndOffset> codeReferences;
-  std::vector<std::string> otherReferences;
-};
-
-MapVector<const Undefined *, UndefinedDiag> undefs;
-} // namespace
-
-void macho::reportPendingDuplicateSymbols() {
-  for (const auto &duplicate : dupSymDiags) {
-    if (!config->deadStripDuplicates || duplicate.sym->isLive()) {
+void macho::reportPendingDuplicateSymbols(Ctx &ctx) {
+  for (const auto &duplicate : ctx.symtab->dupSymDiags) {
+    if (!ctx.arg.deadStripDuplicates || duplicate.sym->isLive()) {
       std::string message =
-          "duplicate symbol: " + toString(*duplicate.sym) + "\n>>> defined in ";
+          "duplicate symbol: " + toString(ctx, *duplicate.sym) +
+          "\n>>> defined in ";
       if (!duplicate.src1.first.empty())
         message += duplicate.src1.first + "\n>>>            ";
       message += duplicate.src1.second + "\n>>> defined in ";
       if (!duplicate.src2.first.empty())
         message += duplicate.src2.first + "\n>>>            ";
-      error(message + duplicate.src2.second);
+      ctx.e.error(message + duplicate.src2.second);
     }
   }
 }
@@ -504,7 +477,7 @@ static bool canSuggestExternCForCXX(StringRef ref, StringRef def) {
 // Suggest an alternative spelling of an "undefined symbol" diagnostic. Returns
 // the suggested symbol, which is either in the symbol table, or in the same
 // file of sym.
-static const Symbol *getAlternativeSpelling(const Undefined &sym,
+static const Symbol *getAlternativeSpelling(Ctx &ctx, const Undefined &sym,
                                             std::string &preHint,
                                             std::string &postHint) {
   DenseMap<StringRef, const Symbol *> map;
@@ -522,7 +495,7 @@ static const Symbol *getAlternativeSpelling(const Undefined &sym,
       return s;
 
     // If in the symbol table and not undefined.
-    if (const Symbol *s = symtab->find(newName))
+    if (const Symbol *s = ctx.symtab->find(newName))
       if (!isa<Undefined>(s))
         return s;
 
@@ -571,7 +544,7 @@ static const Symbol *getAlternativeSpelling(const Undefined &sym,
   for (auto &it : map)
     if (name.equals_insensitive(it.first))
       return it.second;
-  for (Symbol *sym : symtab->getSymbols())
+  for (Symbol *sym : ctx.symtab->getSymbols())
     if (!isa<Undefined>(sym) && name.equals_insensitive(sym->getName()))
       return sym;
 
@@ -599,7 +572,7 @@ static const Symbol *getAlternativeSpelling(const Undefined &sym,
         break;
       }
     if (!s)
-      for (Symbol *sym : symtab->getSymbols())
+      for (Symbol *sym : ctx.symtab->getSymbols())
         if (canSuggestExternCForCXX(nameWithoutUnderscore, sym->getName())) {
           s = sym;
           break;
@@ -614,13 +587,13 @@ static const Symbol *getAlternativeSpelling(const Undefined &sym,
   return nullptr;
 }
 
-static void reportUndefinedSymbol(const Undefined &sym,
+static void reportUndefinedSymbol(Ctx &ctx, const Undefined &sym,
                                   const UndefinedDiag &locations,
                                   bool correctSpelling) {
   std::string message = "undefined symbol";
-  if (config->archMultiple)
-    message += (" for arch " + getArchitectureName(config->arch())).str();
-  message += ": " + toString(sym);
+  if (ctx.arg.archMultiple)
+    message += (" for arch " + getArchitectureName(ctx.arg.arch())).str();
+  message += ": " + toString(ctx, sym);
 
   const size_t maxUndefinedReferences = 3;
   size_t i = 0;
@@ -652,46 +625,46 @@ static void reportUndefinedSymbol(const Undefined &sym,
   if (correctSpelling) {
     std::string preHint = ": ", postHint;
     if (const Symbol *corrected =
-            getAlternativeSpelling(sym, preHint, postHint)) {
+            getAlternativeSpelling(ctx, sym, preHint, postHint)) {
       message +=
-          "\n>>> did you mean" + preHint + toString(*corrected) + postHint;
+          "\n>>> did you mean" + preHint + toString(ctx, *corrected) + postHint;
       if (corrected->getFile())
         message += "\n>>> defined in: " + toString(corrected->getFile());
     }
   }
 
-  if (config->undefinedSymbolTreatment == UndefinedSymbolTreatment::error)
-    error(message);
-  else if (config->undefinedSymbolTreatment ==
+  if (ctx.arg.undefinedSymbolTreatment == UndefinedSymbolTreatment::error)
+    ctx.e.error(message);
+  else if (ctx.arg.undefinedSymbolTreatment ==
            UndefinedSymbolTreatment::warning)
-    warn(message);
+    ctx.e.warn(message);
   else
     assert(false && "diagnostics make sense for -undefined error|warning only");
 }
 
-void macho::reportPendingUndefinedSymbols() {
+void macho::reportPendingUndefinedSymbols(Ctx &ctx) {
+  auto &undefs = ctx.symtab->undefs;
   // Enable spell corrector for the first 2 diagnostics.
   for (const auto &[i, undef] : llvm::enumerate(undefs))
-    reportUndefinedSymbol(*undef.first, undef.second, i < 2);
+    reportUndefinedSymbol(ctx, *undef.first, undef.second, i < 2);
 
   // This function is called multiple times during execution. Clear the printed
   // diagnostics to avoid printing the same things again the next time.
   undefs.clear();
 }
 
-void macho::treatUndefinedSymbol(const Undefined &sym, StringRef source) {
-  if (recoverFromUndefinedSymbol(sym))
+void macho::treatUndefinedSymbol(Ctx &ctx, const Undefined &sym,
+                                 StringRef source) {
+  if (recoverFromUndefinedSymbol(ctx, sym))
     return;
 
-  undefs[&sym].otherReferences.push_back(source.str());
+  ctx.symtab->undefs[&sym].otherReferences.push_back(source.str());
 }
 
-void macho::treatUndefinedSymbol(const Undefined &sym, const InputSection *isec,
-                                 uint64_t offset) {
-  if (recoverFromUndefinedSymbol(sym))
+void macho::treatUndefinedSymbol(Ctx &ctx, const Undefined &sym,
+                                 const InputSection *isec, uint64_t offset) {
+  if (recoverFromUndefinedSymbol(ctx, sym))
     return;
 
-  undefs[&sym].codeReferences.push_back({isec, offset});
+  ctx.symtab->undefs[&sym].codeReferences.push_back({isec, offset});
 }
-
-std::unique_ptr<SymbolTable> macho::symtab;

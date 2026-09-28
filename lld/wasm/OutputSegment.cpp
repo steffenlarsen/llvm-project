@@ -59,7 +59,8 @@ void OutputSegment::finalizeInputSegments() {
     if (i == mergedSegments.end()) {
       LLVM_DEBUG(llvm::dbgs() << "new merge segment: " << name
                               << " alignment=" << ms->alignment << "\n");
-      auto *syn = make<SyntheticMergedChunk>(name, ms->alignment, ms->flags);
+      auto *syn =
+          ctx.make<SyntheticMergedChunk>(ctx, name, ms->alignment, ms->flags);
       syn->outputSeg = this;
       mergedSegments.push_back(syn);
       i = std::prev(mergedSegments.end());

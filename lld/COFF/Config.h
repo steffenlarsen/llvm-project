@@ -407,6 +407,9 @@ COFFSyncStream Fatal(COFFLinkerContext &ctx);
 
 uint64_t errCount(COFFLinkerContext &ctx);
 
+// Unwraps E, or reports a fatal error prefixed with S. Evaluates S lazily, and
+// only if E is an error. A COFFLinkerContext named ctx must be in scope.
+#define CHECK2(E, S) lld::check2(ctx.e, (E), [&] { return toString(S); })
 } // namespace lld::coff
 
 #endif

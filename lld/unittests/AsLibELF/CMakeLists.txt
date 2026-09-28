@@ -3,6 +3,7 @@
 # target application executable.
 
 add_unittest_with_input_files(LLDUnitTests LLDAsLibELFTests
+  ConcurrentLinks.cpp
   OutputStream.cpp
   ROCm.cpp
   SomeDrivers.cpp

@@ -288,7 +288,7 @@ static void writeSequence(Ctx &ctx, const char *prefix, int from,
     return;
   // The full section content has the extent of [begin, end). We drop unused
   // instructions and write [first,end).
-  auto *sec = make<InputSection>(
+  auto *sec = ctx.make<InputSection>(
       ctx.internalFile, ".text", SHT_PROGBITS, SHF_ALLOC, /*addralign=*/4,
       /*entsize=*/0,
       ArrayRef(reinterpret_cast<uint8_t *>(buf.data() + first),

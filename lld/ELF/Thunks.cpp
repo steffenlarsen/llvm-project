@@ -1586,9 +1586,9 @@ void HexagonThunk::addSymbols(ThunkSection &isec) {
   Symbol *enclosing = isec.getEnclosingSymbol(relOffset);
   StringRef src = enclosing ? enclosing->getName() : isec.name;
 
-  addSymbol(
-      saver().save("__hexagon_thunk_" + destination.getName() + "_from_" + src),
-      STT_FUNC, 0, isec);
+  addSymbol(ctx.saver.save("__hexagon_thunk_" + destination.getName() +
+                           "_from_" + src),
+            STT_FUNC, 0, isec);
 }
 
 Thunk::Thunk(Ctx &ctx, Symbol &d, int64_t a)

@@ -435,9 +435,7 @@ private:
 // This is here just for compatibility with MSVC.
 class DefinedLocalImport : public Defined {
 public:
-  DefinedLocalImport(COFFLinkerContext &ctx, StringRef n, Defined *s)
-      : Defined(DefinedLocalImportKind, n),
-        data(make<LocalImportChunk>(ctx, s)) {}
+  DefinedLocalImport(COFFLinkerContext &ctx, StringRef n, Defined *s);
 
   static bool classof(const Symbol *s) {
     return s->kind() == DefinedLocalImportKind;

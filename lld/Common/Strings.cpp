@@ -24,14 +24,14 @@ static bool isExact(StringRef Pattern) {
          Pattern.ends_with("\"");
 }
 
-SingleStringMatcher::SingleStringMatcher(StringRef Pattern)
+SingleStringMatcher::SingleStringMatcher(ErrorHandler &eh, StringRef Pattern)
     : ExactMatch(isExact(Pattern)) {
   if (ExactMatch) {
     ExactPattern = Pattern.substr(1, Pattern.size() - 2);
   } else {
     Expected<GlobPattern> Glob = GlobPattern::create(Pattern);
     if (!Glob) {
-      error(toString(Glob.takeError()) + ": " + Pattern);
+      eh.error(toString(Glob.takeError()) + ": " + Pattern);
       return;
     }
     GlobPatternMatcher = *Glob;
@@ -50,14 +50,14 @@ bool StringMatcher::match(StringRef s) const {
 }
 
 // Converts a hex string (e.g. "deadbeef") to a vector.
-SmallVector<uint8_t, 0> lld::parseHex(StringRef s) {
+SmallVector<uint8_t, 0> lld::parseHex(ErrorHandler &eh, StringRef s) {
   SmallVector<uint8_t, 0> hex;
   while (!s.empty()) {
     StringRef b = s.substr(0, 2);
     s = s.substr(2);
     uint8_t h;
     if (!to_integer(b, h, 16)) {
-      error("not a hexadecimal value: " + b);
+      eh.error("not a hexadecimal value: " + b);
       return {};
     }
     hex.push_back(h);
@@ -72,10 +72,10 @@ bool lld::isValidCIdentifier(StringRef s) {
 }
 
 // Write the contents of the a buffer to a file
-void lld::saveBuffer(StringRef buffer, const Twine &path) {
+void lld::saveBuffer(ErrorHandler &eh, StringRef buffer, const Twine &path) {
   std::error_code ec;
   raw_fd_ostream os(path.str(), ec, sys::fs::OpenFlags::OF_None);
   if (ec)
-    error("cannot create " + path + ": " + ec.message());
+    eh.error("cannot create " + path + ": " + ec.message());
   os << buffer;
 }

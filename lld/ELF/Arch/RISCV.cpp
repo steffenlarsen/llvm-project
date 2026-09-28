@@ -875,7 +875,7 @@ void elf::initSymbolAnchors(Ctx &ctx) {
     for (InputSection *sec : getInputSections(*osec, storage)) {
       if (isa<SyntheticSection>(sec))
         continue;
-      sec->relaxAux = make<RelaxAux>();
+      sec->relaxAux = ctx.make<RelaxAux>();
       if (sec->relocs().size()) {
         sec->relaxAux->relocDeltas =
             std::make_unique<uint32_t[]>(sec->relocs().size());
@@ -1202,7 +1202,7 @@ void RISCV::finalizeSynthesizeAligns(uint64_t &dot, InputSection *sec,
   auto *f = cast<ObjFile<ELFT>>(baseSec->file);
   auto shdr = f->template getELFShdrs<ELFT>()[baseSec->relSecIdx];
   // Create a copy of InputSection.
-  sec = make<InputSection>(*f, shdr, baseSec->name);
+  sec = ctx.make<InputSection>(*f, shdr, baseSec->name);
   auto *baseRelSec = cast<InputSection>(f->getSections()[baseSec->relSecIdx]);
   *sec = *baseRelSec;
   baseSec = nullptr;

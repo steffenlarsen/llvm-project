@@ -24,7 +24,7 @@ public:
   virtual void prepare() = 0;
 
 protected:
-  UnwindInfoSection();
+  UnwindInfoSection(Ctx &ctx);
 
   llvm::MapVector<std::pair<const InputSection *, uint64_t /*Defined::value*/>,
                   const Defined *>
@@ -32,8 +32,7 @@ protected:
   bool allEntriesAreOmitted = true;
 };
 
-UnwindInfoSection *makeUnwindInfoSection();
-
+UnwindInfoSection *makeUnwindInfoSection(Ctx &ctx);
 } // namespace lld::macho
 
 #endif

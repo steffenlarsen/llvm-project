@@ -24,9 +24,6 @@ using namespace llvm;
 using namespace llvm::wasm;
 
 namespace lld::wasm {
-
-OutStruct out;
-
 namespace {
 
 // Some synthetic sections (e.g. "name" and "linking") have subsections.
@@ -77,7 +74,7 @@ void DylinkSection::writeBody() {
     SubSection sub(WASM_DYLINK_MEM_INFO);
     writeUleb128(sub.os, memSize, "MemSize");
     writeUleb128(sub.os, memAlign, "MemAlign");
-    writeUleb128(sub.os, out.elemSec->numEntries(), "TableSize");
+    writeUleb128(sub.os, ctx.out.elemSec->numEntries(), "TableSize");
     writeUleb128(sub.os, 0, "TableAlign");
     sub.writeTo(os);
   }
@@ -98,9 +95,9 @@ void DylinkSection::writeBody() {
   // so that knows not to report an error for such symbols.
   std::vector<const Symbol *> importInfo;
   std::vector<const Symbol *> exportInfo;
-  for (const Symbol *sym : symtab->symbols()) {
+  for (const Symbol *sym : ctx.symtab->symbols()) {
     if (sym->isLive()) {
-      if (sym->isExported() && sym->isTLS() && isa<DefinedData>(sym)) {
+      if (sym->isExported(ctx) && sym->isTLS() && isa<DefinedData>(sym)) {
         exportInfo.push_back(sym);
       }
       if (sym->isUndefWeak()) {
@@ -114,7 +111,8 @@ void DylinkSection::writeBody() {
     writeUleb128(sub.os, exportInfo.size(), "num exports");
 
     for (const Symbol *sym : exportInfo) {
-      LLVM_DEBUG(llvm::dbgs() << "export info: " << toString(*sym) << "\n");
+      LLVM_DEBUG(llvm::dbgs()
+                 << "export info: " << toString(ctx, *sym) << "\n");
       StringRef name = sym->getName();
       if (auto *f = dyn_cast<DefinedFunction>(sym)) {
         if (std::optional<StringRef> exportName =
@@ -134,7 +132,8 @@ void DylinkSection::writeBody() {
     writeUleb128(sub.os, importInfo.size(), "num imports");
 
     for (const Symbol *sym : importInfo) {
-      LLVM_DEBUG(llvm::dbgs() << "imports info: " << toString(*sym) << "\n");
+      LLVM_DEBUG(llvm::dbgs()
+                 << "imports info: " << toString(ctx, *sym) << "\n");
       StringRef module = sym->importModule.value_or(defaultModule);
       StringRef name = sym->importName.value_or(sym->getName());
       writeStr(sub.os, module, "import module");
@@ -166,7 +165,7 @@ uint32_t TypeSection::registerType(const WasmSignature &sig) {
 uint32_t TypeSection::lookupType(const WasmSignature &sig) {
   auto it = typeIndices.find(sig);
   if (it == typeIndices.end()) {
-    error("type not found: " + toString(sig));
+    ctx.e.error("type not found: " + toString(sig));
     return 0;
   }
   return it->second;
@@ -190,7 +189,7 @@ void ImportSection::addGOTEntry(Symbol *sym) {
   assert(!isSealed);
   if (sym->hasGOTIndex())
     return;
-  LLVM_DEBUG(dbgs() << "addGOTEntry: " << toString(*sym) << "\n");
+  LLVM_DEBUG(dbgs() << "addGOTEntry: " << toString(ctx, *sym) << "\n");
   sym->setGOTIndex(numImportedGlobals++);
   if (ctx.isPic) {
     // Any symbol that is assigned an normal GOT entry must be exported
@@ -264,10 +263,10 @@ void ImportSection::writeBody() {
     import.Field = ctx.arg.memoryImport->second;
     import.Kind = WASM_EXTERNAL_MEMORY;
     import.Memory.Flags = 0;
-    import.Memory.Minimum = out.memorySec->numMemoryPages;
-    if (out.memorySec->maxMemoryPages != 0 || ctx.arg.sharedMemory) {
+    import.Memory.Minimum = ctx.out.memorySec->numMemoryPages;
+    if (ctx.out.memorySec->maxMemoryPages != 0 || ctx.arg.sharedMemory) {
       import.Memory.Flags |= WASM_LIMITS_FLAG_HAS_MAX;
-      import.Memory.Maximum = out.memorySec->maxMemoryPages;
+      import.Memory.Maximum = ctx.out.memorySec->maxMemoryPages;
     }
     if (ctx.arg.sharedMemory)
       import.Memory.Flags |= WASM_LIMITS_FLAG_IS_SHARED;
@@ -287,13 +286,13 @@ void ImportSection::writeBody() {
 
     if (auto *functionSym = dyn_cast<FunctionSymbol>(sym)) {
       import.Kind = WASM_EXTERNAL_FUNCTION;
-      import.SigIndex = out.typeSec->lookupType(*functionSym->signature);
+      import.SigIndex = ctx.out.typeSec->lookupType(*functionSym->signature);
     } else if (auto *globalSym = dyn_cast<GlobalSymbol>(sym)) {
       import.Kind = WASM_EXTERNAL_GLOBAL;
       import.Global = *globalSym->getGlobalType();
     } else if (auto *tagSym = dyn_cast<TagSymbol>(sym)) {
       import.Kind = WASM_EXTERNAL_TAG;
-      import.SigIndex = out.typeSec->lookupType(*tagSym->signature);
+      import.SigIndex = ctx.out.typeSec->lookupType(*tagSym->signature);
     } else {
       auto *tableSym = cast<TableSymbol>(sym);
       import.Kind = WASM_EXTERNAL_TABLE;
@@ -316,7 +315,7 @@ void ImportSection::writeBody() {
   }
 
   bool hasCompactImports =
-      out.targetFeaturesSec->features.contains("compact-imports");
+      ctx.out.targetFeaturesSec->features.contains("compact-imports");
   uint32_t i = 0;
   while (i < numImports) {
     const WasmImport &import = imports[i];
@@ -334,12 +333,12 @@ void ImportSection::writeBody() {
         writeU8(os, 0x7F, "compact imports encoding 1");
         writeUleb128(os, groupSize, "num compact imports");
         while (groupSize--) {
-          writeCompactImport(os, imports[i++]);
+          writeCompactImport(ctx, os, imports[i++]);
         }
         continue;
       }
     }
-    writeImport(os, imports[i++]);
+    writeImport(ctx, os, imports[i++]);
   }
 }
 
@@ -348,14 +347,14 @@ void FunctionSection::writeBody() {
 
   writeUleb128(os, inputFunctions.size(), "function count");
   for (const InputFunction *func : inputFunctions)
-    writeUleb128(os, out.typeSec->lookupType(func->signature), "sig index");
+    writeUleb128(os, ctx.out.typeSec->lookupType(func->signature), "sig index");
 }
 
 void FunctionSection::addFunction(InputFunction *func) {
   if (!func->live)
     return;
   uint32_t functionIndex =
-      out.importSec->getNumImportedFunctions() + inputFunctions.size();
+      ctx.out.importSec->getNumImportedFunctions() + inputFunctions.size();
   inputFunctions.emplace_back(func);
   func->setFunctionIndex(functionIndex);
 }
@@ -376,16 +375,16 @@ void TableSection::addTable(InputTable *table) {
   if (ctx.legacyFunctionTable &&
       isa<DefinedTable>(ctx.sym.indirectFunctionTable) &&
       cast<DefinedTable>(ctx.sym.indirectFunctionTable)->table == table) {
-    if (out.importSec->getNumImportedTables()) {
+    if (ctx.out.importSec->getNumImportedTables()) {
       // Alack!  Some other input imported a table, meaning that we are unable
       // to assign table number 0 to the indirect function table.
-      for (const auto *culprit : out.importSec->importedSymbols) {
+      for (const auto *culprit : ctx.out.importSec->importedSymbols) {
         if (isa<UndefinedTable>(culprit)) {
-          error("object file not built with 'reference-types' or "
-                "'call-indirect-overlong' feature conflicts with import of "
-                "table " +
-                culprit->getName() + " by file " +
-                toString(culprit->getFile()));
+          ctx.e.error(
+              "object file not built with 'reference-types' or "
+              "'call-indirect-overlong' feature conflicts with import of "
+              "table " +
+              culprit->getName() + " by file " + toString(culprit->getFile()));
           return;
         }
       }
@@ -398,7 +397,7 @@ void TableSection::addTable(InputTable *table) {
 }
 
 void TableSection::assignIndexes() {
-  uint32_t tableNumber = out.importSec->getNumImportedTables();
+  uint32_t tableNumber = ctx.out.importSec->getNumImportedTables();
   for (InputTable *t : inputTables)
     t->assignIndex(tableNumber++);
 }
@@ -431,21 +430,22 @@ void TagSection::writeBody() {
   writeUleb128(os, inputTags.size(), "tag count");
   for (InputTag *t : inputTags) {
     writeUleb128(os, 0, "tag attribute"); // Reserved "attribute" field
-    writeUleb128(os, out.typeSec->lookupType(t->signature), "sig index");
+    writeUleb128(os, ctx.out.typeSec->lookupType(t->signature), "sig index");
   }
 }
 
 void TagSection::addTag(InputTag *tag) {
   if (!tag->live)
     return;
-  uint32_t tagIndex = out.importSec->getNumImportedTags() + inputTags.size();
+  uint32_t tagIndex =
+      ctx.out.importSec->getNumImportedTags() + inputTags.size();
   LLVM_DEBUG(dbgs() << "addTag: " << tagIndex << "\n");
   tag->assignIndex(tagIndex);
   inputTags.push_back(tag);
 }
 
 void GlobalSection::assignIndexes() {
-  uint32_t globalIndex = out.importSec->getNumImportedGlobals();
+  uint32_t globalIndex = ctx.out.importSec->getNumImportedGlobals();
   for (InputGlobal *g : inputGlobals)
     g->assignIndex(globalIndex++);
   for (Symbol *sym : internalGotSymbols)
@@ -453,10 +453,10 @@ void GlobalSection::assignIndexes() {
   isSealed = true;
 }
 
-static void ensureIndirectFunctionTable() {
+static void ensureIndirectFunctionTable(Ctx &ctx) {
   if (!ctx.sym.indirectFunctionTable)
     ctx.sym.indirectFunctionTable =
-        symtab->resolveIndirectFunctionTable(/*required =*/true);
+        ctx.symtab->resolveIndirectFunctionTable(/*required =*/true);
 }
 
 void GlobalSection::addInternalGOTEntry(Symbol *sym) {
@@ -467,8 +467,8 @@ void GlobalSection::addInternalGOTEntry(Symbol *sym) {
                     << toString(sym->kind()) << "\n");
   sym->requiresGOT = true;
   if (auto *F = dyn_cast<FunctionSymbol>(sym)) {
-    ensureIndirectFunctionTable();
-    out.elemSec->addEntry(F);
+    ensureIndirectFunctionTable(ctx);
+    ctx.out.elemSec->addEntry(F);
   }
   internalGotSymbols.push_back(sym);
 }
@@ -518,7 +518,7 @@ void GlobalSection::writeBody() {
   writeUleb128(os, numGlobals(), "global count");
   for (InputGlobal *g : inputGlobals) {
     writeGlobalType(os, g->getType());
-    writeInitExpr(os, g->getInitExpr());
+    writeInitExpr(ctx, os, g->getInitExpr());
   }
   bool is64 = ctx.arg.is64.value_or(false);
   uint8_t itype = is64 ? WASM_TYPE_I64 : WASM_TYPE_I32;
@@ -580,13 +580,13 @@ void GlobalSection::writeBody() {
         assert(isa<UndefinedData>(sym) || isa<SharedData>(sym));
         initExpr = intConst(0, is64);
       }
-      writeInitExpr(os, initExpr);
+      writeInitExpr(ctx, os, initExpr);
     }
   }
   for (const DefinedData *sym : dataAddressGlobals) {
     WasmGlobalType type{itype, false};
     writeGlobalType(os, type);
-    writeInitExpr(os, intConst(sym->getVA(), is64));
+    writeInitExpr(ctx, os, intConst(sym->getVA(), is64));
   }
 }
 
@@ -602,7 +602,7 @@ void ExportSection::writeBody() {
 
   writeUleb128(os, exports.size(), "export count");
   for (const WasmExport &export_ : exports)
-    writeExport(os, export_);
+    writeExport(ctx, os, export_);
 }
 
 bool StartSection::isNeeded() const { return ctx.sym.startFunction != nullptr; }
@@ -644,7 +644,7 @@ void ElemSection::writeBody() {
     bool is64 = ctx.arg.is64.value_or(false);
     initExpr = intConst(ctx.arg.tableBase, is64);
   }
-  writeInitExpr(os, initExpr);
+  writeInitExpr(ctx, os, initExpr);
 
   if (flags & WASM_ELEM_SEGMENT_MASK_HAS_ELEM_DESC) {
     // We only write active function table initializers, for which the elem kind
@@ -663,8 +663,8 @@ void ElemSection::writeBody() {
   }
 }
 
-DataCountSection::DataCountSection(ArrayRef<OutputSegment *> segments)
-    : SyntheticSection(llvm::wasm::WASM_SEC_DATACOUNT),
+DataCountSection::DataCountSection(Ctx &ctx, ArrayRef<OutputSegment *> segments)
+    : SyntheticSection(ctx, llvm::wasm::WASM_SEC_DATACOUNT),
       numSegments(llvm::count_if(segments, [](OutputSegment *const segment) {
         return segment->requiredInBinary();
       })) {}
@@ -773,7 +773,7 @@ void LinkingSection::writeBody() {
   };
   std::map<StringRef, std::vector<ComdatEntry>> comdats;
 
-  for (const InputFunction *f : out.functionSec->inputFunctions) {
+  for (const InputFunction *f : ctx.out.functionSec->inputFunctions) {
     StringRef comdat = f->getComdatName();
     if (!comdat.empty())
       comdats[comdat].emplace_back(
@@ -814,9 +814,9 @@ void LinkingSection::addToSymtab(Symbol *sym) {
 }
 
 unsigned NameSection::numNamedFunctions() const {
-  unsigned numNames = out.importSec->getNumImportedFunctions();
+  unsigned numNames = ctx.out.importSec->getNumImportedFunctions();
 
-  for (const InputFunction *f : out.functionSec->inputFunctions)
+  for (const InputFunction *f : ctx.out.functionSec->inputFunctions)
     if (!f->name.empty() || !f->debugName.empty())
       ++numNames;
 
@@ -824,13 +824,13 @@ unsigned NameSection::numNamedFunctions() const {
 }
 
 unsigned NameSection::numNamedGlobals() const {
-  unsigned numNames = out.importSec->getNumImportedGlobals();
+  unsigned numNames = ctx.out.importSec->getNumImportedGlobals();
 
-  for (const InputGlobal *g : out.globalSec->inputGlobals)
+  for (const InputGlobal *g : ctx.out.globalSec->inputGlobals)
     if (!g->getName().empty())
       ++numNames;
 
-  numNames += out.globalSec->internalGotSymbols.size();
+  numNames += ctx.out.globalSec->internalGotSymbols.size();
   return numNames;
 }
 
@@ -863,19 +863,19 @@ void NameSection::writeBody() {
     // Function names appear in function index order.  As it happens
     // importedSymbols and inputFunctions are numbered in order with imported
     // functions coming first.
-    for (const Symbol *s : out.importSec->importedSymbols) {
+    for (const Symbol *s : ctx.out.importSec->importedSymbols) {
       if (auto *f = dyn_cast<FunctionSymbol>(s)) {
         writeUleb128(sub.os, f->getFunctionIndex(), "func index");
-        writeStr(sub.os, toString(*s), "symbol name");
+        writeStr(sub.os, toString(ctx, *s), "symbol name");
       }
     }
-    for (const InputFunction *f : out.functionSec->inputFunctions) {
+    for (const InputFunction *f : ctx.out.functionSec->inputFunctions) {
       if (!f->name.empty()) {
         writeUleb128(sub.os, f->getFunctionIndex(), "func index");
         if (!f->debugName.empty()) {
           writeStr(sub.os, f->debugName, "symbol name");
         } else {
-          writeStr(sub.os, maybeDemangleSymbol(f->name), "symbol name");
+          writeStr(sub.os, maybeDemangleSymbol(ctx, f->name), "symbol name");
         }
       }
     }
@@ -887,28 +887,30 @@ void NameSection::writeBody() {
     SubSection sub(WASM_NAMES_GLOBAL);
     writeUleb128(sub.os, count, "name count");
 
-    for (const Symbol *s : out.importSec->importedSymbols) {
+    for (const Symbol *s : ctx.out.importSec->importedSymbols) {
       if (auto *g = dyn_cast<GlobalSymbol>(s)) {
         writeUleb128(sub.os, g->getGlobalIndex(), "global index");
-        writeStr(sub.os, toString(*s), "symbol name");
+        writeStr(sub.os, toString(ctx, *s), "symbol name");
       }
     }
-    for (const Symbol *s : out.importSec->gotSymbols) {
+    for (const Symbol *s : ctx.out.importSec->gotSymbols) {
       writeUleb128(sub.os, s->getGOTIndex(), "global index");
-      writeStr(sub.os, toString(*s), "symbol name");
+      writeStr(sub.os, toString(ctx, *s), "symbol name");
     }
-    for (const InputGlobal *g : out.globalSec->inputGlobals) {
+    for (const InputGlobal *g : ctx.out.globalSec->inputGlobals) {
       if (!g->getName().empty()) {
         writeUleb128(sub.os, g->getAssignedIndex(), "global index");
-        writeStr(sub.os, maybeDemangleSymbol(g->getName()), "symbol name");
+        writeStr(sub.os, maybeDemangleSymbol(ctx, g->getName()), "symbol name");
       }
     }
-    for (Symbol *s : out.globalSec->internalGotSymbols) {
+    for (Symbol *s : ctx.out.globalSec->internalGotSymbols) {
       writeUleb128(sub.os, s->getGOTIndex(), "global index");
       if (isa<FunctionSymbol>(s))
-        writeStr(sub.os, "GOT.func.internal." + toString(*s), "symbol name");
+        writeStr(sub.os, "GOT.func.internal." + toString(ctx, *s),
+                 "symbol name");
       else
-        writeStr(sub.os, "GOT.data.internal." + toString(*s), "symbol name");
+        writeStr(sub.os, "GOT.data.internal." + toString(ctx, *s),
+                 "symbol name");
     }
 
     sub.writeTo(bodyOutputStream);
@@ -978,7 +980,7 @@ void RelocSection::writeBody() {
   sec->writeRelocations(bodyOutputStream);
 }
 
-static size_t getHashSize() {
+static size_t getHashSize(Ctx &ctx) {
   switch (ctx.arg.buildId) {
   case BuildIdKind::Fast:
   case BuildIdKind::Uuid:
@@ -993,9 +995,9 @@ static size_t getHashSize() {
   llvm_unreachable("build id kind not implemented");
 }
 
-BuildIdSection::BuildIdSection()
-    : SyntheticSection(llvm::wasm::WASM_SEC_CUSTOM, buildIdSectionName),
-      hashSize(getHashSize()) {}
+BuildIdSection::BuildIdSection(Ctx &ctx)
+    : SyntheticSection(ctx, llvm::wasm::WASM_SEC_CUSTOM, buildIdSectionName),
+      hashSize(getHashSize(ctx)) {}
 
 void BuildIdSection::writeBody() {
   LLVM_DEBUG(llvm::dbgs() << "BuildId writebody\n");

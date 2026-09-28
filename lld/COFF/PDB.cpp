@@ -67,7 +67,7 @@ class PDBLinker {
 
 public:
   PDBLinker(COFFLinkerContext &ctx)
-      : builder(bAlloc()), tMerger(ctx, bAlloc()), ctx(ctx) {
+      : builder(ctx.bAlloc), tMerger(ctx, ctx.bAlloc), ctx(ctx) {
     // This isn't strictly necessary, but link.exe usually puts an empty string
     // as the first "valid" string in the string table, so we do the same in
     // order to maintain as much byte-for-byte compatibility as possible.
@@ -262,7 +262,8 @@ void PDBLinker::pdbMakeAbsolute(SmallVectorImpl<char> &fileName) {
   fileName = std::move(absoluteFileName);
 }
 
-static void addTypeInfo(pdb::TpiStreamBuilder &tpiBuilder,
+static void addTypeInfo(COFFLinkerContext &ctx,
+                        pdb::TpiStreamBuilder &tpiBuilder,
                         TypeCollection &typeTable) {
   // Start the TPI or IPI stream header.
   tpiBuilder.setVersionHeader(pdb::PdbTpiV80);
@@ -271,7 +272,7 @@ static void addTypeInfo(pdb::TpiStreamBuilder &tpiBuilder,
   typeTable.ForEachRecord([&](TypeIndex ti, const CVType &type) {
     auto hash = pdb::hashTypeRecord(type);
     if (auto e = hash.takeError())
-      fatal("type hashing error");
+      Fatal(ctx) << "type hashing error";
     tpiBuilder.addTypeRecord(type.RecordData, *hash);
   });
 }
@@ -292,7 +293,8 @@ static void addGHashTypeInfo(COFFLinkerContext &ctx,
 }
 
 static void
-recordStringTableReferences(CVSymbol sym, uint32_t symOffset,
+recordStringTableReferences(COFFLinkerContext &ctx, CVSymbol sym,
+                            uint32_t symOffset,
                             std::vector<StringTableFixup> &stringTableFixups) {
   // For now we only handle S_FILESTATIC, but we may need the same logic for
   // S_DEFRANGE and S_DEFRANGE_SUBFIELD.  However, I cannot seem to generate any
@@ -307,8 +309,8 @@ recordStringTableReferences(CVSymbol sym, uint32_t symOffset,
   }
   case SymbolKind::S_DEFRANGE:
   case SymbolKind::S_DEFRANGE_SUBFIELD:
-    log("Not fixing up string table reference in S_DEFRANGE / "
-        "S_DEFRANGE_SUBFIELD record");
+    Log(ctx) << "Not fixing up string table reference in S_DEFRANGE / "
+                "S_DEFRANGE_SUBFIELD record";
     break;
   default:
     break;
@@ -474,7 +476,8 @@ static bool symbolGoesInGlobalsStream(const CVSymbol &sym,
   }
 }
 
-static void addGlobalSymbol(pdb::GSIStreamBuilder &builder, uint16_t modIndex,
+static void addGlobalSymbol(COFFLinkerContext &ctx,
+                            pdb::GSIStreamBuilder &builder, uint16_t modIndex,
                             unsigned symOffset,
                             std::vector<uint8_t> &symStorage) {
   CVSymbol sym{ArrayRef(symStorage)};
@@ -489,7 +492,7 @@ static void addGlobalSymbol(pdb::GSIStreamBuilder &builder, uint16_t modIndex,
   case SymbolKind::S_LPROCREF: {
     // sym is a temporary object, so we have to copy and reallocate the record
     // to stabilize it.
-    uint8_t *mem = bAlloc().Allocate<uint8_t>(sym.length());
+    uint8_t *mem = ctx.bAlloc.Allocate<uint8_t>(sym.length());
     memcpy(mem, sym.data().data(), sym.length());
     builder.addGlobalSymbol(CVSymbol(ArrayRef(mem, sym.length())));
     break;
@@ -599,7 +602,7 @@ void PDBLinker::analyzeSymbolSubsection(
           storage.clear();
           writeSymbolRecord(debugChunk, sectionContents, sym, alignedSize,
                             nextRelocIndex, storage);
-          addGlobalSymbol(builder.getGsiBuilder(),
+          addGlobalSymbol(ctx, builder.getGsiBuilder(),
                           file->moduleDBI->getModuleIndex(), moduleSymOffset,
                           storage);
 
@@ -611,7 +614,8 @@ void PDBLinker::analyzeSymbolSubsection(
         // references. There are very few of these and they will be rewritten
         // later during PDB writing.
         if (symbolGoesInModuleStream(sym, scopeLevel)) {
-          recordStringTableReferences(sym, moduleSymOffset, stringTableFixups);
+          recordStringTableReferences(ctx, sym, moduleSymOffset,
+                                      stringTableFixups);
           moduleSymOffset += alignedSize;
 
           if (ctx.pdbStats.has_value())
@@ -645,7 +649,7 @@ Error PDBLinker::writeAllModuleSymbolRecords(ObjFile *file,
 
     ArrayRef<uint8_t> sectionContents = debugChunk->getContents();
     auto contents =
-        SectionChunk::consumeDebugMagic(sectionContents, ".debug$S");
+        SectionChunk::consumeDebugMagic(ctx, sectionContents, ".debug$S");
     DebugSubsectionArray subsections;
     BinaryStreamReader reader(contents, llvm::endianness::little);
     exitOnErr(reader.readArray(subsections, contents.size()));
@@ -747,7 +751,7 @@ void DebugSHandler::handleDebugS(SectionChunk *debugChunk) {
   // Note that we are processing the *unrelocated* section contents. They will
   // be relocated later during PDB writing.
   ArrayRef<uint8_t> contents = debugChunk->getContents();
-  contents = SectionChunk::consumeDebugMagic(contents, ".debug$S");
+  contents = SectionChunk::consumeDebugMagic(ctx, contents, ".debug$S");
   DebugSubsectionArray subsections;
   BinaryStreamReader reader(contents, llvm::endianness::little);
   ExitOnError exitOnErr;
@@ -866,8 +870,9 @@ Error UnrelocatedDebugSubsection::commit(BinaryStreamWriter &writer) const {
     for (const InlineeSourceLine &line : inlineeLines) {
       TypeIndex &inlinee = *const_cast<TypeIndex *>(&line.Header->Inlinee);
       if (!source->remapTypeIndex(inlinee, TiRefKind::IndexRef)) {
-        log("bad inlinee line record in " + debugChunk->file->getName() +
-            " with bad inlinee index 0x" + utohexstr(inlinee.getIndex()));
+        Log(debugChunk->file->symtab.ctx)
+            << "bad inlinee line record in " + debugChunk->file->getName() +
+                   " with bad inlinee index 0x" + utohexstr(inlinee.getIndex());
       }
     }
   }
@@ -921,8 +926,9 @@ void DebugSHandler::finish() {
   // present, now is the time to handle them.
   if (!cvStrTab.valid()) {
     if (checksums.valid())
-      fatal(".debug$S sections with a checksums subsection must also contain a "
-            "string table subsection");
+      Fatal(ctx) << ".debug$S sections with a checksums subsection must also "
+                    "contain a "
+                    "string table subsection";
 
     if (!stringTableFixups.empty())
       Warn(ctx)
@@ -1006,8 +1012,9 @@ static void warnUnusable(InputFile *f, Error e, bool shouldWarn) {
 }
 
 // Allocate memory for a .debug$S / .debug$F section and relocate it.
-static ArrayRef<uint8_t> relocateDebugChunk(SectionChunk &debugChunk) {
-  uint8_t *buffer = bAlloc().Allocate<uint8_t>(debugChunk.getSize());
+static ArrayRef<uint8_t> relocateDebugChunk(COFFLinkerContext &ctx,
+                                            SectionChunk &debugChunk) {
+  uint8_t *buffer = ctx.bAlloc.Allocate<uint8_t>(debugChunk.getSize());
   assert(debugChunk.getOutputSectionIdx() == 0 &&
          "debug sections should not be in output sections");
   debugChunk.writeTo(buffer);
@@ -1040,7 +1047,7 @@ void PDBLinker::addDebugSymbols(TpiSource *source) {
     } else if (isDebugF) {
       // Handle old FPO data .debug$F sections. These are relatively rare.
       ArrayRef<uint8_t> relocatedDebugContents =
-          relocateDebugChunk(*debugChunk);
+          relocateDebugChunk(ctx, *debugChunk);
       FixedStreamArray<object::FpoData> fpoRecords;
       BinaryStreamReader reader(relocatedDebugContents,
                                 llvm::endianness::little);
@@ -1183,8 +1190,8 @@ void PDBLinker::addObjectsToPDB() {
     if (ctx.config.debugGHashes) {
       addGHashTypeInfo(ctx, builder);
     } else {
-      addTypeInfo(builder.getTpiBuilder(), tMerger.getTypeTable());
-      addTypeInfo(builder.getIpiBuilder(), tMerger.getIDTable());
+      addTypeInfo(ctx, builder.getTpiBuilder(), tMerger.getTypeTable());
+      addTypeInfo(ctx, builder.getIpiBuilder(), tMerger.getIDTable());
     }
   }
 
@@ -1443,7 +1450,7 @@ void PDBLinker::addCommonLinkerModuleSymbols(
   ebs.Fields.push_back(path);
   ebs.Fields.push_back("cmd");
   ebs.Fields.push_back(argStr);
-  llvm::BumpPtrAllocator &bAlloc = lld::bAlloc();
+  llvm::BumpPtrAllocator &bAlloc = ctx.bAlloc;
   mod.addSymbol(codeview::SymbolSerializer::writeOneSymbol(
       ons, bAlloc, CodeViewContainer::Pdb));
   mod.addSymbol(codeview::SymbolSerializer::writeOneSymbol(
@@ -1452,7 +1459,8 @@ void PDBLinker::addCommonLinkerModuleSymbols(
       ebs, bAlloc, CodeViewContainer::Pdb));
 }
 
-static void addLinkerModuleCoffGroup(PartialSection *sec,
+static void addLinkerModuleCoffGroup(COFFLinkerContext &ctx,
+                                     PartialSection *sec,
                                      pdb::DbiModuleDescriptorBuilder &mod,
                                      OutputSection &os) {
   // If there's a section, there's at least one chunk
@@ -1475,10 +1483,11 @@ static void addLinkerModuleCoffGroup(PartialSection *sec,
     cgs.Characteristics |= llvm::COFF::IMAGE_SCN_MEM_WRITE;
 
   mod.addSymbol(codeview::SymbolSerializer::writeOneSymbol(
-      cgs, bAlloc(), CodeViewContainer::Pdb));
+      cgs, ctx.bAlloc, CodeViewContainer::Pdb));
 }
 
-static void addLinkerModuleSectionSymbol(pdb::DbiModuleDescriptorBuilder &mod,
+static void addLinkerModuleSectionSymbol(COFFLinkerContext &ctx,
+                                         pdb::DbiModuleDescriptorBuilder &mod,
                                          OutputSection &os, bool isMinGW) {
   SectionSym sym(SymbolRecordKind::SectionSym);
   sym.Alignment = 12; // 2^12 = 4KB
@@ -1488,7 +1497,7 @@ static void addLinkerModuleSectionSymbol(pdb::DbiModuleDescriptorBuilder &mod,
   sym.Rva = os.getRVA();
   sym.SectionNumber = os.sectionIndex;
   mod.addSymbol(codeview::SymbolSerializer::writeOneSymbol(
-      sym, bAlloc(), CodeViewContainer::Pdb));
+      sym, ctx.bAlloc, CodeViewContainer::Pdb));
 
   // Skip COFF groups in MinGW because it adds a significant footprint to the
   // PDB, due to each function being in its own section
@@ -1497,7 +1506,7 @@ static void addLinkerModuleSectionSymbol(pdb::DbiModuleDescriptorBuilder &mod,
 
   // Output COFF groups for individual chunks of this section.
   for (PartialSection *sec : os.contribSections) {
-    addLinkerModuleCoffGroup(sec, mod, os);
+    addLinkerModuleCoffGroup(ctx, sec, mod, os);
   }
 }
 
@@ -1565,7 +1574,7 @@ void PDBLinker::addImportFilesToPDB() {
     ts.Segment = thunkOS->sectionIndex;
     ts.Offset = thunkChunk->getRVA() - thunkOS->getRVA();
 
-    llvm::BumpPtrAllocator &bAlloc = lld::bAlloc();
+    llvm::BumpPtrAllocator &bAlloc = ctx.bAlloc;
     mod->addSymbol(codeview::SymbolSerializer::writeOneSymbol(
         ons, bAlloc, CodeViewContainer::Pdb));
     mod->addSymbol(codeview::SymbolSerializer::writeOneSymbol(
@@ -1677,7 +1686,7 @@ void PDBLinker::addSections(ArrayRef<uint8_t> sectionTable) {
 
   // Add section contributions. They must be ordered by ascending RVA.
   for (OutputSection *os : ctx.outputSections) {
-    addLinkerModuleSectionSymbol(linkerModule, *os, ctx.config.mingw);
+    addLinkerModuleSectionSymbol(ctx, linkerModule, *os, ctx.config.mingw);
     for (Chunk *c : os->chunks) {
       pdb::SectionContrib sc =
           createSectionContrib(ctx, c, linkerModule.getModuleIndex());
@@ -1713,7 +1722,7 @@ void PDBLinker::commit(codeview::GUID *guid) {
       if (me.isPageOverflow())
         Err(ctx) << "try setting a larger /pdbpagesize";
     });
-    checkError(std::move(e));
+    checkError(ctx.e, std::move(e));
     Err(ctx) << "failed to write PDB file " << Twine(ctx.config.pdbPath);
   }
 }
@@ -1762,8 +1771,8 @@ static bool findLineTable(const SectionChunk *c, uint32_t addr,
           secrels[r.VirtualAddress] = s->getValue();
     }
 
-    ArrayRef<uint8_t> contents =
-        SectionChunk::consumeDebugMagic(dbgC->getContents(), ".debug$S");
+    ArrayRef<uint8_t> contents = SectionChunk::consumeDebugMagic(
+        c->file->symtab.ctx, dbgC->getContents(), ".debug$S");
     DebugSubsectionArray subsections;
     BinaryStreamReader reader(contents, llvm::endianness::little);
     exitOnErr(reader.readArray(subsections, contents.size()));

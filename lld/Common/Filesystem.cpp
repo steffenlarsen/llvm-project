@@ -132,12 +132,13 @@ std::error_code lld::tryCreateFile(StringRef path) {
 }
 
 // Creates an empty file to and returns a raw_fd_ostream to write to it.
-std::unique_ptr<raw_fd_ostream> lld::openFile(StringRef file) {
+std::unique_ptr<raw_fd_ostream> lld::openFile(ErrorHandler &eh,
+                                              StringRef file) {
   std::error_code ec;
   auto ret =
       std::make_unique<raw_fd_ostream>(file, ec, sys::fs::OpenFlags::OF_None);
   if (ec) {
-    error("cannot open " + file + ": " + ec.message());
+    eh.error("cannot open " + file + ": " + ec.message());
     return nullptr;
   }
   return ret;
@@ -147,11 +148,12 @@ std::unique_ptr<raw_fd_ostream> lld::openFile(StringRef file) {
 // supports reading, seeking and writing. Such a file allows BitcodeWriter to
 // flush buffered data to reduce memory consumption. If this fails, open a file
 // stream that supports only write.
-std::unique_ptr<raw_fd_ostream> lld::openLTOOutputFile(StringRef file) {
+std::unique_ptr<raw_fd_ostream> lld::openLTOOutputFile(ErrorHandler &eh,
+                                                       StringRef file) {
   std::error_code ec;
   std::unique_ptr<raw_fd_ostream> fs =
       std::make_unique<raw_fd_stream>(file, ec);
   if (!ec)
     return fs;
-  return openFile(file);
+  return openFile(eh, file);
 }

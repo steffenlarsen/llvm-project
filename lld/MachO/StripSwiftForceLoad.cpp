@@ -27,11 +27,11 @@ static constexpr StringRef forceLoadPrefix = "__swift_FORCE_LOAD_$_";
 // Returns true if every byte of `isec` is a pointer slot covered by an UNSIGNED
 // pointer relocation to an imported `__swift_FORCE_LOAD_$_*` symbol, i.e.
 // the section exists only to force-load Swift overlays and holds no other data.
-static bool isSwiftForceLoadSection(const ConcatInputSection *isec) {
+static bool isSwiftForceLoadSection(Ctx &ctx, const ConcatInputSection *isec) {
   if (isec->relocs.empty())
     return false;
 
-  if (isec->getSize() != target->wordSize * isec->relocs.size())
+  if (isec->getSize() != ctx.target->wordSize * isec->relocs.size())
     return false;
 
   for (const Relocation &r : isec->relocs) {
@@ -44,13 +44,13 @@ static bool isSwiftForceLoadSection(const ConcatInputSection *isec) {
   return true;
 }
 
-void macho::stripSwiftForceLoadFixups() {
-  if (!config->stripSwiftForceLoad)
+void macho::stripSwiftForceLoadFixups(Ctx &ctx) {
+  if (!ctx.arg.stripSwiftForceLoad)
     return;
 
   TimeTraceScope timeScope("Strip Swift FORCE_LOAD fixups");
 
-  for (ConcatInputSection *isec : inputSections) {
+  for (ConcatInputSection *isec : ctx.inputSections) {
     if (isec->shouldOmitFromOutput() || isec->replacement)
       continue;
 
@@ -64,7 +64,7 @@ void macho::stripSwiftForceLoadFixups() {
         }))
       continue;
 
-    if (!isSwiftForceLoadSection(isec))
+    if (!isSwiftForceLoadSection(ctx, isec))
       continue;
 
     isec->live = false;

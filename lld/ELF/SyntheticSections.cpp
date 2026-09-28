@@ -84,8 +84,8 @@ static ArrayRef<uint8_t> getVersion(Ctx &ctx) {
 // The returned object is a mergeable string section.
 MergeInputSection *elf::createCommentSection(Ctx &ctx) {
   auto *sec =
-      make<MergeInputSection>(ctx, ".comment", SHT_PROGBITS,
-                              SHF_MERGE | SHF_STRINGS, 1, getVersion(ctx));
+      ctx.make<MergeInputSection>(ctx, ".comment", SHT_PROGBITS,
+                                  SHF_MERGE | SHF_STRINGS, 1, getVersion(ctx));
   sec->splitIntoPieces();
   return sec;
 }
@@ -95,9 +95,9 @@ InputSection *elf::createInterpSection(Ctx &ctx) {
   StringRef s = ctx.saver.save(ctx.arg.dynamicLinker);
   ArrayRef<uint8_t> contents = {(const uint8_t *)s.data(), s.size() + 1};
 
-  return make<InputSection>(ctx.internalFile, ".interp", SHT_PROGBITS,
-                            SHF_ALLOC,
-                            /*addralign=*/1, /*entsize=*/0, contents);
+  return ctx.make<InputSection>(ctx.internalFile, ".interp", SHT_PROGBITS,
+                                SHF_ALLOC,
+                                /*addralign=*/1, /*entsize=*/0, contents);
 }
 
 Defined *elf::addSyntheticLocal(Ctx &ctx, StringRef name, uint8_t type,
@@ -243,7 +243,7 @@ CieRecord *EhFrameSection::addCie(EhSectionPiece &cie,
 
   // If not found, create a new one.
   if (!rec) {
-    rec = make<CieRecord>();
+    rec = ctx.make<CieRecord>();
     rec->cie = &cie;
     cieRecords.push_back(rec);
   }

@@ -34,18 +34,18 @@ Timer::Timer(llvm::StringRef name, Timer &parent)
   parent.children.push_back(this);
 }
 
-void Timer::print() {
+void Timer::print(ErrorHandler &eh) {
   double totalDuration = static_cast<double>(millis());
 
   // We want to print the grand total under all the intermediate phases, so we
   // print all children first, then print the total under that.
   for (const auto &child : children)
     if (child->total > 0)
-      child->print(1, totalDuration);
+      child->print(eh, 1, totalDuration);
 
-  message(std::string(50, '-'));
+  eh.message(std::string(50, '-'), eh.outs());
 
-  print(0, millis(), false);
+  print(eh, 0, millis(), false);
 }
 
 double Timer::millis() const {
@@ -54,7 +54,8 @@ double Timer::millis() const {
       .count();
 }
 
-void Timer::print(int depth, double totalDuration, bool recurse) const {
+void Timer::print(ErrorHandler &eh, int depth, double totalDuration,
+                  bool recurse) const {
   double p = 100.0 * millis() / totalDuration;
 
   SmallString<32> str;
@@ -62,11 +63,11 @@ void Timer::print(int depth, double totalDuration, bool recurse) const {
   std::string s = std::string(depth * 2, ' ') + name + std::string(":");
   stream << format("%-30s%7d ms (%5.1f%%)", s.c_str(), (int)millis(), p);
 
-  message(str);
+  eh.message(str, eh.outs());
 
   if (recurse) {
     for (const auto &child : children)
       if (child->total > 0)
-        child->print(depth + 1, totalDuration);
+        child->print(eh, depth + 1, totalDuration);
   }
 }

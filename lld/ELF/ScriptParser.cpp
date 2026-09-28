@@ -300,7 +300,7 @@ void ScriptParser::readDefsym() {
   Expr e = readExpr();
   if (!atEOF())
     setError("EOF expected, but got " + next());
-  auto *cmd = make<SymbolAssignment>(name, e, 0, curBuf.filename.str());
+  auto *cmd = ctx.make<SymbolAssignment>(name, e, 0, curBuf.filename.str());
   ctx.script->sectionCommands.push_back(cmd);
 }
 
@@ -636,13 +636,14 @@ SmallVector<SectionCommand *, 0> ScriptParser::readOverlay() {
       max = std::max(max, cast<OutputDesc>(cmd)->osec.size);
     return addrExpr().getValue() + max;
   };
-  v.push_back(make<SymbolAssignment>(".", moveDot, 0, getCurrentLocation()));
+  v.push_back(
+      ctx.make<SymbolAssignment>(".", moveDot, 0, getCurrentLocation()));
   return v;
 }
 
 SectionClassDesc *ScriptParser::readSectionClassDescription() {
   StringRef name = readSectionClassName();
-  SectionClassDesc *desc = make<SectionClassDesc>(name);
+  SectionClassDesc *desc = ctx.make<SectionClassDesc>(name);
   if (!ctx.script->sectionClasses.insert({CachedHashStringRef(name), desc})
            .second)
     setError("section class '" + name + "' already defined");
@@ -768,7 +769,7 @@ static int precedence(StringRef op) {
 StringMatcher ScriptParser::readFilePatterns() {
   StringMatcher Matcher;
   while (auto tok = till(")"))
-    Matcher.addPattern(SingleStringMatcher(tok));
+    Matcher.addPattern(SingleStringMatcher(ctx.e, tok));
   return Matcher;
 }
 
@@ -824,7 +825,7 @@ SmallVector<SectionPattern, 0> ScriptParser::readInputSectionsList() {
         setError("section pattern is expected");
         break;
       }
-      SectionMatcher.addPattern(readName());
+      SectionMatcher.addPattern(SingleStringMatcher(ctx.e, readName()));
     }
 
     if (!SectionMatcher.empty())
@@ -851,8 +852,8 @@ SmallVector<SectionPattern, 0> ScriptParser::readInputSectionsList() {
 InputSectionDescription *
 ScriptParser::readInputSectionRules(StringRef filePattern, uint64_t withFlags,
                                     uint64_t withoutFlags) {
-  auto *cmd =
-      make<InputSectionDescription>(filePattern, withFlags, withoutFlags);
+  auto *cmd = ctx.make<InputSectionDescription>(ctx, filePattern, withFlags,
+                                                withoutFlags);
   expect("(");
 
   while (peek() != ")" && !atEOF()) {
@@ -899,8 +900,8 @@ ScriptParser::readInputSectionDescription(StringRef tok) {
     tok = next();
     InputSectionDescription *cmd;
     if (tok == "CLASS")
-      cmd = make<InputSectionDescription>(StringRef{}, withFlags, withoutFlags,
-                                          readSectionClassName());
+      cmd = ctx.make<InputSectionDescription>(
+          ctx, StringRef{}, withFlags, withoutFlags, readSectionClassName());
     else
       cmd = readInputSectionRules(tok, withFlags, withoutFlags);
     expect(")");
@@ -912,8 +913,8 @@ ScriptParser::readInputSectionDescription(StringRef tok) {
     tok = next();
   }
   if (tok == "CLASS")
-    return make<InputSectionDescription>(StringRef{}, withFlags, withoutFlags,
-                                         readSectionClassName());
+    return ctx.make<InputSectionDescription>(
+        ctx, StringRef{}, withFlags, withoutFlags, readSectionClassName());
   return readInputSectionRules(tok, withFlags, withoutFlags);
 }
 
@@ -1126,8 +1127,8 @@ void ScriptParser::readOutputSectionStmt(OutputSection &osec, StringRef tok) {
     // FIXME: GNU ld permits INPUT_SECTION_FLAGS to be used here. We do not
     // handle this case here as it will already have been matched by the
     // case above.
-    auto *isd = make<InputSectionDescription>(tok);
-    isd->sectionPatterns.push_back({{}, StringMatcher("*")});
+    auto *isd = ctx.make<InputSectionDescription>(ctx, tok);
+    isd->sectionPatterns.push_back({{}, StringMatcher(ctx.e, "*")});
     osec.commands.push_back(isd);
   }
 }
@@ -1186,7 +1187,8 @@ static void squeezeSpaces(std::string &str) {
 SymbolAssignment *ScriptParser::readAssignment(StringRef tok) {
   // Assert expression returns Dot, so this is equal to ".=."
   if (tok == "ASSERT")
-    return make<SymbolAssignment>(".", readAssert(), 0, getCurrentLocation());
+    return ctx.make<SymbolAssignment>(".", readAssert(), 0,
+                                      getCurrentLocation());
 
   const char *oldS = prevTok.data();
   SymbolAssignment *cmd = nullptr;
@@ -1257,8 +1259,8 @@ SymbolAssignment *ScriptParser::readSymbolAssignment(StringRef name) {
       }
     };
   }
-  return make<SymbolAssignment>(name, e, ctx.scriptSymOrderCounter++,
-                                getCurrentLocation());
+  return ctx.make<SymbolAssignment>(name, e, ctx.scriptSymOrderCounter++,
+                                    getCurrentLocation());
 }
 
 // This is an operator-precedence parser to parse a linker
@@ -1423,7 +1425,7 @@ ByteCommand *ScriptParser::readByteCommand(StringRef tok) {
   Expr e = readParenExpr();
   std::string commandString = StringRef(oldS, curBuf.s.data() - oldS).str();
   squeezeSpaces(commandString);
-  return make<ByteCommand>(e, size, std::move(commandString));
+  return ctx.make<ByteCommand>(e, size, std::move(commandString));
 }
 
 static std::optional<uint64_t> parseFlag(StringRef tok) {
@@ -1892,8 +1894,8 @@ void ScriptParser::readMemoryStmt(StringRef tok) {
   Expr length = readMemoryAssignment("LENGTH", "len", "l");
 
   // Add the memory region to the region map.
-  MemoryRegion *mr = make<MemoryRegion>(tok, origin, length, flags, invFlags,
-                                        negFlags, negInvFlags);
+  MemoryRegion *mr = ctx.make<MemoryRegion>(tok, origin, length, flags,
+                                            invFlags, negFlags, negInvFlags);
   if (!ctx.script->memoryRegions.insert({tok, mr}).second)
     setError("region '" + tok + "' already defined");
 }

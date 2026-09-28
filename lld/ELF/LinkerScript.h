@@ -201,10 +201,11 @@ class InputSectionDescription : public SectionCommand {
   mutable std::optional<std::pair<const InputFile *, bool>> matchesFileCache;
 
 public:
-  InputSectionDescription(StringRef filePattern, uint64_t withFlags = 0,
-                          uint64_t withoutFlags = 0, StringRef classRef = {})
+  InputSectionDescription(Ctx &ctx, StringRef filePattern,
+                          uint64_t withFlags = 0, uint64_t withoutFlags = 0,
+                          StringRef classRef = {})
       : SectionCommand(InputSectionKind), matchType(MatchType::Trivial),
-        filePat(filePattern), classRef(classRef), withFlags(withFlags),
+        filePat(ctx.e, filePattern), classRef(classRef), withFlags(withFlags),
         withoutFlags(withoutFlags) {
     assert((filePattern.empty() || classRef.empty()) &&
            "file pattern and class reference are mutually exclusive");
@@ -215,10 +216,10 @@ public:
     if (!filePattern.empty()) {
       if (filePattern.back() == ':') {
         matchType = MatchType::WholeArchive;
-        filePat = filePattern.drop_back();
+        filePat = SingleStringMatcher(ctx.e, filePattern.drop_back());
       } else if (filePattern.front() == ':') {
         matchType = MatchType::ArchivesExcluded;
-        filePat = filePattern.drop_front();
+        filePat = SingleStringMatcher(ctx.e, filePattern.drop_front());
       }
     }
   }

@@ -437,8 +437,8 @@ void macho::applyOptimizationHints(uint8_t *outBuf, const ObjFile &obj) {
 
   auto isValidOffset = [&](uint64_t offset) {
     if (offset < sectionAddr || offset >= sectionAddr + section->getSize()) {
-      error(toString(&obj) +
-            ": linker optimization hint spans multiple sections");
+      obj.ctx.e.error(toString(&obj) +
+                      ": linker optimization hint spans multiple sections");
       return false;
     }
     return true;

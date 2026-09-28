@@ -62,6 +62,7 @@ public:
   virtual void markLive(uint64_t off) = 0;
   virtual InputSection *canonical() { return this; }
   virtual const InputSection *canonical() const { return this; }
+  Ctx &getCtx() const { return section.ctx; }
 
 protected:
   InputSection(Kind kind, const Section &section, ArrayRef<uint8_t> data,
@@ -150,7 +151,7 @@ public:
   // while all copies in other translation units are coalesced into the
   // first and not copied to the output.
   bool wasCoalesced = false;
-  bool live = !config->deadStrip;
+  bool live = !section.ctx.arg.deadStrip;
   // This variable has two usages. Initially, it represents the input order.
   // After assignAddresses is called, it represents the offset from the
   // beginning of the output section this section was assigned to.
@@ -159,7 +160,7 @@ public:
 
 // Initialize a fake InputSection that does not belong to any InputFile.
 // The created ConcatInputSection will always have 'live=true'
-ConcatInputSection *makeSyntheticInputSection(StringRef segName,
+ConcatInputSection *makeSyntheticInputSection(Ctx &ctx, StringRef segName,
                                               StringRef sectName,
                                               uint32_t flags = 0,
                                               ArrayRef<uint8_t> data = {},
@@ -188,8 +189,8 @@ struct StringPiece {
   // Offset from the start of the containing output section.
   uint64_t outSecOff = 0;
 
-  StringPiece(uint64_t off, uint32_t hash)
-      : inSecOff(off), live(!config->deadStrip), hash(hash) {}
+  StringPiece(uint64_t off, uint32_t hash, bool live)
+      : inSecOff(off), live(live), hash(hash) {}
 };
 
 static_assert(sizeof(StringPiece) == 16, "StringPiece is too big!");
@@ -311,10 +312,6 @@ bool isSelRefsSection(const InputSection *);
 bool isEhFrameSection(const InputSection *);
 bool isGccExceptTabSection(const InputSection *);
 
-extern std::vector<ConcatInputSection *> inputSections;
-// This is used as a counter for specyfing input order for input sections
-extern int inputSectionsOrder;
-
 namespace section_names {
 
 constexpr const char authGot[] = "__auth_got";
@@ -383,9 +380,10 @@ constexpr const char addrSig[] = "__llvm_addrsig";
 
 } // namespace section_names
 
-void addInputSection(InputSection *inputSection);
+void addInputSection(Ctx &ctx, InputSection *inputSection);
 
-uint64_t resolveSymbolOffsetVA(const Symbol *sym, uint8_t type, int64_t offset);
+uint64_t resolveSymbolOffsetVA(Ctx &ctx, const Symbol *sym, uint8_t type,
+                               int64_t offset);
 } // namespace macho
 
 std::string toString(const macho::InputSection *);

@@ -54,6 +54,7 @@
 #include "llvm/Remarks/HotnessThresholdParser.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compression.h"
+#include "llvm/Support/CrashRecoveryContext.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/GlobPattern.h"
 #include "llvm/Support/LEB128.h"
@@ -128,8 +129,10 @@ namespace lld {
 namespace elf {
 bool link(ArrayRef<const char *> args, llvm::raw_ostream &stdoutOS,
           llvm::raw_ostream &stderrOS, bool exitEarly, bool disableOutput) {
-  // This driver-specific context will be freed later by unsafeLldMain().
-  auto *context = new Ctx;
+  auto context = std::make_unique<Ctx>();
+  // If fatal() unwinds the link, the CrashRecoveryContext in lldMain() skips
+  // our destructors, so it deletes the context instead.
+  llvm::CrashRecoveryContextCleanupRegistrar<Ctx> contextCleanup(context.get());
   Ctx &ctx = *context;
   LinkerScript script(ctx);
   ctx.e.initialize(stdoutOS, stderrOS, exitEarly, disableOutput);
@@ -137,7 +140,12 @@ bool link(ArrayRef<const char *> args, llvm::raw_ostream &stdoutOS,
 
   ctx.driver.linkerMain(args);
 
-  return errCount(ctx) == 0;
+  int ret = errCount(ctx) != 0;
+  // Exit here rather than in unsafeLldMain(), which cannot reach this context,
+  // so that the destructors are skipped.
+  if (exitEarly)
+    exitLld(ctx.e, ret);
+  return ret == 0;
 }
 } // namespace elf
 } // namespace lld
@@ -195,20 +203,20 @@ static std::tuple<ELFKind, uint16_t, uint8_t> parseEmulation(Ctx &ctx,
 std::vector<std::pair<MemoryBufferRef, uint64_t>> static getArchiveMembers(
     Ctx &ctx, LoadJob &job) {
   MemoryBufferRef mb = job.mbref;
-  std::unique_ptr<Archive> file =
-      CHECK(Archive::create(mb),
-            mb.getBufferIdentifier() + ": failed to parse archive");
+  std::unique_ptr<Archive> file = check2(ctx.e, Archive::create(mb), [&] {
+    return toString(mb.getBufferIdentifier() + ": failed to parse archive");
+  });
 
   std::vector<std::pair<MemoryBufferRef, uint64_t>> v;
   Error err = Error::success();
   bool addToTar = file->isThin() && ctx.tar;
   for (const Archive::Child &c : file->children(err)) {
-    MemoryBufferRef mbref =
-        CHECK(c.getMemoryBufferRef(),
-              mb.getBufferIdentifier() +
-                  ": could not get the buffer for a child of the archive");
+    MemoryBufferRef mbref = check2(ctx.e, c.getMemoryBufferRef(), [&] {
+      return toString(mb.getBufferIdentifier() +
+                      ": could not get the buffer for a child of the archive");
+    });
     if (addToTar)
-      job.tarEntries.emplace_back(relativeToRoot(check(c.getFullName())),
+      job.tarEntries.emplace_back(relativeToRoot(check(ctx.e, c.getFullName())),
                                   mbref.getBuffer());
     v.push_back(std::make_pair(mbref, c.getChildOffset()));
   }
@@ -627,8 +635,8 @@ static int getZMemtagMode(Ctx &ctx, opt::InputArgList &args) {
 static void checkZOptions(Ctx &ctx, opt::InputArgList &args) {
   // This function is called before getTarget(), when certain options are not
   // initialized yet. Claim them here.
-  args::getZOptionValue(args, OPT_z, "max-page-size", 0);
-  args::getZOptionValue(args, OPT_z, "common-page-size", 0);
+  args::getZOptionValue(ctx.e, args, OPT_z, "max-page-size", 0);
+  args::getZOptionValue(ctx.e, args, OPT_z, "common-page-size", 0);
   getZFlag(args, "rel", "rela", false);
   getZFlag(args, "dynamic-undefined-weak", "nodynamic-undefined-weak", false);
   for (auto *arg : args.filtered(OPT_z))
@@ -652,7 +660,7 @@ void LinkerDriver::linkerMain(ArrayRef<const char *> argsArr) {
   opt::InputArgList args = parser.parse(ctx, argsArr.slice(1));
 
   // Interpret these flags early because Err/Warn depend on them.
-  ctx.e.errorLimit = args::getInteger(args, OPT_error_limit, 20);
+  ctx.e.errorLimit = args::getInteger(ctx.e, args, OPT_error_limit, 20);
   ctx.e.fatalWarnings =
       args.hasFlag(OPT_fatal_warnings, OPT_no_fatal_warnings, false) &&
       !args.hasArg(OPT_no_warnings);
@@ -978,7 +986,7 @@ getBuildId(Ctx &ctx, opt::InputArgList &args) {
   if (s == "uuid")
     return {BuildIdKind::Uuid, {}};
   if (s.starts_with("0x"))
-    return {BuildIdKind::Hexstring, parseHex(s.substr(2))};
+    return {BuildIdKind::Hexstring, parseHex(ctx.e, s.substr(2))};
 
   if (s != "none")
     ErrAlways(ctx) << "unknown --build-id style: " << s;
@@ -1051,16 +1059,17 @@ processCallGraphRelocations(Ctx &ctx, SmallVector<uint32_t, 32> &symbolIndices,
       inputObj->template getELFShdrs<ELFT>();
   symbolIndices.clear();
   const ELFFile<ELFT> &obj = inputObj->getObj();
-  cgProfile =
-      check(obj.template getSectionContentsAsArray<typename ELFT::CGProfile>(
-          objSections[inputObj->cgProfileSectionIndex]));
+  cgProfile = check(
+      ctx.e, obj.template getSectionContentsAsArray<typename ELFT::CGProfile>(
+                 objSections[inputObj->cgProfileSectionIndex]));
 
   for (size_t i = 0, e = objSections.size(); i < e; ++i) {
     const Elf_Shdr_Impl<ELFT> &sec = objSections[i];
     if (sec.sh_info == inputObj->cgProfileSectionIndex) {
       if (sec.sh_type == SHT_CREL) {
-        auto crels =
-            CHECK(obj.crels(sec), "could not retrieve cg profile rela section");
+        auto crels = check2(ctx.e, obj.crels(sec), [&] {
+          return toString("could not retrieve cg profile rela section");
+        });
         for (const auto &rel : crels.first)
           symbolIndices.push_back(rel.getSymbol(false));
         for (const auto &rel : crels.second)
@@ -1069,14 +1078,17 @@ processCallGraphRelocations(Ctx &ctx, SmallVector<uint32_t, 32> &symbolIndices,
       }
       if (sec.sh_type == SHT_RELA) {
         ArrayRef<typename ELFT::Rela> relas =
-            CHECK(obj.relas(sec), "could not retrieve cg profile rela section");
+            check2(ctx.e, obj.relas(sec), [&] {
+              return toString("could not retrieve cg profile rela section");
+            });
         for (const typename ELFT::Rela &rel : relas)
           symbolIndices.push_back(rel.getSymbol(ctx.arg.isMips64EL));
         break;
       }
       if (sec.sh_type == SHT_REL) {
-        ArrayRef<typename ELFT::Rel> rels =
-            CHECK(obj.rels(sec), "could not retrieve cg profile rel section");
+        ArrayRef<typename ELFT::Rel> rels = check2(ctx.e, obj.rels(sec), [&] {
+          return toString("could not retrieve cg profile rel section");
+        });
         for (const typename ELFT::Rel &rel : rels)
           symbolIndices.push_back(rel.getSymbol(ctx.arg.isMips64EL));
         break;
@@ -1134,7 +1146,7 @@ static void ltoValidateAllVtablesHaveTypeInfos(Ctx &ctx,
     using Elf_Sym = typename ELFT::Sym;
     for (const Elf_Sym &s : f->template getGlobalELFSyms<ELFT>()) {
       if (s.st_shndx != SHN_UNDEF) {
-        StringRef name = check(s.getName(f->getStringTable()));
+        StringRef name = check(ctx.e, s.getName(f->getStringTable()));
         processVtableAndTypeInfoSymbols(name);
       }
     }
@@ -1144,7 +1156,7 @@ static void ltoValidateAllVtablesHaveTypeInfos(Ctx &ctx,
     using Elf_Sym = typename ELFT::Sym;
     for (const Elf_Sym &s : f->template getELFSyms<ELFT>()) {
       if (s.st_shndx != SHN_UNDEF) {
-        StringRef name = check(s.getName(f->getStringTable()));
+        StringRef name = check(ctx.e, s.getName(f->getStringTable()));
         processVtableAndTypeInfoSymbols(name);
       }
     }
@@ -1500,17 +1512,17 @@ static void readConfigs(Ctx &ctx, opt::InputArgList &args) {
   ctx.arg.ltoValidateAllVtablesHaveTypeInfos =
       args.hasFlag(OPT_lto_validate_all_vtables_have_type_infos,
                    OPT_no_lto_validate_all_vtables_have_type_infos, false);
-  ctx.arg.ltoo = args::getInteger(args, OPT_lto_O, 2);
+  ctx.arg.ltoo = args::getInteger(ctx.e, args, OPT_lto_O, 2);
   if (ctx.arg.ltoo > 3)
     ErrAlways(ctx) << "invalid optimization level for LTO: " << ctx.arg.ltoo;
-  unsigned ltoCgo =
-      args::getInteger(args, OPT_lto_CGO, args::getCGOptLevel(ctx.arg.ltoo));
+  unsigned ltoCgo = args::getInteger(ctx.e, args, OPT_lto_CGO,
+                                     args::getCGOptLevel(ctx.arg.ltoo));
   if (auto level = CodeGenOpt::getLevel(ltoCgo))
     ctx.arg.ltoCgo = *level;
   else
     ErrAlways(ctx) << "invalid codegen optimization level for LTO: " << ltoCgo;
   ctx.arg.ltoObjPath = args.getLastArgValue(OPT_lto_obj_path_eq);
-  ctx.arg.ltoPartitions = args::getInteger(args, OPT_lto_partitions, 1);
+  ctx.arg.ltoPartitions = args::getInteger(ctx.e, args, OPT_lto_partitions, 1);
   ctx.arg.ltoSampleProfile = args.getLastArgValue(OPT_lto_sample_profile);
   ctx.arg.ltoBBAddrMap =
       args.hasFlag(OPT_lto_basic_block_address_map,
@@ -1521,7 +1533,8 @@ static void readConfigs(Ctx &ctx, opt::InputArgList &args) {
       args.hasFlag(OPT_lto_unique_basic_block_section_names,
                    OPT_no_lto_unique_basic_block_section_names, false);
   ctx.arg.mapFile = args.getLastArgValue(OPT_Map);
-  ctx.arg.mipsGotSize = args::getInteger(args, OPT_mips_got_size, 0xfff0);
+  ctx.arg.mipsGotSize =
+      args::getInteger(ctx.e, args, OPT_mips_got_size, 0xfff0);
   ctx.arg.mergeArmExidx =
       args.hasFlag(OPT_merge_exidx_entries, OPT_no_merge_exidx_entries, true);
   ctx.arg.mmapOutputFile =
@@ -1547,7 +1560,7 @@ static void readConfigs(Ctx &ctx, opt::InputArgList &args) {
   ctx.arg.optRemarksPasses = args.getLastArgValue(OPT_opt_remarks_passes);
   ctx.arg.optRemarksWithHotness = args.hasArg(OPT_opt_remarks_with_hotness);
   ctx.arg.optRemarksFormat = args.getLastArgValue(OPT_opt_remarks_format);
-  ctx.arg.optimize = args::getInteger(args, OPT_O, 1);
+  ctx.arg.optimize = args::getInteger(ctx.e, args, OPT_O, 1);
   ctx.arg.orphanHandling = getOrphanHandling(ctx, args);
   ctx.arg.outputFile = args.getLastArgValue(OPT_o);
   if (auto *arg = args.getLastArg(OPT_package_metadata))
@@ -1592,13 +1605,13 @@ static void readConfigs(Ctx &ctx, opt::InputArgList &args) {
   ctx.arg.shared = args.hasArg(OPT_shared);
   if (args.hasArg(OPT_randomize_section_padding))
     ctx.arg.randomizeSectionPadding =
-        args::getInteger(args, OPT_randomize_section_padding, 0);
+        args::getInteger(ctx.e, args, OPT_randomize_section_padding, 0);
   ctx.arg.singleRoRx = !args.hasFlag(OPT_rosegment, OPT_no_rosegment, true);
   ctx.arg.singleXoRx = !args.hasFlag(OPT_xosegment, OPT_no_xosegment, false);
   ctx.arg.soName = args.getLastArgValue(OPT_soname);
   ctx.arg.sortSection = getSortSection(ctx, args);
   ctx.arg.splitStackAdjustSize =
-      args::getInteger(args, OPT_split_stack_adjust_size, 16384);
+      args::getInteger(ctx.e, args, OPT_split_stack_adjust_size, 16384);
   ctx.arg.zSectionHeader =
       getZFlag(args, "sectionheader", "nosectionheader", true);
   ctx.arg.strip = getStrip(ctx, args); // needs zSectionHeader
@@ -1606,9 +1619,10 @@ static void readConfigs(Ctx &ctx, opt::InputArgList &args) {
   ctx.arg.target1Rel = args.hasFlag(OPT_target1_rel, OPT_target1_abs, false);
   ctx.arg.target2 = getTarget2(ctx, args);
   ctx.arg.thinLTOCacheDir = args.getLastArgValue(OPT_thinlto_cache_dir);
-  ctx.arg.thinLTOCachePolicy = CHECK(
+  ctx.arg.thinLTOCachePolicy = check2(
+      ctx.e,
       parseCachePruningPolicy(args.getLastArgValue(OPT_thinlto_cache_policy)),
-      "--thinlto-cache-policy: invalid cache policy");
+      [&] { return toString("--thinlto-cache-policy: invalid cache policy"); });
   ctx.arg.thinLTOEmitImportsFiles = args.hasArg(OPT_thinlto_emit_imports_files);
   ctx.arg.thinLTOEmitIndexFiles = args.hasArg(OPT_thinlto_emit_index_files) ||
                                   args.hasArg(OPT_thinlto_index_only) ||
@@ -1640,7 +1654,7 @@ static void readConfigs(Ctx &ctx, opt::InputArgList &args) {
   ctx.arg.timeTraceEnabled =
       args.hasArg(OPT_time_trace_eq) && !ctx.e.disableOutput;
   ctx.arg.timeTraceGranularity =
-      args::getInteger(args, OPT_time_trace_granularity, 500);
+      args::getInteger(ctx.e, args, OPT_time_trace_granularity, 500);
   ctx.arg.trace = args.hasArg(OPT_trace);
   ctx.arg.undefined = args::getStrings(args, OPT_undefined);
   ctx.arg.undefinedVersion =
@@ -1695,7 +1709,8 @@ static void readConfigs(Ctx &ctx, opt::InputArgList &args) {
   ctx.arg.zRodynamic = hasZOption(args, "rodynamic");
   ctx.arg.zSeparate = getZSeparate(args);
   ctx.arg.zShstk = hasZOption(args, "shstk");
-  ctx.arg.zStackSize = args::getZOptionValue(args, OPT_z, "stack-size", 0);
+  ctx.arg.zStackSize =
+      args::getZOptionValue(ctx.e, args, OPT_z, "stack-size", 0);
   ctx.arg.zStartStopGC =
       getZFlag(args, "start-stop-gc", "nostart-stop-gc", true);
   ctx.arg.zStartStopVisibility = getZStartStopVisibility(ctx, args);
@@ -2376,7 +2391,7 @@ void LinkerDriver::inferMachineType() {
 // Parse -z max-page-size=<value>. The default value is defined by
 // each target.
 static uint64_t getMaxPageSize(Ctx &ctx, opt::InputArgList &args) {
-  uint64_t val = args::getZOptionValue(args, OPT_z, "max-page-size",
+  uint64_t val = args::getZOptionValue(ctx.e, args, OPT_z, "max-page-size",
                                        ctx.target->defaultMaxPageSize);
   if (!isPowerOf2_64(val)) {
     ErrAlways(ctx) << "max-page-size: value isn't a power of 2";
@@ -2394,7 +2409,7 @@ static uint64_t getMaxPageSize(Ctx &ctx, opt::InputArgList &args) {
 // Parse -z common-page-size=<value>. The default value is defined by
 // each target.
 static uint64_t getCommonPageSize(Ctx &ctx, opt::InputArgList &args) {
-  uint64_t val = args::getZOptionValue(args, OPT_z, "common-page-size",
+  uint64_t val = args::getZOptionValue(ctx.e, args, OPT_z, "common-page-size",
                                        ctx.target->defaultCommonPageSize);
   if (!isPowerOf2_64(val)) {
     ErrAlways(ctx) << "common-page-size: value isn't a power of 2";
@@ -2675,7 +2690,7 @@ static void replaceCommonSymbols(Ctx &ctx) {
       if (!s)
         continue;
 
-      auto *bss = make<BssSection>(ctx, "COMMON", s->size, s->alignment);
+      auto *bss = ctx.make<BssSection>(ctx, "COMMON", s->size, s->alignment);
       bss->file = s->file;
       ctx.inputSections.push_back(bss);
       Defined(ctx, s->file, StringRef(), s->binding, s->stOther, s->type,
@@ -2731,7 +2746,7 @@ static void findKeepUniqueSections(Ctx &ctx, opt::InputArgList &args) {
     ArrayRef<Symbol *> syms = obj->getSymbols();
     if (obj->addrsigSec) {
       ArrayRef<uint8_t> contents =
-          check(obj->getObj().getSectionContents(*obj->addrsigSec));
+          check(ctx.e, obj->getObj().getSectionContents(*obj->addrsigSec));
       const uint8_t *cur = contents.begin();
       while (cur != contents.end()) {
         unsigned size;
@@ -2822,7 +2837,8 @@ void LinkerDriver::compileBitcodeFiles(bool skipLinkedOutput) {
     // TODO: check if PAuth is actually used.
     if (ctx.arg.emachine == EM_AARCH64) {
       for (typename ELFT::Sym elfSym : obj->template getGlobalELFSyms<ELFT>()) {
-        StringRef elfSymName = check(elfSym.getName(obj->getStringTable()));
+        StringRef elfSymName =
+            check(ctx.e, elfSym.getName(obj->getStringTable()));
         if (Symbol *sym = ctx.symtab->find(elfSymName))
           if (sym->type == STT_NOTYPE)
             sym->type = elfSym.getType();
@@ -3291,7 +3307,7 @@ template <class ELFT> void LinkerDriver::link(opt::InputArgList &args) {
     ctx.symtab->insert(arg->getValue())->traced = true;
 
   ctx.internalFile = createInternalFile(ctx, "<internal>");
-  ctx.dummySym = make<Undefined>(ctx.internalFile, "", STB_LOCAL, 0, 0);
+  ctx.dummySym = ctx.make<Undefined>(ctx.internalFile, "", STB_LOCAL, 0, 0);
 
   // Handle -u/--undefined before input files. If both a.a and b.so define foo,
   // -u foo a.a b.so will extract a.a.

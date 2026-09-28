@@ -112,7 +112,8 @@ getFileLineDwarf(const SectionChunk *c, uint32_t addr) {
   const DILineInfo &lineInfo = *optionalLineInfo;
   if (lineInfo.FileName == DILineInfo::BadString)
     return std::nullopt;
-  return std::make_pair(saver().save(lineInfo.FileName), lineInfo.Line);
+  return std::make_pair(c->file->symtab.ctx.saver.save(lineInfo.FileName),
+                        lineInfo.Line);
 }
 
 static std::optional<std::pair<StringRef, uint32_t>>
@@ -528,7 +529,7 @@ std::pair<Symbol *, bool> SymbolTable::insert(StringRef name) {
   bool inserted = false;
   Symbol *&sym = symMap[CachedHashStringRef(name)];
   if (!sym) {
-    sym = reinterpret_cast<Symbol *>(make<SymbolUnion>());
+    sym = reinterpret_cast<Symbol *>(ctx.make<SymbolUnion>());
     sym->isUsedInRegularObj = false;
     sym->pendingArchiveLoad = false;
     sym->canInline = true;
@@ -671,12 +672,12 @@ void SymbolTable::initializeSameAddressThunks() {
     // Replace symbols with symbols referencing the thunk. Store the original
     // symbol as equivalent DefinedSynthetic instances for use in the thunk
     // itself.
-    auto symClone = make<DefinedSynthetic>(sym->getName(), sym->getChunk(),
-                                           sym->getValue());
-    auto nativeSymClone = make<DefinedSynthetic>(
+    auto symClone = ctx.make<DefinedSynthetic>(sym->getName(), sym->getChunk(),
+                                               sym->getValue());
+    auto nativeSymClone = ctx.make<DefinedSynthetic>(
         nativeSym->getName(), nativeSym->getChunk(), nativeSym->getValue());
     SameAddressThunkARM64EC *thunk =
-        make<SameAddressThunkARM64EC>(nativeSymClone, symClone, entryThunk);
+        ctx.make<SameAddressThunkARM64EC>(nativeSymClone, symClone, entryThunk);
     sameAddressThunks.push_back(thunk);
 
     replaceSymbol<DefinedSynthetic>(sym, sym->getName(), thunk);
@@ -711,12 +712,12 @@ Symbol *SymbolTable::addGCRoot(StringRef name, bool aliasEC) {
             getArm64ECMangledFunctionName(name)) {
       auto u = dyn_cast<Undefined>(b);
       if (u && !u->weakAlias) {
-        Symbol *t = addUndefined(saver().save(*mangledName));
+        Symbol *t = addUndefined(ctx.saver.save(*mangledName));
         u->setWeakAlias(t, true);
       }
     } else if (std::optional<std::string> demangledName =
                    getArm64ECDemangledFunctionName(name)) {
-      Symbol *us = addUndefined(saver().save(*demangledName));
+      Symbol *us = addUndefined(ctx.saver.save(*demangledName));
       auto u = dyn_cast<Undefined>(us);
       if (u && !u->weakAlias)
         u->setWeakAlias(b, true);
@@ -1067,7 +1068,7 @@ bool SymbolTable::findUnderscoreMangle(StringRef sym) {
 StringRef SymbolTable::mangle(StringRef sym) {
   assert(machine != IMAGE_FILE_MACHINE_UNKNOWN);
   if (machine == I386)
-    return saver().save("_" + sym);
+    return ctx.saver.save("_" + sym);
   return sym;
 }
 
@@ -1164,21 +1165,21 @@ void SymbolTable::addUndefinedGlob(StringRef arg) {
 
 // Convert stdcall/fastcall style symbols into unsuffixed symbols,
 // with or without a leading underscore. (MinGW specific.)
-static StringRef killAt(StringRef sym, bool prefix) {
+static StringRef killAt(COFFLinkerContext &ctx, StringRef sym, bool prefix) {
   if (sym.empty())
     return sym;
   // Strip any trailing stdcall suffix
   sym = sym.substr(0, sym.find('@', 1));
   if (!sym.starts_with("@")) {
     if (prefix && !sym.starts_with("_"))
-      return saver().save("_" + sym);
+      return ctx.saver.save("_" + sym);
     return sym;
   }
   // For fastcall, remove the leading @ and replace it with an
   // underscore, if prefixes are used.
   sym = sym.substr(1);
   if (prefix)
-    sym = saver().save("_" + sym);
+    sym = ctx.saver.save("_" + sym);
   return sym;
 }
 
@@ -1253,7 +1254,7 @@ void SymbolTable::fixupExports() {
     if (isEC() && !e.data && !e.constant) {
       if (std::optional<std::string> demangledName =
               getArm64ECDemangledFunctionName(sym)) {
-        e.exportName = saver().save(*demangledName);
+        e.exportName = ctx.saver.save(*demangledName);
         continue;
       }
     }
@@ -1262,10 +1263,10 @@ void SymbolTable::fixupExports() {
 
   if (ctx.config.killAt && machine == I386) {
     for (Export &e : exports) {
-      e.name = killAt(e.name, true);
-      e.exportName = killAt(e.exportName, false);
-      e.extName = killAt(e.extName, true);
-      e.symbolName = killAt(e.symbolName, true);
+      e.name = killAt(ctx, e.name, true);
+      e.exportName = killAt(ctx, e.exportName, false);
+      e.extName = killAt(ctx, e.extName, true);
+      e.symbolName = killAt(ctx, e.symbolName, true);
     }
   }
 
@@ -1336,19 +1337,20 @@ void SymbolTable::assignExportOrdinals() {
 void SymbolTable::parseModuleDefs(StringRef path) {
   llvm::TimeTraceScope timeScope("Parse def file");
   std::unique_ptr<MemoryBuffer> mb =
-      CHECK(MemoryBuffer::getFile(path, /*IsText=*/false,
-                                  /*RequiresNullTerminator=*/false,
-                                  /*IsVolatile=*/true),
-            "could not open " + path);
-  COFFModuleDefinition m = check(parseCOFFModuleDefinition(
-      mb->getMemBufferRef(), machine, ctx.config.mingw));
+      CHECK2(MemoryBuffer::getFile(path, /*IsText=*/false,
+                                   /*RequiresNullTerminator=*/false,
+                                   /*IsVolatile=*/true),
+             "could not open " + path);
+  COFFModuleDefinition m =
+      check(ctx.e, parseCOFFModuleDefinition(mb->getMemBufferRef(), machine,
+                                             ctx.config.mingw));
 
   // Include in /reproduce: output if applicable.
   ctx.driver.takeBuffer(std::move(mb));
 
   if (ctx.config.outputFile.empty())
-    ctx.config.outputFile = std::string(saver().save(m.OutputFile));
-  ctx.config.importName = std::string(saver().save(m.ImportName));
+    ctx.config.outputFile = std::string(ctx.saver.save(m.OutputFile));
+  ctx.config.importName = std::string(ctx.saver.save(m.ImportName));
   if (m.ImageBase)
     ctx.config.imageBase = m.ImageBase;
   if (m.StackReserve)
@@ -1376,14 +1378,14 @@ void SymbolTable::parseModuleDefs(StringRef path) {
     // by both MS and GNU linkers.
     if (!e1.ExtName.empty() && e1.ExtName != e1.Name &&
         StringRef(e1.Name).contains('.')) {
-      e2.name = saver().save(e1.ExtName);
-      e2.forwardTo = saver().save(e1.Name);
+      e2.name = ctx.saver.save(e1.ExtName);
+      e2.forwardTo = ctx.saver.save(e1.Name);
     } else {
-      e2.name = saver().save(e1.Name);
-      e2.extName = saver().save(e1.ExtName);
+      e2.name = ctx.saver.save(e1.Name);
+      e2.extName = ctx.saver.save(e1.ExtName);
     }
-    e2.exportAs = saver().save(e1.ExportAs);
-    e2.importName = saver().save(e1.ImportName);
+    e2.exportAs = ctx.saver.save(e1.ExportAs);
+    e2.importName = ctx.saver.save(e1.ImportName);
     e2.ordinal = e1.Ordinal;
     e2.noname = e1.Noname;
     e2.data = e1.Data;

@@ -82,9 +82,6 @@ class DiagnosticInfo;
 }
 
 namespace lld {
-
-llvm::raw_ostream &outs();
-
 enum class ErrorTag { LibNotFound, SymbolNotFound };
 
 class ErrorHandler {
@@ -132,25 +129,14 @@ private:
   llvm::StringRef sep;
 
   // We wrap stdout and stderr so that you can pass alternative stdout/stderr as
-  // arguments to lld::*::link() functions. Since lld::outs() or lld::errs() can
-  // be indirectly called from multiple threads, we protect them using a mutex.
-  // In the future, we plan on supporting several concurrent linker contexts,
-  // which explains why the mutex is not a global but part of this context.
+  // arguments to lld::*::link() functions. Since outs() or errs() can be
+  // indirectly called from multiple threads, we protect them using a mutex.
+  // Several linker contexts can run concurrently, which explains why the mutex
+  // is not a global but part of this context.
   std::mutex mu;
   llvm::raw_ostream *stdoutOS{};
   llvm::raw_ostream *stderrOS{};
 };
-
-/// Returns the default error handler.
-ErrorHandler &errorHandler();
-
-void error(const Twine &msg);
-void error(const Twine &msg, ErrorTag tag, ArrayRef<StringRef> args);
-[[noreturn]] void fatal(const Twine &msg);
-void log(const Twine &msg);
-void message(const Twine &msg, llvm::raw_ostream &s = outs());
-void warn(const Twine &msg);
-uint64_t errorCount();
 
 enum class DiagLevel { None, Log, Msg, Warn, Err, Fatal };
 
@@ -170,52 +156,53 @@ public:
   uint64_t tell() { return os.tell(); }
 };
 
+// Exits outside of any link, e.g. after lldMain() returns canRunAgain=false.
 [[noreturn]] void exitLld(int val);
+// Exits from inside a link, discarding its output and flushing its streams.
+[[noreturn]] void exitLld(ErrorHandler &e, int val);
 
-void diagnosticHandler(const llvm::DiagnosticInfo &di);
-void checkError(Error e);
+// Reports an LLVM diagnostic to eh.
+void handleDiagnostic(ErrorHandler &eh, const llvm::DiagnosticInfo &di);
 void checkError(ErrorHandler &eh, Error e);
 
 // check functions are convenient functions to strip errors
 // from error-or-value objects.
-template <class T> T check(ErrorOr<T> e) {
+template <class T> T check(ErrorHandler &eh, ErrorOr<T> e) {
   if (auto ec = e.getError())
-    fatal(ec.message());
+    eh.fatal(ec.message());
   return std::move(*e);
 }
 
-template <class T> T check(Expected<T> e) {
+template <class T> T check(ErrorHandler &eh, Expected<T> e) {
   if (!e)
-    fatal(llvm::toString(e.takeError()));
+    eh.fatal(llvm::toString(e.takeError()));
   return std::move(*e);
 }
 
 // Don't move from Expected wrappers around references.
-template <class T> T &check(Expected<T &> e) {
+template <class T> T &check(ErrorHandler &eh, Expected<T &> e) {
   if (!e)
-    fatal(llvm::toString(e.takeError()));
+    eh.fatal(llvm::toString(e.takeError()));
   return *e;
 }
 
 template <class T>
-T check2(ErrorOr<T> e, llvm::function_ref<std::string()> prefix) {
+T check2(ErrorHandler &eh, ErrorOr<T> e,
+         llvm::function_ref<std::string()> prefix) {
   if (auto ec = e.getError())
-    fatal(prefix() + ": " + ec.message());
+    eh.fatal(prefix() + ": " + ec.message());
   return std::move(*e);
 }
 
 template <class T>
-T check2(Expected<T> e, llvm::function_ref<std::string()> prefix) {
+T check2(ErrorHandler &eh, Expected<T> e,
+         llvm::function_ref<std::string()> prefix) {
   if (!e)
-    fatal(prefix() + ": " + toString(e.takeError()));
+    eh.fatal(prefix() + ": " + toString(e.takeError()));
   return std::move(*e);
 }
 
 inline std::string toString(const Twine &s) { return s.str(); }
-
-// To evaluate the second argument lazily, we use C macro.
-#define CHECK(E, S) check2((E), [&] { return toString(S); })
-
 } // namespace lld
 
 #endif

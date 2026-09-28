@@ -31,10 +31,21 @@ namespace lld {
 struct SpecificAllocBase;
 class CommonLinkerContext {
 public:
+  // A context is reached by reference only, so it can coexist with other links
+  // running on other threads.
   CommonLinkerContext();
   virtual ~CommonLinkerContext();
 
+  // Deprecated, and does nothing. Each driver owns its context and deletes it
+  // before lldMain() returns, unless a fatal error unwound the link.
   static void destroy();
+
+  // Creates new instances of T off a (almost) contiguous arena/object pool
+  // owned by this context. The instances are destroyed with the context.
+  template <typename T, typename... U> T *make(U &&...args) {
+    return new (getSpecificAllocSingleton<T>(*this).Allocate())
+        T(std::forward<U>(args)...);
+  }
 
   llvm::BumpPtrAllocator bAlloc;
   llvm::StringSaver saver{bAlloc};
@@ -43,21 +54,6 @@ public:
 
   ErrorHandler e;
 };
-
-// Retrieve the global state. Currently only one state can exist per process,
-// but in the future we plan on supporting an arbitrary number of LLD instances
-// in a single process.
-CommonLinkerContext &commonContext();
-
-template <typename T = CommonLinkerContext> T &context() {
-  return static_cast<T &>(commonContext());
-}
-
-bool hasContext();
-
-inline llvm::BumpPtrAllocator &bAlloc() { return context().bAlloc; }
-inline llvm::StringSaver &saver() { return context().saver; }
-inline llvm::UniqueStringSaver &uniqueSaver() { return context().uniqueSaver; }
 } // namespace lld
 
 #endif

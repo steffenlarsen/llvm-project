@@ -78,7 +78,9 @@ lto::Config BitcodeCompiler::createConfig() {
 #else
   c.DisableVerify = true;
 #endif
-  c.DiagHandler = diagnosticHandler;
+  c.DiagHandler = [&ctx = ctx](const DiagnosticInfo &di) {
+    handleDiagnostic(ctx.e, di);
+  };
   c.DwoDir = ctx.config.dwoDir.str();
   c.OptLevel = ctx.config.ltoo;
   c.CPU = getCPUStr();
@@ -104,7 +106,7 @@ lto::Config BitcodeCompiler::createConfig() {
   if (ctx.config.emit == EmitKind::LLVM) {
     c.PreCodeGenModuleHook = [this](size_t task, const Module &m) {
       if (std::unique_ptr<raw_fd_ostream> os =
-              openLTOOutputFile(ctx.config.outputFile))
+              openLTOOutputFile(ctx.e, ctx.config.outputFile))
         WriteBitcodeToFile(m, *os, false);
       return false;
     };
@@ -114,9 +116,9 @@ lto::Config BitcodeCompiler::createConfig() {
   }
 
   if (!ctx.config.saveTempsArgs.empty())
-    checkError(c.addSaveTemps(std::string(ctx.config.outputFile) + ".",
-                              /*UseInputModulePath*/ true,
-                              ctx.config.saveTempsArgs));
+    checkError(ctx.e, c.addSaveTemps(std::string(ctx.config.outputFile) + ".",
+                                     /*UseInputModulePath*/ true,
+                                     ctx.config.saveTempsArgs));
 
   c.PTO.LoopVectorization = c.OptLevel > 1;
   c.PTO.SLPVectorization = c.OptLevel > 1;
@@ -127,7 +129,7 @@ lto::Config BitcodeCompiler::createConfig() {
 BitcodeCompiler::BitcodeCompiler(COFFLinkerContext &c) : ctx(c) {
   // Initialize indexFile.
   if (!ctx.config.thinLTOIndexOnlyArg.empty())
-    indexFile = openFile(ctx.config.thinLTOIndexOnlyArg);
+    indexFile = openFile(ctx.e, ctx.config.thinLTOIndexOnlyArg);
 
   // Initialize ltoObj.
   lto::ThinBackend backend;
@@ -198,7 +200,7 @@ void BitcodeCompiler::add(BitcodeFile &f) {
     // their values are still not final.
     r.LinkerRedefined = !sym->canInline;
   }
-  checkError(ltoObj->add(std::move(f.obj), resols));
+  checkError(ctx.e, ltoObj->add(std::move(f.obj), resols));
 }
 
 // Merge all the bitcode files we have seen, codegen the result
@@ -215,24 +217,25 @@ std::vector<InputFile *> BitcodeCompiler::compile() {
   // specified, configure LTO to use it as the cache directory.
   FileCache cache;
   if (!ctx.config.ltoCache.empty())
-    cache = check(localCache("ThinLTO", "Thin", ctx.config.ltoCache,
-                             createAddBufferFn(files, file_names),
-                             !ctx.config.dtltoDistributor.empty()));
+    cache = check(ctx.e, localCache("ThinLTO", "Thin", ctx.config.ltoCache,
+                                    createAddBufferFn(files, file_names),
+                                    !ctx.config.dtltoDistributor.empty()));
 
-  checkError(ltoObj->run(
-      [&](size_t task, const Twine &moduleName) {
-        buf[task].first = moduleName.str();
-        return std::make_unique<CachedFileStream>(
-            std::make_unique<raw_svector_ostream>(buf[task].second));
-      },
-      cache));
+  checkError(ctx.e,
+             ltoObj->run(
+                 [&](size_t task, const Twine &moduleName) {
+                   buf[task].first = moduleName.str();
+                   return std::make_unique<CachedFileStream>(
+                       std::make_unique<raw_svector_ostream>(buf[task].second));
+                 },
+                 cache));
 
   // Emit empty index files for non-indexed files
   for (StringRef s : thinIndices) {
     std::string path = getThinLTOOutputFile(s);
-    openFile(path + ".thinlto.bc");
+    openFile(ctx.e, path + ".thinlto.bc");
     if (ctx.config.thinLTOEmitImportsFiles)
-      openFile(path + ".imports");
+      openFile(ctx.e, path + ".imports");
   }
 
   // ThinLTO with index only option is required to generate only the index
@@ -240,14 +243,15 @@ std::vector<InputFile *> BitcodeCompiler::compile() {
   // distributed environment.
   if (ctx.config.thinLTOIndexOnly) {
     if (!ctx.config.ltoObjPath.empty())
-      saveBuffer(buf[0].second, ctx.config.ltoObjPath);
+      saveBuffer(ctx.e, buf[0].second, ctx.config.ltoObjPath);
     if (indexFile)
       indexFile->close();
     return {};
   }
 
   if (!ctx.config.ltoCache.empty())
-    check(pruneCache(ctx.config.ltoCache, ctx.config.ltoCachePolicy, files));
+    check(ctx.e,
+          pruneCache(ctx.config.ltoCache, ctx.config.ltoCachePolicy, files));
 
   std::vector<InputFile *> ret;
   bool emitASM = ctx.config.emit == EmitKind::ASM;
@@ -274,8 +278,8 @@ std::vector<InputFile *> BitcodeCompiler::compile() {
     StringRef ltoObjName;
     if (bitcodeFilePath == "ld-temp.o") {
       ltoObjName =
-          saver().save(Twine(ctx.config.outputFile) + ".lto" +
-                       (i == 0 ? Twine("") : Twine('.') + Twine(i)) + Ext);
+          ctx.saver.save(Twine(ctx.config.outputFile) + ".lto" +
+                         (i == 0 ? Twine("") : Twine('.') + Twine(i)) + Ext);
     } else {
       StringRef directory = sys::path::parent_path(bitcodeFilePath);
       StringRef baseName = sys::path::stem(bitcodeFilePath);
@@ -284,10 +288,10 @@ std::vector<InputFile *> BitcodeCompiler::compile() {
       sys::path::append(path, directory,
                         outputFileBaseName + ".lto." + baseName + Ext);
       sys::path::remove_dots(path, true);
-      ltoObjName = saver().save(path.str());
+      ltoObjName = ctx.saver.save(path.str());
     }
     if (llvm::is_contained(ctx.config.saveTempsArgs, "prelink") || emitASM)
-      saveBuffer(buf[i].second, ltoObjName);
+      saveBuffer(ctx.e, buf[i].second, ltoObjName);
     if (!emitASM)
       ret.push_back(ObjFile::create(ctx, MemoryBufferRef(objBuf, ltoObjName)));
   }

@@ -116,7 +116,8 @@ private:
 } // namespace
 
 DenseMap<const InputSection *, int> lld::macho::runBalancedPartitioning(
-    StringRef profilePath, ArrayRef<BPCompressionSortSpec> compressionSortSpecs,
+    Ctx &ctx, StringRef profilePath,
+    ArrayRef<BPCompressionSortSpec> compressionSortSpecs,
     bool forFunctionCompression, bool forDataCompression,
     bool compressionSortStartupFunctions, bool verbose) {
   // Collect candidate sections and associated symbols.
@@ -145,7 +146,7 @@ DenseMap<const InputSection *, int> lld::macho::runBalancedPartitioning(
         rootSymbolToSectionIdxs[CachedHashStringRef(*linkageName)].insert(idx);
     }
   };
-  for (const auto *file : inputFiles) {
+  for (const auto *file : ctx.inputFiles) {
     for (auto *sec : file->sections) {
       if (sec->name == section_names::ehFrame &&
           sec->segname == segment_names::text)
@@ -168,7 +169,7 @@ DenseMap<const InputSection *, int> lld::macho::runBalancedPartitioning(
             return sym->identicalCodeFoldingKind == Symbol::ICFFoldKind::Thunk;
           }))
         continue;
-      auto *bodySym = cast<Defined>(target->getThunkBranchTarget(isec));
+      auto *bodySym = cast<Defined>(ctx.target->getThunkBranchTarget(isec));
       auto bodyIdx = sectionToIdx.find(bodySym->isec());
       if (bodyIdx != sectionToIdx.end())
         sectionIdxs.insert(bodyIdx->second);
@@ -176,7 +177,7 @@ DenseMap<const InputSection *, int> lld::macho::runBalancedPartitioning(
   }
 
   auto result = BPOrdererMachO().computeOrder(
-      profilePath, compressionSortSpecs, forFunctionCompression,
+      ctx.e, profilePath, compressionSortSpecs, forFunctionCompression,
       forDataCompression, compressionSortStartupFunctions, verbose, sections,
       rootSymbolToSectionIdxs);
   // BP already orders cold sections after non-cold via separate buckets.

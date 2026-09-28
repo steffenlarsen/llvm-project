@@ -21,6 +21,7 @@
 
 namespace lld::macho {
 class InputSection;
+struct Ctx;
 
 /// Run Balanced Partitioning to find the optimal function and data order to
 /// improve startup time and compressed size.
@@ -28,11 +29,10 @@ class InputSection;
 /// It is important that .subsections_via_symbols is used to ensure functions
 /// and data are in their own sections and thus can be reordered.
 llvm::DenseMap<const InputSection *, int> runBalancedPartitioning(
-    llvm::StringRef profilePath,
+    Ctx &ctx, llvm::StringRef profilePath,
     llvm::ArrayRef<BPCompressionSortSpec> compressionSortSpecs,
     bool forFunctionCompression, bool forDataCompression,
     bool compressionSortStartupFunctions, bool verbose);
-
 } // namespace lld::macho
 
 #endif

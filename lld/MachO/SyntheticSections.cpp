@@ -58,21 +58,20 @@ static void sha256(const uint8_t *data, size_t len, uint8_t *output) {
 #endif
 }
 
-InStruct macho::in;
-std::vector<SyntheticSection *> macho::syntheticSections;
-
-SyntheticSection::SyntheticSection(const char *segname, const char *name)
-    : OutputSection(SyntheticKind, name) {
-  std::tie(this->segname, this->name) = maybeRenameSection({segname, name});
-  isec = makeSyntheticInputSection(segname, name);
+SyntheticSection::SyntheticSection(Ctx &ctx, const char *segname,
+                                   const char *name)
+    : OutputSection(ctx, SyntheticKind, name) {
+  std::tie(this->segname, this->name) =
+      maybeRenameSection(ctx, {segname, name});
+  isec = makeSyntheticInputSection(ctx, segname, name);
   isec->parent = this;
-  syntheticSections.push_back(this);
+  ctx.syntheticSections.push_back(this);
 }
 
 // dyld3's MachOLoaded::getSlide() assumes that the __TEXT segment starts
 // from the beginning of the file (i.e. the header).
-MachHeaderSection::MachHeaderSection()
-    : SyntheticSection(segment_names::text, section_names::header) {
+MachHeaderSection::MachHeaderSection(Ctx &ctx)
+    : SyntheticSection(ctx, segment_names::text, section_names::header) {
   // XXX: This is a hack. (See D97007)
   // Setting the index to 1 to pretend that this section is the text
   // section.
@@ -86,68 +85,69 @@ void MachHeaderSection::addLoadCommand(LoadCommand *lc) {
 }
 
 uint64_t MachHeaderSection::getSize() const {
-  uint64_t size = target->headerSize + sizeOfCmds + config->headerPad;
+  uint64_t size = ctx.target->headerSize + sizeOfCmds + ctx.arg.headerPad;
   // If we are emitting an encryptable binary, our load commands must have a
   // separate (non-encrypted) page to themselves.
-  if (config->emitEncryptionInfo)
-    size = alignToPowerOf2(size, target->getPageSize());
+  if (ctx.arg.emitEncryptionInfo)
+    size = alignToPowerOf2(size, ctx.target->getPageSize());
   return size;
 }
 
-static uint32_t cpuSubtype() {
-  uint32_t subtype = target->cpuSubtype;
+static uint32_t cpuSubtype(Ctx &ctx) {
+  uint32_t subtype = ctx.target->cpuSubtype;
 
-  if (config->outputType == MH_EXECUTE && !config->staticLink &&
-      target->cpuSubtype == CPU_SUBTYPE_X86_64_ALL &&
-      config->platform() == PLATFORM_MACOS &&
-      config->platformInfo.target.MinDeployment >= VersionTuple(10, 5))
+  if (ctx.arg.outputType == MH_EXECUTE && !ctx.arg.staticLink &&
+      ctx.target->cpuSubtype == CPU_SUBTYPE_X86_64_ALL &&
+      ctx.arg.platform() == PLATFORM_MACOS &&
+      ctx.arg.platformInfo.target.MinDeployment >= VersionTuple(10, 5))
     subtype |= CPU_SUBTYPE_LIB64;
 
   return subtype;
 }
 
-static bool hasWeakBinding() {
-  return config->emitChainedFixups ? in.chainedFixups->hasWeakBinding()
-                                   : in.weakBinding->hasEntry();
+static bool hasWeakBinding(Ctx &ctx) {
+  return ctx.arg.emitChainedFixups ? ctx.in.chainedFixups->hasWeakBinding()
+                                   : ctx.in.weakBinding->hasEntry();
 }
 
-static bool hasNonWeakDefinition() {
-  return config->emitChainedFixups ? in.chainedFixups->hasNonWeakDefinition()
-                                   : in.weakBinding->hasNonWeakDefinition();
+static bool hasNonWeakDefinition(Ctx &ctx) {
+  return ctx.arg.emitChainedFixups
+             ? ctx.in.chainedFixups->hasNonWeakDefinition()
+             : ctx.in.weakBinding->hasNonWeakDefinition();
 }
 
 void MachHeaderSection::writeTo(uint8_t *buf) const {
   auto *hdr = reinterpret_cast<mach_header *>(buf);
-  hdr->magic = target->magic;
-  hdr->cputype = target->cpuType;
-  hdr->cpusubtype = cpuSubtype();
-  hdr->filetype = config->outputType;
+  hdr->magic = ctx.target->magic;
+  hdr->cputype = ctx.target->cpuType;
+  hdr->cpusubtype = cpuSubtype(ctx);
+  hdr->filetype = ctx.arg.outputType;
   hdr->ncmds = loadCommands.size();
   hdr->sizeofcmds = sizeOfCmds;
   hdr->flags = MH_DYLDLINK;
 
-  if (config->namespaceKind == NamespaceKind::twolevel)
+  if (ctx.arg.namespaceKind == NamespaceKind::twolevel)
     hdr->flags |= MH_NOUNDEFS | MH_TWOLEVEL;
 
-  if (config->outputType == MH_DYLIB && !config->hasReexports)
+  if (ctx.arg.outputType == MH_DYLIB && !ctx.arg.hasReexports)
     hdr->flags |= MH_NO_REEXPORTED_DYLIBS;
 
-  if (config->markDeadStrippableDylib)
+  if (ctx.arg.markDeadStrippableDylib)
     hdr->flags |= MH_DEAD_STRIPPABLE_DYLIB;
 
-  if (config->outputType == MH_EXECUTE && config->isPic)
+  if (ctx.arg.outputType == MH_EXECUTE && ctx.arg.isPic)
     hdr->flags |= MH_PIE;
 
-  if (config->outputType == MH_DYLIB && config->applicationExtension)
+  if (ctx.arg.outputType == MH_DYLIB && ctx.arg.applicationExtension)
     hdr->flags |= MH_APP_EXTENSION_SAFE;
 
-  if (in.exports->hasWeakSymbol || hasNonWeakDefinition())
+  if (ctx.in.exports->hasWeakSymbol || hasNonWeakDefinition(ctx))
     hdr->flags |= MH_WEAK_DEFINES;
 
-  if (in.exports->hasWeakSymbol || hasWeakBinding())
+  if (ctx.in.exports->hasWeakSymbol || hasWeakBinding(ctx))
     hdr->flags |= MH_BINDS_TO_WEAK;
 
-  for (const OutputSegment *seg : outputSegments) {
+  for (const OutputSegment *seg : ctx.outputSegments) {
     for (const OutputSection *osec : seg->getSections()) {
       if (isThreadLocalVariables(osec->flags)) {
         hdr->flags |= MH_HAS_TLV_DESCRIPTORS;
@@ -156,18 +156,18 @@ void MachHeaderSection::writeTo(uint8_t *buf) const {
     }
   }
 
-  uint8_t *p = reinterpret_cast<uint8_t *>(hdr) + target->headerSize;
+  uint8_t *p = reinterpret_cast<uint8_t *>(hdr) + ctx.target->headerSize;
   for (const LoadCommand *lc : loadCommands) {
     lc->writeTo(p);
     p += lc->getSize();
   }
 }
 
-PageZeroSection::PageZeroSection()
-    : SyntheticSection(segment_names::pageZero, section_names::pageZero) {}
+PageZeroSection::PageZeroSection(Ctx &ctx)
+    : SyntheticSection(ctx, segment_names::pageZero, section_names::pageZero) {}
 
-RebaseSection::RebaseSection()
-    : LinkEditSection(segment_names::linkEdit, section_names::rebase) {}
+RebaseSection::RebaseSection(Ctx &ctx)
+    : LinkEditSection(ctx, segment_names::linkEdit, section_names::rebase) {}
 
 namespace {
 struct RebaseState {
@@ -176,23 +176,24 @@ struct RebaseState {
 };
 } // namespace
 
-static void emitIncrement(uint64_t incr, raw_svector_ostream &os) {
+static void emitIncrement(Ctx &ctx, uint64_t incr, raw_svector_ostream &os) {
   assert(incr != 0);
 
-  if ((incr >> target->p2WordSize) <= REBASE_IMMEDIATE_MASK &&
-      (incr % target->wordSize) == 0) {
+  if ((incr >> ctx.target->p2WordSize) <= REBASE_IMMEDIATE_MASK &&
+      (incr % ctx.target->wordSize) == 0) {
     os << static_cast<uint8_t>(REBASE_OPCODE_ADD_ADDR_IMM_SCALED |
-                               (incr >> target->p2WordSize));
+                               (incr >> ctx.target->p2WordSize));
   } else {
     os << static_cast<uint8_t>(REBASE_OPCODE_ADD_ADDR_ULEB);
     encodeULEB128(incr, os);
   }
 }
 
-static void flushRebase(const RebaseState &state, raw_svector_ostream &os) {
+static void flushRebase(Ctx &ctx, const RebaseState &state,
+                        raw_svector_ostream &os) {
   assert(state.sequenceLength > 0);
 
-  if (state.skipLength == target->wordSize) {
+  if (state.skipLength == ctx.target->wordSize) {
     if (state.sequenceLength <= REBASE_IMMEDIATE_MASK) {
       os << static_cast<uint8_t>(REBASE_OPCODE_DO_REBASE_IMM_TIMES |
                                  state.sequenceLength);
@@ -202,12 +203,12 @@ static void flushRebase(const RebaseState &state, raw_svector_ostream &os) {
     }
   } else if (state.sequenceLength == 1) {
     os << static_cast<uint8_t>(REBASE_OPCODE_DO_REBASE_ADD_ADDR_ULEB);
-    encodeULEB128(state.skipLength - target->wordSize, os);
+    encodeULEB128(state.skipLength - ctx.target->wordSize, os);
   } else {
     os << static_cast<uint8_t>(
         REBASE_OPCODE_DO_REBASE_ULEB_TIMES_SKIPPING_ULEB);
     encodeULEB128(state.sequenceLength, os);
-    encodeULEB128(state.skipLength - target->wordSize, os);
+    encodeULEB128(state.skipLength - ctx.target->wordSize, os);
   }
 }
 
@@ -220,7 +221,7 @@ static void flushRebase(const RebaseState &state, raw_svector_ostream &os) {
 // splitting up the sorted list of addresses into such chunks. If the locations
 // are consecutive or the sequence consists of a single location, flushRebase
 // will use a smaller, more specialized encoding.
-static void encodeRebases(const OutputSegment *seg,
+static void encodeRebases(Ctx &ctx, const OutputSegment *seg,
                           MutableArrayRef<Location> locations,
                           raw_svector_ostream &os) {
   // dyld operates on segments. Translate section offsets into segment offsets.
@@ -240,7 +241,7 @@ static void encodeRebases(const OutputSegment *seg,
   uint64_t offset = locations[0].offset;
   encodeULEB128(offset, os);
 
-  RebaseState state{1, target->wordSize};
+  RebaseState state{1, ctx.target->wordSize};
 
   for (size_t i = 1; i < count; ++i) {
     offset = locations[i].offset;
@@ -258,20 +259,20 @@ static void encodeRebases(const OutputSegment *seg,
       // location would be part of a sequence. We start a new sequence from the
       // previous location.
       --state.sequenceLength;
-      flushRebase(state, os);
+      flushRebase(ctx, state, os);
 
       state.sequenceLength = 2;
       state.skipLength = skip;
     } else {
       // The address is at some positive offset from the rebase pointer. We
       // start a new sequence which begins with the current location.
-      flushRebase(state, os);
-      emitIncrement(skip - state.skipLength, os);
+      flushRebase(ctx, state, os);
+      emitIncrement(ctx, skip - state.skipLength, os);
       state.sequenceLength = 1;
-      state.skipLength = target->wordSize;
+      state.skipLength = ctx.target->wordSize;
     }
   }
-  flushRebase(state, os);
+  flushRebase(ctx, state, os);
 }
 
 void RebaseSection::finalizeContents() {
@@ -290,7 +291,7 @@ void RebaseSection::finalizeContents() {
     size_t j = i + 1;
     while (j < count && locations[j].isec->parent->parent == seg)
       ++j;
-    encodeRebases(seg, {locations.data() + i, locations.data() + j}, os);
+    encodeRebases(ctx, seg, {locations.data() + i, locations.data() + j}, os);
     i = j;
   }
   os << static_cast<uint8_t>(REBASE_OPCODE_DONE);
@@ -300,35 +301,35 @@ void RebaseSection::writeTo(uint8_t *buf) const {
   memcpy(buf, contents.data(), contents.size());
 }
 
-GotSection::GotSection()
-    : SyntheticSection(segment_names::data, section_names::got) {
-  align = target->wordSize;
+GotSection::GotSection(Ctx &ctx)
+    : SyntheticSection(ctx, segment_names::data, section_names::got) {
+  align = ctx.target->wordSize;
   flags = S_NON_LAZY_SYMBOL_POINTERS;
 }
 
-void macho::addNonLazyBindingEntries(const Symbol *sym,
+void macho::addNonLazyBindingEntries(Ctx &ctx, const Symbol *sym,
                                      const InputSection *isec, uint64_t offset,
                                      int64_t addend) {
-  if (config->emitChainedFixups) {
+  if (ctx.arg.emitChainedFixups) {
     if (needsBinding(sym))
-      in.chainedFixups->addBinding(sym, isec, offset, addend);
+      ctx.in.chainedFixups->addBinding(sym, isec, offset, addend);
     else if (isa<Defined>(sym))
-      in.chainedFixups->addRebase(isec, offset);
+      ctx.in.chainedFixups->addRebase(isec, offset);
     else
       llvm_unreachable("cannot bind to an undefined symbol");
     return;
   }
 
   if (const auto *dysym = dyn_cast<DylibSymbol>(sym)) {
-    in.binding->addEntry(dysym, isec, offset, addend);
+    ctx.in.binding->addEntry(dysym, isec, offset, addend);
     if (dysym->isWeakDef())
-      in.weakBinding->addEntry(sym, isec, offset, addend);
+      ctx.in.weakBinding->addEntry(sym, isec, offset, addend);
   } else if (const auto *defined = dyn_cast<Defined>(sym)) {
-    in.rebase->addEntry(isec, offset);
+    ctx.in.rebase->addEntry(isec, offset);
     if (defined->isExternalWeakDef())
-      in.weakBinding->addEntry(sym, isec, offset, addend);
+      ctx.in.weakBinding->addEntry(sym, isec, offset, addend);
     else if (defined->interposable)
-      in.binding->addEntry(sym, isec, offset, addend);
+      ctx.in.binding->addEntry(sym, isec, offset, addend);
   } else {
     // Undefined symbols are filtered out in scanRelocations(); we should never
     // get here
@@ -342,13 +343,14 @@ void GotSection::addEntry(Symbol *sym) {
     assert(!sym->isInGot());
     sym->gotIndex = entries.size() - 1;
 
-    addNonLazyBindingEntries(sym, isec, sym->gotIndex * target->wordSize);
+    addNonLazyBindingEntries(ctx, sym, isec,
+                             sym->gotIndex * ctx.target->wordSize);
   }
 }
 
-void macho::writeChainedRebase(uint8_t *buf, uint64_t targetVA) {
-  assert(config->emitChainedFixups);
-  assert(target->wordSize == 8 && "Only 64-bit platforms are supported");
+void macho::writeChainedRebase(Ctx &ctx, uint8_t *buf, uint64_t targetVA) {
+  assert(ctx.arg.emitChainedFixups);
+  assert(ctx.target->wordSize == 8 && "Only 64-bit platforms are supported");
   auto *rebase = reinterpret_cast<dyld_chained_ptr_64_rebase *>(buf);
   rebase->target = targetVA & 0xf'ffff'ffff;
   rebase->high8 = (targetVA >> 56);
@@ -360,15 +362,17 @@ void macho::writeChainedRebase(uint8_t *buf, uint64_t targetVA) {
   // Should we handle this gracefully?
   uint64_t encodedVA = rebase->target | ((uint64_t)rebase->high8 << 56);
   if (encodedVA != targetVA)
-    error("rebase target address 0x" + Twine::utohexstr(targetVA) +
-          " does not fit into chained fixup. Re-link with -no_fixup_chains");
+    ctx.e.error(
+        "rebase target address 0x" + Twine::utohexstr(targetVA) +
+        " does not fit into chained fixup. Re-link with -no_fixup_chains");
 }
 
-static void writeChainedBind(uint8_t *buf, const Symbol *sym, int64_t addend) {
-  assert(config->emitChainedFixups);
-  assert(target->wordSize == 8 && "Only 64-bit platforms are supported");
+static void writeChainedBind(Ctx &ctx, uint8_t *buf, const Symbol *sym,
+                             int64_t addend) {
+  assert(ctx.arg.emitChainedFixups);
+  assert(ctx.target->wordSize == 8 && "Only 64-bit platforms are supported");
   auto *bind = reinterpret_cast<dyld_chained_ptr_64_bind *>(buf);
-  auto [ordinal, inlineAddend] = in.chainedFixups->getBinding(sym, addend);
+  auto [ordinal, inlineAddend] = ctx.in.chainedFixups->getBinding(sym, addend);
   bind->ordinal = ordinal;
   bind->addend = inlineAddend;
   bind->reserved = 0;
@@ -376,26 +380,27 @@ static void writeChainedBind(uint8_t *buf, const Symbol *sym, int64_t addend) {
   bind->bind = 1;
 }
 
-void macho::writeChainedFixup(uint8_t *buf, const Symbol *sym, int64_t addend) {
+void macho::writeChainedFixup(Ctx &ctx, uint8_t *buf, const Symbol *sym,
+                              int64_t addend) {
   if (needsBinding(sym))
-    writeChainedBind(buf, sym, addend);
+    writeChainedBind(ctx, buf, sym, addend);
   else
-    writeChainedRebase(buf, sym->getVA() + addend);
+    writeChainedRebase(ctx, buf, sym->getVA(ctx) + addend);
 }
 
 void GotSection::writeTo(uint8_t *buf) const {
-  if (config->emitChainedFixups) {
+  if (ctx.arg.emitChainedFixups) {
     for (const auto &[i, entry] : llvm::enumerate(entries))
-      writeChainedFixup(&buf[i * target->wordSize], entry, 0);
+      writeChainedFixup(ctx, &buf[i * ctx.target->wordSize], entry, 0);
   } else {
     for (const auto &[i, entry] : llvm::enumerate(entries))
       if (auto *defined = dyn_cast<Defined>(entry))
-        write64le(&buf[i * target->wordSize], defined->getVA());
+        write64le(&buf[i * ctx.target->wordSize], defined->getVA(ctx));
   }
 }
 
-BindingSection::BindingSection()
-    : LinkEditSection(segment_names::linkEdit, section_names::binding) {}
+BindingSection::BindingSection(Ctx &ctx)
+    : LinkEditSection(ctx, segment_names::linkEdit, section_names::binding) {}
 
 namespace {
 struct Binding {
@@ -418,9 +423,9 @@ struct BindIR {
 // The bind opcode "interpreter" remembers the values of each binding field, so
 // we only need to encode the differences between bindings. Hence the use of
 // lastBinding.
-static void encodeBinding(const OutputSection *osec, uint64_t outSecOff,
-                          int64_t addend, Binding &lastBinding,
-                          std::vector<BindIR> &opcodes) {
+static void encodeBinding(Ctx &ctx, const OutputSection *osec,
+                          uint64_t outSecOff, int64_t addend,
+                          Binding &lastBinding, std::vector<BindIR> &opcodes) {
   OutputSegment *seg = osec->parent;
   uint64_t offset = osec->getSegmentOffset() + outSecOff;
   if (lastBinding.segment != seg) {
@@ -443,10 +448,10 @@ static void encodeBinding(const OutputSection *osec, uint64_t outSecOff,
 
   opcodes.push_back({BIND_OPCODE_DO_BIND, 0});
   // DO_BIND causes dyld to both perform the binding and increment the offset
-  lastBinding.offset += target->wordSize;
+  lastBinding.offset += ctx.target->wordSize;
 }
 
-static void optimizeOpcodes(std::vector<BindIR> &opcodes) {
+static void optimizeOpcodes(Ctx &ctx, std::vector<BindIR> &opcodes) {
   // Pass 1: Combine bind/add pairs
   size_t i;
   int pWrite = 0;
@@ -498,10 +503,10 @@ static void optimizeOpcodes(std::vector<BindIR> &opcodes) {
     // but ld64 currently does this. This could be a potential bug, but
     // for now, perform the same behavior to prevent mysterious bugs.
     if ((p.opcode == BIND_OPCODE_DO_BIND_ADD_ADDR_ULEB) &&
-        ((p.data / target->wordSize) < BIND_IMMEDIATE_MASK) &&
-        ((p.data % target->wordSize) == 0)) {
+        ((p.data / ctx.target->wordSize) < BIND_IMMEDIATE_MASK) &&
+        ((p.data % ctx.target->wordSize) == 0)) {
       p.opcode = BIND_OPCODE_DO_BIND_ADD_ADDR_IMM_SCALED;
-      p.data /= target->wordSize;
+      p.data /= ctx.target->wordSize;
     }
   }
 }
@@ -544,18 +549,18 @@ static bool needsWeakBind(const Symbol &sym) {
 }
 
 // Non-weak bindings need to have their dylib ordinal encoded as well.
-static int16_t ordinalForDylibSymbol(const DylibSymbol &dysym) {
-  if (config->namespaceKind == NamespaceKind::flat || dysym.isDynamicLookup())
+static int16_t ordinalForDylibSymbol(Ctx &ctx, const DylibSymbol &dysym) {
+  if (ctx.arg.namespaceKind == NamespaceKind::flat || dysym.isDynamicLookup())
     return static_cast<int16_t>(BIND_SPECIAL_DYLIB_FLAT_LOOKUP);
   assert(dysym.getFile()->isReferenced());
   return dysym.getFile()->ordinal;
 }
 
-static int16_t ordinalForSymbol(const Symbol &sym) {
-  if (config->emitChainedFixups && needsWeakBind(sym))
+static int16_t ordinalForSymbol(Ctx &ctx, const Symbol &sym) {
+  if (ctx.arg.emitChainedFixups && needsWeakBind(sym))
     return BIND_SPECIAL_DYLIB_WEAK_LOOKUP;
   if (const auto *dysym = dyn_cast<DylibSymbol>(&sym))
-    return ordinalForDylibSymbol(*dysym);
+    return ordinalForDylibSymbol(ctx, *dysym);
   assert(cast<Defined>(&sym)->interposable);
   return BIND_SPECIAL_DYLIB_FLAT_LOOKUP;
 }
@@ -636,18 +641,18 @@ void BindingSection::finalizeContents() {
       flags |= BIND_SYMBOL_FLAGS_WEAK_IMPORT;
     os << flags << sym->getName() << '\0'
        << static_cast<uint8_t>(BIND_OPCODE_SET_TYPE_IMM | BIND_TYPE_POINTER);
-    int16_t ordinal = ordinalForSymbol(*sym);
+    int16_t ordinal = ordinalForSymbol(ctx, *sym);
     if (ordinal != lastOrdinal) {
       encodeDylibOrdinal(ordinal, os);
       lastOrdinal = ordinal;
     }
     std::vector<BindIR> opcodes;
     for (const BindingEntry &b : bindings)
-      encodeBinding(b.target.isec->parent,
+      encodeBinding(ctx, b.target.isec->parent,
                     b.target.isec->getOffset(b.target.offset), b.addend,
                     lastBinding, opcodes);
-    if (config->optimize > 1)
-      optimizeOpcodes(opcodes);
+    if (ctx.arg.optimize > 1)
+      optimizeOpcodes(ctx, opcodes);
     for (const auto &op : opcodes)
       flushOpcodes(op, os);
   }
@@ -659,8 +664,9 @@ void BindingSection::writeTo(uint8_t *buf) const {
   memcpy(buf, contents.data(), contents.size());
 }
 
-WeakBindingSection::WeakBindingSection()
-    : LinkEditSection(segment_names::linkEdit, section_names::weakBinding) {}
+WeakBindingSection::WeakBindingSection(Ctx &ctx)
+    : LinkEditSection(ctx, segment_names::linkEdit,
+                      section_names::weakBinding) {}
 
 void WeakBindingSection::finalizeContents() {
   raw_svector_ostream os{contents};
@@ -677,11 +683,11 @@ void WeakBindingSection::finalizeContents() {
        << static_cast<uint8_t>(BIND_OPCODE_SET_TYPE_IMM | BIND_TYPE_POINTER);
     std::vector<BindIR> opcodes;
     for (const BindingEntry &b : bindings)
-      encodeBinding(b.target.isec->parent,
+      encodeBinding(ctx, b.target.isec->parent,
                     b.target.isec->getOffset(b.target.offset), b.addend,
                     lastBinding, opcodes);
-    if (config->optimize > 1)
-      optimizeOpcodes(opcodes);
+    if (ctx.arg.optimize > 1)
+      optimizeOpcodes(ctx, opcodes);
     for (const auto &op : opcodes)
       flushOpcodes(op, os);
   }
@@ -693,50 +699,50 @@ void WeakBindingSection::writeTo(uint8_t *buf) const {
   memcpy(buf, contents.data(), contents.size());
 }
 
-StubsSection::StubsSection()
-    : SyntheticSection(segment_names::text, section_names::stubs) {
+StubsSection::StubsSection(Ctx &ctx)
+    : SyntheticSection(ctx, segment_names::text, section_names::stubs) {
   flags = S_SYMBOL_STUBS | S_ATTR_SOME_INSTRUCTIONS | S_ATTR_PURE_INSTRUCTIONS;
   // The stubs section comprises machine instructions, which are aligned to
   // 4 bytes on the archs we care about.
   align = 4;
-  reserved2 = target->stubSize;
+  reserved2 = ctx.target->stubSize;
 }
 
 uint64_t StubsSection::getSize() const {
-  return entries.size() * target->stubSize;
+  return entries.size() * ctx.target->stubSize;
 }
 
 void StubsSection::writeTo(uint8_t *buf) const {
   size_t off = 0;
   for (const Symbol *sym : entries) {
     uint64_t pointerVA =
-        config->emitChainedFixups ? sym->getGotVA() : sym->getLazyPtrVA();
-    target->writeStub(buf + off, *sym, pointerVA);
-    off += target->stubSize;
+        ctx.arg.emitChainedFixups ? sym->getGotVA(ctx) : sym->getLazyPtrVA(ctx);
+    ctx.target->writeStub(buf + off, *sym, pointerVA);
+    off += ctx.target->stubSize;
   }
 }
 
 void StubsSection::finalize() { isFinal = true; }
 
-static void addBindingsForStub(Symbol *sym) {
-  assert(!config->emitChainedFixups);
+static void addBindingsForStub(Ctx &ctx, Symbol *sym) {
+  assert(!ctx.arg.emitChainedFixups);
   if (auto *dysym = dyn_cast<DylibSymbol>(sym)) {
     if (sym->isWeakDef()) {
-      in.binding->addEntry(dysym, in.lazyPointers->isec,
-                           sym->stubsIndex * target->wordSize);
-      in.weakBinding->addEntry(sym, in.lazyPointers->isec,
-                               sym->stubsIndex * target->wordSize);
+      ctx.in.binding->addEntry(dysym, ctx.in.lazyPointers->isec,
+                               sym->stubsIndex * ctx.target->wordSize);
+      ctx.in.weakBinding->addEntry(sym, ctx.in.lazyPointers->isec,
+                                   sym->stubsIndex * ctx.target->wordSize);
     } else {
-      in.lazyBinding->addEntry(dysym);
+      ctx.in.lazyBinding->addEntry(dysym);
     }
   } else if (auto *defined = dyn_cast<Defined>(sym)) {
     if (defined->isExternalWeakDef()) {
-      in.rebase->addEntry(in.lazyPointers->isec,
-                          sym->stubsIndex * target->wordSize);
-      in.weakBinding->addEntry(sym, in.lazyPointers->isec,
-                               sym->stubsIndex * target->wordSize);
+      ctx.in.rebase->addEntry(ctx.in.lazyPointers->isec,
+                              sym->stubsIndex * ctx.target->wordSize);
+      ctx.in.weakBinding->addEntry(sym, ctx.in.lazyPointers->isec,
+                                   sym->stubsIndex * ctx.target->wordSize);
     } else if (defined->interposable) {
-      in.lazyBinding->addEntry(sym);
+      ctx.in.lazyBinding->addEntry(sym);
     } else {
       llvm_unreachable("invalid stub target");
     }
@@ -750,40 +756,44 @@ void StubsSection::addEntry(Symbol *sym) {
   if (inserted) {
     sym->stubsIndex = entries.size() - 1;
 
-    if (config->emitChainedFixups)
-      in.got->addEntry(sym);
+    if (ctx.arg.emitChainedFixups)
+      ctx.in.got->addEntry(sym);
     else
-      addBindingsForStub(sym);
+      addBindingsForStub(ctx, sym);
   }
 }
 
-StubHelperSection::StubHelperSection()
-    : SyntheticSection(segment_names::text, section_names::stubHelper) {
+StubHelperSection::StubHelperSection(Ctx &ctx)
+    : SyntheticSection(ctx, segment_names::text, section_names::stubHelper) {
   flags = S_ATTR_SOME_INSTRUCTIONS | S_ATTR_PURE_INSTRUCTIONS;
   align = 4; // This section comprises machine instructions
 }
 
 uint64_t StubHelperSection::getSize() const {
-  return target->stubHelperHeaderSize +
-         in.lazyBinding->getEntries().size() * target->stubHelperEntrySize;
+  return ctx.target->stubHelperHeaderSize +
+         ctx.in.lazyBinding->getEntries().size() *
+             ctx.target->stubHelperEntrySize;
 }
 
-bool StubHelperSection::isNeeded() const { return in.lazyBinding->isNeeded(); }
+bool StubHelperSection::isNeeded() const {
+  return ctx.in.lazyBinding->isNeeded();
+}
 
 void StubHelperSection::writeTo(uint8_t *buf) const {
-  target->writeStubHelperHeader(buf);
-  size_t off = target->stubHelperHeaderSize;
-  for (const Symbol *sym : in.lazyBinding->getEntries()) {
-    target->writeStubHelperEntry(buf + off, *sym, addr + off);
-    off += target->stubHelperEntrySize;
+  ctx.target->writeStubHelperHeader(buf);
+  size_t off = ctx.target->stubHelperHeaderSize;
+  for (const Symbol *sym : ctx.in.lazyBinding->getEntries()) {
+    ctx.target->writeStubHelperEntry(buf + off, *sym, addr + off);
+    off += ctx.target->stubHelperEntrySize;
   }
 }
 
 void StubHelperSection::setUp() {
-  Symbol *binder = symtab->addUndefined("dyld_stub_binder", /*file=*/nullptr,
-                                        /*isWeakRef=*/false);
+  Symbol *binder =
+      ctx.symtab->addUndefined("dyld_stub_binder", /*file=*/nullptr,
+                               /*isWeakRef=*/false);
   if (auto *undefined = dyn_cast<Undefined>(binder))
-    treatUndefinedSymbol(*undefined,
+    treatUndefinedSymbol(ctx, *undefined,
                          "lazy binding (normally in libSystem.dylib)");
 
   // treatUndefinedSymbol() can replace binder with a DylibSymbol; re-check.
@@ -791,34 +801,32 @@ void StubHelperSection::setUp() {
   if (stubBinder == nullptr)
     return;
 
-  in.got->addEntry(stubBinder);
+  ctx.in.got->addEntry(stubBinder);
 
-  in.imageLoaderCache->parent =
-      ConcatOutputSection::getOrCreateForInput(in.imageLoaderCache);
-  addInputSection(in.imageLoaderCache);
+  ctx.in.imageLoaderCache->parent =
+      ConcatOutputSection::getOrCreateForInput(ctx, ctx.in.imageLoaderCache);
+  addInputSection(ctx, ctx.in.imageLoaderCache);
   // Since this isn't in the symbol table or in any input file, the noDeadStrip
   // argument doesn't matter.
-  dyldPrivate =
-      make<Defined>("__dyld_private", nullptr, in.imageLoaderCache, 0, 0,
-                    /*isWeakDef=*/false,
-                    /*isExternal=*/false, /*isPrivateExtern=*/false,
-                    /*includeInSymtab=*/true,
-                    /*isReferencedDynamically=*/false,
-                    /*noDeadStrip=*/false);
+  dyldPrivate = ctx.make<Defined>(
+      ctx, "__dyld_private", nullptr, ctx.in.imageLoaderCache, 0, 0,
+      /*isWeakDef=*/false,
+      /*isExternal=*/false, /*isPrivateExtern=*/false,
+      /*includeInSymtab=*/true,
+      /*isReferencedDynamically=*/false,
+      /*noDeadStrip=*/false);
   dyldPrivate->used = true;
 }
 
-llvm::DenseMap<llvm::CachedHashStringRef, ConcatInputSection *>
-    ObjCSelRefsHelper::methnameToSelref;
-void ObjCSelRefsHelper::initialize() {
+void ObjCSelRefsHelper::initialize(Ctx &ctx) {
   // Do not fold selrefs without ICF.
-  if (config->icfLevel == ICFLevel::none)
+  if (ctx.arg.icfLevel == ICFLevel::none)
     return;
 
   // Search methnames already referenced in __objc_selrefs
   // Map the name to the corresponding selref entry
   // which we will reuse when creating objc stubs.
-  for (ConcatInputSection *isec : inputSections) {
+  for (ConcatInputSection *isec : ctx.inputSections) {
     if (isec->shouldOmitFromOutput())
       continue;
     if (isec->getName() != section_names::objcSelrefs)
@@ -831,51 +839,51 @@ void ObjCSelRefsHelper::initialize() {
       if (const auto *d = dyn_cast<Defined>(sym)) {
         auto *cisec = cast<CStringInputSection>(d->isec());
         auto methname = cisec->getStringRefAtOffset(d->value);
-        methnameToSelref[CachedHashStringRef(methname)] = isec;
+        ctx.methnameToSelref[CachedHashStringRef(methname)] = isec;
       }
     }
   }
 }
 
-void ObjCSelRefsHelper::cleanup() { methnameToSelref.clear(); }
+ConcatInputSection *ObjCSelRefsHelper::makeSelRef(Ctx &ctx,
+                                                  StringRef methname) {
+  auto methnameOffset = ctx.in.objcMethnameSection->getStringOffset(methname);
 
-ConcatInputSection *ObjCSelRefsHelper::makeSelRef(StringRef methname) {
-  auto methnameOffset = in.objcMethnameSection->getStringOffset(methname);
-
-  size_t wordSize = target->wordSize;
-  uint8_t *selrefData = bAlloc().Allocate<uint8_t>(wordSize);
+  size_t wordSize = ctx.target->wordSize;
+  uint8_t *selrefData = ctx.bAlloc.Allocate<uint8_t>(wordSize);
   write64le(selrefData, methnameOffset);
-  ConcatInputSection *objcSelref =
-      makeSyntheticInputSection(segment_names::data, section_names::objcSelrefs,
-                                S_LITERAL_POINTERS | S_ATTR_NO_DEAD_STRIP,
-                                ArrayRef<uint8_t>{selrefData, wordSize},
-                                /*align=*/wordSize);
+  ConcatInputSection *objcSelref = makeSyntheticInputSection(
+      ctx, segment_names::data, section_names::objcSelrefs,
+      S_LITERAL_POINTERS | S_ATTR_NO_DEAD_STRIP,
+      ArrayRef<uint8_t>{selrefData, wordSize},
+      /*align=*/wordSize);
   assert(objcSelref->live);
-  objcSelref->relocs.push_back({/*type=*/target->unsignedRelocType,
+  objcSelref->relocs.push_back({/*type=*/ctx.target->unsignedRelocType,
                                 /*pcrel=*/false, /*length=*/3,
                                 /*offset=*/0,
                                 /*addend=*/static_cast<int64_t>(methnameOffset),
-                                /*referent=*/in.objcMethnameSection->isec});
-  objcSelref->parent = ConcatOutputSection::getOrCreateForInput(objcSelref);
-  addInputSection(objcSelref);
+                                /*referent=*/ctx.in.objcMethnameSection->isec});
+  objcSelref->parent =
+      ConcatOutputSection::getOrCreateForInput(ctx, objcSelref);
+  addInputSection(ctx, objcSelref);
   objcSelref->isFinal = true;
-  methnameToSelref[CachedHashStringRef(methname)] = objcSelref;
+  ctx.methnameToSelref[CachedHashStringRef(methname)] = objcSelref;
   return objcSelref;
 }
 
-ConcatInputSection *ObjCSelRefsHelper::getSelRef(StringRef methname) {
-  auto it = methnameToSelref.find(CachedHashStringRef(methname));
-  if (it == methnameToSelref.end())
+ConcatInputSection *ObjCSelRefsHelper::getSelRef(Ctx &ctx, StringRef methname) {
+  auto it = ctx.methnameToSelref.find(CachedHashStringRef(methname));
+  if (it == ctx.methnameToSelref.end())
     return nullptr;
   return it->second;
 }
 
-ObjCStubsSection::ObjCStubsSection()
-    : SyntheticSection(segment_names::text, section_names::objcStubs) {
+ObjCStubsSection::ObjCStubsSection(Ctx &ctx)
+    : SyntheticSection(ctx, segment_names::text, section_names::objcStubs) {
   flags = S_ATTR_SOME_INSTRUCTIONS | S_ATTR_PURE_INSTRUCTIONS;
-  align = config->objcStubsMode == ObjCStubsMode::fast
-              ? target->objcStubsFastAlignment
-              : target->objcStubsSmallAlignment;
+  align = ctx.arg.objcStubsMode == ObjCStubsMode::fast
+              ? ctx.target->objcStubsFastAlignment
+              : ctx.target->objcStubsSmallAlignment;
 }
 
 bool ObjCStubsSection::isObjCStubSymbol(Symbol *sym) {
@@ -890,20 +898,20 @@ StringRef ObjCStubsSection::getMethname(Symbol *sym) {
 }
 
 size_t ObjCStubsSection::getStubSize() const {
-  return config->objcStubsMode == ObjCStubsMode::fast
-             ? target->objcStubsFastSize
-             : target->objcStubsSmallSize;
+  return ctx.arg.objcStubsMode == ObjCStubsMode::fast
+             ? ctx.target->objcStubsFastSize
+             : ctx.target->objcStubsSmallSize;
 }
 
 void ObjCStubsSection::addEntry(Symbol *sym) {
   StringRef methname = getMethname(sym);
   // We create a selref entry for each unique methname.
-  if (!ObjCSelRefsHelper::getSelRef(methname))
-    ObjCSelRefsHelper::makeSelRef(methname);
+  if (!ObjCSelRefsHelper::getSelRef(ctx, methname))
+    ObjCSelRefsHelper::makeSelRef(ctx, methname);
 
   size_t stubSize = getStubSize();
   Defined *newSym = replaceSymbol<Defined>(
-      sym, sym->getName(), nullptr, isec,
+      sym, ctx, sym->getName(), nullptr, isec,
       /*value=*/symbols.size() * stubSize,
       /*size=*/stubSize,
       /*isWeakDef=*/false, /*isExternal=*/true, /*isPrivateExtern=*/true,
@@ -913,23 +921,23 @@ void ObjCStubsSection::addEntry(Symbol *sym) {
 }
 
 void ObjCStubsSection::setUp() {
-  objcMsgSend = symtab->addUndefined("_objc_msgSend", /*file=*/nullptr,
-                                     /*isWeakRef=*/false);
+  objcMsgSend = ctx.symtab->addUndefined("_objc_msgSend", /*file=*/nullptr,
+                                         /*isWeakRef=*/false);
   if (auto *undefined = dyn_cast<Undefined>(objcMsgSend))
-    treatUndefinedSymbol(*undefined,
+    treatUndefinedSymbol(ctx, *undefined,
                          "lazy binding (normally in libobjc.dylib)");
   objcMsgSend->used = true;
-  if (config->objcStubsMode == ObjCStubsMode::fast) {
-    in.got->addEntry(objcMsgSend);
+  if (ctx.arg.objcStubsMode == ObjCStubsMode::fast) {
+    ctx.in.got->addEntry(objcMsgSend);
     assert(objcMsgSend->isInGot());
   } else {
-    assert(config->objcStubsMode == ObjCStubsMode::small);
+    assert(ctx.arg.objcStubsMode == ObjCStubsMode::small);
     // In line with ld64's behavior, when objc_msgSend is a direct symbol,
     // we directly reference it.
     // In other cases, typically when binding in libobjc.dylib,
     // we generate a stub to invoke objc_msgSend.
     if (!isa<Defined>(objcMsgSend))
-      in.stubs->addEntry(objcMsgSend);
+      ctx.in.stubs->addEntry(objcMsgSend);
   }
 }
 
@@ -956,47 +964,49 @@ void ObjCStubsSection::writeTo(uint8_t *buf) const {
   uint64_t stubOffset = 0;
   for (Defined *sym : symbols) {
     auto methname = getMethname(sym);
-    InputSection *selRef = ObjCSelRefsHelper::getSelRef(methname);
+    InputSection *selRef = ObjCSelRefsHelper::getSelRef(ctx, methname);
     assert(selRef != nullptr && "no selref for methname");
     auto selrefAddr = selRef->getVA(0);
-    target->writeObjCMsgSendStub(buf + stubOffset, sym, in.objcStubs->addr,
-                                 stubOffset, selrefAddr, objcMsgSend);
+    ctx.target->writeObjCMsgSendStub(buf + stubOffset, sym,
+                                     ctx.in.objcStubs->addr, stubOffset,
+                                     selrefAddr, objcMsgSend);
   }
 }
 
-LazyPointerSection::LazyPointerSection()
-    : SyntheticSection(segment_names::data, section_names::lazySymbolPtr) {
-  align = target->wordSize;
+LazyPointerSection::LazyPointerSection(Ctx &ctx)
+    : SyntheticSection(ctx, segment_names::data, section_names::lazySymbolPtr) {
+  align = ctx.target->wordSize;
   flags = S_LAZY_SYMBOL_POINTERS;
 }
 
 uint64_t LazyPointerSection::getSize() const {
-  return in.stubs->getEntries().size() * target->wordSize;
+  return ctx.in.stubs->getEntries().size() * ctx.target->wordSize;
 }
 
 bool LazyPointerSection::isNeeded() const {
-  return !in.stubs->getEntries().empty();
+  return !ctx.in.stubs->getEntries().empty();
 }
 
 void LazyPointerSection::writeTo(uint8_t *buf) const {
   size_t off = 0;
-  for (const Symbol *sym : in.stubs->getEntries()) {
+  for (const Symbol *sym : ctx.in.stubs->getEntries()) {
     if (const auto *dysym = dyn_cast<DylibSymbol>(sym)) {
       if (dysym->hasStubsHelper()) {
         uint64_t stubHelperOffset =
-            target->stubHelperHeaderSize +
-            dysym->stubsHelperIndex * target->stubHelperEntrySize;
-        write64le(buf + off, in.stubHelper->addr + stubHelperOffset);
+            ctx.target->stubHelperHeaderSize +
+            dysym->stubsHelperIndex * ctx.target->stubHelperEntrySize;
+        write64le(buf + off, ctx.in.stubHelper->addr + stubHelperOffset);
       }
     } else {
-      write64le(buf + off, sym->getVA());
+      write64le(buf + off, sym->getVA(ctx));
     }
-    off += target->wordSize;
+    off += ctx.target->wordSize;
   }
 }
 
-LazyBindingSection::LazyBindingSection()
-    : LinkEditSection(segment_names::linkEdit, section_names::lazyBinding) {}
+LazyBindingSection::LazyBindingSection(Ctx &ctx)
+    : LinkEditSection(ctx, segment_names::linkEdit,
+                      section_names::lazyBinding) {}
 
 void LazyBindingSection::finalizeContents() {
   // TODO: Just precompute output size here instead of writing to a temporary
@@ -1010,11 +1020,11 @@ void LazyBindingSection::writeTo(uint8_t *buf) const {
 }
 
 void LazyBindingSection::addEntry(Symbol *sym) {
-  assert(!config->emitChainedFixups && "Chained fixups always bind eagerly");
+  assert(!ctx.arg.emitChainedFixups && "Chained fixups always bind eagerly");
   if (entries.insert(sym)) {
     sym->stubsHelperIndex = entries.size() - 1;
-    in.rebase->addEntry(in.lazyPointers->isec,
-                        sym->stubsIndex * target->wordSize);
+    ctx.in.rebase->addEntry(ctx.in.lazyPointers->isec,
+                            sym->stubsIndex * ctx.target->wordSize);
   }
 }
 
@@ -1026,13 +1036,13 @@ void LazyBindingSection::addEntry(Symbol *sym) {
 // complete bind information for each symbol.
 uint32_t LazyBindingSection::encode(const Symbol &sym) {
   uint32_t opstreamOffset = contents.size();
-  OutputSegment *dataSeg = in.lazyPointers->parent;
+  OutputSegment *dataSeg = ctx.in.lazyPointers->parent;
   os << static_cast<uint8_t>(BIND_OPCODE_SET_SEGMENT_AND_OFFSET_ULEB |
                              dataSeg->index);
-  uint64_t offset =
-      in.lazyPointers->addr - dataSeg->addr + sym.stubsIndex * target->wordSize;
+  uint64_t offset = ctx.in.lazyPointers->addr - dataSeg->addr +
+                    sym.stubsIndex * ctx.target->wordSize;
   encodeULEB128(offset, os);
-  encodeDylibOrdinal(ordinalForSymbol(sym), os);
+  encodeDylibOrdinal(ordinalForSymbol(ctx, sym), os);
 
   uint8_t flags = BIND_OPCODE_SET_SYMBOL_TRAILING_FLAGS_IMM;
   if (sym.isWeakRef())
@@ -1044,12 +1054,13 @@ uint32_t LazyBindingSection::encode(const Symbol &sym) {
   return opstreamOffset;
 }
 
-ExportSection::ExportSection()
-    : LinkEditSection(segment_names::linkEdit, section_names::export_) {}
+ExportSection::ExportSection(Ctx &ctx)
+    : LinkEditSection(ctx, segment_names::linkEdit, section_names::export_),
+      trieBuilder(ctx) {}
 
 void ExportSection::finalizeContents() {
-  trieBuilder.setImageBase(in.header->addr);
-  for (const Symbol *sym : symtab->getSymbols()) {
+  trieBuilder.setImageBase(ctx.in.header->addr);
+  for (const Symbol *sym : ctx.symtab->getSymbols()) {
     if (const auto *defined = dyn_cast<Defined>(sym)) {
       if (defined->privateExtern || !defined->isLive())
         continue;
@@ -1065,13 +1076,15 @@ void ExportSection::finalizeContents() {
 
 void ExportSection::writeTo(uint8_t *buf) const { trieBuilder.writeTo(buf); }
 
-DataInCodeSection::DataInCodeSection()
-    : LinkEditSection(segment_names::linkEdit, section_names::dataInCode) {}
+DataInCodeSection::DataInCodeSection(Ctx &ctx)
+    : LinkEditSection(ctx, segment_names::linkEdit, section_names::dataInCode) {
+}
 
 template <class LP>
-static std::vector<MachO::data_in_code_entry> collectDataInCodeEntries() {
+static std::vector<MachO::data_in_code_entry>
+collectDataInCodeEntries(Ctx &ctx) {
   std::vector<MachO::data_in_code_entry> dataInCodeEntries;
-  for (const InputFile *inputFile : inputFiles) {
+  for (const InputFile *inputFile : ctx.inputFiles) {
     if (!isa<ObjFile>(inputFile))
       continue;
     const ObjFile *objFile = cast<ObjFile>(inputFile);
@@ -1107,7 +1120,7 @@ static std::vector<MachO::data_in_code_entry> collectDataInCodeEntries() {
              it != end && it->offset + it->length <= endAddr; ++it)
           dataInCodeEntries.push_back(
               {static_cast<uint32_t>(isec->getVA(it->offset - beginAddr) -
-                                     in.header->addr),
+                                     ctx.in.header->addr),
                it->length, it->kind});
       }
     }
@@ -1122,8 +1135,8 @@ static std::vector<MachO::data_in_code_entry> collectDataInCodeEntries() {
 }
 
 void DataInCodeSection::finalizeContents() {
-  entries = target->wordSize == 8 ? collectDataInCodeEntries<LP64>()
-                                  : collectDataInCodeEntries<ILP32>();
+  entries = ctx.target->wordSize == 8 ? collectDataInCodeEntries<LP64>(ctx)
+                                      : collectDataInCodeEntries<ILP32>(ctx);
 }
 
 void DataInCodeSection::writeTo(uint8_t *buf) const {
@@ -1131,26 +1144,27 @@ void DataInCodeSection::writeTo(uint8_t *buf) const {
     memcpy(buf, entries.data(), getRawSize());
 }
 
-FunctionStartsSection::FunctionStartsSection()
-    : LinkEditSection(segment_names::linkEdit, section_names::functionStarts) {}
+FunctionStartsSection::FunctionStartsSection(Ctx &ctx)
+    : LinkEditSection(ctx, segment_names::linkEdit,
+                      section_names::functionStarts) {}
 
 void FunctionStartsSection::finalizeContents() {
   raw_svector_ostream os{contents};
   std::vector<uint64_t> addrs;
-  for (const InputFile *file : inputFiles) {
+  for (const InputFile *file : ctx.inputFiles) {
     if (auto *objFile = dyn_cast<ObjFile>(file)) {
       for (const Symbol *sym : objFile->symbols) {
         if (const auto *defined = dyn_cast_or_null<Defined>(sym)) {
           if (!defined->isec() || !isCodeSection(defined->isec()) ||
               !defined->isLive())
             continue;
-          addrs.push_back(defined->getVA());
+          addrs.push_back(defined->getVA(ctx));
         }
       }
     }
   }
   llvm::sort(addrs);
-  uint64_t addr = in.header->addr;
+  uint64_t addr = ctx.in.header->addr;
   for (uint64_t nextAddr : addrs) {
     uint64_t delta = nextAddr - addr;
     if (delta == 0)
@@ -1165,13 +1179,13 @@ void FunctionStartsSection::writeTo(uint8_t *buf) const {
   memcpy(buf, contents.data(), contents.size());
 }
 
-SymtabSection::SymtabSection(StringTableSection &stringTableSection)
-    : LinkEditSection(segment_names::linkEdit, section_names::symbolTable),
+SymtabSection::SymtabSection(Ctx &ctx, StringTableSection &stringTableSection)
+    : LinkEditSection(ctx, segment_names::linkEdit, section_names::symbolTable),
       stringTableSection(stringTableSection) {}
 
 void SymtabSection::emitBeginSourceStab(StringRef sourceFile) {
   StabsEntry stab(N_SO);
-  stab.strx = stringTableSection.addString(saver().save(sourceFile));
+  stab.strx = stringTableSection.addString(ctx.saver.save(sourceFile));
   stabs.emplace_back(std::move(stab));
 }
 
@@ -1183,18 +1197,18 @@ void SymtabSection::emitEndSourceStab() {
 
 void SymtabSection::emitObjectFileStab(ObjFile *file) {
   StabsEntry stab(N_OSO);
-  stab.sect = target->cpuSubtype;
+  stab.sect = ctx.target->cpuSubtype;
   SmallString<261> path(!file->archiveName.empty() ? file->archiveName
                                                    : file->getName());
   std::error_code ec = sys::fs::make_absolute(path);
   if (ec)
-    fatal("failed to get absolute path for " + path);
+    ctx.e.fatal("failed to get absolute path for " + path);
 
   if (!file->archiveName.empty())
     path.append({"(", file->getName(), ")"});
 
-  StringRef adjustedPath = saver().save(path.str());
-  adjustedPath.consume_front(config->osoPrefix);
+  StringRef adjustedPath = ctx.saver.save(path.str());
+  adjustedPath.consume_front(ctx.arg.osoPrefix);
 
   stab.strx = stringTableSection.addString(adjustedPath);
   stab.desc = 1;
@@ -1209,10 +1223,10 @@ void SymtabSection::emitEndFunStab(Defined *defined) {
 }
 
 void SymtabSection::emitStabs() {
-  if (config->omitDebugInfo)
+  if (ctx.arg.omitDebugInfo)
     return;
 
-  for (const std::string &s : config->astPaths) {
+  for (const std::string &s : ctx.arg.astPaths) {
     StabsEntry astStab(N_AST);
     astStab.strx = stringTableSection.addString(s);
     stabs.emplace_back(std::move(astStab));
@@ -1234,7 +1248,7 @@ void SymtabSection::emitStabs() {
 
       // Constant-folded symbols go in the executable's symbol table, but don't
       // get a stabs entry unless --keep-icf-stabs flag is specified.
-      if (!config->keepICFStabs &&
+      if (!ctx.arg.keepICFStabs &&
           defined->identicalCodeFoldingKind != Symbol::ICFFoldKind::None)
         continue;
 
@@ -1292,10 +1306,10 @@ void SymtabSection::emitStabs() {
     // the symbol refers to after ICF folding.
     if (defined->identicalCodeFoldingKind == Symbol::ICFFoldKind::Thunk) {
       // For thunks, we need to get the function they point to
-      Defined *target = getBodyForThunkFoldedSym(defined);
-      symStab.value = target->getVA();
+      Defined *target = getBodyForThunkFoldedSym(ctx, defined);
+      symStab.value = target->getVA(ctx);
     } else {
-      symStab.value = defined->getVA();
+      symStab.value = defined->getVA(ctx);
     }
 
     if (isCodeSection(isec)) {
@@ -1305,7 +1319,7 @@ void SymtabSection::emitStabs() {
       // actual function body that exists in the output binary
       if (defined->identicalCodeFoldingKind == Symbol::ICFFoldKind::Thunk) {
         // For thunks, we use the target's size
-        Defined *target = getBodyForThunkFoldedSym(defined);
+        Defined *target = getBodyForThunkFoldedSym(ctx, defined);
         emitEndFunStab(target);
       } else {
         emitEndFunStab(defined);
@@ -1327,7 +1341,7 @@ void SymtabSection::finalizeContents() {
   };
 
   std::function<void(Symbol *)> localSymbolsHandler;
-  switch (config->localSymbolsPresence) {
+  switch (ctx.arg.localSymbolsPresence) {
   case SymtabPresence::All:
     localSymbolsHandler = [&](Symbol *sym) { addSymbol(localSymbols, sym); };
     break;
@@ -1336,13 +1350,13 @@ void SymtabSection::finalizeContents() {
     break;
   case SymtabPresence::SelectivelyIncluded:
     localSymbolsHandler = [&](Symbol *sym) {
-      if (config->localSymbolPatterns.match(sym->getName()))
+      if (ctx.arg.localSymbolPatterns.match(sym->getName()))
         addSymbol(localSymbols, sym);
     };
     break;
   case SymtabPresence::SelectivelyExcluded:
     localSymbolsHandler = [&](Symbol *sym) {
-      if (!config->localSymbolPatterns.match(sym->getName()))
+      if (!ctx.arg.localSymbolPatterns.match(sym->getName()))
         addSymbol(localSymbols, sym);
     };
     break;
@@ -1353,8 +1367,8 @@ void SymtabSection::finalizeContents() {
   // But if `-x` is set, then we don't need to. localSymbolsHandler() will do
   // the right thing regardless, but this check is a perf optimization because
   // iterating through all the input files and their symbols is expensive.
-  if (config->localSymbolsPresence != SymtabPresence::None) {
-    for (const InputFile *file : inputFiles) {
+  if (ctx.arg.localSymbolsPresence != SymtabPresence::None) {
+    for (const InputFile *file : ctx.inputFiles) {
       if (auto *objFile = dyn_cast<ObjFile>(file)) {
         for (Symbol *sym : objFile->symbols) {
           if (auto *defined = dyn_cast_or_null<Defined>(sym)) {
@@ -1370,10 +1384,10 @@ void SymtabSection::finalizeContents() {
 
   // __dyld_private is a local symbol too. It's linker-created and doesn't
   // exist in any object file.
-  if (in.stubHelper && in.stubHelper->dyldPrivate)
-    localSymbolsHandler(in.stubHelper->dyldPrivate);
+  if (ctx.in.stubHelper && ctx.in.stubHelper->dyldPrivate)
+    localSymbolsHandler(ctx.in.stubHelper->dyldPrivate);
 
-  for (Symbol *sym : symtab->getSymbols()) {
+  for (Symbol *sym : ctx.symtab->getSymbols()) {
     if (!sym->isLive())
       continue;
     if (auto *defined = dyn_cast<Defined>(sym)) {
@@ -1406,8 +1420,8 @@ uint32_t SymtabSection::getNumSymbols() const {
 // This serves to hide (type-erase) the template parameter from SymtabSection.
 template <class LP> class SymtabSectionImpl final : public SymtabSection {
 public:
-  SymtabSectionImpl(StringTableSection &stringTableSection)
-      : SymtabSection(stringTableSection) {}
+  SymtabSectionImpl(Ctx &ctx, StringTableSection &stringTableSection)
+      : SymtabSection(ctx, stringTableSection) {}
   uint64_t getRawSize() const override;
   void writeTo(uint8_t *buf) const override;
 };
@@ -1455,16 +1469,16 @@ template <class LP> void SymtabSectionImpl<LP>::writeTo(uint8_t *buf) const {
         nList->n_type = scope | N_SECT;
         nList->n_sect = defined->isec()->parent->index;
         // For the N_SECT symbol type, n_value is the address of the symbol
-        nList->n_value = defined->getVA();
+        nList->n_value = defined->getVA(ctx);
       }
       nList->n_desc |= defined->isExternalWeakDef() ? N_WEAK_DEF : 0;
       nList->n_desc |=
           defined->referencedDynamically ? REFERENCED_DYNAMICALLY : 0;
-      if (config->outputType == MH_OBJECT)
+      if (ctx.arg.outputType == MH_OBJECT)
         nList->n_desc |= defined->isCold() ? N_COLD_FUNC : 0;
     } else if (auto *dysym = dyn_cast<DylibSymbol>(entry.sym)) {
       uint16_t n_desc = nList->n_desc;
-      int16_t ordinal = ordinalForDylibSymbol(*dysym);
+      int16_t ordinal = ordinalForDylibSymbol(ctx, *dysym);
       if (ordinal == BIND_SPECIAL_DYLIB_FLAT_LOOKUP)
         SET_LIBRARY_ORDINAL(n_desc, DYNAMIC_LOOKUP_ORDINAL);
       else if (ordinal == BIND_SPECIAL_DYLIB_MAIN_EXECUTABLE)
@@ -1485,33 +1499,34 @@ template <class LP> void SymtabSectionImpl<LP>::writeTo(uint8_t *buf) const {
 
 template <class LP>
 SymtabSection *
-macho::makeSymtabSection(StringTableSection &stringTableSection) {
-  return make<SymtabSectionImpl<LP>>(stringTableSection);
+macho::makeSymtabSection(Ctx &ctx, StringTableSection &stringTableSection) {
+  return ctx.make<SymtabSectionImpl<LP>>(ctx, stringTableSection);
 }
 
-IndirectSymtabSection::IndirectSymtabSection()
-    : LinkEditSection(segment_names::linkEdit,
+IndirectSymtabSection::IndirectSymtabSection(Ctx &ctx)
+    : LinkEditSection(ctx, segment_names::linkEdit,
                       section_names::indirectSymbolTable) {}
 
 uint32_t IndirectSymtabSection::getNumSymbols() const {
-  uint32_t size = in.got->getEntries().size() + in.stubs->getEntries().size();
-  if (!config->emitChainedFixups)
-    size += in.stubs->getEntries().size();
+  uint32_t size =
+      ctx.in.got->getEntries().size() + ctx.in.stubs->getEntries().size();
+  if (!ctx.arg.emitChainedFixups)
+    size += ctx.in.stubs->getEntries().size();
   return size;
 }
 
 bool IndirectSymtabSection::isNeeded() const {
-  return in.got->isNeeded() || in.stubs->isNeeded();
+  return ctx.in.got->isNeeded() || ctx.in.stubs->isNeeded();
 }
 
 void IndirectSymtabSection::finalizeContents() {
   uint32_t off = 0;
-  in.got->reserved1 = off;
-  off += in.got->getEntries().size();
-  in.stubs->reserved1 = off;
-  if (in.lazyPointers) {
-    off += in.stubs->getEntries().size();
-    in.lazyPointers->reserved1 = off;
+  ctx.in.got->reserved1 = off;
+  off += ctx.in.got->getEntries().size();
+  ctx.in.stubs->reserved1 = off;
+  if (ctx.in.lazyPointers) {
+    off += ctx.in.stubs->getEntries().size();
+    ctx.in.lazyPointers->reserved1 = off;
   }
 }
 
@@ -1523,34 +1538,35 @@ static uint32_t indirectValue(const Symbol *sym) {
 
 void IndirectSymtabSection::writeTo(uint8_t *buf) const {
   uint32_t off = 0;
-  for (const Symbol *sym : in.got->getEntries()) {
+  for (const Symbol *sym : ctx.in.got->getEntries()) {
     write32le(buf + off * sizeof(uint32_t), indirectValue(sym));
     ++off;
   }
-  for (const Symbol *sym : in.stubs->getEntries()) {
+  for (const Symbol *sym : ctx.in.stubs->getEntries()) {
     write32le(buf + off * sizeof(uint32_t), indirectValue(sym));
     ++off;
   }
 
-  if (in.lazyPointers) {
+  if (ctx.in.lazyPointers) {
     // There is a 1:1 correspondence between stubs and LazyPointerSection
     // entries. But giving __stubs and __la_symbol_ptr the same reserved1
     // (the offset into the indirect symbol table) so that they both refer
     // to the same range of offsets confuses `strip`, so write the stubs
     // symbol table offsets a second time.
-    for (const Symbol *sym : in.stubs->getEntries()) {
+    for (const Symbol *sym : ctx.in.stubs->getEntries()) {
       write32le(buf + off * sizeof(uint32_t), indirectValue(sym));
       ++off;
     }
   }
 }
 
-StringTableSection::StringTableSection()
-    : LinkEditSection(segment_names::linkEdit, section_names::stringTable) {}
+StringTableSection::StringTableSection(Ctx &ctx)
+    : LinkEditSection(ctx, segment_names::linkEdit,
+                      section_names::stringTable) {}
 
 uint32_t StringTableSection::addString(StringRef str) {
   uint32_t strx = size;
-  if (config->dedupSymbolStrings) {
+  if (ctx.arg.dedupSymbolStrings) {
     llvm::CachedHashStringRef hashedStr(str);
     auto [it, inserted] = stringMap.try_emplace(hashedStr, strx);
     if (!inserted)
@@ -1573,17 +1589,18 @@ void StringTableSection::writeTo(uint8_t *buf) const {
 static_assert((CodeSignatureSection::blobHeadersSize % 8) == 0);
 static_assert((CodeSignatureSection::fixedHeadersSize % 8) == 0);
 
-CodeSignatureSection::CodeSignatureSection()
-    : LinkEditSection(segment_names::linkEdit, section_names::codeSignature) {
+CodeSignatureSection::CodeSignatureSection(Ctx &ctx)
+    : LinkEditSection(ctx, segment_names::linkEdit,
+                      section_names::codeSignature) {
   align = 16; // required by libstuff
 
   // XXX: This mimics LD64, where it uses the install-name as codesign
   // identifier, if available.
-  if (!config->installName.empty())
-    fileName = config->installName;
+  if (!ctx.arg.installName.empty())
+    fileName = ctx.arg.installName;
   else
     // FIXME: Consider using finalOutput instead of outputFile.
-    fileName = config->outputFile;
+    fileName = ctx.arg.outputFile;
 
   size_t slashIndex = fileName.rfind("/");
   if (slashIndex != std::string::npos)
@@ -1659,18 +1676,18 @@ void CodeSignatureSection::writeTo(uint8_t *buf) const {
   codeDirectory->teamOffset = 0;
   codeDirectory->spare3 = 0;
   codeDirectory->codeLimit64 = 0;
-  OutputSegment *textSeg = getOrCreateOutputSegment(segment_names::text);
+  OutputSegment *textSeg = getOrCreateOutputSegment(ctx, segment_names::text);
   write64be(&codeDirectory->execSegBase, textSeg->fileOff);
   write64be(&codeDirectory->execSegLimit, textSeg->fileSize);
   write64be(&codeDirectory->execSegFlags,
-            config->outputType == MH_EXECUTE ? CS_EXECSEG_MAIN_BINARY : 0);
+            ctx.arg.outputType == MH_EXECUTE ? CS_EXECSEG_MAIN_BINARY : 0);
   auto *id = reinterpret_cast<char *>(&codeDirectory[1]);
   memcpy(id, fileName.begin(), fileName.size());
   memset(id + fileName.size(), 0, fileNamePad);
 }
 
-CStringSection::CStringSection(const char *name)
-    : SyntheticSection(segment_names::text, name) {
+CStringSection::CStringSection(Ctx &ctx, const char *name)
+    : SyntheticSection(ctx, segment_names::text, name) {
   flags = S_CSTRING_LITERALS;
 }
 
@@ -1736,7 +1753,7 @@ static Align getStringPieceAlignment(const CStringInputSection &isec,
 
 void CStringSection::finalizeContents() {
   size = 0;
-  priorityBuilder.forEachStringPiece(
+  ctx.priorityBuilder->forEachStringPiece(
       inputs,
       [&](CStringInputSection &isec, StringPiece &piece, size_t pieceIdx) {
         piece.outSecOff = alignTo(size, getStringPieceAlignment(isec, piece));
@@ -1754,14 +1771,14 @@ void DeduplicatedCStringSection::finalizeContents() {
   DenseMap<CachedHashStringRef, Align> strToAlignment;
   // Used for tail merging only
   std::vector<CachedHashStringRef> deduplicatedStrs;
-  priorityBuilder.forEachStringPiece(
+  ctx.priorityBuilder->forEachStringPiece(
       inputs,
       [&](CStringInputSection &isec, StringPiece &piece, size_t pieceIdx) {
         auto s = isec.getCachedHashStringRef(pieceIdx);
         assert(isec.align != 0);
         auto align = getStringPieceAlignment(isec, piece);
         auto [it, wasInserted] = strToAlignment.try_emplace(s, align);
-        if (config->tailMergeStrings && wasInserted)
+        if (ctx.arg.tailMergeStrings && wasInserted)
           deduplicatedStrs.push_back(s);
         if (!wasInserted && it->second < align)
           it->second = align;
@@ -1806,14 +1823,14 @@ void DeduplicatedCStringSection::finalizeContents() {
   // Sort the strings for performance and compression size win, and then
   // assign an offset for each string and save it to the corresponding
   // StringPieces for easy access.
-  priorityBuilder.forEachStringPiece(inputs, [&](CStringInputSection &isec,
-                                                 StringPiece &piece,
-                                                 size_t pieceIdx) {
+  ctx.priorityBuilder->forEachStringPiece(inputs, [&](CStringInputSection &isec,
+                                                      StringPiece &piece,
+                                                      size_t pieceIdx) {
     auto s = isec.getCachedHashStringRef(pieceIdx);
     // Any string can be tail merged with itself with an offset of zero
     uint64_t tailMergeOffset = 0;
     auto mergeIt =
-        config->tailMergeStrings ? tailMergeMap.find(s) : tailMergeMap.end();
+        ctx.arg.tailMergeStrings ? tailMergeMap.find(s) : tailMergeMap.end();
     if (mergeIt != tailMergeMap.end()) {
       auto &[superString, offset] = mergeIt->second;
       // s can be tail merged with superString. Do not layout s. Instead layout
@@ -1856,8 +1873,8 @@ uint64_t DeduplicatedCStringSection::getStringOffset(StringRef str) const {
 // emit input sections of that name, and LLD doesn't currently support mixing
 // synthetic and concat-type OutputSections. To work around this, I've given
 // our merged-literals section a different name.
-WordLiteralSection::WordLiteralSection()
-    : SyntheticSection(segment_names::text, section_names::literals) {
+WordLiteralSection::WordLiteralSection(Ctx &ctx)
+    : SyntheticSection(ctx, segment_names::text, section_names::literals) {
   align = 16;
 }
 
@@ -1922,8 +1939,9 @@ void WordLiteralSection::writeTo(uint8_t *buf) const {
     memcpy(buf + p.second * 4, &p.first, 4);
 }
 
-ObjCImageInfoSection::ObjCImageInfoSection()
-    : SyntheticSection(segment_names::data, section_names::objCImageInfo) {}
+ObjCImageInfoSection::ObjCImageInfoSection(Ctx &ctx)
+    : SyntheticSection(ctx, segment_names::data, section_names::objCImageInfo) {
+}
 
 ObjCImageInfoSection::ImageInfo
 ObjCImageInfoSection::parseImageInfo(const InputFile *file) {
@@ -1935,13 +1953,13 @@ ObjCImageInfoSection::parseImageInfo(const InputFile *file) {
   //   uint32_t flags;
   // };
   if (data.size() < 8) {
-    warn(toString(file) + ": invalid __objc_imageinfo size");
+    file->ctx.e.warn(toString(file) + ": invalid __objc_imageinfo size");
     return info;
   }
 
   auto *buf = reinterpret_cast<const uint32_t *>(data.data());
   if (read32le(buf) != 0) {
-    warn(toString(file) + ": invalid __objc_imageinfo version");
+    file->ctx.e.warn(toString(file) + ": invalid __objc_imageinfo version");
     return info;
   }
 
@@ -1986,9 +2004,10 @@ void ObjCImageInfoSection::finalizeContents() {
       continue;
 
     if (info.swiftVersion != 0 && info.swiftVersion != inputInfo.swiftVersion) {
-      error("Swift version mismatch: " + toString(firstFile) + " has version " +
-            swiftVersionString(info.swiftVersion) + " but " + toString(file) +
-            " has version " + swiftVersionString(inputInfo.swiftVersion));
+      ctx.e.error("Swift version mismatch: " + toString(firstFile) +
+                  " has version " + swiftVersionString(info.swiftVersion) +
+                  " but " + toString(file) + " has version " +
+                  swiftVersionString(inputInfo.swiftVersion));
     } else {
       info.swiftVersion = inputInfo.swiftVersion;
       firstFile = file;
@@ -2002,8 +2021,8 @@ void ObjCImageInfoSection::writeTo(uint8_t *buf) const {
   write32le(buf + 4, flags);
 }
 
-InitOffsetsSection::InitOffsetsSection()
-    : SyntheticSection(segment_names::text, section_names::initOffsets) {
+InitOffsetsSection::InitOffsetsSection(Ctx &ctx)
+    : SyntheticSection(ctx, segment_names::text, section_names::initOffsets) {
   flags = S_INIT_FUNC_OFFSETS;
   align = 4; // This section contains 32-bit integers.
 }
@@ -2021,16 +2040,16 @@ void InitOffsetsSection::writeTo(uint8_t *buf) const {
     for (const Relocation &rel : isec->relocs) {
       const Symbol *referent = cast<Symbol *>(rel.referent);
       assert(referent && "section relocation should have been rejected");
-      uint64_t offset = referent->getVA() - in.header->addr;
+      uint64_t offset = referent->getVA(ctx) - ctx.in.header->addr;
       // FIXME: Can we handle this gracefully?
       if (offset > UINT32_MAX)
-        fatal(isec->getLocation(rel.offset) + ": offset to initializer " +
-              referent->getName() + " (" + utohexstr(offset) +
-              ") does not fit in 32 bits");
+        ctx.e.fatal(isec->getLocation(rel.offset) + ": offset to initializer " +
+                    referent->getName() + " (" + utohexstr(offset) +
+                    ") does not fit in 32 bits");
 
       // Entries need to be added in the order they appear in the section, but
       // relocations aren't guaranteed to be sorted.
-      size_t index = rel.offset >> target->p2WordSize;
+      size_t index = rel.offset >> ctx.target->p2WordSize;
       write32le(&buf[index * sizeof(uint32_t)], offset);
     }
     buf += isec->relocs.size() * sizeof(uint32_t);
@@ -2044,28 +2063,29 @@ void InitOffsetsSection::writeTo(uint8_t *buf) const {
 void InitOffsetsSection::setUp() {
   for (const ConcatInputSection *isec : sections) {
     for (const Relocation &rel : isec->relocs) {
-      RelocAttrs attrs = target->getRelocAttrs(rel.type);
+      RelocAttrs attrs = ctx.target->getRelocAttrs(rel.type);
       if (!attrs.hasAttr(RelocAttrBits::UNSIGNED))
-        error(isec->getLocation(rel.offset) +
-              ": unsupported relocation type: " + attrs.name);
+        ctx.e.error(isec->getLocation(rel.offset) +
+                    ": unsupported relocation type: " + attrs.name);
       if (rel.addend != 0)
-        error(isec->getLocation(rel.offset) +
-              ": relocation addend is not representable in __init_offsets");
+        ctx.e.error(
+            isec->getLocation(rel.offset) +
+            ": relocation addend is not representable in __init_offsets");
       if (isa<InputSection *>(rel.referent))
-        error(isec->getLocation(rel.offset) +
-              ": unexpected section relocation");
+        ctx.e.error(isec->getLocation(rel.offset) +
+                    ": unexpected section relocation");
 
       Symbol *sym = rel.referent.dyn_cast<Symbol *>();
       if (auto *undefined = dyn_cast<Undefined>(sym))
-        treatUndefinedSymbol(*undefined, isec, rel.offset);
+        treatUndefinedSymbol(ctx, *undefined, isec, rel.offset);
       if (needsBinding(sym))
-        in.stubs->addEntry(sym);
+        ctx.in.stubs->addEntry(sym);
     }
   }
 }
 
-ObjCMethListSection::ObjCMethListSection()
-    : SyntheticSection(segment_names::text, section_names::objcMethList) {
+ObjCMethListSection::ObjCMethListSection(Ctx &ctx)
+    : SyntheticSection(ctx, segment_names::text, section_names::objcMethList) {
   flags = S_ATTR_NO_DEAD_STRIP;
   align = relativeOffsetSize;
 }
@@ -2088,8 +2108,8 @@ void ObjCMethListSection::setUp() {
       assert(reloc && "Relocation expected at method list name slot");
 
       StringRef methname = reloc->getReferentString();
-      if (!ObjCSelRefsHelper::getSelRef(methname))
-        ObjCSelRefsHelper::makeSelRef(methname);
+      if (!ObjCSelRefsHelper::getSelRef(ctx, methname))
+        ObjCSelRefsHelper::makeSelRef(ctx, methname);
 
       // Jump to method name offset in next struct
       methodNameOff += originalStructSize;
@@ -2191,16 +2211,16 @@ void ObjCMethListSection::writeRelativeOffsetForIsec(
   uint32_t symVA = 0;
   if (useSelRef) {
     StringRef methname = reloc->getReferentString();
-    ConcatInputSection *selRef = ObjCSelRefsHelper::getSelRef(methname);
+    ConcatInputSection *selRef = ObjCSelRefsHelper::getSelRef(ctx, methname);
     assert(selRef && "Expected all selector names to already be already be "
                      "present in __objc_selrefs");
     symVA = selRef->getVA();
-    assert(selRef->data.size() == target->wordSize &&
+    assert(selRef->data.size() == ctx.target->wordSize &&
            "Expected one selref per ConcatInputSection");
   } else if (auto *sym = dyn_cast<Symbol *>(reloc->referent)) {
     auto *def = dyn_cast_or_null<Defined>(sym);
     assert(def && "Expected all syms in __objc_methlist to be defined");
-    symVA = def->getVA();
+    symVA = def->getVA(ctx);
   } else {
     auto *isec = cast<InputSection *>(reloc->referent);
     symVA = isec->getVA(reloc->addend);
@@ -2211,7 +2231,7 @@ void ObjCMethListSection::writeRelativeOffsetForIsec(
   write32le(buf + outSecOff, delta);
 
   // Move one pointer forward in the absolute method list
-  inSecOff += target->wordSize;
+  inSecOff += ctx.target->wordSize;
   // Move one relative offset forward in the relative method list (32 bits)
   outSecOff += relativeOffsetSize;
 }
@@ -2236,7 +2256,7 @@ ObjCMethListSection::writeRelativeMethodList(const ConcatInputSection *isec,
   writeMethodListHeader(buf, relativeStructSizeAndFlags, structCount);
 
   assert(methodListHeaderSize +
-                 (structCount * pointersPerStruct * target->wordSize) ==
+                 (structCount * pointersPerStruct * ctx.target->wordSize) ==
              isec->data.size() &&
          "Invalid computed ObjC method list size");
 
@@ -2271,7 +2291,7 @@ ObjCMethListSection::writeRelativeMethodList(const ConcatInputSection *isec,
 uint32_t ObjCMethListSection::computeRelativeMethodListSize(
     uint32_t absoluteMethodListSize) const {
   uint32_t oldPointersSize = absoluteMethodListSize - methodListHeaderSize;
-  uint32_t pointerCount = oldPointersSize / target->wordSize;
+  uint32_t pointerCount = oldPointersSize / ctx.target->wordSize;
   assert(((pointerCount % pointersPerStruct) == 0) &&
          "__objc_methlist expects method lists to have multiple-of-3 pointers");
 
@@ -2300,28 +2320,31 @@ void ObjCMethListSection::writeMethodListHeader(uint8_t *buf,
   write32le(buf + sizeof(structSizeAndFlags), structCount);
 }
 
-void macho::createSyntheticSymbols() {
-  auto addHeaderSymbol = [](const char *name) {
-    symtab->addSynthetic(name, in.header->isec, /*value=*/0,
-                         /*isPrivateExtern=*/true, /*includeInSymtab=*/false,
-                         /*referencedDynamically=*/false);
+void macho::createSyntheticSymbols(Ctx &ctx) {
+  auto addHeaderSymbol = [&](const char *name) {
+    ctx.symtab->addSynthetic(name, ctx.in.header->isec, /*value=*/0,
+                             /*isPrivateExtern=*/true,
+                             /*includeInSymtab=*/false,
+                             /*referencedDynamically=*/false);
   };
 
-  switch (config->outputType) {
+  switch (ctx.arg.outputType) {
     // FIXME: Assign the right address value for these symbols
     // (rather than 0). But we need to do that after assignAddresses().
   case MH_EXECUTE:
     // If linking PIE, __mh_execute_header is a defined symbol in
     //  __TEXT, __text)
     // Otherwise, it's an absolute symbol.
-    if (config->isPic)
-      symtab->addSynthetic("__mh_execute_header", in.header->isec, /*value=*/0,
-                           /*isPrivateExtern=*/false, /*includeInSymtab=*/true,
-                           /*referencedDynamically=*/true);
+    if (ctx.arg.isPic)
+      ctx.symtab->addSynthetic(
+          "__mh_execute_header", ctx.in.header->isec, /*value=*/0,
+          /*isPrivateExtern=*/false, /*includeInSymtab=*/true,
+          /*referencedDynamically=*/true);
     else
-      symtab->addSynthetic("__mh_execute_header", /*isec=*/nullptr, /*value=*/0,
-                           /*isPrivateExtern=*/false, /*includeInSymtab=*/true,
-                           /*referencedDynamically=*/true);
+      ctx.symtab->addSynthetic(
+          "__mh_execute_header", /*isec=*/nullptr, /*value=*/0,
+          /*isPrivateExtern=*/false, /*includeInSymtab=*/true,
+          /*referencedDynamically=*/true);
     break;
 
     // The following symbols are N_SECT symbols, even though the header is not
@@ -2352,11 +2375,12 @@ void macho::createSyntheticSymbols() {
   addHeaderSymbol("___dso_handle");
 }
 
-ChainedFixupsSection::ChainedFixupsSection()
-    : LinkEditSection(segment_names::linkEdit, section_names::chainFixups) {}
+ChainedFixupsSection::ChainedFixupsSection(Ctx &ctx)
+    : LinkEditSection(ctx, segment_names::linkEdit,
+                      section_names::chainFixups) {}
 
 bool ChainedFixupsSection::isNeeded() const {
-  assert(config->emitChainedFixups);
+  assert(ctx.arg.emitChainedFixups);
   // dyld always expects LC_DYLD_CHAINED_FIXUPS to point to a valid
   // dyld_chained_fixups_header, so we create this section even if there aren't
   // any fixups.
@@ -2428,13 +2452,14 @@ size_t ChainedFixupsSection::SegmentInfo::getSize() const {
                     pageStarts.back().first * sizeof(uint16_t));
 }
 
-size_t ChainedFixupsSection::SegmentInfo::writeTo(uint8_t *buf) const {
+size_t ChainedFixupsSection::SegmentInfo::writeTo(Ctx &ctx,
+                                                  uint8_t *buf) const {
   auto *segInfo = reinterpret_cast<dyld_chained_starts_in_segment *>(buf);
   segInfo->size = getSize();
-  segInfo->page_size = target->getPageSize();
+  segInfo->page_size = ctx.target->getPageSize();
   // FIXME: Use DYLD_CHAINED_PTR_64_OFFSET on newer OS versions.
   segInfo->pointer_format = DYLD_CHAINED_PTR_64;
-  segInfo->segment_offset = oseg->addr - in.header->addr;
+  segInfo->segment_offset = oseg->addr - ctx.in.header->addr;
   segInfo->max_valid_pointer = 0; // not used on 64-bit
   segInfo->page_count = pageStarts.back().first + 1;
 
@@ -2486,22 +2511,22 @@ void ChainedFixupsSection::writeTo(uint8_t *buf) const {
   header->starts_offset = curOffset();
 
   auto *imageInfo = reinterpret_cast<dyld_chained_starts_in_image *>(buf);
-  imageInfo->seg_count = outputSegments.size();
+  imageInfo->seg_count = ctx.outputSegments.size();
   uint32_t *segStarts = imageInfo->seg_info_offset;
 
   // dyld_chained_starts_in_image ends in a flexible array member containing an
   // uint32_t for each segment. Leave room for it, and fill it via segStarts.
   buf += alignTo<8>(offsetof(dyld_chained_starts_in_image, seg_info_offset) +
-                    outputSegments.size() * sizeof(uint32_t));
+                    ctx.outputSegments.size() * sizeof(uint32_t));
 
   // Initialize all offsets to 0, which indicates that the segment does not have
   // fixups. Those that do have them will be filled in below.
-  for (size_t i = 0; i < outputSegments.size(); ++i)
+  for (size_t i = 0; i < ctx.outputSegments.size(); ++i)
     segStarts[i] = 0;
 
   for (const SegmentInfo &seg : fixupSegments) {
     segStarts[seg.oseg->index] = curOffset() - header->starts_offset;
-    buf += seg.writeTo(buf);
+    buf += seg.writeTo(ctx, buf);
   }
 
   // Write imports table.
@@ -2509,7 +2534,7 @@ void ChainedFixupsSection::writeTo(uint8_t *buf) const {
   uint64_t nameOffset = 0;
   for (auto [import, idx] : bindings) {
     const Symbol &sym = *import.first;
-    buf += writeImport(buf, importFormat, ordinalForSymbol(sym),
+    buf += writeImport(buf, importFormat, ordinalForSymbol(ctx, sym),
                        sym.isWeakRef(), nameOffset, import.second);
     nameOffset += sym.getName().size() + 1;
   }
@@ -2528,16 +2553,16 @@ void ChainedFixupsSection::writeTo(uint8_t *buf) const {
 // This is step 2 of the algorithm described in the class comment of
 // ChainedFixupsSection.
 void ChainedFixupsSection::finalizeContents() {
-  assert(target->wordSize == 8 && "Only 64-bit platforms are supported");
-  assert(config->emitChainedFixups);
+  assert(ctx.target->wordSize == 8 && "Only 64-bit platforms are supported");
+  assert(ctx.arg.emitChainedFixups);
 
   if (!isUInt<32>(symtabSize))
-    error("cannot encode chained fixups: imported symbols table size " +
-          Twine(symtabSize) + " exceeds 4 GiB");
+    ctx.e.error("cannot encode chained fixups: imported symbols table size " +
+                Twine(symtabSize) + " exceeds 4 GiB");
 
-  bool needsLargeOrdinal = any_of(bindings, [](const auto &p) {
+  bool needsLargeOrdinal = any_of(bindings, [&](const auto &p) {
     // 0xF1 - 0xFF are reserved for special ordinals in the 8-bit encoding.
-    return ordinalForSymbol(*p.first.first) > 0xF0;
+    return ordinalForSymbol(ctx, *p.first.first) > 0xF0;
   });
 
   if (needsLargeAddend || !isUInt<23>(symtabSize) || needsLargeOrdinal)
@@ -2563,7 +2588,7 @@ void ChainedFixupsSection::finalizeContents() {
     return a.isec->parent->parent == b.isec->parent->parent;
   };
 
-  const uint64_t pageSize = target->getPageSize();
+  const uint64_t pageSize = ctx.target->getPageSize();
   for (size_t i = 0, count = locations.size(); i < count;) {
     const Location &firstLoc = locations[i];
     fixupSegments.emplace_back(firstLoc.isec->parent->parent);
@@ -2581,12 +2606,31 @@ void ChainedFixupsSection::finalizeContents() {
   // Compute expected encoded size.
   size = alignTo<8>(sizeof(dyld_chained_fixups_header));
   size += alignTo<8>(offsetof(dyld_chained_starts_in_image, seg_info_offset) +
-                     outputSegments.size() * sizeof(uint32_t));
+                     ctx.outputSegments.size() * sizeof(uint32_t));
   for (const SegmentInfo &seg : fixupSegments)
     size += seg.getSize();
   size += importEntrySize(importFormat) * bindings.size();
   size += symtabSize;
 }
 
-template SymtabSection *macho::makeSymtabSection<LP64>(StringTableSection &);
-template SymtabSection *macho::makeSymtabSection<ILP32>(StringTableSection &);
+template SymtabSection *macho::makeSymtabSection<LP64>(Ctx &,
+                                                       StringTableSection &);
+template SymtabSection *macho::makeSymtabSection<ILP32>(Ctx &,
+                                                        StringTableSection &);
+
+CStringSection *macho::getOrCreateCStringSection(Ctx &ctx, StringRef name,
+                                                 bool forceDedupStrings) {
+  auto [it, didEmplace] =
+      ctx.in.cStringSectionMap.try_emplace(name, ctx.in.cStringSections.size());
+  if (!didEmplace)
+    return ctx.in.cStringSections[it->getValue()];
+
+  std::string &nameData = *ctx.make<std::string>(name);
+  CStringSection *sec;
+  if (ctx.arg.dedupStrings || forceDedupStrings)
+    sec = ctx.make<DeduplicatedCStringSection>(ctx, nameData.c_str());
+  else
+    sec = ctx.make<CStringSection>(ctx, nameData.c_str());
+  ctx.in.cStringSections.push_back(sec);
+  return sec;
+}

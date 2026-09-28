@@ -58,7 +58,7 @@ static void handleColorDiagnostics(CommonLinkerContext &ctx,
     else if (s == "never")
       errs.enable_colors(false);
     else if (s != "auto")
-      error("unknown option: --color-diagnostics=" + s);
+      ctx.e.error("unknown option: --color-diagnostics=" + s);
   }
 }
 
@@ -71,26 +71,26 @@ InputArgList MachOOptTable::parse(CommonLinkerContext &ctx,
 
   // Expand response files (arguments in the form of @<filename>)
   // and then parse the argument again.
-  cl::ExpandResponseFiles(saver(), cl::TokenizeGNUCommandLine, vec);
+  cl::ExpandResponseFiles(ctx.saver, cl::TokenizeGNUCommandLine, vec);
   InputArgList args = ParseArgs(vec, missingIndex, missingCount);
 
   // Handle -fatal_warnings early since it converts missing argument warnings
   // to errors.
-  errorHandler().fatalWarnings = args.hasArg(OPT_fatal_warnings);
-  errorHandler().suppressWarnings = args.hasArg(OPT_w);
+  ctx.e.fatalWarnings = args.hasArg(OPT_fatal_warnings);
+  ctx.e.suppressWarnings = args.hasArg(OPT_w);
 
   if (missingCount)
-    error(Twine(args.getArgString(missingIndex)) + ": missing argument");
+    ctx.e.error(Twine(args.getArgString(missingIndex)) + ": missing argument");
 
   handleColorDiagnostics(ctx, args);
 
   for (const Arg *arg : args.filtered(OPT_UNKNOWN)) {
     std::string nearest;
     if (findNearest(arg->getAsString(args), nearest) > 1)
-      error("unknown argument '" + arg->getAsString(args) + "'");
+      ctx.e.error("unknown argument '" + arg->getAsString(args) + "'");
     else
-      error("unknown argument '" + arg->getAsString(args) +
-            "', did you mean '" + nearest + "'");
+      ctx.e.error("unknown argument '" + arg->getAsString(args) +
+                  "', did you mean '" + nearest + "'");
   }
   return args;
 }
@@ -106,7 +106,8 @@ void MachOOptTable::printHelp(CommonLinkerContext &ctx, const char *argv0,
 // If any SDK contains the directory, use those directories in SDK order
 // instead of falling back to the host.
 SmallVector<StringRef>
-macho::getRerootedSearchPaths(StringRef searchPath, ArrayRef<StringRef> roots) {
+macho::getRerootedSearchPaths(Ctx &ctx, StringRef searchPath,
+                              ArrayRef<StringRef> roots) {
   SmallVector<StringRef> paths;
   // NOTE: only absolute paths are re-rooted to syslibroot(s)
   if (path::is_absolute(searchPath, path::Style::posix)) {
@@ -115,7 +116,7 @@ macho::getRerootedSearchPaths(StringRef searchPath, ArrayRef<StringRef> roots) {
       path::append(buffer, searchPath);
       // Do not warn about paths that are computed via the syslib roots
       if (fs::is_directory(buffer))
-        paths.push_back(saver().save(buffer.str()));
+        paths.push_back(ctx.saver.save(buffer.str()));
     }
   }
   if (paths.empty())
@@ -129,17 +130,17 @@ static std::string rewritePath(StringRef s) {
   return std::string(s);
 }
 
-static std::string rewriteInputPath(StringRef s) {
+static std::string rewriteInputPath(Ctx &ctx, StringRef s) {
   // Don't bother rewriting "absolute" paths that are actually under the
   // syslibroot; simply rewriting the syslibroot is sufficient.
-  if (rerootPath(s) == s && fs::exists(s))
+  if (rerootPath(ctx, s) == s && fs::exists(s))
     return relativeToRoot(s);
   return std::string(s);
 }
 
 // Reconstructs command line arguments so that so that you can re-run
 // the same command with the same inputs. This is for --reproduce.
-std::string macho::createResponseFile(const InputArgList &args) {
+std::string macho::createResponseFile(Ctx &ctx, const InputArgList &args) {
   SmallString<0> data;
   raw_svector_ostream os(data);
 
@@ -149,28 +150,29 @@ std::string macho::createResponseFile(const InputArgList &args) {
     case OPT_reproduce:
       break;
     case OPT_INPUT:
-      os << quote(rewriteInputPath(arg->getValue())) << "\n";
+      os << quote(rewriteInputPath(ctx, arg->getValue())) << "\n";
       break;
     case OPT_o:
       os << "-o " << quote(path::filename(arg->getValue())) << "\n";
       break;
     case OPT_filelist:
-      if (std::optional<MemoryBufferRef> buffer = readFile(arg->getValue()))
+      if (std::optional<MemoryBufferRef> buffer =
+              readFile(ctx, arg->getValue()))
         for (StringRef path : args::getLines(*buffer))
-          os << quote(rewriteInputPath(path)) << "\n";
+          os << quote(rewriteInputPath(ctx, path)) << "\n";
       break;
     case OPT_force_load:
     case OPT_weak_library:
     case OPT_load_hidden:
       os << arg->getSpelling() << " "
-         << quote(rewriteInputPath(arg->getValue())) << "\n";
+         << quote(rewriteInputPath(ctx, arg->getValue())) << "\n";
       break;
     case OPT_F:
     case OPT_L:
       // Resolve SDK prefixes before making search paths relative: relative
       // search paths are not rerooted when the reproducer is replayed.
-      for (StringRef path :
-           getRerootedSearchPaths(arg->getValue(), config->systemLibraryRoots))
+      for (StringRef path : getRerootedSearchPaths(ctx, arg->getValue(),
+                                                   ctx.arg.systemLibraryRoots))
         os << arg->getSpelling() << " " << quote(rewritePath(path)) << "\n";
       break;
     case OPT_non_global_symbols_strip_list:
@@ -195,35 +197,33 @@ std::string macho::createResponseFile(const InputArgList &args) {
   return std::string(data);
 }
 
-static void searchedDylib(const Twine &path, bool found) {
-  if (config->printDylibSearch)
-    message("searched " + path + (found ? ", found " : ", not found"));
+static void searchedDylib(Ctx &ctx, const Twine &path, bool found) {
+  if (ctx.arg.printDylibSearch)
+    ctx.e.message("searched " + path + (found ? ", found " : ", not found"),
+                  ctx.e.outs());
   if (!found)
-    depTracker->logFileNotFound(path);
+    ctx.depTracker->logFileNotFound(path);
 }
 
-std::optional<StringRef> macho::resolveDylibPath(StringRef dylibPath) {
+std::optional<StringRef> macho::resolveDylibPath(Ctx &ctx,
+                                                 StringRef dylibPath) {
   // TODO: if a tbd and dylib are both present, we should check to make sure
   // they are consistent.
   SmallString<261> tbdPath = dylibPath;
   path::replace_extension(tbdPath, ".tbd");
   bool tbdExists = fs::exists(tbdPath);
-  searchedDylib(tbdPath, tbdExists);
+  searchedDylib(ctx, tbdPath, tbdExists);
   if (tbdExists)
-    return saver().save(tbdPath.str());
+    return ctx.saver.save(tbdPath.str());
 
   bool dylibExists = fs::exists(dylibPath);
-  searchedDylib(dylibPath, dylibExists);
+  searchedDylib(ctx, dylibPath, dylibExists);
   if (dylibExists)
-    return saver().save(dylibPath);
+    return ctx.saver.save(dylibPath);
   return {};
 }
 
-// It's not uncommon to have multiple attempts to load a single dylib,
-// especially if it's a commonly re-exported core library.
-static DenseMap<CachedHashStringRef, DylibFile *> loadedDylibs;
-
-static StringRef realPathIfDifferent(StringRef path) {
+static StringRef realPathIfDifferent(Ctx &ctx, StringRef path) {
   SmallString<128> realPathBuf;
   if (fs::real_path(path, realPathBuf))
     return StringRef();
@@ -232,13 +232,14 @@ static StringRef realPathIfDifferent(StringRef path) {
   if (!fs::make_absolute(absPathBuf) && realPathBuf == absPathBuf)
     return StringRef();
 
-  return uniqueSaver().save(StringRef(realPathBuf));
+  return ctx.uniqueSaver.save(StringRef(realPathBuf));
 }
 
-DylibFile *macho::loadDylib(MemoryBufferRef mbref, DylibFile *umbrella,
-                            bool isBundleLoader, bool explicitlyLinked) {
+DylibFile *macho::loadDylib(Ctx &ctx, MemoryBufferRef mbref,
+                            DylibFile *umbrella, bool isBundleLoader,
+                            bool explicitlyLinked) {
   CachedHashStringRef path(mbref.getBufferIdentifier());
-  DylibFile *&file = loadedDylibs[path];
+  DylibFile *&file = ctx.loadedDylibs[path];
   if (file) {
     if (explicitlyLinked)
       file->setExplicitlyLinked();
@@ -248,12 +249,12 @@ DylibFile *macho::loadDylib(MemoryBufferRef mbref, DylibFile *umbrella,
   // Frameworks can be found from different symlink paths, so resolve
   // symlinks and look up in the dylib cache.
   CachedHashStringRef realPath(
-      realPathIfDifferent(mbref.getBufferIdentifier()));
+      realPathIfDifferent(ctx, mbref.getBufferIdentifier()));
   if (!realPath.val().empty()) {
     // Avoid map insertions here so that we do not invalidate the "file"
     // reference.
-    auto it = loadedDylibs.find(realPath);
-    if (it != loadedDylibs.end()) {
+    auto it = ctx.loadedDylibs.find(realPath);
+    if (it != ctx.loadedDylibs.end()) {
       DylibFile *realfile = it->second;
       if (explicitlyLinked)
         realfile->setExplicitlyLinked();
@@ -266,12 +267,12 @@ DylibFile *macho::loadDylib(MemoryBufferRef mbref, DylibFile *umbrella,
   if (magic == file_magic::tapi_file) {
     Expected<std::unique_ptr<InterfaceFile>> result = TextAPIReader::get(mbref);
     if (!result) {
-      error("could not load TAPI file at " + mbref.getBufferIdentifier() +
-            ": " + toString(result.takeError()));
+      ctx.e.error("could not load TAPI file at " + mbref.getBufferIdentifier() +
+                  ": " + toString(result.takeError()));
       return nullptr;
     }
-    file =
-        make<DylibFile>(**result, umbrella, isBundleLoader, explicitlyLinked);
+    file = ctx.make<DylibFile>(ctx, **result, umbrella, isBundleLoader,
+                               explicitlyLinked);
 
     // parseReexports() can recursively call loadDylib(). That's fine since
     // we wrote the DylibFile we just loaded to the loadDylib cache via the
@@ -286,7 +287,8 @@ DylibFile *macho::loadDylib(MemoryBufferRef mbref, DylibFile *umbrella,
            magic == file_magic::macho_dynamically_linked_shared_lib_stub ||
            magic == file_magic::macho_executable ||
            magic == file_magic::macho_bundle);
-    file = make<DylibFile>(mbref, umbrella, isBundleLoader, explicitlyLinked);
+    file = ctx.make<DylibFile>(ctx, mbref, umbrella, isBundleLoader,
+                               explicitlyLinked);
 
     // parseLoadCommands() can also recursively call loadDylib(). See comment
     // in previous block for why this means we must copy `file` here.
@@ -299,7 +301,7 @@ DylibFile *macho::loadDylib(MemoryBufferRef mbref, DylibFile *umbrella,
     bool allowed =
         llvm::any_of(newFile->allowableClients, [&](StringRef allowableClient) {
           // We only do a prefix match to match LD64's behaviour.
-          return allowableClient.starts_with(config->clientName);
+          return allowableClient.starts_with(ctx.arg.clientName);
         });
 
     // TODO: This behaviour doesn't quite match the latest available source
@@ -309,22 +311,20 @@ DylibFile *macho::loadDylib(MemoryBufferRef mbref, DylibFile *umbrella,
     // changed in the latest release of Xcode (ld64-1115.7.3), so it's not
     // clear what the correct thing to do is yet.
     if (!allowed)
-      error("cannot link directly with '" +
-            sys::path::filename(newFile->installName) + "' because " +
-            config->clientName + " is not an allowed client");
+      ctx.e.error("cannot link directly with '" +
+                  sys::path::filename(newFile->installName) + "' because " +
+                  ctx.arg.clientName + " is not an allowed client");
   }
 
   // If the load path was a symlink, cache the real path too.
   if (!realPath.val().empty())
-    loadedDylibs[realPath] = newFile;
+    ctx.loadedDylibs[realPath] = newFile;
 
   return newFile;
 }
 
-void macho::resetLoadedDylibs() { loadedDylibs.clear(); }
-
 std::optional<StringRef>
-macho::findPathCombination(const Twine &name,
+macho::findPathCombination(Ctx &ctx, const Twine &name,
                            const std::vector<StringRef> &roots,
                            ArrayRef<StringRef> extensions) {
   SmallString<261> base;
@@ -334,27 +334,27 @@ macho::findPathCombination(const Twine &name,
     for (StringRef ext : extensions) {
       Twine location = base + ext;
       bool exists = fs::exists(location);
-      searchedDylib(location, exists);
+      searchedDylib(ctx, location, exists);
       if (exists)
-        return saver().save(location.str());
+        return ctx.saver.save(location.str());
     }
   }
   return {};
 }
 
-StringRef macho::rerootPath(StringRef path) {
+StringRef macho::rerootPath(Ctx &ctx, StringRef path) {
   if (!path::is_absolute(path, path::Style::posix) || path.ends_with(".o"))
     return path;
 
   if (std::optional<StringRef> rerootedPath =
-          findPathCombination(path, config->systemLibraryRoots))
+          findPathCombination(ctx, path, ctx.arg.systemLibraryRoots))
     return *rerootedPath;
 
   return path;
 }
 
-uint32_t macho::getModTime(StringRef path) {
-  if (config->zeroModTime)
+uint32_t macho::getModTime(Ctx &ctx, StringRef path) {
+  if (ctx.arg.zeroModTime)
     return 0;
 
   fs::file_status stat;
@@ -362,22 +362,23 @@ uint32_t macho::getModTime(StringRef path) {
     if (fs::exists(stat))
       return toTimeT(stat.getLastModificationTime());
 
-  warn("failed to get modification time of " + path);
+  ctx.e.warn("failed to get modification time of " + path);
   return 0;
 }
 
-void macho::printArchiveMemberLoad(StringRef reason, const InputFile *f) {
-  if (config->printEachFile)
-    message(toString(f));
-  if (config->printWhyLoad)
-    message(reason + " forced load of " + toString(f));
+void macho::printArchiveMemberLoad(Ctx &ctx, StringRef reason,
+                                   const InputFile *f) {
+  if (ctx.arg.printEachFile)
+    ctx.e.message(toString(f), ctx.e.outs());
+  if (ctx.arg.printWhyLoad)
+    ctx.e.message(reason + " forced load of " + toString(f), ctx.e.outs());
 }
 
-macho::DependencyTracker::DependencyTracker(StringRef path)
-    : path(path), active(!path.empty()) {
+macho::DependencyTracker::DependencyTracker(Ctx &ctx, StringRef path)
+    : ctx(ctx), path(path), active(!path.empty()) {
   if (active && fs::exists(path) && !fs::can_write(path)) {
-    warn("Ignoring dependency_info option since specified path is not "
-         "writeable.");
+    ctx.e.warn("Ignoring dependency_info option since specified path is not "
+               "writeable.");
     active = false;
   }
 }
@@ -391,7 +392,7 @@ void macho::DependencyTracker::write(StringRef version,
   std::error_code ec;
   raw_fd_ostream os(path, ec, fs::OF_None);
   if (ec) {
-    warn("Error writing dependency info to file");
+    ctx.e.warn("Error writing dependency info to file");
     return;
   }
 

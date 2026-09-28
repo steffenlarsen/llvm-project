@@ -22,11 +22,11 @@ using namespace llvm::MachO;
 using namespace lld;
 using namespace lld::macho;
 
-static uint32_t initProt(StringRef name) {
+static uint32_t initProt(Ctx &ctx, StringRef name) {
   auto it = find_if(
-      config->segmentProtections,
+      ctx.arg.segmentProtections,
       [&](const SegmentProtection &segprot) { return segprot.name == name; });
-  if (it != config->segmentProtections.end())
+  if (it != ctx.arg.segmentProtections.end())
     return it->initProt;
 
   if (name == segment_names::text)
@@ -38,16 +38,16 @@ static uint32_t initProt(StringRef name) {
   return VM_PROT_READ | VM_PROT_WRITE;
 }
 
-static uint32_t maxProt(StringRef name) {
-  assert(config->arch() != AK_i386 &&
+static uint32_t maxProt(Ctx &ctx, StringRef name) {
+  assert(ctx.arg.arch() != AK_i386 &&
          "TODO: i386 has different maxProt requirements");
   auto it = find_if(
-      config->segmentProtections,
+      ctx.arg.segmentProtections,
       [&](const SegmentProtection &segprot) { return segprot.name == name; });
-  if (it != config->segmentProtections.end())
+  if (it != ctx.arg.segmentProtections.end())
     return it->maxProt;
 
-  return initProt(name);
+  return initProt(ctx, name);
 }
 
 static uint32_t flags(StringRef name) {
@@ -69,7 +69,7 @@ void OutputSegment::addOutputSection(OutputSection *osec) {
   osec->parent = this;
   sections.push_back(osec);
 
-  for (const SectionAlign &sectAlign : config->sectionAlignments)
+  for (const SectionAlign &sectAlign : osec->ctx.arg.sectionAlignments)
     if (sectAlign.segName == name && sectAlign.sectName == osec->name)
       osec->align = sectAlign.align;
 }
@@ -191,39 +191,31 @@ void OutputSegment::assignAddressesToStartEndSymbols() {
     d->value = addr + vmSize;
 }
 
-void macho::sortOutputSegments() {
-  llvm::stable_sort(outputSegments,
+void macho::sortOutputSegments(Ctx &ctx) {
+  llvm::stable_sort(ctx.outputSegments,
                     compareByOrder<OutputSegment *>(segmentOrder));
 }
 
-static DenseMap<StringRef, OutputSegment *> nameToOutputSegment;
-std::vector<OutputSegment *> macho::outputSegments;
-
-void macho::resetOutputSegments() {
-  outputSegments.clear();
-  nameToOutputSegment.clear();
-}
-
-static StringRef maybeRenameSegment(StringRef name) {
-  auto newName = config->segmentRenameMap.find(name);
-  if (newName != config->segmentRenameMap.end())
+static StringRef maybeRenameSegment(Ctx &ctx, StringRef name) {
+  auto newName = ctx.arg.segmentRenameMap.find(name);
+  if (newName != ctx.arg.segmentRenameMap.end())
     return newName->second;
   return name;
 }
 
-OutputSegment *macho::getOrCreateOutputSegment(StringRef name) {
-  name = maybeRenameSegment(name);
+OutputSegment *macho::getOrCreateOutputSegment(Ctx &ctx, StringRef name) {
+  name = maybeRenameSegment(ctx, name);
 
-  OutputSegment *&segRef = nameToOutputSegment[name];
+  OutputSegment *&segRef = ctx.nameToOutputSegment[name];
   if (segRef)
     return segRef;
 
-  segRef = make<OutputSegment>();
+  segRef = ctx.make<OutputSegment>();
   segRef->name = name;
-  segRef->maxProt = maxProt(name);
-  segRef->initProt = initProt(name);
+  segRef->maxProt = maxProt(ctx, name);
+  segRef->initProt = initProt(ctx, name);
   segRef->flags = flags(name);
 
-  outputSegments.push_back(segRef);
+  ctx.outputSegments.push_back(segRef);
   return segRef;
 }

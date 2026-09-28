@@ -24,16 +24,18 @@ class LTO;
 namespace lld::macho {
 
 class BitcodeFile;
+struct Ctx;
 class ObjFile;
 
 class BitcodeCompiler {
 public:
-  BitcodeCompiler();
+  BitcodeCompiler(Ctx &ctx);
 
   void add(BitcodeFile &f);
   std::vector<ObjFile *> compile();
 
 private:
+  Ctx &ctx;
   std::unique_ptr<llvm::lto::LTO> ltoObj;
   std::vector<llvm::SmallString<0>> buf;
   std::vector<std::unique_ptr<llvm::MemoryBuffer>> files;

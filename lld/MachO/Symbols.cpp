@@ -29,36 +29,41 @@ static_assert(sizeof(SymbolUnion) == sizeof(Defined),
               "Defined should be the largest Symbol kind");
 
 // Returns a symbol name for an error message.
-static std::string maybeDemangleSymbol(StringRef symName) {
-  if (config->demangle) {
+static std::string maybeDemangleSymbol(Ctx &ctx, StringRef symName) {
+  if (ctx.arg.demangle) {
     symName.consume_front("_");
     return demangle(symName);
   }
   return symName.str();
 }
 
-std::string lld::toString(const Symbol &sym) {
-  return maybeDemangleSymbol(sym.getName());
+std::string lld::toString(Ctx &ctx, const Symbol &sym) {
+  return maybeDemangleSymbol(ctx, sym.getName());
 }
 
-std::string lld::toMachOString(const object::Archive::Symbol &b) {
-  return maybeDemangleSymbol(b.getName());
+std::string lld::toMachOString(Ctx &ctx, const object::Archive::Symbol &b) {
+  return maybeDemangleSymbol(ctx, b.getName());
 }
 
-uint64_t Symbol::getStubVA() const { return in.stubs->getVA(stubsIndex); }
-uint64_t Symbol::getLazyPtrVA() const {
-  return in.lazyPointers->getVA(stubsIndex);
+uint64_t Symbol::getStubVA(Ctx &ctx) const {
+  return ctx.in.stubs->getVA(stubsIndex);
 }
-uint64_t Symbol::getGotVA() const { return in.got->getVA(gotIndex); }
+uint64_t Symbol::getLazyPtrVA(Ctx &ctx) const {
+  return ctx.in.lazyPointers->getVA(stubsIndex);
+}
+uint64_t Symbol::getGotVA(Ctx &ctx) const {
+  return ctx.in.got->getVA(gotIndex);
+}
 
-Defined::Defined(StringRef name, InputFile *file, InputSection *isec,
+Defined::Defined(Ctx &ctx, StringRef name, InputFile *file, InputSection *isec,
                  uint64_t value, uint64_t size, bool isWeakDef, bool isExternal,
                  bool isPrivateExtern, bool includeInSymtab,
                  bool isReferencedDynamically, bool noDeadStrip,
                  bool canOverrideWeakDef, bool isWeakDefCanBeHidden,
                  bool interposable, bool cold)
-    : Symbol(DefinedKind, name, file), overridesWeakDef(canOverrideWeakDef),
-      privateExtern(isPrivateExtern), includeInSymtab(includeInSymtab),
+    : Symbol(ctx, DefinedKind, name, file),
+      overridesWeakDef(canOverrideWeakDef), privateExtern(isPrivateExtern),
+      includeInSymtab(includeInSymtab),
       identicalCodeFoldingKind(ICFFoldKind::None),
       referencedDynamically(isReferencedDynamically), noDeadStrip(noDeadStrip),
       interposable(interposable), weakDefCanBeHidden(isWeakDefCanBeHidden),
@@ -84,7 +89,7 @@ bool Defined::isTlv() const {
   return !isAbsolute() && isThreadLocalVariables(originalIsec->getFlags());
 }
 
-uint64_t Defined::getVA() const {
+uint64_t Defined::getVA(Ctx &ctx) const {
   assert(isLive() && "this should only be called for live symbols");
 
   if (isAbsolute())
@@ -93,7 +98,7 @@ uint64_t Defined::getVA() const {
   if (!isec()->isFinal) {
     // A target arch that does not use thunks ought never ask for
     // the address of a function that has not yet been finalized.
-    assert(target->usesThunks());
+    assert(ctx.target->usesThunks());
 
     // ConcatOutputSection::finalize() can seek the address of a
     // function before its address is assigned. The thunking algorithm
@@ -125,8 +130,8 @@ ConcatInputSection *Defined::unwindEntry() const {
   return originalUnwindEntry ? originalUnwindEntry->canonical() : nullptr;
 }
 
-uint64_t DylibSymbol::getVA() const {
-  return isInStubs() ? getStubVA() : Symbol::getVA();
+uint64_t DylibSymbol::getVA(Ctx &ctx) const {
+  return isInStubs() ? getStubVA(ctx) : Symbol::getVA(ctx);
 }
 
 void LazyArchive::fetchArchiveMember() { getFile()->fetch(sym); }

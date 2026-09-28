@@ -13,12 +13,12 @@ using namespace llvm;
 using namespace lld;
 
 SpecificAllocBase *
-lld::SpecificAllocBase::getOrCreate(void *tag, size_t size, size_t align,
+lld::SpecificAllocBase::getOrCreate(CommonLinkerContext &ctx, void *tag,
+                                    size_t size, size_t align,
                                     SpecificAllocBase *(&creator)(void *)) {
-  auto &instances = context().instances;
-  auto &instance = instances[tag];
+  auto &instance = ctx.instances[tag];
   if (instance == nullptr) {
-    void *storage = context().bAlloc.Allocate(size, align);
+    void *storage = ctx.bAlloc.Allocate(size, align);
     instance = creator(storage);
   }
   return instance;

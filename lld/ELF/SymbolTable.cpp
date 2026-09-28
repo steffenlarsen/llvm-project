@@ -83,10 +83,10 @@ Symbol *SymbolTable::insert(StringRef name) {
     return sym;
   }
 
-  Symbol *sym = reinterpret_cast<Symbol *>(make<SymbolUnion>());
+  Symbol *sym = reinterpret_cast<Symbol *>(ctx.make<SymbolUnion>());
   symVector.push_back(sym);
 
-  // make<SymbolUnion>() value-initializes the storage, so the Symbol fields
+  // ctx.make<SymbolUnion>() value-initializes the storage, so the Symbol fields
   // are zero. Set the ones that need a non-zero value.
   sym->setName(name);
   sym->versionId = VER_NDX_GLOBAL;
@@ -189,8 +189,9 @@ struct WildcardPattern {
   SingleStringMatcher matcher;
   bool isExternCpp;
   uint16_t versionId;
-  WildcardPattern(const SymbolVersion &ver, uint16_t versionId)
-      : matcher(ver.name), isExternCpp(ver.isExternCpp), versionId(versionId) {}
+  WildcardPattern(Ctx &ctx, const SymbolVersion &ver, uint16_t versionId)
+      : matcher(ctx.e, ver.name), isExternCpp(ver.isExternCpp),
+        versionId(versionId) {}
 };
 } // namespace
 
@@ -240,7 +241,7 @@ void SymbolTable::scanVersionScript() {
         if (!pat.hasWildcard)
           continue;
         if (pat.name != "*") {
-          pats.emplace_back(pat, id);
+          pats.emplace_back(ctx, pat, id);
           continue;
         }
         if (!asteriskReported) {
@@ -259,7 +260,7 @@ void SymbolTable::scanVersionScript() {
             globalAsteriskFound = !isLocal;
           }
         }
-        asterisks.emplace_back(pat, id);
+        asterisks.emplace_back(ctx, pat, id);
       }
     }
   }
@@ -295,7 +296,7 @@ void SymbolTable::scanVersionScript() {
   pats.clear();
   for (SymbolVersion &ver : ctx.arg.dynamicList) {
     if (ver.hasWildcard) {
-      pats.emplace_back(ver, 0);
+      pats.emplace_back(ctx, ver, 0);
     } else {
       for (Symbol *sym : findByVersion(ver))
         sym->isExported = sym->inDynamicList = true;

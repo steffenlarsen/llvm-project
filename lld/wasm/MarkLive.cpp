@@ -36,6 +36,7 @@ namespace {
 
 class MarkLive {
 public:
+  MarkLive(Ctx &ctx) : ctx(ctx) {}
   void run();
 
 private:
@@ -45,6 +46,8 @@ private:
   void enqueueRetainedSegments(const ObjFile *file);
   void mark();
   bool isCallCtorsLive();
+
+  Ctx &ctx;
 
   // A list of chunks to visit.
   SmallVector<InputChunk *, 256> queue;
@@ -107,11 +110,11 @@ void MarkLive::enqueueRetainedSegments(const ObjFile *file) {
 void MarkLive::run() {
   // Add GC root symbols.
   if (!ctx.arg.entry.empty())
-    enqueue(symtab->find(ctx.arg.entry));
+    enqueue(ctx.symtab->find(ctx.arg.entry));
 
   // We need to preserve any no-strip or exported symbol
-  for (Symbol *sym : symtab->symbols())
-    if (sym->isNoStrip() || sym->isExported())
+  for (Symbol *sym : ctx.symtab->symbols())
+    if (sym->isNoStrip() || sym->isExported(ctx))
       enqueue(sym);
 
   if (ctx.sym.callDtors)
@@ -179,13 +182,13 @@ void MarkLive::mark() {
   }
 }
 
-void markLive() {
+void markLive(Ctx &ctx) {
   if (!ctx.arg.gcSections)
     return;
 
   LLVM_DEBUG(dbgs() << "markLive\n");
 
-  MarkLive marker;
+  MarkLive marker(ctx);
   marker.run();
 
   // Report garbage-collected sections.
@@ -193,29 +196,29 @@ void markLive() {
     for (const ObjFile *obj : ctx.objectFiles) {
       for (InputChunk *c : obj->functions)
         if (!c->live)
-          message("removing unused section " + toString(c));
+          ctx.e.message("removing unused section " + toString(c), ctx.e.outs());
       for (InputChunk *c : obj->segments)
         if (!c->live)
-          message("removing unused section " + toString(c));
+          ctx.e.message("removing unused section " + toString(c), ctx.e.outs());
       for (InputGlobal *g : obj->globals)
         if (!g->live)
-          message("removing unused section " + toString(g));
+          ctx.e.message("removing unused section " + toString(g), ctx.e.outs());
       for (InputTag *t : obj->tags)
         if (!t->live)
-          message("removing unused section " + toString(t));
+          ctx.e.message("removing unused section " + toString(t), ctx.e.outs());
       for (InputTable *t : obj->tables)
         if (!t->live)
-          message("removing unused section " + toString(t));
+          ctx.e.message("removing unused section " + toString(t), ctx.e.outs());
     }
     for (InputChunk *c : ctx.syntheticFunctions)
       if (!c->live)
-        message("removing unused section " + toString(c));
+        ctx.e.message("removing unused section " + toString(c), ctx.e.outs());
     for (InputGlobal *g : ctx.syntheticGlobals)
       if (!g->live)
-        message("removing unused section " + toString(g));
+        ctx.e.message("removing unused section " + toString(g), ctx.e.outs());
     for (InputTable *t : ctx.syntheticTables)
       if (!t->live)
-        message("removing unused section " + toString(t));
+        ctx.e.message("removing unused section " + toString(t), ctx.e.outs());
   }
 }
 

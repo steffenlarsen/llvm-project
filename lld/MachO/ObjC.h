@@ -12,6 +12,7 @@
 #include "llvm/Support/MemoryBuffer.h"
 
 namespace lld::macho {
+struct Ctx;
 
 namespace objc {
 
@@ -35,14 +36,11 @@ constexpr const char categoryProtocols[] = "__OBJC_CATEGORY_PROTOCOLS_$_";
 } // namespace symbol_names
 
 // Check for duplicate method names within related categories / classes.
-void checkCategories();
-void mergeCategories();
-
-void doCleanup();
+void checkCategories(Ctx &ctx);
+void mergeCategories(Ctx &ctx);
 } // namespace objc
 
-bool hasObjCSection(llvm::MemoryBufferRef);
-
+bool hasObjCSection(Ctx &ctx, llvm::MemoryBufferRef);
 } // namespace lld::macho
 
 #endif

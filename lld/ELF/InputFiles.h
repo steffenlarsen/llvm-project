@@ -175,7 +175,7 @@ public:
 
   void init();
   template <typename ELFT> llvm::object::ELFFile<ELFT> getObj() const {
-    return check(llvm::object::ELFFile<ELFT>::create(mb.getBuffer()));
+    return check(ctx.e, llvm::object::ELFFile<ELFT>::create(mb.getBuffer()));
   }
 
   StringRef getStringTable() const { return stringTable; }

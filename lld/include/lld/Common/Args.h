@@ -21,20 +21,23 @@ class InputArgList;
 } // namespace llvm
 
 namespace lld {
+class ErrorHandler;
+
 namespace args {
 
 int getCGOptLevel(int optLevelLTO);
 
-int64_t getInteger(llvm::opt::InputArgList &args, unsigned key,
-                   int64_t Default);
+int64_t getInteger(ErrorHandler &eh, llvm::opt::InputArgList &args,
+                   unsigned key, int64_t Default);
 
-int64_t getHex(llvm::opt::InputArgList &args, unsigned key, int64_t Default);
+int64_t getHex(ErrorHandler &eh, llvm::opt::InputArgList &args, unsigned key,
+               int64_t Default);
 
 llvm::SmallVector<StringRef, 0> getStrings(llvm::opt::InputArgList &args,
                                            int id);
 
-uint64_t getZOptionValue(llvm::opt::InputArgList &args, int id, StringRef key,
-                         uint64_t Default);
+uint64_t getZOptionValue(ErrorHandler &eh, llvm::opt::InputArgList &args,
+                         int id, StringRef key, uint64_t Default);
 
 std::vector<StringRef> getLines(MemoryBufferRef mb);
 

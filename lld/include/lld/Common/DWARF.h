@@ -22,10 +22,12 @@ struct DILineInfo;
 } // namespace llvm
 
 namespace lld {
+class ErrorHandler;
 
 class DWARFCache {
 public:
-  DWARFCache(std::unique_ptr<llvm::DWARFContext> dwarf);
+  // Problems reading the line tables are reported to eh as warnings.
+  DWARFCache(ErrorHandler &eh, std::unique_ptr<llvm::DWARFContext> dwarf);
   std::optional<llvm::DILineInfo> getDILineInfo(uint64_t offset,
                                                 uint64_t sectionIndex);
   std::optional<std::pair<std::string, unsigned>>

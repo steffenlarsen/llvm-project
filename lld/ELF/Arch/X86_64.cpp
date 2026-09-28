@@ -302,7 +302,7 @@ bool X86_64::deleteFallThruJmpInsn(InputSection &is,
   JmpInsnOpcode jInvert = invertJmpOpcode(jmpOpcodeB);
   if (jInvert == J_UNKNOWN)
     return false;
-  is.jumpInstrMod = make<JumpInstrMod>();
+  is.jumpInstrMod = ctx.make<JumpInstrMod>();
   *is.jumpInstrMod = {rB.offset - 1, jInvert, 4};
   // Move R's values to rB except the offset.
   rB = {r.expr, r.type, rB.offset, r.addend, r.sym};
@@ -380,8 +380,8 @@ void X86_64::relaxCFIJumpTables() const {
           // We need to add enough padding to make this equal to zero.
           size_t mod = (sec->size - sec->entsize) % lastSec->addralign;
           if (mod != 0) {
-            auto *pad = make<PaddingSection>(ctx, lastSec->addralign - mod,
-                                             lastSec->getParent());
+            auto *pad = ctx.make<PaddingSection>(ctx, lastSec->addralign - mod,
+                                                 lastSec->getParent());
             pad->addralign = lastSec->addralign;
             replacements.push_back(pad);
           } else {
@@ -408,7 +408,7 @@ void X86_64::relaxCFIJumpTables() const {
       // [begin, end).
       auto addSectionSlice = [&](size_t begin, size_t end, Relocation *rbegin,
                                  Relocation *rend) {
-        auto *slice = make<InputSection>(
+        auto *slice = ctx.make<InputSection>(
             sec->file, sec->name, sec->type, sec->flags, sec->entsize,
             sec->entsize,
             sec->contentMaybeDecompress().slice(begin, end - begin));

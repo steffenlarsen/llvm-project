@@ -109,7 +109,9 @@ static lto::Config createConfig(Ctx &ctx) {
 
   c.CodeModel = getCodeModelFromCMModel();
   c.DisableVerify = ctx.arg.disableVerify;
-  c.DiagHandler = diagnosticHandler;
+  c.DiagHandler = [&ctx](const DiagnosticInfo &di) {
+    handleDiagnostic(ctx.e, di);
+  };
   c.OptLevel = ctx.arg.ltoo;
   c.CPU = getCPUStr();
   c.MAttrs = getMAttrs();
@@ -158,7 +160,7 @@ static lto::Config createConfig(Ctx &ctx) {
   if (ctx.arg.emitLLVM) {
     c.PreCodeGenModuleHook = [&ctx](size_t task, const Module &m) {
       if (std::unique_ptr<raw_fd_ostream> os =
-              openLTOOutputFile(ctx.arg.outputFile))
+              openLTOOutputFile(ctx.e, ctx.arg.outputFile))
         WriteBitcodeToFile(m, *os, false);
       return false;
     };
@@ -179,7 +181,7 @@ static lto::Config createConfig(Ctx &ctx) {
 BitcodeCompiler::BitcodeCompiler(Ctx &ctx) : ctx(ctx) {
   // Initialize indexFile.
   if (!ctx.arg.thinLTOIndexOnlyArg.empty())
-    indexFile = openFile(ctx.arg.thinLTOIndexOnlyArg);
+    indexFile = openFile(ctx.e, ctx.arg.thinLTOIndexOnlyArg);
 
   // Initialize ltoObj.
   lto::ThinBackend backend;
@@ -315,7 +317,7 @@ static void thinLTOCreateEmptyIndexFiles(Ctx &ctx) {
       continue;
     std::string path =
         replaceThinLTOSuffix(ctx, getThinLTOOutputFile(ctx, f->obj->getName()));
-    std::unique_ptr<raw_fd_ostream> os = openFile(path + ".thinlto.bc");
+    std::unique_ptr<raw_fd_ostream> os = openFile(ctx.e, path + ".thinlto.bc");
     if (!os)
       continue;
 
@@ -323,7 +325,7 @@ static void thinLTOCreateEmptyIndexFiles(Ctx &ctx) {
     m.setSkipModuleByDistributedBackend();
     writeIndexToFile(m, *os);
     if (ctx.arg.thinLTOEmitImportsFiles)
-      openFile(path + ".imports");
+      openFile(ctx.e, path + ".imports");
   }
 }
 
@@ -340,9 +342,9 @@ SmallVector<std::unique_ptr<InputFile>, 0> BitcodeCompiler::compile() {
   // specified, configure LTO to use it as the cache directory.
   FileCache cache;
   if (!ctx.arg.thinLTOCacheDir.empty())
-    cache = check(localCache("ThinLTO", "Thin", ctx.arg.thinLTOCacheDir,
-                             createAddBufferFn(files, filenames),
-                             !ctx.arg.dtltoDistributor.empty()));
+    cache = check(ctx.e, localCache("ThinLTO", "Thin", ctx.arg.thinLTOCacheDir,
+                                    createAddBufferFn(files, filenames),
+                                    !ctx.arg.dtltoDistributor.empty()));
 
   if (!ctx.bitcodeFiles.empty())
     checkError(ctx.e, ltoObj->run(
@@ -358,9 +360,9 @@ SmallVector<std::unique_ptr<InputFile>, 0> BitcodeCompiler::compile() {
   if (ctx.arg.thinLTOModulesToCompile.empty()) {
     for (StringRef s : thinIndices) {
       std::string path = getThinLTOOutputFile(ctx, s);
-      openFile(path + ".thinlto.bc");
+      openFile(ctx.e, path + ".thinlto.bc");
       if (ctx.arg.thinLTOEmitImportsFiles)
-        openFile(path + ".imports");
+        openFile(ctx.e, path + ".imports");
     }
   }
 
@@ -369,7 +371,7 @@ SmallVector<std::unique_ptr<InputFile>, 0> BitcodeCompiler::compile() {
 
   if (ctx.arg.thinLTOIndexOnly) {
     if (!ctx.arg.ltoObjPath.empty())
-      saveBuffer(buf[0].second, ctx.arg.ltoObjPath);
+      saveBuffer(ctx.e, buf[0].second, ctx.arg.ltoObjPath);
 
     // ThinLTO with index only option is required to generate only the index
     // files. After that, we exit from linker and ThinLTO backend runs in a
@@ -380,8 +382,8 @@ SmallVector<std::unique_ptr<InputFile>, 0> BitcodeCompiler::compile() {
   }
 
   if (!ctx.arg.thinLTOCacheDir.empty())
-    check(
-        pruneCache(ctx.arg.thinLTOCacheDir, ctx.arg.thinLTOCachePolicy, files));
+    check(ctx.e, pruneCache(ctx.arg.thinLTOCacheDir, ctx.arg.thinLTOCachePolicy,
+                            files));
 
   bool savePrelink = ctx.arg.saveTempsArgs.contains("prelink");
   SmallVector<std::unique_ptr<InputFile>, 0> ret;
@@ -402,7 +404,7 @@ SmallVector<std::unique_ptr<InputFile>, 0> BitcodeCompiler::compile() {
       bitcodeFilePath = buf[i].first;
     }
     if (!ctx.arg.ltoObjPath.empty())
-      saveBuffer(objBuf, ctx.arg.ltoObjPath + (i == 0 ? "" : Twine(i)));
+      saveBuffer(ctx.e, objBuf, ctx.arg.ltoObjPath + (i == 0 ? "" : Twine(i)));
     if (objBuf.empty())
       continue;
 
@@ -430,7 +432,7 @@ SmallVector<std::unique_ptr<InputFile>, 0> BitcodeCompiler::compile() {
       ltoObjName = ctx.saver.save(path.str());
     }
     if (savePrelink || ctx.arg.ltoEmitAsm)
-      saveBuffer(buf[i].second, ltoObjName);
+      saveBuffer(ctx.e, buf[i].second, ltoObjName);
     if (!ctx.arg.ltoEmitAsm)
       ret.push_back(createObjFile(ctx, MemoryBufferRef(objBuf, ltoObjName)));
   }

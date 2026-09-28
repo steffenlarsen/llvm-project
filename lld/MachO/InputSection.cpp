@@ -35,50 +35,47 @@ static_assert(sizeof(void *) != 8 || sizeof(ConcatInputSection) ==
               "Try to minimize ConcatInputSection's size, we create many "
               "instances of it");
 
-std::vector<ConcatInputSection *> macho::inputSections;
-int macho::inputSectionsOrder = 0;
-
 // Call this function to add a new InputSection and have it routed to the
 // appropriate container. Depending on its type and current config, it will
 // either be added to 'inputSections' vector or to a synthetic section.
-void lld::macho::addInputSection(InputSection *inputSection) {
+void lld::macho::addInputSection(Ctx &ctx, InputSection *inputSection) {
   if (auto *isec = dyn_cast<ConcatInputSection>(inputSection)) {
     if (isec->isCoalescedWeak())
       return;
-    if (config->emitRelativeMethodLists &&
+    if (ctx.arg.emitRelativeMethodLists &&
         ObjCMethListSection::isMethodList(isec)) {
-      if (in.objcMethList->inputOrder == UnspecifiedInputOrder)
-        in.objcMethList->inputOrder = inputSectionsOrder++;
-      in.objcMethList->addInput(isec);
-      isec->parent = in.objcMethList;
+      if (ctx.in.objcMethList->inputOrder == UnspecifiedInputOrder)
+        ctx.in.objcMethList->inputOrder = ctx.inputSectionsOrder++;
+      ctx.in.objcMethList->addInput(isec);
+      isec->parent = ctx.in.objcMethList;
       return;
     }
-    if (config->emitInitOffsets &&
+    if (ctx.arg.emitInitOffsets &&
         sectionType(isec->getFlags()) == S_MOD_INIT_FUNC_POINTERS) {
-      in.initOffsets->addInput(isec);
+      ctx.in.initOffsets->addInput(isec);
       return;
     }
-    isec->outSecOff = inputSectionsOrder++;
-    auto *osec = ConcatOutputSection::getOrCreateForInput(isec);
+    isec->outSecOff = ctx.inputSectionsOrder++;
+    auto *osec = ConcatOutputSection::getOrCreateForInput(ctx, isec);
     isec->parent = osec;
-    inputSections.push_back(isec);
+    ctx.inputSections.push_back(isec);
   } else if (auto *isec = dyn_cast<CStringInputSection>(inputSection)) {
-    bool useSectionName = config->separateCstringLiteralSections ||
+    bool useSectionName = ctx.arg.separateCstringLiteralSections ||
                           isec->getName() == section_names::objcMethname;
-    auto *osec = in.getOrCreateCStringSection(
-        useSectionName ? isec->getName() : section_names::cString);
+    auto *osec = getOrCreateCStringSection(
+        ctx, useSectionName ? isec->getName() : section_names::cString);
     if (osec->inputOrder == UnspecifiedInputOrder)
-      osec->inputOrder = inputSectionsOrder++;
+      osec->inputOrder = ctx.inputSectionsOrder++;
     osec->addInput(isec);
   } else if (auto *isec = dyn_cast<WordLiteralInputSection>(inputSection)) {
-    if (in.wordLiteralSection->inputOrder == UnspecifiedInputOrder)
-      in.wordLiteralSection->inputOrder = inputSectionsOrder++;
-    in.wordLiteralSection->addInput(isec);
+    if (ctx.in.wordLiteralSection->inputOrder == UnspecifiedInputOrder)
+      ctx.in.wordLiteralSection->inputOrder = ctx.inputSectionsOrder++;
+    ctx.in.wordLiteralSection->addInput(isec);
   } else {
     llvm_unreachable("unexpected input section kind");
   }
 
-  assert(inputSectionsOrder <= UnspecifiedInputOrder);
+  assert(ctx.inputSectionsOrder <= UnspecifiedInputOrder);
 }
 
 uint64_t InputSection::getFileSize() const {
@@ -89,9 +86,9 @@ uint64_t InputSection::getVA(uint64_t off) const {
   return parent->addr + getOffset(off);
 }
 
-uint64_t macho::resolveSymbolOffsetVA(const Symbol *sym, uint8_t type,
+uint64_t macho::resolveSymbolOffsetVA(Ctx &ctx, const Symbol *sym, uint8_t type,
                                       int64_t offset) {
-  const RelocAttrs &relocAttrs = target->getRelocAttrs(type);
+  const RelocAttrs &relocAttrs = ctx.target->getRelocAttrs(type);
   uint64_t symVA;
   if (relocAttrs.hasAttr(RelocAttrBits::BRANCH)) {
     // For branch relocations with non-zero offsets, use the actual function
@@ -99,14 +96,14 @@ uint64_t macho::resolveSymbolOffsetVA(const Symbol *sym, uint8_t type,
     // of a function (e.g., _func+16) implies reliance on the original
     // function's layout, which an interposed replacement wouldn't preserve.
     // There's no meaningful way to "interpose" an interior offset.
-    symVA = (offset != 0) ? sym->getVA() : sym->resolveBranchVA();
+    symVA = (offset != 0) ? sym->getVA(ctx) : sym->resolveBranchVA(ctx);
   } else if (relocAttrs.hasAttr(RelocAttrBits::GOT) ||
              relocAttrs.hasAttr(RelocAttrBits::TLV)) {
     // Both kinds read the symbol's single non-lazy pointer slot; for a
     // thread-local that slot holds the address of its TLV descriptor.
-    symVA = sym->resolveNonLazyPtrVA();
+    symVA = sym->resolveNonLazyPtrVA(ctx);
   } else {
-    symVA = sym->getVA();
+    symVA = sym->getVA(ctx);
   }
   return symVA + offset;
 }
@@ -123,8 +120,8 @@ std::string InputSection::getLocation(uint64_t off) const {
   // First, try to find a symbol that's near the offset. Use it as a reference
   // point.
   if (auto *sym = getContainingSymbol(off))
-    return (toString(getFile()) + ":(symbol " + toString(*sym) + "+0x" +
-            Twine::utohexstr(off - sym->value) + ")")
+    return (toString(getFile()) + ":(symbol " + toString(getCtx(), *sym) +
+            "+0x" + Twine::utohexstr(off - sym->value) + ")")
         .str();
 
   // If that fails, use the section itself as a reference point.
@@ -222,6 +219,7 @@ void ConcatInputSection::foldIdentical(ConcatInputSection *copy,
 }
 
 void ConcatInputSection::writeTo(uint8_t *buf) {
+  Ctx &ctx = getCtx();
   assert(!shouldOmitFromOutput());
 
   if (getFileSize() == 0)
@@ -234,40 +232,41 @@ void ConcatInputSection::writeTo(uint8_t *buf) {
     uint8_t *loc = buf + r.offset;
     uint64_t referentVA = 0;
 
-    const bool needsFixup = config->emitChainedFixups &&
-                            target->hasAttr(r.type, RelocAttrBits::UNSIGNED);
-    if (target->hasAttr(r.type, RelocAttrBits::SUBTRAHEND)) {
+    const bool needsFixup =
+        ctx.arg.emitChainedFixups &&
+        ctx.target->hasAttr(r.type, RelocAttrBits::UNSIGNED);
+    if (ctx.target->hasAttr(r.type, RelocAttrBits::SUBTRAHEND)) {
       const Symbol *fromSym = cast<Symbol *>(r.referent);
       const Relocation &minuend = relocs[++i];
       uint64_t minuendVA;
       if (const Symbol *toSym = minuend.referent.dyn_cast<Symbol *>())
-        minuendVA = toSym->getVA() + minuend.addend;
+        minuendVA = toSym->getVA(ctx) + minuend.addend;
       else {
         auto *referentIsec = cast<InputSection *>(minuend.referent);
         assert(!::shouldOmitFromOutput(referentIsec));
         minuendVA = referentIsec->getVA(minuend.addend);
       }
-      referentVA = minuendVA - fromSym->getVA();
+      referentVA = minuendVA - fromSym->getVA(ctx);
     } else if (auto *referentSym = r.referent.dyn_cast<Symbol *>()) {
-      if (target->hasAttr(r.type, RelocAttrBits::LOAD) &&
+      if (ctx.target->hasAttr(r.type, RelocAttrBits::LOAD) &&
           !referentSym->isInGot())
-        target->relaxGotLoad(loc, r.type);
+        ctx.target->relaxGotLoad(loc, r.type);
       // For dtrace symbols, do not handle them as normal undefined symbols
       if (referentSym->getName().starts_with("___dtrace_")) {
         // Change dtrace call site to pre-defined instructions
-        target->handleDtraceReloc(referentSym, r, loc);
+        ctx.target->handleDtraceReloc(referentSym, r, loc);
         continue;
       }
-      referentVA = resolveSymbolOffsetVA(referentSym, r.type, r.addend);
+      referentVA = resolveSymbolOffsetVA(ctx, referentSym, r.type, r.addend);
 
       if (isThreadLocalVariables(getFlags()) && isa<Defined>(referentSym)) {
         // References from thread-local variable sections are treated as offsets
         // relative to the start of the thread-local data memory area, which
         // is initialized via copying all the TLV data sections (which are all
         // contiguous).
-        referentVA -= firstTLVDataSection->addr;
+        referentVA -= ctx.firstTLVDataSection->addr;
       } else if (needsFixup) {
-        writeChainedFixup(loc, referentSym, r.addend);
+        writeChainedFixup(ctx, loc, referentSym, r.addend);
         continue;
       }
     } else if (auto *referentIsec = r.referent.dyn_cast<InputSection *>()) {
@@ -275,22 +274,21 @@ void ConcatInputSection::writeTo(uint8_t *buf) {
       referentVA = referentIsec->getVA(r.addend);
 
       if (needsFixup) {
-        writeChainedRebase(loc, referentVA);
+        writeChainedRebase(ctx, loc, referentVA);
         continue;
       }
     }
-    target->relocateOne(loc, r, referentVA, getVA() + r.offset);
+    ctx.target->relocateOne(loc, r, referentVA, getVA() + r.offset);
   }
 }
 
-ConcatInputSection *macho::makeSyntheticInputSection(StringRef segName,
-                                                     StringRef sectName,
-                                                     uint32_t flags,
-                                                     ArrayRef<uint8_t> data,
-                                                     uint32_t align) {
-  Section &section =
-      *make<Section>(/*file=*/nullptr, segName, sectName, flags, /*addr=*/0);
-  auto isec = make<ConcatInputSection>(section, data, align);
+ConcatInputSection *
+macho::makeSyntheticInputSection(Ctx &ctx, StringRef segName,
+                                 StringRef sectName, uint32_t flags,
+                                 ArrayRef<uint8_t> data, uint32_t align) {
+  Section &section = *ctx.make<Section>(ctx, /*file=*/nullptr, segName,
+                                        sectName, flags, /*addr=*/0);
+  auto isec = ctx.make<ConcatInputSection>(section, data, align);
   // Since this is an explicitly created 'fake' input section,
   // it should not be dead stripped.
   isec->live = true;
@@ -299,14 +297,15 @@ ConcatInputSection *macho::makeSyntheticInputSection(StringRef segName,
 }
 
 void CStringInputSection::splitIntoPieces() {
+  Ctx &ctx = getCtx();
   size_t off = 0;
   StringRef s = toStringRef(data);
   while (!s.empty()) {
     size_t end = s.find(0);
     if (end == StringRef::npos)
-      fatal(getLocation(off) + ": string is not null terminated");
+      ctx.e.fatal(getLocation(off) + ": string is not null terminated");
     uint32_t hash = deduplicateLiterals ? xxh3_64bits(s.take_front(end)) : 0;
-    pieces.emplace_back(off, hash);
+    pieces.emplace_back(off, hash, !ctx.arg.deadStrip);
     size_t size = end + 1; // include null terminator
     s = s.substr(size);
     off += size;
@@ -314,8 +313,9 @@ void CStringInputSection::splitIntoPieces() {
 }
 
 StringPiece &CStringInputSection::getStringPiece(uint64_t off) {
+  Ctx &ctx = getCtx();
   if (off >= data.size())
-    fatal(toString(this) + ": offset is outside the section");
+    ctx.e.fatal(toString(this) + ": offset is outside the section");
 
   auto it =
       partition_point(pieces, [=](StringPiece p) { return p.inSecOff <= off; });
@@ -327,8 +327,9 @@ const StringPiece &CStringInputSection::getStringPiece(uint64_t off) const {
 }
 
 size_t CStringInputSection::getStringPieceIndex(uint64_t off) const {
+  Ctx &ctx = getCtx();
   if (off >= data.size())
-    fatal(toString(this) + ": offset is outside the section");
+    ctx.e.fatal(toString(this) + ": offset is outside the section");
 
   auto it =
       partition_point(pieces, [=](StringPiece p) { return p.inSecOff <= off; });
@@ -359,12 +360,13 @@ WordLiteralInputSection::WordLiteralInputSection(const Section &section,
     llvm_unreachable("invalid literal section type");
   }
 
-  live.resize(data.size() >> power2LiteralSize, !config->deadStrip);
+  live.resize(data.size() >> power2LiteralSize, !getCtx().arg.deadStrip);
 }
 
 uint64_t WordLiteralInputSection::getOffset(uint64_t off) const {
+  Ctx &ctx = getCtx();
   if (off >= data.size())
-    fatal(toString(this) + ": offset is outside the section");
+    ctx.e.fatal(toString(this) + ": offset is outside the section");
 
   auto *osec = cast<WordLiteralSection>(parent);
   const uintptr_t buf = reinterpret_cast<uintptr_t>(data.data());

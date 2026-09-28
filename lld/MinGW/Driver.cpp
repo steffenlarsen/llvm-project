@@ -39,6 +39,7 @@
 #include "llvm/Option/ArgList.h"
 #include "llvm/Option/Option.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CrashRecoveryContext.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Path.h"
 #include "llvm/TargetParser/Host.h"
@@ -65,7 +66,8 @@ namespace {
 class MinGWOptTable : public opt::OptTable {
 public:
   MinGWOptTable() : opt::OptTable(optionTables(), false) {}
-  opt::InputArgList parse(ArrayRef<const char *> argv);
+  opt::InputArgList parse(CommonLinkerContext &ctx,
+                          ArrayRef<const char *> argv);
 };
 } // namespace
 
@@ -83,18 +85,20 @@ static cl::TokenizerCallback getQuotingStyle() {
   return cl::TokenizeGNUCommandLine;
 }
 
-opt::InputArgList MinGWOptTable::parse(ArrayRef<const char *> argv) {
+opt::InputArgList MinGWOptTable::parse(CommonLinkerContext &ctx,
+                                       ArrayRef<const char *> argv) {
   unsigned missingIndex;
   unsigned missingCount;
 
   SmallVector<const char *, 256> vec(argv.data(), argv.data() + argv.size());
-  cl::ExpandResponseFiles(saver(), getQuotingStyle(), vec);
+  cl::ExpandResponseFiles(ctx.saver, getQuotingStyle(), vec);
   opt::InputArgList args = this->ParseArgs(vec, missingIndex, missingCount);
 
   if (missingCount)
-    error(StringRef(args.getArgString(missingIndex)) + ": missing argument");
+    ctx.e.error(StringRef(args.getArgString(missingIndex)) +
+                ": missing argument");
   for (auto *arg : args.filtered(OPT_UNKNOWN))
-    error("unknown argument: " + arg->getAsString(args));
+    ctx.e.error("unknown argument: " + arg->getAsString(args));
   return args;
 }
 
@@ -109,14 +113,14 @@ static std::optional<std::string> findFile(StringRef path1,
 }
 
 // This is for -lfoo. We'll look for libfoo.dll.a or libfoo.a from search paths.
-static std::string searchLibrary(StringRef name,
+static std::string searchLibrary(CommonLinkerContext &ctx, StringRef name,
                                  ArrayRef<StringRef> searchPaths, bool bStatic,
                                  StringRef prefix) {
   if (name.starts_with(":")) {
     for (StringRef dir : searchPaths)
       if (std::optional<std::string> s = findFile(dir, name.substr(1)))
         return *s;
-    error("unable to find library -l" + name);
+    ctx.e.error("unable to find library -l" + name);
     return "";
   }
 
@@ -138,7 +142,7 @@ static std::string searchLibrary(StringRef name,
         return *s;
     }
   }
-  error("unable to find library -l" + name);
+  ctx.e.error("unable to find library -l" + name);
   return "";
 }
 
@@ -161,17 +165,22 @@ namespace mingw {
 // then call coff::link.
 bool link(ArrayRef<const char *> argsArr, llvm::raw_ostream &stdoutOS,
           llvm::raw_ostream &stderrOS, bool exitEarly, bool disableOutput) {
-  auto *ctx = new CommonLinkerContext;
-  ctx->e.initialize(stdoutOS, stderrOS, exitEarly, disableOutput);
+  auto context = std::make_unique<CommonLinkerContext>();
+  // If fatal() unwinds the link, the CrashRecoveryContext in lldMain() skips
+  // our destructors, so it deletes the context instead.
+  llvm::CrashRecoveryContextCleanupRegistrar<CommonLinkerContext>
+      contextCleanup(context.get());
+  CommonLinkerContext &ctx = *context;
+  ctx.e.initialize(stdoutOS, stderrOS, exitEarly, disableOutput);
 
   MinGWOptTable parser;
-  opt::InputArgList args = parser.parse(argsArr.slice(1));
+  opt::InputArgList args = parser.parse(ctx, argsArr.slice(1));
 
-  if (errorCount())
+  if (ctx.e.errorCount)
     return false;
 
   if (args.hasArg(OPT_help)) {
-    printHelp(*ctx, argsArr[0]);
+    printHelp(ctx, argsArr[0]);
     return true;
   }
 
@@ -181,7 +190,8 @@ bool link(ArrayRef<const char *> argsArr, llvm::raw_ostream &stdoutOS,
   // a GNU compatible linker. As long as an output for the -v option
   // contains "GNU" or "with BFD", they recognize us as GNU-compatible.
   if (args.hasArg(OPT_v) || args.hasArg(OPT_version))
-    message(getLLDVersion() + " (compatible with GNU linkers)");
+    ctx.e.message(getLLDVersion() + " (compatible with GNU linkers)",
+                  ctx.e.outs());
 
   // The behavior of -v or --version is a bit strange, but this is
   // needed for compatibility with GNU linkers.
@@ -191,7 +201,7 @@ bool link(ArrayRef<const char *> argsArr, llvm::raw_ostream &stdoutOS,
     return true;
 
   if (!args.hasArg(OPT_INPUT) && !args.hasArg(OPT_l)) {
-    error("no input files");
+    ctx.e.error("no input files");
     return false;
   }
 
@@ -303,7 +313,8 @@ bool link(ArrayRef<const char *> argsArr, llvm::raw_ostream &stdoutOS,
       add("-build-id:no");
     else {
       if (!v.empty())
-        warn("unsupported build id hashing: " + v + ", using default hashing.");
+        ctx.e.warn("unsupported build id hashing: " + v +
+                   ", using default hashing.");
       add("-build-id");
     }
   } else {
@@ -408,7 +419,7 @@ bool link(ArrayRef<const char *> argsArr, llvm::raw_ostream &stdoutOS,
     else if (s == "none")
       add("-opt:noicf");
     else
-      error("unknown parameter: --icf=" + s);
+      ctx.e.error("unknown parameter: --icf=" + s);
   } else {
     add("-opt:noicf");
   }
@@ -430,7 +441,7 @@ bool link(ArrayRef<const char *> argsArr, llvm::raw_ostream &stdoutOS,
     else if (s == "mipspe")
       add("-machine:mips");
     else
-      error("unknown parameter: -m" + s);
+      ctx.e.error("unknown parameter: -m" + s);
   }
 
   if (args.hasFlag(OPT_guard_cf, OPT_no_guard_cf, false)) {
@@ -440,21 +451,22 @@ bool link(ArrayRef<const char *> argsArr, llvm::raw_ostream &stdoutOS,
       add("-guard:cf,nolongjmp");
   } else if (args.hasFlag(OPT_guard_longjmp, OPT_no_guard_longjmp, false)) {
     auto *a = args.getLastArg(OPT_guard_longjmp);
-    warn("parameter " + a->getSpelling() +
-         " only takes effect when used with --guard-cf");
+    ctx.e.warn("parameter " + a->getSpelling() +
+               " only takes effect when used with --guard-cf");
   }
 
   if (auto *a = args.getLastArg(OPT_error_limit)) {
     int n;
     StringRef s = a->getValue();
     if (s.getAsInteger(10, n))
-      error(a->getSpelling() + ": number expected, but got " + s);
+      ctx.e.error(a->getSpelling() + ": number expected, but got " + s);
     else
       add("-errorlimit:" + s);
   }
 
   if (auto *a = args.getLastArg(OPT_rpath))
-    warn("parameter " + a->getSpelling() + " has no effect on PE/COFF targets");
+    ctx.e.warn("parameter " + a->getSpelling() +
+               " has no effect on PE/COFF targets");
 
   for (auto *a : args.filtered(OPT_mllvm))
     add("-mllvm:" + StringRef(a->getValue()));
@@ -509,8 +521,8 @@ bool link(ArrayRef<const char *> argsArr, llvm::raw_ostream &stdoutOS,
   for (opt::Arg *arg : args.filtered(OPT_plugin_opt_eq)) {
     StringRef v(arg->getValue());
     if (!v.ends_with("lto-wrapper") && !v.ends_with("lto-wrapper.exe"))
-      error(arg->getSpelling() + ": unknown plugin option '" + arg->getValue() +
-            "'");
+      ctx.e.error(arg->getSpelling() + ": unknown plugin option '" +
+                  arg->getValue() + "'");
   }
 
   for (auto *a : args.filtered(OPT_Xlink))
@@ -565,7 +577,7 @@ bool link(ArrayRef<const char *> argsArr, llvm::raw_ostream &stdoutOS,
       break;
     case OPT_l:
       add(prefix +
-          searchLibrary(a->getValue(), searchPaths, isStatic, dllPrefix));
+          searchLibrary(ctx, a->getValue(), searchPaths, isStatic, dllPrefix));
       break;
     case OPT_whole_archive:
       prefix = "-wholearchive:";
@@ -584,7 +596,7 @@ bool link(ArrayRef<const char *> argsArr, llvm::raw_ostream &stdoutOS,
       break;
     case OPT_pop_state:
       if (pushPopStates.empty()) {
-        error("unbalanced --push-state/--pop-state");
+        ctx.e.error("unbalanced --push-state/--pop-state");
         break;
       }
       prefix = pushPopStates.top().prefix;
@@ -594,11 +606,11 @@ bool link(ArrayRef<const char *> argsArr, llvm::raw_ostream &stdoutOS,
     }
   }
 
-  if (errorCount())
+  if (ctx.e.errorCount)
     return false;
 
   if (args.hasArg(OPT_verbose) || args.hasArg(OPT__HASH_HASH_HASH))
-    ctx->e.errs() << llvm::join(linkArgs, " ") << "\n";
+    ctx.e.errs() << llvm::join(linkArgs, " ") << "\n";
 
   if (args.hasArg(OPT__HASH_HASH_HASH))
     return true;
@@ -611,8 +623,9 @@ bool link(ArrayRef<const char *> argsArr, llvm::raw_ostream &stdoutOS,
   // the right prefix.
   vec[0] = argsArr[0];
 
-  // The context will be re-created in the COFF driver.
-  lld::CommonLinkerContext::destroy();
+  // The COFF driver creates and installs its own context.
+  contextCleanup.unregister();
+  context.reset();
 
   return coff::link(vec, stdoutOS, stderrOS, exitEarly, disableOutput);
 }

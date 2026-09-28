@@ -36,6 +36,8 @@ class InputSegment;
 // There is one add* function per symbol type.
 class SymbolTable {
 public:
+  SymbolTable(Ctx &ctx) : ctx(ctx) {}
+
   ArrayRef<Symbol *> symbols() const { return symVector; }
 
   void wrap(Symbol *sym, Symbol *real, Symbol *wrap);
@@ -109,6 +111,8 @@ public:
   DefinedFunction *createUndefinedStub(const WasmSignature &sig);
 
 private:
+  Ctx &ctx;
+
   std::pair<Symbol *, bool> insert(StringRef name, const InputFile *file);
   std::pair<Symbol *, bool> insertName(StringRef name);
 
@@ -140,9 +144,6 @@ private:
   // For LTO.
   std::unique_ptr<BitcodeCompiler> lto;
 };
-
-extern SymbolTable *symtab;
-
 } // namespace lld::wasm
 
 #endif

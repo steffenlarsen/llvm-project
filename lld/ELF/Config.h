@@ -855,7 +855,7 @@ uint64_t errCount(Ctx &ctx);
 
 ELFSyncStream InternalErr(Ctx &ctx, const uint8_t *buf);
 
-#define CHECK2(E, S) lld::check2((E), [&] { return toStr(ctx, S); })
+#define CHECK2(E, S) lld::check2(ctx.e, (E), [&] { return toStr(ctx, S); })
 
 inline DiagLevel toDiagLevel(ReportPolicy policy) {
   if (policy == ReportPolicy::Error)

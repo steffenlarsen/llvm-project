@@ -25,12 +25,10 @@ using namespace lld;
 using namespace lld::macho;
 
 static constexpr bool verboseDiagnostics = false;
-// This counter is used to generate unique thunk names.
-static uint64_t icfThunkCounter = 0;
 
 class ICF {
 public:
-  ICF(std::vector<ConcatInputSection *> &inputs);
+  ICF(Ctx &ctx, std::vector<ConcatInputSection *> &inputs);
   void run();
 
   using EqualsFn = bool (ICF::*)(const ConcatInputSection *,
@@ -46,6 +44,9 @@ public:
   bool equalsVariable(const ConcatInputSection *ia,
                       const ConcatInputSection *ib);
   void applySafeThunksToRange(size_t begin, size_t end);
+  Symbol *getThunkTargetSymbol(ConcatInputSection *isec);
+
+  Ctx &ctx;
 
   // ICF needs a copy of the inputs vector because its equivalence-class
   // segregation algorithm destroys the proper sequence.
@@ -55,9 +56,11 @@ public:
   std::atomic<bool> icfRepeat{false};
   std::atomic<uint64_t> equalsConstantCount{0};
   std::atomic<uint64_t> equalsVariableCount{0};
+  // This counter is used to generate unique thunk names.
+  uint64_t icfThunkCounter = 0;
 };
 
-ICF::ICF(std::vector<ConcatInputSection *> &inputs) {
+ICF::ICF(Ctx &ctx, std::vector<ConcatInputSection *> &inputs) : ctx(ctx) {
   icfInputs.assign(inputs.begin(), inputs.end());
 }
 
@@ -101,13 +104,14 @@ static bool isFoldableIgnoringRelocatedBytes(const ConcatInputSection *isec) {
 // relocs. Return it in the given &buf
 static void getNormalizedData(const ConcatInputSection *isec,
                               SmallVectorImpl<uint8_t> &buf) {
+  Ctx &ctx = isec->getCtx();
   buf.assign(isec->data.begin(), isec->data.end());
   for (size_t i = 0; i < isec->relocs.size(); ++i) {
     const Relocation &r = isec->relocs[i];
     size_t size = 1ULL << r.length;
     if (r.offset + size <= buf.size())
       memset(buf.data() + r.offset, 0, size);
-    if (target->hasAttr(r.type, RelocAttrBits::SUBTRAHEND))
+    if (ctx.target->hasAttr(r.type, RelocAttrBits::SUBTRAHEND))
       ++i; // Skip the paired minuend relocation
   }
 }
@@ -308,7 +312,7 @@ void ICF::forEachClassRange(size_t begin, size_t end,
 }
 
 // Find or create a symbol at offset 0 in the given section
-static Symbol *getThunkTargetSymbol(ConcatInputSection *isec) {
+Symbol *ICF::getThunkTargetSymbol(ConcatInputSection *isec) {
   for (Symbol *sym : isec->symbols)
     if (auto *d = dyn_cast<Defined>(sym))
       if (d->value == 0)
@@ -322,12 +326,12 @@ static Symbol *getThunkTargetSymbol(ConcatInputSection *isec) {
                 std::to_string(icfThunkCounter++);
 
   // If no symbol found at offset 0, create one
-  auto *sym = make<Defined>(thunkName, /*file=*/nullptr, isec,
-                            /*value=*/0, /*size=*/isec->getSize(),
-                            /*isWeakDef=*/false, /*isExternal=*/false,
-                            /*isPrivateExtern=*/false, /*isThumb=*/false,
-                            /*isReferencedDynamically=*/false,
-                            /*noDeadStrip=*/false);
+  auto *sym = ctx.make<Defined>(ctx, thunkName, /*file=*/nullptr, isec,
+                                /*value=*/0, /*size=*/isec->getSize(),
+                                /*isWeakDef=*/false, /*isExternal=*/false,
+                                /*isPrivateExtern=*/false, /*isThumb=*/false,
+                                /*isReferencedDynamically=*/false,
+                                /*noDeadStrip=*/false);
   isec->symbols.push_back(sym);
   return sym;
 }
@@ -354,7 +358,7 @@ void ICF::applySafeThunksToRange(size_t begin, size_t end) {
 
   // If the functions we're dealing with are smaller than the thunk size, then
   // just leave them all as-is - creating thunks would be a net loss.
-  uint32_t thunkSize = target->getICFSafeThunkSize();
+  uint32_t thunkSize = ctx.target->getICFSafeThunkSize();
   if (masterIsec->data.size() <= thunkSize)
     return;
 
@@ -369,12 +373,12 @@ void ICF::applySafeThunksToRange(size_t begin, size_t end) {
       break;
 
     ConcatInputSection *thunk =
-        makeSyntheticInputSection(isec->getSegName(), isec->getName());
+        makeSyntheticInputSection(ctx, isec->getSegName(), isec->getName());
     // A thunk-folded cold function has a cold thunk.
     thunk->isCold = isec->isCold;
-    addInputSection(thunk);
+    addInputSection(ctx, thunk);
 
-    target->initICFSafeThunkBody(thunk, masterSym);
+    ctx.target->initICFSafeThunkBody(thunk, masterSym);
     thunk->foldIdentical(isec, Symbol::ICFFoldKind::Thunk);
 
     // Since we're folding the target function into a thunk, we need to adjust
@@ -448,7 +452,7 @@ void ICF::run() {
       isec->icfEqClass[(icfPass + 1) % 2] = hash | (1ull << 31);
     });
   }
-  const bool useSafeThunks = config->icfLevel == ICFLevel::safe_thunks;
+  const bool useSafeThunks = ctx.arg.icfLevel == ICFLevel::safe_thunks;
   llvm::stable_sort(
       icfInputs, [&](const ConcatInputSection *a, const ConcatInputSection *b) {
         // When using safe_thunks, ensure that we first sort by icfEqClass and
@@ -470,10 +474,12 @@ void ICF::run() {
       segregate(begin, end, &ICF::equalsVariable);
     });
   } while (icfRepeat);
-  log("ICF needed " + Twine(icfPass) + " iterations");
+  ctx.e.log("ICF needed " + Twine(icfPass) + " iterations");
   if (verboseDiagnostics) {
-    log("equalsConstant() called " + Twine(equalsConstantCount) + " times");
-    log("equalsVariable() called " + Twine(equalsVariableCount) + " times");
+    ctx.e.log("equalsConstant() called " + Twine(equalsConstantCount) +
+              " times");
+    ctx.e.log("equalsVariable() called " + Twine(equalsVariableCount) +
+              " times");
   }
 
   // When using safe_thunks, we need to create thunks for all keepUnique
@@ -498,10 +504,10 @@ void ICF::run() {
           icfInputs[i]->keepUnique) {
         // Assert keepUnique sections are either small or replaced with thunks.
         assert(!icfInputs[i]->live ||
-               icfInputs[i]->data.size() <= target->getICFSafeThunkSize());
+               icfInputs[i]->data.size() <= ctx.target->getICFSafeThunkSize());
         assert(!icfInputs[i]->replacement ||
                icfInputs[i]->replacement->data.size() ==
-                   target->getICFSafeThunkSize());
+                   ctx.target->getICFSafeThunkSize());
         continue;
       }
       beginIsec->foldIdentical(icfInputs[i]);
@@ -543,9 +549,9 @@ void macho::markSymAsAddrSig(Symbol *s) {
       d->isec()->keepUnique = true;
 }
 
-void macho::markAddrSigSymbols() {
+void macho::markAddrSigSymbols(Ctx &ctx) {
   TimeTraceScope timeScope("Mark addrsig symbols");
-  for (InputFile *file : inputFiles) {
+  for (InputFile *file : ctx.inputFiles) {
     ObjFile *obj = dyn_cast<ObjFile>(file);
     if (!obj)
       continue;
@@ -564,7 +570,7 @@ void macho::markAddrSigSymbols() {
       if (auto *sym = r.referent.dyn_cast<Symbol *>())
         markSymAsAddrSig(sym);
       else
-        error(toString(isec) + ": unexpected section relocation");
+        ctx.e.error(toString(isec) + ": unexpected section relocation");
     }
   }
 }
@@ -572,7 +578,7 @@ void macho::markAddrSigSymbols() {
 // Given a symbol that was folded into a thunk, return the symbol pointing to
 // the actual body of the function. We use this approach rather than storing the
 // needed info in the Defined itself in order to minimize memory usage.
-Defined *macho::getBodyForThunkFoldedSym(Defined *foldedSym) {
+Defined *macho::getBodyForThunkFoldedSym(Ctx &ctx, Defined *foldedSym) {
   assert(isa<ConcatInputSection>(foldedSym->originalIsec) &&
          "thunk-folded ICF symbol expected to be on a ConcatInputSection");
   // foldedSec is the InputSection that was marked as deleted upon fold
@@ -585,11 +591,11 @@ Defined *macho::getBodyForThunkFoldedSym(Defined *foldedSym) {
 
   // The symbol of the merged body of the function that the thunk jumps to. This
   // will end up in the final binary.
-  Symbol *targetSym = target->getThunkBranchTarget(thunkBody);
+  Symbol *targetSym = ctx.target->getThunkBranchTarget(thunkBody);
 
   return cast<Defined>(targetSym);
 }
-void macho::foldIdenticalSections(bool onlyCfStrings) {
+void macho::foldIdenticalSections(Ctx &ctx, bool onlyCfStrings) {
   TimeTraceScope timeScope("Fold Identical Code Sections");
   // The ICF equivalence-class segregation algorithm relies on pre-computed
   // hashes of InputSection::data for the ConcatOutputSection::inputs and all
@@ -606,10 +612,8 @@ void macho::foldIdenticalSections(bool onlyCfStrings) {
   // someone keep the numbers straight in case we ever need to debug the
   // ICF::segregate()
   std::vector<ConcatInputSection *> foldable;
-  uint64_t icfUniqueID = inputSections.size();
-  // Reset the thunk counter for each run of ICF.
-  icfThunkCounter = 0;
-  for (ConcatInputSection *isec : inputSections) {
+  uint64_t icfUniqueID = ctx.inputSections.size();
+  for (ConcatInputSection *isec : ctx.inputSections) {
     bool isUnconditionallyCoalescedData = isCfStringSection(isec) ||
                                           isClassRefsSection(isec) ||
                                           isSelRefsSection(isec);
@@ -631,7 +635,7 @@ void macho::foldIdenticalSections(bool onlyCfStrings) {
     //     keepUnique flag.
     //   - Otherwise, keepUnique sections are not foldable.
     bool isSafeThunksCode =
-        config->icfLevel == ICFLevel::safe_thunks && isCodeSec;
+        ctx.arg.icfLevel == ICFLevel::safe_thunks && isCodeSec;
     bool keepUniqueAllowsFolding =
         !isec->keepUnique || isUnconditionallyCoalescedData || isSafeThunksCode;
 
@@ -676,5 +680,5 @@ void macho::foldIdenticalSections(bool onlyCfStrings) {
   });
   // Now that every input section is either hashed or marked as unique, run the
   // segregation algorithm to detect foldable subsections.
-  ICF(foldable).run();
+  ICF(ctx, foldable).run();
 }

@@ -23,8 +23,8 @@ int lld::args::getCGOptLevel(int optLevelLTO) {
   return std::clamp(optLevelLTO, 2, 3);
 }
 
-static int64_t getInteger(opt::InputArgList &args, unsigned key,
-                          int64_t Default, unsigned base) {
+static int64_t getInteger(ErrorHandler &eh, opt::InputArgList &args,
+                          unsigned key, int64_t Default, unsigned base) {
   auto *a = args.getLastArg(key);
   if (!a)
     return Default;
@@ -37,18 +37,18 @@ static int64_t getInteger(opt::InputArgList &args, unsigned key,
     return v;
 
   StringRef spelling = args.getArgString(a->getIndex());
-  error(spelling + ": number expected, but got '" + a->getValue() + "'");
+  eh.error(spelling + ": number expected, but got '" + a->getValue() + "'");
   return 0;
 }
 
-int64_t lld::args::getInteger(opt::InputArgList &args, unsigned key,
-                              int64_t Default) {
-  return ::getInteger(args, key, Default, 10);
+int64_t lld::args::getInteger(ErrorHandler &eh, opt::InputArgList &args,
+                              unsigned key, int64_t Default) {
+  return ::getInteger(eh, args, key, Default, 10);
 }
 
-int64_t lld::args::getHex(opt::InputArgList &args, unsigned key,
-                          int64_t Default) {
-  return ::getInteger(args, key, Default, 16);
+int64_t lld::args::getHex(ErrorHandler &eh, opt::InputArgList &args,
+                          unsigned key, int64_t Default) {
+  return ::getInteger(eh, args, key, Default, 16);
 }
 
 SmallVector<StringRef, 0> lld::args::getStrings(opt::InputArgList &args,
@@ -59,13 +59,14 @@ SmallVector<StringRef, 0> lld::args::getStrings(opt::InputArgList &args,
   return v;
 }
 
-uint64_t lld::args::getZOptionValue(opt::InputArgList &args, int id,
-                                    StringRef key, uint64_t defaultValue) {
+uint64_t lld::args::getZOptionValue(ErrorHandler &eh, opt::InputArgList &args,
+                                    int id, StringRef key,
+                                    uint64_t defaultValue) {
   for (auto *arg : args.filtered(id)) {
     std::pair<StringRef, StringRef> kv = StringRef(arg->getValue()).split('=');
     if (kv.first == key) {
       if (!to_integer(kv.second, defaultValue))
-        error("invalid " + key + ": " + kv.second);
+        eh.error("invalid " + key + ": " + kv.second);
       arg->claim();
     }
   }

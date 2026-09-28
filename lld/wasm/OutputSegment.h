@@ -20,7 +20,7 @@ class InputSegment;
 
 class OutputSegment {
 public:
-  OutputSegment(StringRef n) : name(n) {}
+  OutputSegment(Ctx &ctx, StringRef n) : ctx(ctx), name(n) {}
 
   void addInputSegment(InputChunk *inSeg);
   void finalizeInputSegments();
@@ -32,6 +32,7 @@ public:
 
   bool isTLS() const { return name == ".tdata"; }
 
+  Ctx &ctx;
   StringRef name;
   bool isBss = false;
   uint32_t index = 0;

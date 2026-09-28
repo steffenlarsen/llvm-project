@@ -38,10 +38,11 @@ int64_t ARM64Common::getEmbeddedAddend(MemoryBufferRef mb, uint64_t offset,
   }
 }
 
-static void writeValue(uint8_t *loc, const Relocation &r, uint64_t value) {
+static void writeValue(Ctx &ctx, uint8_t *loc, const Relocation &r,
+                       uint64_t value) {
   switch (r.length) {
   case 2:
-    checkInt(loc, r, value, 32);
+    checkInt(ctx, loc, r, value, 32);
     write32le(loc, value);
     break;
   case 3:
@@ -63,28 +64,28 @@ void ARM64Common::relocateOne(uint8_t *loc, const Relocation &r, uint64_t value,
   uint32_t base = ((r.length == 2) ? read32le(loc) : 0);
   switch (r.type) {
   case ARM64_RELOC_BRANCH26:
-    encodeBranch26(loc32, r, base, value - pc);
+    encodeBranch26(ctx, loc32, r, base, value - pc);
     break;
   case ARM64_RELOC_SUBTRACTOR:
   case ARM64_RELOC_UNSIGNED:
-    writeValue(loc, r, value);
+    writeValue(ctx, loc, r, value);
     break;
   case ARM64_RELOC_POINTER_TO_GOT:
     if (r.pcrel)
       value -= pc;
-    writeValue(loc, r, value);
+    writeValue(ctx, loc, r, value);
     break;
   case ARM64_RELOC_PAGE21:
   case ARM64_RELOC_GOT_LOAD_PAGE21:
   case ARM64_RELOC_TLVP_LOAD_PAGE21:
     assert(r.pcrel);
-    encodePage21(loc32, r, base, pageBits(value) - pageBits(pc));
+    encodePage21(ctx, loc32, r, base, pageBits(value) - pageBits(pc));
     break;
   case ARM64_RELOC_PAGEOFF12:
   case ARM64_RELOC_GOT_LOAD_PAGEOFF12:
   case ARM64_RELOC_TLVP_LOAD_PAGEOFF12:
     assert(!r.pcrel);
-    encodePageOff12(loc32, r, base, value);
+    encodePageOff12(ctx, loc32, r, base, value);
     break;
   default:
     llvm_unreachable("unexpected relocation type");
@@ -101,7 +102,7 @@ void ARM64Common::relaxGotLoad(uint8_t *loc, uint8_t type) const {
   // This matches both the 64- and 32-bit variants:
   // LDR <(X|W)t>, [<Xn|SP>{, #<pimm>}]
   if ((instruction & 0xbfc00000) != 0xb9400000)
-    error(getRelocAttrs(type).name + " reloc requires LDR instruction");
+    ctx.e.error(getRelocAttrs(type).name + " reloc requires LDR instruction");
   assert(((instruction >> 10) & 0xfff) == 0 &&
          "non-zero embedded LDR immediate");
   // C6.2.4 ADD (immediate)
@@ -114,7 +115,7 @@ void ARM64Common::handleDtraceReloc(const Symbol *sym, const Relocation &r,
                                     uint8_t *loc) const {
   assert(r.type == ARM64_RELOC_BRANCH26);
 
-  if (config->outputType == MH_OBJECT)
+  if (ctx.arg.outputType == MH_OBJECT)
     return;
 
   if (sym->getName().starts_with("___dtrace_probe")) {
@@ -124,29 +125,31 @@ void ARM64Common::handleDtraceReloc(const Symbol *sym, const Relocation &r,
     // change call site to 'MOVZ X0,0'
     write32le(loc, 0xD2800000);
   } else {
-    error("Unrecognized dtrace symbol prefix: " + toString(*sym));
+    ctx.e.error("Unrecognized dtrace symbol prefix: " + toString(ctx, *sym));
   }
 }
 
-static void reportUnalignedLdrStr(Twine loc, uint64_t va, int align,
+static void reportUnalignedLdrStr(Ctx &ctx, Twine loc, uint64_t va, int align,
                                   const Symbol *sym) {
   std::string symbolHint;
   if (sym)
-    symbolHint = " (" + toString(*sym) + ")";
-  error(loc + ": " + Twine(8 * align) + "-bit LDR/STR to 0x" +
-        llvm::utohexstr(va) + symbolHint + " is not " + Twine(align) +
-        "-byte aligned");
+    symbolHint = " (" + toString(ctx, *sym) + ")";
+  ctx.e.error(loc + ": " + Twine(8 * align) + "-bit LDR/STR to 0x" +
+              llvm::utohexstr(va) + symbolHint + " is not " + Twine(align) +
+              "-byte aligned");
 }
 
-void macho::reportUnalignedLdrStr(void *loc, const Relocation &r, uint64_t va,
-                                  int align) {
-  uint64_t off = reinterpret_cast<const uint8_t *>(loc) - in.bufferStart;
-  const InputSection *isec = offsetToInputSection(&off);
-  std::string locStr = isec ? isec->getLocation(off) : "(invalid location)";
-  ::reportUnalignedLdrStr(locStr, va, align, r.referent.dyn_cast<Symbol *>());
-}
-
-void macho::reportUnalignedLdrStr(void *loc, lld::macho::SymbolDiagnostic d,
+void macho::reportUnalignedLdrStr(Ctx &ctx, void *loc, const Relocation &r,
                                   uint64_t va, int align) {
-  ::reportUnalignedLdrStr(d.reason, va, align, d.symbol);
+  uint64_t off = reinterpret_cast<const uint8_t *>(loc) - ctx.in.bufferStart;
+  const InputSection *isec = offsetToInputSection(ctx, &off);
+  std::string locStr = isec ? isec->getLocation(off) : "(invalid location)";
+  ::reportUnalignedLdrStr(ctx, locStr, va, align,
+                          r.referent.dyn_cast<Symbol *>());
+}
+
+void macho::reportUnalignedLdrStr(Ctx &ctx, void *loc,
+                                  lld::macho::SymbolDiagnostic d, uint64_t va,
+                                  int align) {
+  ::reportUnalignedLdrStr(ctx, d.reason, va, align, d.symbol);
 }

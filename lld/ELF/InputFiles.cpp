@@ -432,12 +432,14 @@ static void handleSectionGroup(ArrayRef<InputSectionBase *> sections,
 }
 
 template <class ELFT> void ObjFile<ELFT>::initDwarf() {
-  dwarf = std::make_unique<DWARFCache>(std::make_unique<DWARFContext>(
-      std::make_unique<LLDDwarfObj<ELFT>>(this), "",
-      [&](Error err) { Warn(ctx) << getName() + ": " << std::move(err); },
-      [&](Error warning) {
-        Warn(ctx) << getName() << ": " << std::move(warning);
-      }));
+  dwarf = std::make_unique<DWARFCache>(
+      ctx.e,
+      std::make_unique<DWARFContext>(
+          std::make_unique<LLDDwarfObj<ELFT>>(this), "",
+          [&](Error err) { Warn(ctx) << getName() + ": " << std::move(err); },
+          [&](Error warning) {
+            Warn(ctx) << getName() << ": " << std::move(warning);
+          }));
 }
 
 DWARFCache *ELFFileBase::getDwarf() {
@@ -610,7 +612,7 @@ template <class ELFT> void ObjFile<ELFT>::parse(bool ignoreComdats) {
         keptGroups.push_back(i);
         if (!ctx.arg.resolveGroups)
           sections[i] = createInputSection(
-              i, sec, check(obj.getSectionName(sec, shstrtab)));
+              i, sec, check(ctx.e, obj.getSectionName(sec, shstrtab)));
       } else {
         // Otherwise, discard group members.
         for (uint32_t secIndex : entries.slice(1)) {
@@ -624,7 +626,7 @@ template <class ELFT> void ObjFile<ELFT>::parse(bool ignoreComdats) {
     }
 
     if (sec.sh_type == SHT_LLVM_DEPENDENT_LIBRARIES && !ctx.arg.relocatable) {
-      StringRef name = check(obj.getSectionName(sec, shstrtab));
+      StringRef name = check(ctx.e, obj.getSectionName(sec, shstrtab));
       ArrayRef<char> data = CHECK2(
           this->getObj().template getSectionContentsAsArray<char>(sec), this);
       if (!data.empty() && data.back() != '\0') {
@@ -644,7 +646,7 @@ template <class ELFT> void ObjFile<ELFT>::parse(bool ignoreComdats) {
     }
 
     if (sec.sh_type == SHT_LLVM_DYNDBG_ELF) {
-      if (check(obj.getSectionName(sec, shstrtab)) == dynDbgSecName) {
+      if (check(ctx.e, obj.getSectionName(sec, shstrtab)) == dynDbgSecName) {
         sections[i] = &InputSection::discarded;
         dynDbgSec = std::make_unique<InputSection>(*this, sec, dynDbgSecName);
         ctx.hasDynDbg = true;
@@ -657,8 +659,8 @@ template <class ELFT> void ObjFile<ELFT>::parse(bool ignoreComdats) {
       if (sec.sh_type == SHT_ARM_ATTRIBUTES) {
         ARMAttributeParser attributes;
         ArrayRef<uint8_t> contents =
-            check(this->getObj().getSectionContents(sec));
-        StringRef name = check(obj.getSectionName(sec, shstrtab));
+            check(ctx.e, this->getObj().getSectionContents(sec));
+        StringRef name = check(ctx.e, obj.getSectionName(sec, shstrtab));
         sections[i] = &InputSection::discarded;
         if (Error e = attributes.parse(contents, ekind == ELF32LEKind
                                                      ? llvm::endianness::little
@@ -824,10 +826,10 @@ void ObjFile<ELFT>::initializeSections(bool ignoreComdats,
     // properties. We delay processing Build Attributes until we have finished
     // reading all sections so that we can check that these are consistent.
     if (type == SHT_AARCH64_ATTRIBUTES && ctx.arg.emachine == EM_AARCH64) {
-      ArrayRef<uint8_t> contents = check(obj.getSectionContents(sec));
+      ArrayRef<uint8_t> contents = check(ctx.e, obj.getSectionContents(sec));
       AArch64AttributeParser attributes;
       if (Error e = attributes.parse(contents, ELFT::Endianness)) {
-        StringRef name = check(obj.getSectionName(sec, shstrtab));
+        StringRef name = check(ctx.e, obj.getSectionName(sec, shstrtab));
         InputSection isec(*this, sec, name);
         Warn(ctx) << &isec << ": " << std::move(e);
       } else {
@@ -866,8 +868,8 @@ void ObjFile<ELFT>::initializeSections(bool ignoreComdats,
     case SHT_INIT_ARRAY:
     case SHT_FINI_ARRAY:
     case SHT_PREINIT_ARRAY:
-      this->sections[i] =
-          createInputSection(i, sec, check(obj.getSectionName(sec, shstrtab)));
+      this->sections[i] = createInputSection(
+          i, sec, check(ctx.e, obj.getSectionName(sec, shstrtab)));
       break;
     case SHT_LLVM_LTO:
       // Discard .llvm.lto in a relocatable link that does not use the bitcode.
@@ -880,8 +882,8 @@ void ObjFile<ELFT>::initializeSections(bool ignoreComdats,
       }
       [[fallthrough]];
     default:
-      this->sections[i] =
-          createInputSection(i, sec, check(obj.getSectionName(sec, shstrtab)));
+      this->sections[i] = createInputSection(
+          i, sec, check(ctx.e, obj.getSectionName(sec, shstrtab)));
       if (ctx.arg.rejectMismatch &&
           !isKnownSpecificSectionType(type, sec.sh_flags))
         Err(ctx) << this->sections[i] << ": unknown section type 0x"
@@ -937,7 +939,7 @@ void ObjFile<ELFT>::initializeSections(bool ignoreComdats,
       // tools specify --emit-relocs to obtain the information.)
       if (ctx.arg.copyRelocs) {
         auto *isec = makeThreadLocal<InputSection>(
-            *this, sec, check(obj.getSectionName(sec, shstrtab)));
+            *this, sec, check(ctx.e, obj.getSectionName(sec, shstrtab)));
         // If the relocated section is discarded (due to /DISCARD/ or
         // --gc-sections), the relocation section should be discarded as well.
         s->dependentSections.push_back(isec);
@@ -1339,7 +1341,8 @@ void ObjFile<ELFT>::initSectionsAndLocalSyms(bool ignoreComdats) {
     const Elf_Sym &eSym = eSyms[i];
     uint32_t secIdx = eSym.st_shndx;
     if (LLVM_UNLIKELY(secIdx == SHN_XINDEX))
-      secIdx = check(getExtendedSymbolTableIndex<ELFT>(eSym, i, shndxTable));
+      secIdx =
+          check(ctx.e, getExtendedSymbolTableIndex<ELFT>(eSym, i, shndxTable));
     else if (secIdx >= SHN_LORESERVE)
       secIdx = 0;
     if (LLVM_UNLIKELY(secIdx >= sections.size())) {
@@ -1404,7 +1407,8 @@ template <class ELFT> void ObjFile<ELFT>::postParse() {
       if (secIdx == SHN_COMMON)
         continue;
       if (secIdx == SHN_XINDEX)
-        secIdx = check(getExtendedSymbolTableIndex<ELFT>(eSym, i, shndxTable));
+        secIdx = check(ctx.e,
+                       getExtendedSymbolTableIndex<ELFT>(eSym, i, shndxTable));
       else
         secIdx = 0;
     }
@@ -1960,8 +1964,8 @@ void BitcodeFile::postParse() {
 void BinaryFile::parse() {
   ArrayRef<uint8_t> data = arrayRefFromStringRef(mb.getBuffer());
   auto *section =
-      make<InputSection>(this, ".data", SHT_PROGBITS, SHF_ALLOC | SHF_WRITE,
-                         /*addralign=*/8, /*entsize=*/0, data);
+      ctx.make<InputSection>(this, ".data", SHT_PROGBITS, SHF_ALLOC | SHF_WRITE,
+                             /*addralign=*/8, /*entsize=*/0, data);
   sections.push_back(section);
 
   // For each input file foo that is embedded to a result as a binary
@@ -1986,8 +1990,8 @@ void BinaryFile::parse() {
 }
 
 InputFile *elf::createInternalFile(Ctx &ctx, StringRef name) {
-  auto *file =
-      make<InputFile>(ctx, InputFile::InternalKind, MemoryBufferRef("", name));
+  auto *file = ctx.make<InputFile>(ctx, InputFile::InternalKind,
+                                   MemoryBufferRef("", name));
   // References from an internal file do not lead to --warn-backrefs
   // diagnostics.
   file->groupId = 0;

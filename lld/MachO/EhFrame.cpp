@@ -96,8 +96,8 @@ void EhReader::skipLeb128(size_t *off) const {
 }
 
 void EhReader::failOn(size_t errOff, const Twine &msg) const {
-  fatal(toString(file) + ":(__eh_frame+0x" +
-        Twine::utohexstr(dataOff + errOff) + "): " + msg);
+  file->ctx.e.fatal(toString(file) + ":(__eh_frame+0x" +
+                    Twine::utohexstr(dataOff + errOff) + "): " + msg);
 }
 
 /*
@@ -106,19 +106,19 @@ void EhReader::failOn(size_t errOff, const Twine &msg) const {
  *   `(a + offset) - b` if Invert == true
  */
 template <bool Invert = false>
-static void createSubtraction(PointerUnion<Symbol *, InputSection *> a,
-                              PointerUnion<Symbol *, InputSection *> b,
-                              uint64_t off, uint8_t length,
-                              SmallVectorImpl<Relocation> *newRelocs) {
+static void
+createSubtraction(Ctx &ctx, PointerUnion<Symbol *, InputSection *> a,
+                  PointerUnion<Symbol *, InputSection *> b, uint64_t off,
+                  uint8_t length, SmallVectorImpl<Relocation> *newRelocs) {
   auto subtrahend = a;
   auto minuend = b;
   if (Invert)
     std::swap(subtrahend, minuend);
   assert(isa<Symbol *>(subtrahend));
-  Relocation subtrahendReloc(target->subtractorRelocType, /*pcrel=*/false,
+  Relocation subtrahendReloc(ctx.target->subtractorRelocType, /*pcrel=*/false,
                              length, off, /*addend=*/0, subtrahend);
-  Relocation minuendReloc(target->unsignedRelocType, /*pcrel=*/false, length,
-                          off, (Invert ? 1 : -1) * off, minuend);
+  Relocation minuendReloc(ctx.target->unsignedRelocType, /*pcrel=*/false,
+                          length, off, (Invert ? 1 : -1) * off, minuend);
   newRelocs->push_back(subtrahendReloc);
   newRelocs->push_back(minuendReloc);
 }
@@ -126,13 +126,15 @@ static void createSubtraction(PointerUnion<Symbol *, InputSection *> a,
 void EhRelocator::makePcRel(uint64_t off,
                             PointerUnion<Symbol *, InputSection *> target,
                             uint8_t length) {
-  createSubtraction(isec->symbols[0], target, off, length, &newRelocs);
+  createSubtraction(isec->getCtx(), isec->symbols[0], target, off, length,
+                    &newRelocs);
 }
 
 void EhRelocator::makeNegativePcRel(
     uint64_t off, PointerUnion<Symbol *, InputSection *> target,
     uint8_t length) {
-  createSubtraction</*Invert=*/true>(isec, target, off, length, &newRelocs);
+  createSubtraction</*Invert=*/true>(isec->getCtx(), isec, target, off, length,
+                                     &newRelocs);
 }
 
 void EhRelocator::commit() {

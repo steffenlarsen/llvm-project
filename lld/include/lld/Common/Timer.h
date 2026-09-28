@@ -19,7 +19,7 @@
 #include <vector>
 
 namespace lld {
-
+class ErrorHandler;
 class Timer;
 
 struct ScopedTimer {
@@ -42,12 +42,14 @@ public:
   explicit Timer(llvm::StringRef name);
 
   void addToTotal(std::chrono::nanoseconds time) { total += time.count(); }
-  void print();
+  // Prints the timings of this timer and its children to eh.outs().
+  void print(ErrorHandler &eh);
 
   double millis() const;
 
 private:
-  void print(int depth, double totalDuration, bool recurse = true) const;
+  void print(ErrorHandler &eh, int depth, double totalDuration,
+             bool recurse = true) const;
 
   std::atomic<std::chrono::nanoseconds::rep> total;
   std::vector<Timer *> children;

@@ -25,7 +25,8 @@ using namespace llvm::MachO;
 using namespace lld;
 using namespace lld::macho;
 
-template <class LP> static bool objectHasObjCSection(MemoryBufferRef mb) {
+template <class LP>
+static bool objectHasObjCSection(Ctx &ctx, MemoryBufferRef mb) {
   using SectionHeader = typename LP::section;
 
   auto *hdr =
@@ -33,8 +34,8 @@ template <class LP> static bool objectHasObjCSection(MemoryBufferRef mb) {
   if (hdr->magic != LP::magic)
     return false;
 
-  if (const auto *c =
-          findCommand<typename LP::segment_command>(hdr, LP::segmentLCType)) {
+  if (const auto *c = findCommand<typename LP::segment_command>(
+          ctx, hdr, LP::segmentLCType)) {
     auto sectionHeaders = ArrayRef<SectionHeader>{
         reinterpret_cast<const SectionHeader *>(c + 1), c->nsects};
     for (const SectionHeader &secHead : sectionHeaders) {
@@ -53,19 +54,19 @@ template <class LP> static bool objectHasObjCSection(MemoryBufferRef mb) {
   return false;
 }
 
-static bool objectHasObjCSection(MemoryBufferRef mb) {
-  if (target->wordSize == 8)
-    return ::objectHasObjCSection<LP64>(mb);
+static bool objectHasObjCSection(Ctx &ctx, MemoryBufferRef mb) {
+  if (ctx.target->wordSize == 8)
+    return ::objectHasObjCSection<LP64>(ctx, mb);
   else
-    return ::objectHasObjCSection<ILP32>(mb);
+    return ::objectHasObjCSection<ILP32>(ctx, mb);
 }
 
-bool macho::hasObjCSection(MemoryBufferRef mb) {
+bool macho::hasObjCSection(Ctx &ctx, MemoryBufferRef mb) {
   switch (identify_magic(mb.getBuffer())) {
   case file_magic::macho_object:
-    return objectHasObjCSection(mb);
+    return objectHasObjCSection(ctx, mb);
   case file_magic::bitcode:
-    return check(isBitcodeContainingObjCCategory(mb));
+    return check(ctx.e, isBitcodeContainingObjCCategory(mb));
   default:
     return false;
   }
@@ -161,7 +162,7 @@ struct ObjcClass {
 
 class ObjcCategoryChecker {
 public:
-  ObjcCategoryChecker();
+  ObjcCategoryChecker(Ctx &ctx);
   void parseCategory(const ConcatInputSection *catListIsec);
 
 private:
@@ -171,6 +172,7 @@ private:
                     const ConcatInputSection *containerIsec,
                     MethodContainerKind, MethodKind);
 
+  Ctx &ctx;
   CategoryLayout catLayout;
   ClassLayout classLayout;
   ROClassLayout roClassLayout;
@@ -180,10 +182,11 @@ private:
   DenseMap<const Symbol *, ObjcClass> classMap;
 };
 
-ObjcCategoryChecker::ObjcCategoryChecker()
-    : catLayout(target->wordSize), classLayout(target->wordSize),
-      roClassLayout(target->wordSize), listHeaderLayout(target->wordSize),
-      methodLayout(target->wordSize) {}
+ObjcCategoryChecker::ObjcCategoryChecker(Ctx &ctx)
+    : ctx(ctx), catLayout(ctx.target->wordSize),
+      classLayout(ctx.target->wordSize), roClassLayout(ctx.target->wordSize),
+      listHeaderLayout(ctx.target->wordSize),
+      methodLayout(ctx.target->wordSize) {}
 
 void ObjcCategoryChecker::parseMethods(const ConcatInputSection *methodsIsec,
                                        const Symbol *methodContainerSym,
@@ -249,11 +252,11 @@ void ObjcCategoryChecker::parseMethods(const ConcatInputSection *methodsIsec,
     };
 
     StringRef containerType = mc.kind == MCK_Category ? "category" : "class";
-    warn("method '" + methPrefix + methodName.val() +
-         "' has conflicting definitions:\n>>> defined in category " +
-         newCatName + " from " + formatObjAndSrcFileName(containerIsec) +
-         "\n>>> defined in " + containerType + " " + containerName + " from " +
-         formatObjAndSrcFileName(mc.isec));
+    ctx.e.warn("method '" + methPrefix + methodName.val() +
+               "' has conflicting definitions:\n>>> defined in category " +
+               newCatName + " from " + formatObjAndSrcFileName(containerIsec) +
+               "\n>>> defined in " + containerType + " " + containerName +
+               " from " + formatObjAndSrcFileName(mc.isec));
   }
 }
 
@@ -310,11 +313,11 @@ void ObjcCategoryChecker::parseClass(const Defined *classSym) {
       parseMethods(classMethodsIsec, classSym, classIsec, MCK_Class, MK_Static);
 }
 
-void objc::checkCategories() {
+void objc::checkCategories(Ctx &ctx) {
   TimeTraceScope timeScope("ObjcCategoryChecker");
 
-  ObjcCategoryChecker checker;
-  for (const InputSection *isec : inputSections) {
+  ObjcCategoryChecker checker(ctx);
+  for (const InputSection *isec : ctx.inputSections) {
     if (isec->getName() == section_names::objcCatList)
       for (const Relocation &r : isec->relocs) {
         auto *catIsec = cast<ConcatInputSection>(r.getReferentInputSection());
@@ -411,9 +414,9 @@ class ObjcCategoryMerger {
   };
 
 public:
-  ObjcCategoryMerger(std::vector<ConcatInputSection *> &_allInputSections);
+  ObjcCategoryMerger(Ctx &ctx,
+                     std::vector<ConcatInputSection *> &_allInputSections);
   void doMerge();
-  static void doCleanup();
 
 private:
   DenseSet<const Symbol *> collectNlCategories();
@@ -483,6 +486,7 @@ private:
   // Allocate section data, backed by generatedSectionData
   SmallVector<uint8_t> &newSectionData(uint32_t size);
 
+  Ctx &ctx;
   CategoryLayout catLayout;
   ClassLayout classLayout;
   ROClassLayout roClassLayout;
@@ -496,25 +500,15 @@ private:
   // address points can be interior to a larger metadata symbol after LTO.
   MapVector<std::pair<const Symbol *, int64_t>, std::vector<InfoInputCategory>>
       categoryMap;
-
-  // Normally, the binary data comes from the input files, but since we're
-  // generating binary data ourselves, we use the below array to store it in.
-  // Need this to be 'static' so the data survives past the ObjcCategoryMerger
-  // object, as the data will be read by the Writer when the final binary is
-  // generated.
-  static SmallVector<std::unique_ptr<SmallVector<uint8_t>>>
-      generatedSectionData;
 };
 
-SmallVector<std::unique_ptr<SmallVector<uint8_t>>>
-    ObjcCategoryMerger::generatedSectionData;
-
 ObjcCategoryMerger::ObjcCategoryMerger(
-    std::vector<ConcatInputSection *> &_allInputSections)
-    : catLayout(target->wordSize), classLayout(target->wordSize),
-      roClassLayout(target->wordSize), listHeaderLayout(target->wordSize),
-      methodLayout(target->wordSize),
-      protocolListHeaderLayout(target->wordSize),
+    Ctx &ctx, std::vector<ConcatInputSection *> &_allInputSections)
+    : ctx(ctx), catLayout(ctx.target->wordSize),
+      classLayout(ctx.target->wordSize), roClassLayout(ctx.target->wordSize),
+      listHeaderLayout(ctx.target->wordSize),
+      methodLayout(ctx.target->wordSize),
+      protocolListHeaderLayout(ctx.target->wordSize),
       allInputSections(_allInputSections) {}
 
 void ObjcCategoryMerger::collectSectionWriteInfoFromIsec(
@@ -663,7 +657,7 @@ bool ObjcCategoryMerger::collectCategoryWriterInfoFromCategory(
   // would provide the same info)
   if (!infoCategoryWriter.catPtrListInfo.valid) {
     for (uint32_t off = catLayout.instanceMethodsOffset;
-         off <= catLayout.classPropsOffset; off += target->wordSize) {
+         off <= catLayout.classPropsOffset; off += ctx.target->wordSize) {
       if (Defined *ptrList =
               tryGetDefinedAtIsecOffset(catInfo.catBodyIsec, off)) {
         collectSectionWriteInfoFromIsec(ptrList->isec(),
@@ -683,7 +677,7 @@ bool ObjcCategoryMerger::collectCategoryWriterInfoFromCategory(
 void ObjcCategoryMerger::parseProtocolListInfo(const ConcatInputSection *isec,
                                                uint32_t secOffset,
                                                PointerListInfo &ptrList) {
-  assert((isec && (secOffset + target->wordSize <= isec->data.size())) &&
+  assert((isec && (secOffset + ctx.target->wordSize <= isec->data.size())) &&
          "Tried to read pointer list beyond protocol section end");
 
   const Relocation *reloc = isec->getRelocAt(secOffset);
@@ -700,12 +694,12 @@ void ObjcCategoryMerger::parseProtocolListInfo(const ConcatInputSection *isec,
       ptrListSym->isec()->data.data() + listHeaderLayout.structSizeOffset);
 
   ptrList.structCount += protocolCount;
-  ptrList.structSize = target->wordSize;
+  ptrList.structSize = ctx.target->wordSize;
 
   [[maybe_unused]] uint32_t expectedListSize =
-      (protocolCount * target->wordSize) +
+      (protocolCount * ctx.target->wordSize) +
       /*header(count)*/ protocolListHeaderLayout.totalSize +
-      /*extra null value*/ target->wordSize;
+      /*extra null value*/ ctx.target->wordSize;
 
   uint32_t off = protocolListHeaderLayout.totalSize;
   for (uint32_t inx = 0; inx < protocolCount; ++inx) {
@@ -716,11 +710,11 @@ void ObjcCategoryMerger::parseProtocolListInfo(const ConcatInputSection *isec,
     assert(listSym && "Protocol list reloc does not have a valid Defined");
 
     ptrList.allPtrs.push_back(listSym);
-    off += target->wordSize;
+    off += ctx.target->wordSize;
   }
   assert((ptrListSym->isec()->getRelocAt(off) == nullptr) &&
          "expected null terminating protocol");
-  assert(off + /*extra null value*/ target->wordSize == expectedListSize &&
+  assert(off + /*extra null value*/ ctx.target->wordSize == expectedListSize &&
          "Protocol list end offset does not match expected size");
 }
 
@@ -741,7 +735,7 @@ bool ObjcCategoryMerger::parsePointerListInfo(const ConcatInputSection *isec,
                                               PointerListInfo &ptrList) {
   assert(ptrList.pointersPerStruct == 2 || ptrList.pointersPerStruct == 3);
   assert(isec && "Trying to parse pointer list from null isec");
-  assert(secOffset + target->wordSize <= isec->data.size() &&
+  assert(secOffset + ctx.target->wordSize <= isec->data.size() &&
          "Trying to read pointer list beyond section end");
 
   const Relocation *reloc = isec->getRelocAt(secOffset);
@@ -756,7 +750,7 @@ bool ObjcCategoryMerger::parsePointerListInfo(const ConcatInputSection *isec,
       ptrListSym->isec()->data.data() + listHeaderLayout.structSizeOffset);
   uint32_t thisStructCount = *reinterpret_cast<const uint32_t *>(
       ptrListSym->isec()->data.data() + listHeaderLayout.structCountOffset);
-  assert(thisStructSize == ptrList.pointersPerStruct * target->wordSize);
+  assert(thisStructSize == ptrList.pointersPerStruct * ctx.target->wordSize);
 
   assert(!ptrList.structSize || (thisStructSize == ptrList.structSize));
 
@@ -769,7 +763,7 @@ bool ObjcCategoryMerger::parsePointerListInfo(const ConcatInputSection *isec,
          "Pointer list does not match expected size");
 
   for (uint32_t off = listHeaderLayout.totalSize; off < expectedListSize;
-       off += target->wordSize) {
+       off += ctx.target->wordSize) {
     const Relocation *reloc = ptrListSym->isec()->getRelocAt(off);
     assert(reloc && "No reloc found at pointer list offset");
 
@@ -867,9 +861,9 @@ Defined *ObjcCategoryMerger::emitAndLinkProtocolList(
 
   assert(ptrList.allPtrs.size() == ptrList.structCount);
 
-  uint32_t bodySize = (ptrList.structCount * target->wordSize) +
+  uint32_t bodySize = (ptrList.structCount * ctx.target->wordSize) +
                       /*header(count)*/ protocolListHeaderLayout.totalSize +
-                      /*extra null value*/ target->wordSize;
+                      /*extra null value*/ ctx.target->wordSize;
   llvm::ArrayRef<uint8_t> bodyData = newSectionData(bodySize);
 
   // This theoretically can be either 32b or 64b, but writing just the first 32b
@@ -879,7 +873,7 @@ Defined *ObjcCategoryMerger::emitAndLinkProtocolList(
 
   *const_cast<uint32_t *>(ptrProtoCount) = ptrList.allPtrs.size();
 
-  ConcatInputSection *listSec = make<ConcatInputSection>(
+  ConcatInputSection *listSec = ctx.make<ConcatInputSection>(
       *infoCategoryWriter.catPtrListInfo.inputSection, bodyData,
       infoCategoryWriter.catPtrListInfo.align);
   listSec->parent = infoCategoryWriter.catPtrListInfo.outputSection;
@@ -890,8 +884,8 @@ Defined *ObjcCategoryMerger::emitAndLinkProtocolList(
   std::string symName = ptrList.categoryPrefix;
   symName += extInfo.baseClassName + "(" + extInfo.mergedContainerName + ")";
 
-  Defined *ptrListSym = make<Defined>(
-      newStringData(symName.c_str()), /*file=*/parentSym->getObjectFile(),
+  Defined *ptrListSym = ctx.make<Defined>(
+      ctx, newStringData(symName.c_str()), /*file=*/parentSym->getObjectFile(),
       listSec, /*value=*/0, bodyData.size(), /*isWeakDef=*/false,
       /*isExternal=*/false, /*isPrivateExtern=*/false, /*includeInSymtab=*/true,
       /*isReferencedDynamically=*/false, /*noDeadStrip=*/false,
@@ -899,7 +893,7 @@ Defined *ObjcCategoryMerger::emitAndLinkProtocolList(
 
   ptrListSym->used = true;
   parentSym->getObjectFile()->symbols.push_back(ptrListSym);
-  addInputSection(listSec);
+  addInputSection(ctx, listSec);
 
   createSymbolReference(parentSym, ptrListSym, linkAtOffset,
                         infoCategoryWriter.catBodyInfo.relocTemplate);
@@ -908,7 +902,7 @@ Defined *ObjcCategoryMerger::emitAndLinkProtocolList(
   for (Symbol *symbol : ptrList.allPtrs) {
     createSymbolReference(ptrListSym, symbol, offset,
                           infoCategoryWriter.catPtrListInfo.relocTemplate);
-    offset += target->wordSize;
+    offset += ctx.target->wordSize;
   }
 
   return ptrListSym;
@@ -923,7 +917,7 @@ void ObjcCategoryMerger::emitAndLinkPointerList(
   if (ptrList.allPtrs.empty())
     return;
 
-  assert(ptrList.allPtrs.size() * target->wordSize ==
+  assert(ptrList.allPtrs.size() * ctx.target->wordSize ==
          ptrList.structCount * ptrList.structSize);
 
   // Generate body
@@ -939,7 +933,7 @@ void ObjcCategoryMerger::emitAndLinkPointerList(
   *const_cast<uint32_t *>(ptrStructSize) = ptrList.structSize;
   *const_cast<uint32_t *>(ptrStructCount) = ptrList.structCount;
 
-  ConcatInputSection *listSec = make<ConcatInputSection>(
+  ConcatInputSection *listSec = ctx.make<ConcatInputSection>(
       *infoCategoryWriter.catPtrListInfo.inputSection, bodyData,
       infoCategoryWriter.catPtrListInfo.align);
   listSec->parent = infoCategoryWriter.catPtrListInfo.outputSection;
@@ -950,8 +944,8 @@ void ObjcCategoryMerger::emitAndLinkPointerList(
   std::string symName = ptrList.categoryPrefix;
   symName += extInfo.baseClassName + "(" + extInfo.mergedContainerName + ")";
 
-  Defined *ptrListSym = make<Defined>(
-      newStringData(symName.c_str()), /*file=*/parentSym->getObjectFile(),
+  Defined *ptrListSym = ctx.make<Defined>(
+      ctx, newStringData(symName.c_str()), /*file=*/parentSym->getObjectFile(),
       listSec, /*value=*/0, bodyData.size(), /*isWeakDef=*/false,
       /*isExternal=*/false, /*isPrivateExtern=*/false, /*includeInSymtab=*/true,
       /*isReferencedDynamically=*/false, /*noDeadStrip=*/false,
@@ -959,7 +953,7 @@ void ObjcCategoryMerger::emitAndLinkPointerList(
 
   ptrListSym->used = true;
   parentSym->getObjectFile()->symbols.push_back(ptrListSym);
-  addInputSection(listSec);
+  addInputSection(ctx, listSec);
 
   createSymbolReference(parentSym, ptrListSym, linkAtOffset,
                         infoCategoryWriter.catBodyInfo.relocTemplate);
@@ -968,7 +962,7 @@ void ObjcCategoryMerger::emitAndLinkPointerList(
   for (Symbol *symbol : ptrList.allPtrs) {
     createSymbolReference(ptrListSym, symbol, offset,
                           infoCategoryWriter.catPtrListInfo.relocTemplate);
-    offset += target->wordSize;
+    offset += ctx.target->wordSize;
   }
 }
 
@@ -977,12 +971,12 @@ Defined *
 ObjcCategoryMerger::emitCatListEntrySec(const std::string &forCategoryName,
                                         const std::string &forBaseClassName,
                                         ObjFile *objFile) {
-  uint32_t sectionSize = target->wordSize;
+  uint32_t sectionSize = ctx.target->wordSize;
   llvm::ArrayRef<uint8_t> bodyData = newSectionData(sectionSize);
 
-  ConcatInputSection *newCatList =
-      make<ConcatInputSection>(*infoCategoryWriter.catListInfo.inputSection,
-                               bodyData, infoCategoryWriter.catListInfo.align);
+  ConcatInputSection *newCatList = ctx.make<ConcatInputSection>(
+      *infoCategoryWriter.catListInfo.inputSection, bodyData,
+      infoCategoryWriter.catListInfo.align);
   newCatList->parent = infoCategoryWriter.catListInfo.outputSection;
   newCatList->live = true;
 
@@ -991,8 +985,8 @@ ObjcCategoryMerger::emitCatListEntrySec(const std::string &forCategoryName,
   std::string catSymName = "<__objc_catlist slot for merged category ";
   catSymName += forBaseClassName + "(" + forCategoryName + ")>";
 
-  Defined *catListSym = make<Defined>(
-      newStringData(catSymName.c_str()), /*file=*/objFile, newCatList,
+  Defined *catListSym = ctx.make<Defined>(
+      ctx, newStringData(catSymName.c_str()), /*file=*/objFile, newCatList,
       /*value=*/0, bodyData.size(), /*isWeakDef=*/false, /*isExternal=*/false,
       /*isPrivateExtern=*/false, /*includeInSymtab=*/false,
       /*isReferencedDynamically=*/false, /*noDeadStrip=*/false,
@@ -1000,7 +994,7 @@ ObjcCategoryMerger::emitCatListEntrySec(const std::string &forCategoryName,
 
   catListSym->used = true;
   objFile->symbols.push_back(catListSym);
-  addInputSection(newCatList);
+  addInputSection(ctx, newCatList);
   return catListSym;
 }
 
@@ -1019,16 +1013,16 @@ Defined *ObjcCategoryMerger::emitCategoryBody(const std::string &name,
                                    catLayout.sizeOffset);
   *ptrSize = catLayout.totalSize;
 
-  ConcatInputSection *newBodySec =
-      make<ConcatInputSection>(*infoCategoryWriter.catBodyInfo.inputSection,
-                               bodyData, infoCategoryWriter.catBodyInfo.align);
+  ConcatInputSection *newBodySec = ctx.make<ConcatInputSection>(
+      *infoCategoryWriter.catBodyInfo.inputSection, bodyData,
+      infoCategoryWriter.catBodyInfo.align);
   newBodySec->parent = infoCategoryWriter.catBodyInfo.outputSection;
   newBodySec->live = true;
 
   std::string symName =
       objc::symbol_names::category + baseClassName + "(" + name + ")";
-  Defined *catBodySym = make<Defined>(
-      newStringData(symName.c_str()), /*file=*/objFile, newBodySec,
+  Defined *catBodySym = ctx.make<Defined>(
+      ctx, newStringData(symName.c_str()), /*file=*/objFile, newBodySec,
       /*value=*/0, bodyData.size(), /*isWeakDef=*/false, /*isExternal=*/false,
       /*isPrivateExtern=*/false, /*includeInSymtab=*/true,
       /*isReferencedDynamically=*/false, /*noDeadStrip=*/false,
@@ -1036,7 +1030,7 @@ Defined *ObjcCategoryMerger::emitCategoryBody(const std::string &name,
 
   catBodySym->used = true;
   objFile->symbols.push_back(catBodySym);
-  addInputSection(newBodySec);
+  addInputSection(ctx, newBodySec);
 
   createSymbolReference(catBodySym, nameSym, catLayout.nameOffset,
                         infoCategoryWriter.catBodyInfo.relocTemplate);
@@ -1060,7 +1054,7 @@ Defined *ObjcCategoryMerger::emitCategoryName(const std::string &name,
       nameStrData.size() + 1);
 
   auto *parentSection = infoCategoryWriter.catNameInfo.inputSection;
-  CStringInputSection *newStringSec = make<CStringInputSection>(
+  CStringInputSection *newStringSec = ctx.make<CStringInputSection>(
       *infoCategoryWriter.catNameInfo.inputSection, nameData,
       infoCategoryWriter.catNameInfo.align, /*dedupLiterals=*/true);
 
@@ -1069,11 +1063,11 @@ Defined *ObjcCategoryMerger::emitCategoryName(const std::string &name,
   newStringSec->splitIntoPieces();
   newStringSec->pieces[0].live = true;
   newStringSec->parent = infoCategoryWriter.catNameInfo.outputSection;
-  in.cStringSection->addInput(newStringSec);
+  ctx.in.cStringSection->addInput(newStringSec);
   assert(newStringSec->pieces.size() == 1);
 
-  Defined *catNameSym = make<Defined>(
-      "<merged category name>", /*file=*/objFile, newStringSec,
+  Defined *catNameSym = ctx.make<Defined>(
+      ctx, "<merged category name>", /*file=*/objFile, newStringSec,
       /*value=*/0, nameData.size(),
       /*isWeakDef=*/false, /*isExternal=*/false, /*isPrivateExtern=*/false,
       /*includeInSymtab=*/false, /*isReferencedDynamically=*/false,
@@ -1189,7 +1183,7 @@ void ObjcCategoryMerger::collectAndValidateCategoriesData() {
            "__objc_catList InputSection is not a ConcatInputSection");
 
     for (uint32_t off = 0; off < catListCisec->getSize();
-         off += target->wordSize) {
+         off += ctx.target->wordSize) {
       Defined *categorySym = tryGetDefinedAtIsecOffset(catListCisec, off);
       assert(categorySym &&
              "Failed to get a valid category at __objc_catlit offset");
@@ -1234,7 +1228,7 @@ void ObjcCategoryMerger::generateCatListForNonErasedCategories(
     ConcatInputSection *catListIsec = mapEntry.first;
     for (uint32_t catListIsecOffset = 0;
          catListIsecOffset < catListIsec->data.size();
-         catListIsecOffset += target->wordSize) {
+         catListIsecOffset += ctx.target->wordSize) {
       // This slot was erased, we can just skip it
       if (mapEntry.second.count(catListIsecOffset))
         continue;
@@ -1244,13 +1238,13 @@ void ObjcCategoryMerger::generateCatListForNonErasedCategories(
       assert(nonErasedCatBody && "Failed to relocate non-deleted category");
 
       // Allocate data for the new __objc_catlist slot
-      llvm::ArrayRef<uint8_t> bodyData = newSectionData(target->wordSize);
+      llvm::ArrayRef<uint8_t> bodyData = newSectionData(ctx.target->wordSize);
 
       // We mark the __objc_catlist slot as belonging to the same file as the
       // category
       ObjFile *objFile = dyn_cast<ObjFile>(nonErasedCatBody->getFile());
 
-      ConcatInputSection *listSec = make<ConcatInputSection>(
+      ConcatInputSection *listSec = ctx.make<ConcatInputSection>(
           *infoCategoryWriter.catListInfo.inputSection, bodyData,
           infoCategoryWriter.catListInfo.align);
       listSec->parent = infoCategoryWriter.catListInfo.outputSection;
@@ -1260,8 +1254,8 @@ void ObjcCategoryMerger::generateCatListForNonErasedCategories(
       slotSymName += nonErasedCatBody->getName();
       slotSymName += ">";
 
-      Defined *catListSlotSym = make<Defined>(
-          newStringData(slotSymName.c_str()), /*file=*/objFile, listSec,
+      Defined *catListSlotSym = ctx.make<Defined>(
+          ctx, newStringData(slotSymName.c_str()), /*file=*/objFile, listSec,
           /*value=*/0, bodyData.size(),
           /*isWeakDef=*/false, /*isExternal=*/false, /*isPrivateExtern=*/false,
           /*includeInSymtab=*/false, /*isReferencedDynamically=*/false,
@@ -1269,7 +1263,7 @@ void ObjcCategoryMerger::generateCatListForNonErasedCategories(
 
       catListSlotSym->used = true;
       objFile->symbols.push_back(catListSlotSym);
-      addInputSection(listSec);
+      addInputSection(ctx, listSec);
 
       // Now link the category body into the newly created slot
       createSymbolReference(catListSlotSym, nonErasedCatBody, 0,
@@ -1352,15 +1346,13 @@ void ObjcCategoryMerger::doMerge() {
       merged = mergeCategoriesIntoSingleCategory(catInfos);
     }
     if (!merged)
-      warn("ObjC category merging skipped for class symbol' " +
-           baseClass->getName().str() + "'\n");
+      ctx.e.warn("ObjC category merging skipped for class symbol' " +
+                 baseClass->getName().str() + "'\n");
   }
 
   // Erase all categories that were merged
   eraseMergedCategories();
 }
-
-void ObjcCategoryMerger::doCleanup() { generatedSectionData.clear(); }
 
 StringRef ObjcCategoryMerger::newStringData(const char *str) {
   uint32_t len = strlen(str);
@@ -1372,22 +1364,22 @@ StringRef ObjcCategoryMerger::newStringData(const char *str) {
   return StringRef(strData, len);
 }
 
+// Normally, the binary data comes from the input files, but since we're
+// generating binary data ourselves, we allocate it in the linker context so
+// the data survives past the ObjcCategoryMerger object, as the data will be
+// read by the Writer when the final binary is generated.
 SmallVector<uint8_t> &ObjcCategoryMerger::newSectionData(uint32_t size) {
-  generatedSectionData.push_back(
-      std::make_unique<SmallVector<uint8_t>>(size, 0));
-  return *generatedSectionData.back();
+  return *ctx.make<SmallVector<uint8_t>>(size, 0);
 }
 
 } // namespace
 
-void objc::mergeCategories() {
+void objc::mergeCategories(Ctx &ctx) {
   TimeTraceScope timeScope("ObjcCategoryMerger");
 
-  ObjcCategoryMerger merger(inputSections);
+  ObjcCategoryMerger merger(ctx, ctx.inputSections);
   merger.doMerge();
 }
-
-void objc::doCleanup() { ObjcCategoryMerger::doCleanup(); }
 
 bool ObjcCategoryMerger::mergeCategoriesIntoBaseClass(
     const Defined *baseClass, int64_t baseClassAddend,

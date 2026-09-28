@@ -133,7 +133,8 @@ struct SecondLevelPage {
 // lengthy definition of UnwindInfoSection.
 class UnwindInfoSectionImpl final : public UnwindInfoSection {
 public:
-  UnwindInfoSectionImpl() : cuLayout(target->wordSize) {}
+  UnwindInfoSectionImpl(Ctx &ctx)
+      : UnwindInfoSection(ctx), cuLayout(ctx.target->wordSize) {}
   uint64_t getSize() const override { return unwindInfoSize; }
   void prepare() override;
   void finalize() override;
@@ -167,8 +168,8 @@ private:
   uint64_t cueEndBoundary = 0;
 };
 
-UnwindInfoSection::UnwindInfoSection()
-    : SyntheticSection(segment_names::text, section_names::unwindInfo) {
+UnwindInfoSection::UnwindInfoSection(Ctx &ctx)
+    : SyntheticSection(ctx, segment_names::text, section_names::unwindInfo) {
   align = 4;
 }
 
@@ -236,7 +237,7 @@ void UnwindInfoSectionImpl::prepareRelocations(ConcatInputSection *isec) {
   // live, it wouldn't reduce number of got entries.
   for (size_t i = 0; i < isec->relocs.size(); ++i) {
     Relocation &r = isec->relocs[i];
-    assert(target->hasAttr(r.type, RelocAttrBits::UNSIGNED));
+    assert(ctx.target->hasAttr(r.type, RelocAttrBits::UNSIGNED));
     // Since compact unwind sections aren't part of the inputSections vector,
     // they don't get canonicalized by scanRelocations(), so we have to do the
     // canonicalization here.
@@ -265,12 +266,12 @@ void UnwindInfoSectionImpl::prepareRelocations(ConcatInputSection *isec) {
         //
         // (See discussions/alternatives already considered on D107533)
         if (!defined->isExternal())
-          if (Symbol *sym = symtab->find(defined->getName()))
+          if (Symbol *sym = ctx.symtab->find(defined->getName()))
             if (!sym->isLazy())
               r.referent = s = sym;
       }
       if (auto *undefined = dyn_cast<Undefined>(s)) {
-        treatUndefinedSymbol(*undefined, isec, r.offset);
+        treatUndefinedSymbol(ctx, *undefined, isec, r.offset);
         // treatUndefinedSymbol() can replace s with a DylibSymbol; re-check.
         if (isa<Undefined>(s))
           continue;
@@ -283,7 +284,7 @@ void UnwindInfoSectionImpl::prepareRelocations(ConcatInputSection *isec) {
             personalityTable[{defined->isec(), defined->value}];
         if (personality == nullptr) {
           personality = defined;
-          in.got->addEntry(defined);
+          ctx.in.got->addEntry(defined);
         } else if (personality != defined) {
           r.referent = personality;
         }
@@ -291,7 +292,7 @@ void UnwindInfoSectionImpl::prepareRelocations(ConcatInputSection *isec) {
       }
 
       assert(isa<DylibSymbol>(s));
-      in.got->addEntry(s);
+      ctx.in.got->addEntry(s);
       continue;
     }
 
@@ -315,14 +316,15 @@ void UnwindInfoSectionImpl::prepareRelocations(ConcatInputSection *isec) {
         } else {
           // This runs after dead stripping, so the noDeadStrip argument does
           // not matter.
-          s = make<Defined>("<internal>", /*file=*/nullptr, referentIsec,
-                            r.addend, /*size=*/0, /*isWeakDef=*/false,
-                            /*isExternal=*/false, /*isPrivateExtern=*/false,
-                            /*includeInSymtab=*/true,
-                            /*isReferencedDynamically=*/false,
-                            /*noDeadStrip=*/false);
+          s = ctx.make<Defined>(ctx, "<internal>", /*file=*/nullptr,
+                                referentIsec, r.addend, /*size=*/0,
+                                /*isWeakDef=*/false,
+                                /*isExternal=*/false, /*isPrivateExtern=*/false,
+                                /*includeInSymtab=*/true,
+                                /*isReferencedDynamically=*/false,
+                                /*noDeadStrip=*/false);
           s->used = true;
-          in.got->addEntry(s);
+          ctx.in.got->addEntry(s);
         }
       }
       r.referent = s;
@@ -352,7 +354,7 @@ void UnwindInfoSectionImpl::relocateCompactUnwind(
   parallelFor(0, symbolsVec.size(), [&](size_t i) {
     CompactUnwindEntry &cu = cuEntries[i];
     const Defined *d = symbolsVec[i].second;
-    cu.functionAddress = d->getVA();
+    cu.functionAddress = d->getVA(ctx);
     if (!d->unwindEntry())
       return;
 
@@ -371,7 +373,7 @@ void UnwindInfoSectionImpl::relocateCompactUnwind(
           d->unwindEntry()->outSecOff <= DWARF_SECTION_OFFSET
               ? d->unwindEntry()->outSecOff
               : 0;
-      cu.encoding = target->modeDwarfEncoding | dwarfOffsetHint;
+      cu.encoding = ctx.target->modeDwarfEncoding | dwarfOffsetHint;
       const FDE &fde = cast<ObjFile>(d->getFile())->fdes[d->unwindEntry()];
       cu.functionLength = fde.funcLength;
       // Omit the DWARF personality from compact-unwind entry so that we
@@ -385,7 +387,7 @@ void UnwindInfoSectionImpl::relocateCompactUnwind(
 
     auto buf =
         reinterpret_cast<const uint8_t *>(d->unwindEntry()->data.data()) -
-        target->wordSize;
+        ctx.target->wordSize;
     cu.functionLength =
         support::endian::read32le(buf + cuLayout.functionLengthOffset);
     cu.encoding = support::endian::read32le(buf + cuLayout.encodingOffset);
@@ -418,11 +420,11 @@ void UnwindInfoSectionImpl::encodePersonalities() {
             static_cast<compact_unwind_encoding_t>(UNWIND_PERSONALITY_MASK));
   }
   if (personalities.size() > 3)
-    error("too many personalities (" + Twine(personalities.size()) +
-          ") for compact unwind to encode");
+    ctx.e.error("too many personalities (" + Twine(personalities.size()) +
+                ") for compact unwind to encode");
 }
 
-static bool canFoldEncoding(compact_unwind_encoding_t encoding) {
+static bool canFoldEncoding(Ctx &ctx, compact_unwind_encoding_t encoding) {
   // From compact_unwind_encoding.h:
   //  UNWIND_X86_64_MODE_STACK_IND:
   //  A "frameless" (RBP not used as frame pointer) function large constant
@@ -437,7 +439,8 @@ static bool canFoldEncoding(compact_unwind_encoding_t encoding) {
   // entries need unique addresses.
   static_assert(static_cast<uint32_t>(UNWIND_X86_64_MODE_STACK_IND) ==
                 static_cast<uint32_t>(UNWIND_X86_MODE_STACK_IND));
-  if ((target->cpuType == CPU_TYPE_X86_64 || target->cpuType == CPU_TYPE_X86) &&
+  if ((ctx.target->cpuType == CPU_TYPE_X86_64 ||
+       ctx.target->cpuType == CPU_TYPE_X86) &&
       (encoding & UNWIND_MODE_MASK) == UNWIND_X86_64_MODE_STACK_IND) {
     // FIXME: Consider passing in the two function addresses and getting
     // their two stack sizes off the `subq` and only returning false if they're
@@ -511,7 +514,7 @@ void UnwindInfoSectionImpl::finalize() {
            // is just a no-op without LSDA), so we still check for personality
            // function equivalence to handle that case.
            foldBegin->personality == foldEnd->personality &&
-           canFoldEncoding(foldEnd->encoding))
+           canFoldEncoding(ctx, foldEnd->encoding))
       ;
     *foldWrite++ = *foldBegin;
     foldBegin = foldEnd;
@@ -642,7 +645,7 @@ void UnwindInfoSectionImpl::writeTo(uint8_t *buf) const {
 
   // Personalities
   for (const Symbol *personality : personalities)
-    *i32p++ = personality->getGotVA() - in.header->addr;
+    *i32p++ = personality->getGotVA(ctx) - ctx.in.header->addr;
 
   // FIXME: LD64 checks and warns aboutgaps or overlapse in cuEntries address
   // ranges. We should do the same too
@@ -655,7 +658,7 @@ void UnwindInfoSectionImpl::writeTo(uint8_t *buf) const {
   auto *iep = reinterpret_cast<unwind_info_section_header_index_entry *>(i32p);
   for (const SecondLevelPage &page : secondLevelPages) {
     size_t idx = page.entryIndex;
-    iep->functionOffset = cuEntries[idx].functionAddress - in.header->addr;
+    iep->functionOffset = cuEntries[idx].functionAddress - ctx.in.header->addr;
     iep->secondLevelPagesSectionOffset = l2PagesOffset;
     iep->lsdaIndexArraySectionOffset =
         lsdaOffset + lsdaIndex.lookup(idx) *
@@ -667,7 +670,7 @@ void UnwindInfoSectionImpl::writeTo(uint8_t *buf) const {
   // XXX(vyng): Note that LD64 adds +1 here.
   // Unsure whether it's a bug or it's their workaround for something else.
   // See comments from https://reviews.llvm.org/D138320.
-  iep->functionOffset = cueEndBoundary - in.header->addr;
+  iep->functionOffset = cueEndBoundary - ctx.in.header->addr;
   iep->secondLevelPagesSectionOffset = 0;
   iep->lsdaIndexArraySectionOffset =
       lsdaOffset + entriesWithLsda.size() *
@@ -679,8 +682,8 @@ void UnwindInfoSectionImpl::writeTo(uint8_t *buf) const {
       reinterpret_cast<unwind_info_section_header_lsda_index_entry *>(iep);
   for (size_t idx : entriesWithLsda) {
     const CompactUnwindEntry &cu = cuEntries[idx];
-    lep->lsdaOffset = cu.lsda->getVA(/*off=*/0) - in.header->addr;
-    lep->functionOffset = cu.functionAddress - in.header->addr;
+    lep->lsdaOffset = cu.lsda->getVA(/*off=*/0) - ctx.in.header->addr;
+    lep->functionOffset = cu.functionAddress - ctx.in.header->addr;
     lep++;
   }
 
@@ -730,6 +733,6 @@ void UnwindInfoSectionImpl::writeTo(uint8_t *buf) const {
   }
 }
 
-UnwindInfoSection *macho::makeUnwindInfoSection() {
-  return make<UnwindInfoSectionImpl>();
+UnwindInfoSection *macho::makeUnwindInfoSection(Ctx &ctx) {
+  return ctx.make<UnwindInfoSectionImpl>(ctx);
 }

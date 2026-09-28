@@ -17,12 +17,14 @@
 #include <vector>
 
 namespace lld {
+class ErrorHandler;
 
-llvm::SmallVector<uint8_t, 0> parseHex(llvm::StringRef s);
+llvm::SmallVector<uint8_t, 0> parseHex(ErrorHandler &eh, llvm::StringRef s);
 bool isValidCIdentifier(llvm::StringRef s);
 
 // Write the contents of the a buffer to a file
-void saveBuffer(llvm::StringRef buffer, const llvm::Twine &path);
+void saveBuffer(ErrorHandler &eh, llvm::StringRef buffer,
+                const llvm::Twine &path);
 
 // A single pattern to match against. A pattern can either be double-quoted
 // text that should be matched exactly after removing the quoting marks or a
@@ -30,8 +32,9 @@ void saveBuffer(llvm::StringRef buffer, const llvm::Twine &path);
 class SingleStringMatcher {
 public:
   // Create a StringPattern from Pattern to be matched exactly regardless
-  // of globbing characters if ExactMatch is true.
-  SingleStringMatcher(llvm::StringRef Pattern);
+  // of globbing characters if ExactMatch is true. An invalid glob pattern is
+  // reported to eh.
+  SingleStringMatcher(ErrorHandler &eh, llvm::StringRef Pattern);
 
   // Match s against this pattern, exactly if ExactMatch is true.
   bool match(llvm::StringRef s) const;
@@ -64,8 +67,8 @@ public:
   StringMatcher() = default;
 
   // Matcher for a single pattern.
-  StringMatcher(llvm::StringRef Pattern)
-      : patterns({SingleStringMatcher(Pattern)}) {}
+  StringMatcher(ErrorHandler &eh, llvm::StringRef Pattern)
+      : patterns({SingleStringMatcher(eh, Pattern)}) {}
 
   // Add a new pattern to the existing ones to match against.
   void addPattern(SingleStringMatcher Matcher) { patterns.push_back(Matcher); }

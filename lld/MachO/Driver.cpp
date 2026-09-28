@@ -68,9 +68,6 @@ using namespace llvm::sys;
 using namespace lld;
 using namespace lld::macho;
 
-std::unique_ptr<Configuration> macho::config;
-std::unique_ptr<DependencyTracker> macho::depTracker;
-
 static HeaderFileType getOutputType(const InputArgList &args) {
   // TODO: -r, -dylinker, -preload...
   Arg *outputArg = args.getLastArg(OPT_bundle, OPT_dylib, OPT_execute);
@@ -89,48 +86,46 @@ static HeaderFileType getOutputType(const InputArgList &args) {
   }
 }
 
-static DenseMap<CachedHashStringRef, StringRef> resolvedLibraries;
-static std::optional<StringRef> findLibrary(StringRef name) {
+static std::optional<StringRef> findLibrary(Ctx &ctx, StringRef name) {
   CachedHashStringRef key(name);
-  auto entry = resolvedLibraries.find(key);
-  if (entry != resolvedLibraries.end())
+  auto entry = ctx.resolvedLibraries.find(key);
+  if (entry != ctx.resolvedLibraries.end())
     return entry->second;
 
   auto doFind = [&] {
     // Special case for Csu support files required for Mac OS X 10.7 and older
     // (crt1.o)
     if (name.ends_with(".o"))
-      return findPathCombination(name, config->librarySearchPaths, {""});
-    if (config->searchDylibsFirst) {
+      return findPathCombination(ctx, name, ctx.arg.librarySearchPaths, {""});
+    if (ctx.arg.searchDylibsFirst) {
       if (std::optional<StringRef> path =
-              findPathCombination("lib" + name, config->librarySearchPaths,
+              findPathCombination(ctx, "lib" + name, ctx.arg.librarySearchPaths,
                                   {".tbd", ".dylib", ".so"}))
         return path;
-      return findPathCombination("lib" + name, config->librarySearchPaths,
+      return findPathCombination(ctx, "lib" + name, ctx.arg.librarySearchPaths,
                                  {".a"});
     }
-    return findPathCombination("lib" + name, config->librarySearchPaths,
+    return findPathCombination(ctx, "lib" + name, ctx.arg.librarySearchPaths,
                                {".tbd", ".dylib", ".so", ".a"});
   };
 
   std::optional<StringRef> path = doFind();
   if (path)
-    resolvedLibraries[key] = *path;
+    ctx.resolvedLibraries[key] = *path;
 
   return path;
 }
 
-static DenseMap<CachedHashStringRef, StringRef> resolvedFrameworks;
-static std::optional<StringRef> findFramework(StringRef name) {
+static std::optional<StringRef> findFramework(Ctx &ctx, StringRef name) {
   CachedHashStringRef key(name);
-  auto entry = resolvedFrameworks.find(key);
-  if (entry != resolvedFrameworks.end())
+  auto entry = ctx.resolvedFrameworks.find(key);
+  if (entry != ctx.resolvedFrameworks.end())
     return entry->second;
 
   SmallString<260> symlink;
   StringRef suffix;
   std::tie(name, suffix) = name.split(",");
-  for (StringRef dir : config->frameworkSearchPaths) {
+  for (StringRef dir : ctx.arg.frameworkSearchPaths) {
     symlink = dir;
     path::append(symlink, name + ".framework", name);
 
@@ -142,37 +137,38 @@ static std::optional<StringRef> findFramework(StringRef name) {
         // only append suffix if realpath() succeeds
         Twine suffixed = location + suffix;
         if (fs::exists(suffixed))
-          return resolvedFrameworks[key] = saver().save(suffixed.str());
+          return ctx.resolvedFrameworks[key] = ctx.saver.save(suffixed.str());
       }
       // Suffix lookup failed, fall through to the no-suffix case.
     }
 
-    if (std::optional<StringRef> path = resolveDylibPath(symlink.str()))
-      return resolvedFrameworks[key] = *path;
+    if (std::optional<StringRef> path = resolveDylibPath(ctx, symlink.str()))
+      return ctx.resolvedFrameworks[key] = *path;
   }
   return {};
 }
 
-static bool warnIfNotDirectory(StringRef option, StringRef path) {
+static bool warnIfNotDirectory(Ctx &ctx, StringRef option, StringRef path) {
   if (!fs::exists(path)) {
-    warn("directory not found for option -" + option + path);
+    ctx.e.warn("directory not found for option -" + option + path);
     return false;
   } else if (!fs::is_directory(path)) {
-    warn("option -" + option + path + " references a non-directory path");
+    ctx.e.warn("option -" + option + path + " references a non-directory path");
     return false;
   }
   return true;
 }
 
 static std::vector<StringRef>
-getSearchPaths(unsigned optionCode, InputArgList &args,
+getSearchPaths(Ctx &ctx, unsigned optionCode, InputArgList &args,
                const std::vector<StringRef> &roots,
                const SmallVector<StringRef, 2> &systemPaths) {
   std::vector<StringRef> paths;
   StringRef optionLetter{optionCode == OPT_F ? "F" : "L"};
   for (StringRef path : args::getStrings(args, optionCode))
-    for (StringRef searchPath : getRerootedSearchPaths(path, roots))
-      if (searchPath != path || warnIfNotDirectory(optionLetter, searchPath))
+    for (StringRef searchPath : getRerootedSearchPaths(ctx, path, roots))
+      if (searchPath != path ||
+          warnIfNotDirectory(ctx, optionLetter, searchPath))
         paths.push_back(searchPath);
 
   // `-Z` suppresses the standard "system" search paths.
@@ -184,7 +180,7 @@ getSearchPaths(unsigned optionCode, InputArgList &args,
       SmallString<261> buffer(root);
       path::append(buffer, path);
       if (fs::is_directory(buffer))
-        paths.push_back(saver().save(buffer.str()));
+        paths.push_back(ctx.saver.save(buffer.str()));
     }
   }
   return paths;
@@ -205,18 +201,21 @@ static std::vector<StringRef> getSystemLibraryRoots(InputArgList &args) {
 }
 
 static std::vector<StringRef>
-getLibrarySearchPaths(InputArgList &args, const std::vector<StringRef> &roots) {
-  return getSearchPaths(OPT_L, args, roots, {"/usr/lib", "/usr/local/lib"});
+getLibrarySearchPaths(Ctx &ctx, InputArgList &args,
+                      const std::vector<StringRef> &roots) {
+  return getSearchPaths(ctx, OPT_L, args, roots,
+                        {"/usr/lib", "/usr/local/lib"});
 }
 
 static std::vector<StringRef>
-getFrameworkSearchPaths(InputArgList &args,
+getFrameworkSearchPaths(Ctx &ctx, InputArgList &args,
                         const std::vector<StringRef> &roots) {
-  return getSearchPaths(OPT_F, args, roots,
+  return getSearchPaths(ctx, OPT_F, args, roots,
                         {"/Library/Frameworks", "/System/Library/Frameworks"});
 }
 
-static llvm::CachePruningPolicy getLTOCachePolicy(InputArgList &args) {
+static llvm::CachePruningPolicy getLTOCachePolicy(Ctx &ctx,
+                                                  InputArgList &args) {
   SmallString<128> ltoPolicy;
   auto add = [&ltoPolicy](Twine val) {
     if (!ltoPolicy.empty())
@@ -257,25 +256,19 @@ enum class LoadType {
   LCLinkerOption,   // Library was passed via LC_LINKER_OPTIONS
 };
 
-struct ArchiveFileInfo {
-  ArchiveFile *file;
-  bool isCommandLineLoad;
-};
-
-static DenseMap<StringRef, ArchiveFileInfo> loadedArchives;
-
-static void saveThinArchiveToRepro(ArchiveFile const *file) {
-  assert(tar && file->getArchive().isThin());
+static void saveThinArchiveToRepro(Ctx &ctx, ArchiveFile const *file) {
+  assert(ctx.tar && file->getArchive().isThin());
 
   Error e = Error::success();
   for (const object::Archive::Child &c : file->getArchive().children(e)) {
     MemoryBufferRef mb = CHECK(c.getMemoryBufferRef(),
                                toString(file) + ": failed to get buffer");
-    tar->append(relativeToRoot(CHECK(c.getFullName(), file)), mb.getBuffer());
+    ctx.tar->append(relativeToRoot(CHECK(c.getFullName(), file)),
+                    mb.getBuffer());
   }
   if (e)
-    error(toString(file) +
-          ": Archive::children failed: " + toString(std::move(e)));
+    ctx.e.error(toString(file) +
+                ": Archive::children failed: " + toString(std::move(e)));
 }
 
 struct DeferredFile {
@@ -292,13 +285,24 @@ struct DeferredFile {
 using DeferredFiles = std::vector<DeferredFile>;
 
 #if LLVM_ENABLE_THREADS
-class SerialBackgroundWorkQueue {
+class macho::SerialBackgroundWorkQueue {
   std::deque<std::function<void()>> queue;
-  std::thread *running;
+  std::thread *running = nullptr;
   std::mutex mutex;
 
 public:
   std::atomic_bool stopAllWork = false;
+
+  // The worker thread reads the linker context, so it must be finished before
+  // the context goes away.
+  ~SerialBackgroundWorkQueue() {
+    stopAllWork = true;
+    if (running) {
+      running->join();
+      delete running;
+    }
+  }
+
   void queueWork(std::function<void()> work) {
     mutex.lock();
     if (running && queue.empty()) {
@@ -332,12 +336,10 @@ public:
   }
 };
 
-static SerialBackgroundWorkQueue pageInQueue;
-
 // Most input files have been mapped but not yet paged in.
 // This code forces the page-ins on multiple threads so
 // the process is not stalled waiting on disk buffer i/o.
-void multiThreadedPageInBackground(DeferredFiles &deferred) {
+void multiThreadedPageInBackground(Ctx &ctx, DeferredFiles &deferred) {
   static const size_t pageSize = Process::getPageSizeEstimate();
   static const size_t largeArchive = 10 * 1024 * 1024;
 #ifndef NDEBUG
@@ -359,7 +361,7 @@ void multiThreadedPageInBackground(DeferredFiles &deferred) {
 #if _WIN32
     // Reference all file's mmap'd pages to load them into memory.
     for (const char *page = buff.data(), *end = page + buff.size();
-         page < end && !pageInQueue.stopAllWork; page += pageSize) {
+         page < end && !ctx.pageInQueue->stopAllWork; page += pageSize) {
       [[maybe_unused]] volatile char t = *page;
       (void)t;
     }
@@ -376,9 +378,9 @@ void multiThreadedPageInBackground(DeferredFiles &deferred) {
   { // Create scope for waiting for the taskGroup
     std::atomic_size_t index = 0;
     llvm::parallel::TaskGroup taskGroup;
-    for (int w = 0; w < config->readWorkers; w++)
-      taskGroup.spawn([&index, &preloadDeferredFile, &deferred]() {
-        while (!pageInQueue.stopAllWork) {
+    for (int w = 0; w < ctx.arg.readWorkers; w++)
+      taskGroup.spawn([&ctx, &index, &preloadDeferredFile, &deferred]() {
+        while (!ctx.pageInQueue->stopAllWork) {
           size_t localIndex = index.fetch_add(1);
           if (localIndex >= deferred.size())
             break;
@@ -396,15 +398,15 @@ void multiThreadedPageInBackground(DeferredFiles &deferred) {
 #endif
 }
 
-static void multiThreadedPageIn(const DeferredFiles &deferred) {
-  pageInQueue.queueWork([=]() {
+static void multiThreadedPageIn(Ctx &ctx, const DeferredFiles &deferred) {
+  ctx.pageInQueue->queueWork([=, &ctx]() {
     DeferredFiles files = deferred;
-    multiThreadedPageInBackground(files);
+    multiThreadedPageInBackground(ctx, files);
   });
 }
 #endif
 
-static InputFile *processFile(std::optional<MemoryBufferRef> buffer,
+static InputFile *processFile(Ctx &ctx, std::optional<MemoryBufferRef> buffer,
                               DeferredFiles *archiveContents, StringRef path,
                               LoadType loadType, bool isLazy = false,
                               bool isExplicit = true,
@@ -425,18 +427,18 @@ static InputFile *processFile(std::optional<MemoryBufferRef> buffer,
     // We don't take a reference to cachedFile here because the
     // loadArchiveMember() call below may recursively call addFile() and
     // invalidate this reference.
-    auto entry = loadedArchives.find(path);
+    auto entry = ctx.loadedArchives.find(path);
 
     ArchiveFile *file;
-    if (entry == loadedArchives.end()) {
+    if (entry == ctx.loadedArchives.end()) {
       // No cached archive, we need to create a new one
       std::unique_ptr<object::Archive> archive = CHECK(
           object::Archive::create(mbref), path + ": failed to parse archive");
 
-      file = make<ArchiveFile>(std::move(archive), isForceHidden);
+      file = ctx.make<ArchiveFile>(ctx, std::move(archive), isForceHidden);
 
-      if (tar && file->getArchive().isThin())
-        saveThinArchiveToRepro(file);
+      if (ctx.tar && file->getArchive().isThin())
+        saveThinArchiveToRepro(ctx, file);
     } else {
       file = entry->second.file;
       // Command-line loads take precedence. If file is previously loaded via
@@ -447,11 +449,11 @@ static InputFile *processFile(std::optional<MemoryBufferRef> buffer,
     }
 
     bool isLCLinkerForceLoad = loadType == LoadType::LCLinkerOption &&
-                               config->forceLoadSwift &&
+                               ctx.arg.forceLoadSwift &&
                                path::filename(path).starts_with("libswift");
-    if ((isCommandLineLoad && config->allLoad) ||
+    if ((isCommandLineLoad && ctx.arg.allLoad) ||
         loadType == LoadType::CommandLineForce || isLCLinkerForceLoad) {
-      if (readFile(path)) {
+      if (readFile(ctx, path)) {
         Error e = Error::success();
         for (const object::Archive::Child &c : file->getArchive().children(e)) {
           StringRef reason;
@@ -467,18 +469,19 @@ static InputFile *processFile(std::optional<MemoryBufferRef> buffer,
             break;
           }
           if (Error e = file->fetch(c, reason)) {
-            if (config->warnThinArchiveMissingMembers)
-              warn(toString(file) + ": " + reason +
-                   " failed to load archive member: " + toString(std::move(e)));
+            if (ctx.arg.warnThinArchiveMissingMembers)
+              ctx.e.warn(
+                  toString(file) + ": " + reason +
+                  " failed to load archive member: " + toString(std::move(e)));
             else
               llvm::consumeError(std::move(e));
           }
         }
         if (e)
-          error(toString(file) +
-                ": Archive::children failed: " + toString(std::move(e)));
+          ctx.e.error(toString(file) +
+                      ": Archive::children failed: " + toString(std::move(e)));
       }
-    } else if (isCommandLineLoad && config->forceLoadObjC) {
+    } else if (isCommandLineLoad && ctx.arg.forceLoadObjC) {
       if (file->getArchive().hasSymbolTable()) {
         for (const object::Archive::Symbol &sym : file->getArchive().symbols())
           if (sym.getName().starts_with(objc::symbol_names::klass))
@@ -487,181 +490,181 @@ static InputFile *processFile(std::optional<MemoryBufferRef> buffer,
 
       // TODO: no need to look for ObjC sections for a given archive member if
       // we already found that it contains an ObjC symbol.
-      if (readFile(path)) {
+      if (readFile(ctx, path)) {
         Error e = Error::success();
         for (const object::Archive::Child &c : file->getArchive().children(e)) {
           Expected<MemoryBufferRef> mb = c.getMemoryBufferRef();
           if (!mb) {
             // We used to create broken repro tarballs that only included those
             // object files from thin archives that ended up being used.
-            if (config->warnThinArchiveMissingMembers)
-              warn(toString(file) + ": -ObjC failed to open archive member: " +
-                   toString(mb.takeError()));
+            if (ctx.arg.warnThinArchiveMissingMembers)
+              ctx.e.warn(toString(file) +
+                         ": -ObjC failed to open archive member: " +
+                         toString(mb.takeError()));
             else
               llvm::consumeError(mb.takeError());
             continue;
           }
 
-          if (config->readWorkers && archiveContents)
+          if (ctx.arg.readWorkers && archiveContents)
             archiveContents->push_back({path, isLazy, *mb});
-          if (!hasObjCSection(*mb))
+          if (!hasObjCSection(ctx, *mb))
             continue;
           if (Error e = file->fetch(c, "-ObjC"))
-            error(toString(file) + ": -ObjC failed to load archive member: " +
-                  toString(std::move(e)));
+            ctx.e.error(toString(file) +
+                        ": -ObjC failed to load archive member: " +
+                        toString(std::move(e)));
         }
         if (e)
-          error(toString(file) +
-                ": Archive::children failed: " + toString(std::move(e)));
+          ctx.e.error(toString(file) +
+                      ": Archive::children failed: " + toString(std::move(e)));
       }
     }
     if (!archiveContents || archiveContents->empty())
       file->addLazySymbols();
-    loadedArchives[path] = ArchiveFileInfo{file, isCommandLineLoad};
+    ctx.loadedArchives[path] = ArchiveFileInfo{file, isCommandLineLoad};
     newFile = file;
     break;
   }
   case file_magic::macho_object:
-    newFile = make<ObjFile>(mbref, getModTime(path), "", isLazy);
+    newFile = ctx.make<ObjFile>(ctx, mbref, getModTime(ctx, path), "", isLazy);
     break;
   case file_magic::macho_dynamically_linked_shared_lib:
   case file_magic::macho_dynamically_linked_shared_lib_stub:
   case file_magic::tapi_file:
-    if (DylibFile *dylibFile =
-            loadDylib(mbref, nullptr, /*isBundleLoader=*/false, isExplicit))
+    if (DylibFile *dylibFile = loadDylib(ctx, mbref, nullptr,
+                                         /*isBundleLoader=*/false, isExplicit))
       newFile = dylibFile;
     break;
   case file_magic::bitcode:
-    newFile = make<BitcodeFile>(mbref, "", 0, isLazy);
+    newFile = ctx.make<BitcodeFile>(ctx, mbref, "", 0, isLazy);
     break;
   case file_magic::macho_executable:
   case file_magic::macho_bundle:
     // We only allow executable and bundle type here if it is used
     // as a bundle loader.
     if (!isBundleLoader)
-      error(path + ": unhandled file type");
-    if (DylibFile *dylibFile = loadDylib(mbref, nullptr, isBundleLoader))
+      ctx.e.error(path + ": unhandled file type");
+    if (DylibFile *dylibFile = loadDylib(ctx, mbref, nullptr, isBundleLoader))
       newFile = dylibFile;
     break;
   default:
-    error(path + ": unhandled file type");
+    ctx.e.error(path + ": unhandled file type");
   }
   if (newFile && !isa<DylibFile>(newFile)) {
     if ((isa<ObjFile>(newFile) || isa<BitcodeFile>(newFile)) && newFile->lazy &&
-        config->forceLoadObjC) {
+        ctx.arg.forceLoadObjC) {
       for (Symbol *sym : newFile->symbols)
         if (sym && sym->getName().starts_with(objc::symbol_names::klass)) {
           extract(*newFile, "-ObjC");
           break;
         }
-      if (newFile->lazy && hasObjCSection(mbref))
+      if (newFile->lazy && hasObjCSection(ctx, mbref))
         extract(*newFile, "-ObjC");
     }
 
-    // printArchiveMemberLoad() prints both .a and .o names, so no need to
+    // printArchiveMemberLoad(ctx) prints both .a and .o names, so no need to
     // print the .a name here. Similarly skip lazy files.
-    if (config->printEachFile && magic != file_magic::archive && !isLazy)
-      message(toString(newFile));
-    inputFiles.insert(newFile);
+    if (ctx.arg.printEachFile && magic != file_magic::archive && !isLazy)
+      ctx.e.message(toString(newFile), ctx.e.outs());
+    ctx.inputFiles.insert(newFile);
   }
   return newFile;
 }
 
-static InputFile *addFile(StringRef path, LoadType loadType,
+static InputFile *addFile(Ctx &ctx, StringRef path, LoadType loadType,
                           bool isLazy = false, bool isExplicit = true,
                           bool isBundleLoader = false,
                           bool isForceHidden = false) {
-  return processFile(readFile(path), nullptr, path, loadType, isLazy,
+  return processFile(ctx, readFile(ctx, path), nullptr, path, loadType, isLazy,
                      isExplicit, isBundleLoader, isForceHidden);
 }
 
-static DenseSet<StringRef> loadedObjectFrameworks;
-
-static void applyDylibMetadata(InputFile *file, bool isNeeded, bool isWeak,
-                               bool isReexport) {
+static void applyDylibMetadata(Ctx &ctx, InputFile *file, bool isNeeded,
+                               bool isWeak, bool isReexport) {
   if (auto *dylibFile = dyn_cast_or_null<DylibFile>(file)) {
     dylibFile->forceNeeded |= isNeeded;
     dylibFile->forceWeakImport |= isWeak;
     if (isReexport) {
-      config->hasReexports = true;
+      ctx.arg.hasReexports = true;
       dylibFile->reexport = true;
     }
   }
 }
 
-static void checkAndCacheFramework(InputFile *file, StringRef path) {
+static void checkAndCacheFramework(Ctx &ctx, InputFile *file, StringRef path) {
   if (isa_and_nonnull<ObjFile>(file) || isa_and_nonnull<BitcodeFile>(file)) {
     if (path.contains(".framework"))
-      loadedObjectFrameworks.insert(path);
+      ctx.loadedObjectFrameworks.insert(path);
   }
 }
 
-static void deferFile(StringRef path, bool isLazy, DeferredFiles &deferred,
+static void deferFile(Ctx &ctx, StringRef path, bool isLazy,
+                      DeferredFiles &deferred,
                       LoadType loadType = LoadType::CommandLine,
                       bool isNeeded = false, bool isWeak = false,
                       bool isReexport = false, bool isHidden = false,
                       bool isExplicit = true) {
-  std::optional<MemoryBufferRef> buffer = readFile(path);
+  std::optional<MemoryBufferRef> buffer = readFile(ctx, path);
   if (!buffer)
     return;
-  if (config->readWorkers)
+  if (ctx.arg.readWorkers)
     deferred.push_back({path, isLazy, *buffer, loadType, isNeeded, isWeak,
                         isReexport, isHidden, isExplicit});
   else {
-    if (loadedObjectFrameworks.contains(path))
+    if (ctx.loadedObjectFrameworks.contains(path))
       return;
 
     InputFile *file =
-        processFile(buffer, nullptr, path, loadType, isLazy, isExplicit,
+        processFile(ctx, buffer, nullptr, path, loadType, isLazy, isExplicit,
                     /*isBundleLoader=*/false, isHidden);
-    applyDylibMetadata(file, isNeeded, isWeak, isReexport);
-    checkAndCacheFramework(file, path);
+    applyDylibMetadata(ctx, file, isNeeded, isWeak, isReexport);
+    checkAndCacheFramework(ctx, file, path);
   }
 }
 
-static std::vector<StringRef> missingAutolinkWarnings;
-static void addLibrary(StringRef name, bool isNeeded, bool isWeak,
+static void addLibrary(Ctx &ctx, StringRef name, bool isNeeded, bool isWeak,
                        bool isReexport, bool isHidden, bool isExplicit,
                        LoadType loadType, DeferredFiles &deferred) {
-  if (std::optional<StringRef> path = findLibrary(name)) {
-    deferFile(*path, /*isLazy=*/false, deferred, loadType, isNeeded, isWeak,
-              isReexport, isHidden, isExplicit);
+  if (std::optional<StringRef> path = findLibrary(ctx, name)) {
+    deferFile(ctx, *path, /*isLazy=*/false, deferred, loadType, isNeeded,
+              isWeak, isReexport, isHidden, isExplicit);
     return;
   }
   if (loadType == LoadType::LCLinkerOption) {
-    missingAutolinkWarnings.push_back(
-        saver().save("auto-linked library not found for -l" + name));
+    ctx.missingAutolinkWarnings.push_back(
+        ctx.saver.save("auto-linked library not found for -l" + name));
     return;
   }
-  error("library not found for -l" + name);
+  ctx.e.error("library not found for -l" + name);
 }
 
-static void addFramework(StringRef name, bool isNeeded, bool isWeak,
+static void addFramework(Ctx &ctx, StringRef name, bool isNeeded, bool isWeak,
                          bool isReexport, bool isExplicit, LoadType loadType,
                          DeferredFiles &deferred) {
-  if (std::optional<StringRef> path = findFramework(name)) {
-    if (loadedObjectFrameworks.contains(*path))
+  if (std::optional<StringRef> path = findFramework(ctx, name)) {
+    if (ctx.loadedObjectFrameworks.contains(*path))
       return;
 
-    deferFile(*path, /*isLazy=*/false, deferred, loadType, isNeeded, isWeak,
-              isReexport, /*isHidden=*/false, isExplicit);
+    deferFile(ctx, *path, /*isLazy=*/false, deferred, loadType, isNeeded,
+              isWeak, isReexport, /*isHidden=*/false, isExplicit);
     return;
   }
   if (loadType == LoadType::LCLinkerOption) {
-    missingAutolinkWarnings.push_back(
-        saver().save("auto-linked framework not found for -framework " + name));
+    ctx.missingAutolinkWarnings.push_back(ctx.saver.save(
+        "auto-linked framework not found for -framework " + name));
     return;
   }
-  error("framework not found for -framework " + name);
+  ctx.e.error("framework not found for -framework " + name);
 }
 
 // Parses LC_LINKER_OPTION contents, which can add additional command line
 // flags. This directly parses the flags instead of using the standard argument
 // parser to improve performance.
 void macho::parseLCLinkerOption(
-    llvm::SmallVectorImpl<StringRef> &LCLinkerOptions, InputFile *f,
+    Ctx &ctx, llvm::SmallVectorImpl<StringRef> &LCLinkerOptions, InputFile *f,
     unsigned argc, StringRef data) {
-  if (config->ignoreAutoLink)
+  if (ctx.arg.ignoreAutoLink)
     return;
 
   SmallVector<StringRef, 4> argv;
@@ -671,28 +674,28 @@ void macho::parseLCLinkerOption(
     offset += strlen(data.data() + offset) + 1;
   }
   if (argv.size() != argc || offset > data.size())
-    fatal(toString(f) + ": invalid LC_LINKER_OPTION");
+    ctx.e.fatal(toString(f) + ": invalid LC_LINKER_OPTION");
 
   unsigned i = 0;
   StringRef arg = argv[i];
   if (arg.consume_front("-l")) {
-    if (config->ignoreAutoLinkOptions.contains(arg))
+    if (ctx.arg.ignoreAutoLinkOptions.contains(arg))
       return;
   } else if (arg == "-framework") {
     StringRef name = argv[++i];
-    if (config->ignoreAutoLinkOptions.contains(name))
+    if (ctx.arg.ignoreAutoLinkOptions.contains(name))
       return;
   } else {
-    error(arg + " is not allowed in LC_LINKER_OPTION");
+    ctx.e.error(arg + " is not allowed in LC_LINKER_OPTION");
   }
 
   LCLinkerOptions.append(argv);
 }
 
-void macho::resolveLCLinkerOptions() {
-  while (!unprocessedLCLinkerOptions.empty()) {
-    SmallVector<StringRef> LCLinkerOptions(unprocessedLCLinkerOptions);
-    unprocessedLCLinkerOptions.clear();
+void macho::resolveLCLinkerOptions(Ctx &ctx) {
+  while (!ctx.unprocessedLCLinkerOptions.empty()) {
+    SmallVector<StringRef> LCLinkerOptions(ctx.unprocessedLCLinkerOptions);
+    ctx.unprocessedLCLinkerOptions.clear();
 
     DeferredFiles deferred;
     SmallVector<StringRef> frameworks;
@@ -701,14 +704,14 @@ void macho::resolveLCLinkerOptions() {
     for (unsigned i = 0; i < LCLinkerOptions.size(); ++i) {
       StringRef arg = LCLinkerOptions[i];
       if (arg.consume_front("-l")) {
-        assert(!config->ignoreAutoLinkOptions.contains(arg));
+        assert(!ctx.arg.ignoreAutoLinkOptions.contains(arg));
         libraries.push_back(arg);
       } else if (arg == "-framework") {
         StringRef name = LCLinkerOptions[++i];
-        assert(!config->ignoreAutoLinkOptions.contains(name));
+        assert(!ctx.arg.ignoreAutoLinkOptions.contains(name));
         frameworks.push_back(name);
       } else {
-        error(arg + " is not allowed in LC_LINKER_OPTION");
+        ctx.e.error(arg + " is not allowed in LC_LINKER_OPTION");
       }
     }
 
@@ -721,47 +724,48 @@ void macho::resolveLCLinkerOptions() {
                     libraries.end());
 
     for (const StringRef framework : frameworks) {
-      addFramework(framework, /*isNeeded=*/false, /*isWeak=*/false,
+      addFramework(ctx, framework, /*isNeeded=*/false, /*isWeak=*/false,
                    /*isReexport=*/false, /*isExplicit=*/false,
                    LoadType::LCLinkerOption, deferred);
     }
 
     for (const StringRef library : libraries) {
-      addLibrary(library, /*isNeeded=*/false, /*isWeak=*/false,
+      addLibrary(ctx, library, /*isNeeded=*/false, /*isWeak=*/false,
                  /*isReexport=*/false, /*isHidden=*/false,
                  /*isExplicit=*/false, LoadType::LCLinkerOption, deferred);
     }
 
     for (auto &file : deferred) {
-      if (loadedObjectFrameworks.contains(file.path))
+      if (ctx.loadedObjectFrameworks.contains(file.path))
         continue;
 
-      auto inputFile = processFile(file.buffer, nullptr, file.path,
+      auto inputFile = processFile(ctx, file.buffer, nullptr, file.path,
                                    file.loadType, file.isLazy, file.isExplicit,
                                    /*isBundleLoader=*/false, file.isHidden);
-      applyDylibMetadata(inputFile, file.isNeeded, file.isWeak,
+      applyDylibMetadata(ctx, inputFile, file.isNeeded, file.isWeak,
                          file.isReexport);
-      checkAndCacheFramework(inputFile, file.path);
+      checkAndCacheFramework(ctx, inputFile, file.path);
     }
   }
 }
 
-static void addFileList(StringRef path, bool isLazy,
+static void addFileList(Ctx &ctx, StringRef path, bool isLazy,
                         DeferredFiles &deferredFiles) {
-  std::optional<MemoryBufferRef> buffer = readFile(path);
+  std::optional<MemoryBufferRef> buffer = readFile(ctx, path);
   if (!buffer)
     return;
   MemoryBufferRef mbref = *buffer;
   for (StringRef path : args::getLines(mbref))
-    deferFile(rerootPath(path), isLazy, deferredFiles);
+    deferFile(ctx, rerootPath(ctx, path), isLazy, deferredFiles);
 }
 
 // We expect sub-library names of the form "libfoo", which will match a dylib
 // with a path of .*/libfoo.{dylib, tbd}.
 // XXX ld64 seems to ignore the extension entirely when matching sub-libraries;
 // I'm not sure what the use case for that is.
-static bool markReexport(StringRef searchName, ArrayRef<StringRef> extensions) {
-  for (InputFile *file : inputFiles) {
+static bool markReexport(Ctx &ctx, StringRef searchName,
+                         ArrayRef<StringRef> extensions) {
+  for (InputFile *file : ctx.inputFiles) {
     if (auto *dylibFile = dyn_cast<DylibFile>(file)) {
       StringRef filename = path::filename(dylibFile->getName());
       if (filename.consume_front(searchName) &&
@@ -785,16 +789,16 @@ static void initLLVM() {
   InitializeAllAsmParsers();
 }
 
-static bool compileBitcodeFiles() {
+static bool compileBitcodeFiles(Ctx &ctx) {
   TimeTraceScope timeScope("LTO");
-  auto *lto = make<BitcodeCompiler>();
-  for (InputFile *file : inputFiles)
+  auto *lto = ctx.make<BitcodeCompiler>(ctx);
+  for (InputFile *file : ctx.inputFiles)
     if (auto *bitcodeFile = dyn_cast<BitcodeFile>(file))
       if (!file->lazy)
         lto->add(*bitcodeFile);
 
   std::vector<ObjFile *> compiled = lto->compile();
-  inputFiles.insert_range(compiled);
+  ctx.inputFiles.insert_range(compiled);
 
   return !compiled.empty();
 }
@@ -803,10 +807,10 @@ static bool compileBitcodeFiles() {
 // This function must be called after all symbol names are resolved (i.e. after
 // all InputFiles have been loaded.) As a result, later operations won't see
 // any CommonSymbols.
-static void replaceCommonSymbols() {
+static void replaceCommonSymbols(Ctx &ctx) {
   TimeTraceScope timeScope("Replace common symbols");
   ConcatOutputSection *osec = nullptr;
-  for (Symbol *sym : symtab->getSymbols()) {
+  for (Symbol *sym : ctx.symtab->getSymbols()) {
     auto *common = dyn_cast<CommonSymbol>(sym);
     if (common == nullptr)
       continue;
@@ -817,26 +821,27 @@ static void replaceCommonSymbols() {
     ArrayRef<uint8_t> data = {nullptr, static_cast<size_t>(common->size)};
     // FIXME avoid creating one Section per symbol?
     auto *section =
-        make<Section>(common->getFile(), segment_names::data,
-                      section_names::common, S_ZEROFILL, /*addr=*/0);
-    auto *isec = make<ConcatInputSection>(*section, data, common->align);
+        ctx.make<Section>(ctx, common->getFile(), segment_names::data,
+                          section_names::common, S_ZEROFILL, /*addr=*/0);
+    auto *isec = ctx.make<ConcatInputSection>(*section, data, common->align);
     if (!osec)
-      osec = ConcatOutputSection::getOrCreateForInput(isec);
+      osec = ConcatOutputSection::getOrCreateForInput(ctx, isec);
     isec->parent = osec;
-    addInputSection(isec);
+    addInputSection(ctx, isec);
 
     // FIXME: CommonSymbol should store isReferencedDynamically, noDeadStrip
     // and pass them on here.
     replaceSymbol<Defined>(
-        sym, sym->getName(), common->getFile(), isec, /*value=*/0, common->size,
+        sym, ctx, sym->getName(), common->getFile(), isec, /*value=*/0,
+        common->size,
         /*isWeakDef=*/false, /*isExternal=*/true, common->privateExtern,
         /*includeInSymtab=*/true, /*isReferencedDynamically=*/false,
         /*noDeadStrip=*/false);
   }
 }
 
-static void initializeSectionRenameMap() {
-  if (config->dataConst) {
+static void initializeSectionRenameMap(Ctx &ctx) {
+  if (ctx.arg.dataConst) {
     SmallVector<StringRef> v{section_names::got,
                              section_names::authGot,
                              section_names::authPtr,
@@ -852,13 +857,13 @@ static void initializeSectionRenameMap() {
                              section_names::objcProtoList,
                              section_names::objCImageInfo};
     for (StringRef s : v)
-      config->sectionRenameMap[{segment_names::data, s}] = {
+      ctx.arg.sectionRenameMap[{segment_names::data, s}] = {
           segment_names::dataConst, s};
   }
-  config->sectionRenameMap[{segment_names::text, section_names::staticInit}] = {
+  ctx.arg.sectionRenameMap[{segment_names::text, section_names::staticInit}] = {
       segment_names::text, section_names::text};
-  config->sectionRenameMap[{segment_names::import, section_names::pointers}] = {
-      config->dataConst ? segment_names::dataConst : segment_names::data,
+  ctx.arg.sectionRenameMap[{segment_names::import, section_names::pointers}] = {
+      ctx.arg.dataConst ? segment_names::dataConst : segment_names::data,
       section_names::nonLazySymbolPtr};
 }
 
@@ -881,7 +886,7 @@ struct PlatformVersion {
   llvm::VersionTuple sdk;
 };
 
-static PlatformVersion parsePlatformVersion(const Arg *arg) {
+static PlatformVersion parsePlatformVersion(Ctx &ctx, const Arg *arg) {
   assert(arg->getOption().getID() == OPT_platform_version);
   StringRef platformStr = arg->getValue(0);
   StringRef minVersionStr = arg->getValue(1);
@@ -906,24 +911,25 @@ static PlatformVersion parsePlatformVersion(const Arg *arg) {
           .Cases({"xros-simulator", "12"}, PLATFORM_XROS_SIMULATOR)
           .Default(PLATFORM_UNKNOWN);
   if (platformVersion.platform == PLATFORM_UNKNOWN)
-    error(Twine("malformed platform: ") + platformStr);
+    ctx.e.error(Twine("malformed platform: ") + platformStr);
   // The underlying load command only supports 3 components.
   if (platformVersion.minimum.tryParse(minVersionStr) ||
       platformVersion.minimum.getBuild())
-    error(Twine("malformed minimum version: ") + minVersionStr);
+    ctx.e.error(Twine("malformed minimum version: ") + minVersionStr);
   if (platformVersion.sdk.tryParse(sdkVersionStr) ||
       platformVersion.sdk.getBuild())
-    error(Twine("malformed sdk version: ") + sdkVersionStr);
+    ctx.e.error(Twine("malformed sdk version: ") + sdkVersionStr);
   return platformVersion;
 }
 
 // Has the side-effect of setting Config::platformInfo and
 // potentially Config::secondaryPlatformInfo.
-static void setPlatformVersions(StringRef archName, const ArgList &args) {
+static void setPlatformVersions(Ctx &ctx, StringRef archName,
+                                const ArgList &args) {
   std::map<PlatformType, PlatformVersion> platformVersions;
   const PlatformVersion *lastVersionInfo = nullptr;
   for (const Arg *arg : args.filtered(OPT_platform_version)) {
-    PlatformVersion version = parsePlatformVersion(arg);
+    PlatformVersion version = parsePlatformVersion(ctx, arg);
 
     // For each platform, the last flag wins:
     // `-platform_version macos 2 3 -platform_version macos 4 5` has the same
@@ -934,11 +940,11 @@ static void setPlatformVersions(StringRef archName, const ArgList &args) {
   }
 
   if (platformVersions.empty()) {
-    error("must specify -platform_version");
+    ctx.e.error("must specify -platform_version");
     return;
   }
   if (platformVersions.size() > 2) {
-    error("must specify -platform_version at most twice");
+    ctx.e.error("must specify -platform_version at most twice");
     return;
   }
   if (platformVersions.size() == 2) {
@@ -946,55 +952,56 @@ static void setPlatformVersions(StringRef archName, const ArgList &args) {
                               platformVersions.count(PLATFORM_MACCATALYST);
 
     if (!isZipperedCatalyst) {
-      error("lld supports writing zippered outputs only for "
-            "macos and mac-catalyst");
-    } else if (config->outputType != MH_DYLIB &&
-               config->outputType != MH_BUNDLE) {
-      error("writing zippered outputs only valid for -dylib and -bundle");
+      ctx.e.error("lld supports writing zippered outputs only for "
+                  "macos and mac-catalyst");
+    } else if (ctx.arg.outputType != MH_DYLIB &&
+               ctx.arg.outputType != MH_BUNDLE) {
+      ctx.e.error("writing zippered outputs only valid for -dylib and -bundle");
     }
 
-    config->platformInfo = {
+    ctx.arg.platformInfo = {
         MachO::Target(getArchitectureFromName(archName), PLATFORM_MACOS,
                       platformVersions[PLATFORM_MACOS].minimum),
         platformVersions[PLATFORM_MACOS].sdk};
-    config->secondaryPlatformInfo = {
+    ctx.arg.secondaryPlatformInfo = {
         MachO::Target(getArchitectureFromName(archName), PLATFORM_MACCATALYST,
                       platformVersions[PLATFORM_MACCATALYST].minimum),
         platformVersions[PLATFORM_MACCATALYST].sdk};
     return;
   }
 
-  config->platformInfo = {MachO::Target(getArchitectureFromName(archName),
+  ctx.arg.platformInfo = {MachO::Target(getArchitectureFromName(archName),
                                         lastVersionInfo->platform,
                                         lastVersionInfo->minimum),
                           lastVersionInfo->sdk};
 }
 
 // Has the side-effect of setting Config::target.
-static TargetInfo *createTargetInfo(InputArgList &args) {
+static std::unique_ptr<TargetInfo> createTargetInfo(Ctx &ctx,
+                                                    InputArgList &args) {
   StringRef archName = args.getLastArgValue(OPT_arch);
   if (archName.empty()) {
-    error("must specify -arch");
+    ctx.e.error("must specify -arch");
     return nullptr;
   }
 
-  setPlatformVersions(archName, args);
-  auto [cpuType, cpuSubtype] = getCPUTypeFromArchitecture(config->arch());
+  setPlatformVersions(ctx, archName, args);
+  auto [cpuType, cpuSubtype] = getCPUTypeFromArchitecture(ctx.arg.arch());
   switch (cpuType) {
   case CPU_TYPE_X86_64:
-    return createX86_64TargetInfo();
+    return createX86_64TargetInfo(ctx);
   case CPU_TYPE_ARM64:
-    return createARM64TargetInfo();
+    return createARM64TargetInfo(ctx);
   case CPU_TYPE_ARM64_32:
-    return createARM64_32TargetInfo();
+    return createARM64_32TargetInfo(ctx);
   default:
-    error("missing or unsupported -arch " + archName);
+    ctx.e.error("missing or unsupported -arch " + archName);
     return nullptr;
   }
 }
 
 static UndefinedSymbolTreatment
-getUndefinedSymbolTreatment(const ArgList &args) {
+getUndefinedSymbolTreatment(Ctx &ctx, const ArgList &args) {
   StringRef treatmentStr = args.getLastArgValue(OPT_undefined);
   auto treatment =
       StringSwitch<UndefinedSymbolTreatment>(treatmentStr)
@@ -1004,22 +1011,22 @@ getUndefinedSymbolTreatment(const ArgList &args) {
           .Case("dynamic_lookup", UndefinedSymbolTreatment::dynamic_lookup)
           .Default(UndefinedSymbolTreatment::unknown);
   if (treatment == UndefinedSymbolTreatment::unknown) {
-    warn(Twine("unknown -undefined TREATMENT '") + treatmentStr +
-         "', defaulting to 'error'");
+    ctx.e.warn(Twine("unknown -undefined TREATMENT '") + treatmentStr +
+               "', defaulting to 'error'");
     treatment = UndefinedSymbolTreatment::error;
-  } else if (config->namespaceKind == NamespaceKind::twolevel &&
+  } else if (ctx.arg.namespaceKind == NamespaceKind::twolevel &&
              (treatment == UndefinedSymbolTreatment::warning ||
               treatment == UndefinedSymbolTreatment::suppress)) {
     if (treatment == UndefinedSymbolTreatment::warning)
-      fatal("'-undefined warning' only valid with '-flat_namespace'");
+      ctx.e.fatal("'-undefined warning' only valid with '-flat_namespace'");
     else
-      fatal("'-undefined suppress' only valid with '-flat_namespace'");
+      ctx.e.fatal("'-undefined suppress' only valid with '-flat_namespace'");
     treatment = UndefinedSymbolTreatment::error;
   }
   return treatment;
 }
 
-static ICFLevel getICFLevel(const ArgList &args) {
+static ICFLevel getICFLevel(Ctx &ctx, const ArgList &args) {
   StringRef icfLevelStr = args.getLastArgValue(OPT_icf_eq);
   auto icfLevel = StringSwitch<ICFLevel>(icfLevelStr)
                       .Cases({"none", ""}, ICFLevel::none)
@@ -1028,43 +1035,43 @@ static ICFLevel getICFLevel(const ArgList &args) {
                       .Case("all", ICFLevel::all)
                       .Default(ICFLevel::unknown);
 
-  if ((icfLevel == ICFLevel::safe_thunks) && (config->arch() != AK_arm64)) {
-    error("--icf=safe_thunks is only supported on arm64 targets");
+  if ((icfLevel == ICFLevel::safe_thunks) && (ctx.arg.arch() != AK_arm64)) {
+    ctx.e.error("--icf=safe_thunks is only supported on arm64 targets");
   }
 
   if (icfLevel == ICFLevel::unknown) {
-    warn(Twine("unknown --icf=OPTION `") + icfLevelStr +
-         "', defaulting to `none'");
+    ctx.e.warn(Twine("unknown --icf=OPTION `") + icfLevelStr +
+               "', defaulting to `none'");
     icfLevel = ICFLevel::none;
   }
   return icfLevel;
 }
 
-static ObjCStubsMode getObjCStubsMode(const ArgList &args) {
+static ObjCStubsMode getObjCStubsMode(Ctx &ctx, const ArgList &args) {
   const Arg *arg = args.getLastArg(OPT_objc_stubs_fast, OPT_objc_stubs_small);
   if (!arg)
     return ObjCStubsMode::fast;
 
   if (arg->getOption().getID() == OPT_objc_stubs_small) {
-    if (is_contained({AK_arm64e, AK_arm64}, config->arch()))
+    if (is_contained({AK_arm64e, AK_arm64}, ctx.arg.arch()))
       return ObjCStubsMode::small;
     else
-      warn("-objc_stubs_small is not yet implemented, defaulting to "
-           "-objc_stubs_fast");
+      ctx.e.warn("-objc_stubs_small is not yet implemented, defaulting to "
+                 "-objc_stubs_fast");
   }
   return ObjCStubsMode::fast;
 }
 
-static void warnIfDeprecatedOption(const Option &opt) {
+static void warnIfDeprecatedOption(Ctx &ctx, const Option &opt) {
   if (!opt.getGroup().isValid())
     return;
   if (opt.getGroup().getID() == OPT_grp_deprecated) {
-    warn("Option `" + opt.getPrefixedName() + "' is deprecated in ld64:");
-    warn(opt.getHelpText());
+    ctx.e.warn("Option `" + opt.getPrefixedName() + "' is deprecated in ld64:");
+    ctx.e.warn(opt.getHelpText());
   }
 }
 
-static void warnIfUnimplementedOption(const Option &opt) {
+static void warnIfUnimplementedOption(Ctx &ctx, const Option &opt) {
   if (!opt.getGroup().isValid() || !opt.hasFlag(DriverFlag::HelpHidden))
     return;
   switch (opt.getGroup().getID()) {
@@ -1072,21 +1079,21 @@ static void warnIfUnimplementedOption(const Option &opt) {
     // warn about deprecated options elsewhere
     break;
   case OPT_grp_undocumented:
-    warn("Option `" + opt.getPrefixedName() +
-         "' is undocumented. Should lld implement it?");
+    ctx.e.warn("Option `" + opt.getPrefixedName() +
+               "' is undocumented. Should lld implement it?");
     break;
   case OPT_grp_obsolete:
-    warn("Option `" + opt.getPrefixedName() +
-         "' is obsolete. Please modernize your usage.");
+    ctx.e.warn("Option `" + opt.getPrefixedName() +
+               "' is obsolete. Please modernize your usage.");
     break;
   case OPT_grp_ignored:
-    warn("Option `" + opt.getPrefixedName() + "' is ignored.");
+    ctx.e.warn("Option `" + opt.getPrefixedName() + "' is ignored.");
     break;
   case OPT_grp_ignored_silently:
     break;
   default:
-    warn("Option `" + opt.getPrefixedName() +
-         "' is not yet implemented. Stay tuned...");
+    ctx.e.warn("Option `" + opt.getPrefixedName() +
+               "' is not yet implemented. Stay tuned...");
     break;
   }
 }
@@ -1098,8 +1105,8 @@ static const char *getReproduceOption(InputArgList &args) {
 }
 
 // Parse options of the form "old;new".
-static std::pair<StringRef, StringRef> getOldNewOptions(opt::InputArgList &args,
-                                                        unsigned id) {
+static std::pair<StringRef, StringRef>
+getOldNewOptions(Ctx &ctx, opt::InputArgList &args, unsigned id) {
   auto *arg = args.getLastArg(id);
   if (!arg)
     return {"", ""};
@@ -1107,48 +1114,48 @@ static std::pair<StringRef, StringRef> getOldNewOptions(opt::InputArgList &args,
   StringRef s = arg->getValue();
   std::pair<StringRef, StringRef> ret = s.split(';');
   if (ret.second.empty())
-    error(arg->getSpelling() + " expects 'old;new' format, but got " + s);
+    ctx.e.error(arg->getSpelling() + " expects 'old;new' format, but got " + s);
   return ret;
 }
 
 // Parse options of the form "old;new[;extra]".
 static std::tuple<StringRef, StringRef, StringRef>
-getOldNewOptionsExtra(opt::InputArgList &args, unsigned id) {
-  auto [oldDir, second] = getOldNewOptions(args, id);
+getOldNewOptionsExtra(Ctx &ctx, opt::InputArgList &args, unsigned id) {
+  auto [oldDir, second] = getOldNewOptions(ctx, args, id);
   auto [newDir, extraDir] = second.split(';');
   return {oldDir, newDir, extraDir};
 }
 
-static void parseClangOption(StringRef opt, const Twine &msg) {
+static void parseClangOption(Ctx &ctx, StringRef opt, const Twine &msg) {
   std::string err;
   raw_string_ostream os(err);
 
   const char *argv[] = {"lld", opt.data()};
   if (cl::ParseCommandLineOptions(2, argv, "", &os))
     return;
-  error(msg + ": " + StringRef(err).trim());
+  ctx.e.error(msg + ": " + StringRef(err).trim());
 }
 
-static uint32_t parseDylibVersion(const ArgList &args, unsigned id) {
+static uint32_t parseDylibVersion(Ctx &ctx, const ArgList &args, unsigned id) {
   const Arg *arg = args.getLastArg(id);
   if (!arg)
     return 0;
 
-  if (config->outputType != MH_DYLIB) {
-    error(arg->getAsString(args) + ": only valid with -dylib");
+  if (ctx.arg.outputType != MH_DYLIB) {
+    ctx.e.error(arg->getAsString(args) + ": only valid with -dylib");
     return 0;
   }
 
   PackedVersion version;
   if (!version.parse32(arg->getValue())) {
-    error(arg->getAsString(args) + ": malformed version");
+    ctx.e.error(arg->getAsString(args) + ": malformed version");
     return 0;
   }
 
   return version.rawValue();
 }
 
-static uint32_t parseProtection(StringRef protStr) {
+static uint32_t parseProtection(Ctx &ctx, StringRef protStr) {
   uint32_t prot = 0;
   for (char c : protStr) {
     switch (c) {
@@ -1164,14 +1171,15 @@ static uint32_t parseProtection(StringRef protStr) {
     case '-':
       break;
     default:
-      error("unknown -segprot letter '" + Twine(c) + "' in " + protStr);
+      ctx.e.error("unknown -segprot letter '" + Twine(c) + "' in " + protStr);
       return 0;
     }
   }
   return prot;
 }
 
-static std::vector<SectionAlign> parseSectAlign(const opt::InputArgList &args) {
+static std::vector<SectionAlign> parseSectAlign(Ctx &ctx,
+                                                const opt::InputArgList &args) {
   std::vector<SectionAlign> sectAligns;
   for (const Arg *arg : args.filtered(OPT_sectalign)) {
     StringRef segName = arg->getValue(0);
@@ -1180,13 +1188,13 @@ static std::vector<SectionAlign> parseSectAlign(const opt::InputArgList &args) {
     alignStr.consume_front_insensitive("0x");
     uint32_t align;
     if (alignStr.getAsInteger(16, align)) {
-      error("-sectalign: failed to parse '" + StringRef(arg->getValue(2)) +
-            "' as number");
+      ctx.e.error("-sectalign: failed to parse '" +
+                  StringRef(arg->getValue(2)) + "' as number");
       continue;
     }
     if (!isPowerOf2_32(align)) {
-      error("-sectalign: '" + StringRef(arg->getValue(2)) +
-            "' (in base 16) not a power of two");
+      ctx.e.error("-sectalign: '" + StringRef(arg->getValue(2)) +
+                  "' (in base 16) not a power of two");
       continue;
     }
     sectAligns.push_back({segName, sectName, align});
@@ -1209,9 +1217,9 @@ PlatformType macho::removeSimulator(PlatformType platform) {
   }
 }
 
-static bool supportsNoPie() {
-  return !(config->arch() == AK_arm64 || config->arch() == AK_arm64e ||
-           config->arch() == AK_arm64_32);
+static bool supportsNoPie(Ctx &ctx) {
+  return !(ctx.arg.arch() == AK_arm64 || ctx.arg.arch() == AK_arm64e ||
+           ctx.arg.arch() == AK_arm64_32);
 }
 
 static bool shouldAdhocSignByDefault(Architecture arch, PlatformType platform) {
@@ -1230,20 +1238,20 @@ using MinVersions = std::array<std::pair<PlatformType, VersionTuple>, N>;
 /// Returns true if the platform is greater than the min version.
 /// Returns false if the platform does not exist.
 template <std::size_t N>
-static bool greaterEqMinVersion(const MinVersions<N> &minVersions,
+static bool greaterEqMinVersion(Ctx &ctx, const MinVersions<N> &minVersions,
                                 bool ignoreSimulator) {
-  PlatformType platform = config->platformInfo.target.Platform;
+  PlatformType platform = ctx.arg.platformInfo.target.Platform;
   if (ignoreSimulator)
     platform = removeSimulator(platform);
   auto it = llvm::find_if(minVersions,
                           [&](const auto &p) { return p.first == platform; });
   if (it != minVersions.end())
-    if (config->platformInfo.target.MinDeployment >= it->second)
+    if (ctx.arg.platformInfo.target.MinDeployment >= it->second)
       return true;
   return false;
 }
 
-static bool dataConstDefault(const InputArgList &args) {
+static bool dataConstDefault(Ctx &ctx, const InputArgList &args) {
   static const MinVersions<6> minVersion = {{
       {PLATFORM_MACOS, VersionTuple(10, 15)},
       {PLATFORM_IOS, VersionTuple(13, 0)},
@@ -1252,12 +1260,12 @@ static bool dataConstDefault(const InputArgList &args) {
       {PLATFORM_XROS, VersionTuple(1, 0)},
       {PLATFORM_BRIDGEOS, VersionTuple(4, 0)},
   }};
-  if (!greaterEqMinVersion(minVersion, true))
+  if (!greaterEqMinVersion(ctx, minVersion, true))
     return false;
 
-  switch (config->outputType) {
+  switch (ctx.arg.outputType) {
   case MH_EXECUTE:
-    return !(args.hasArg(OPT_no_pie) && supportsNoPie());
+    return !(args.hasArg(OPT_no_pie) && supportsNoPie(ctx));
   case MH_BUNDLE:
     // FIXME: return false when -final_name ...
     // has prefix "/System/Library/UserEventPlugins/"
@@ -1274,29 +1282,30 @@ static bool dataConstDefault(const InputArgList &args) {
   return false;
 }
 
-static bool shouldEmitChainedFixups(const InputArgList &args) {
+static bool shouldEmitChainedFixups(Ctx &ctx, const InputArgList &args) {
   const Arg *arg = args.getLastArg(OPT_fixup_chains, OPT_no_fixup_chains);
   if (arg && arg->getOption().matches(OPT_no_fixup_chains))
     return false;
 
   bool requested = arg && arg->getOption().matches(OPT_fixup_chains);
-  if (!config->isPic) {
+  if (!ctx.arg.isPic) {
     if (requested)
-      error("-fixup_chains is incompatible with -no_pie");
+      ctx.e.error("-fixup_chains is incompatible with -no_pie");
 
     return false;
   }
 
-  if (!is_contained({AK_x86_64, AK_x86_64h, AK_arm64}, config->arch())) {
+  if (!is_contained({AK_x86_64, AK_x86_64h, AK_arm64}, ctx.arg.arch())) {
     if (requested)
-      error("-fixup_chains is only supported on x86_64 and arm64 targets");
+      ctx.e.error(
+          "-fixup_chains is only supported on x86_64 and arm64 targets");
 
     return false;
   }
 
   if (args.hasArg(OPT_preload)) {
     if (requested)
-      error("-fixup_chains is incompatible with -preload");
+      ctx.e.error("-fixup_chains is incompatible with -preload");
 
     return false;
   }
@@ -1315,10 +1324,10 @@ static bool shouldEmitChainedFixups(const InputArgList &args) {
       {PLATFORM_XROS, VersionTuple(1, 0)},
       {PLATFORM_XROS_SIMULATOR, VersionTuple(1, 0)},
   }};
-  return greaterEqMinVersion(minVersion, false);
+  return greaterEqMinVersion(ctx, minVersion, false);
 }
 
-static bool shouldEmitRelativeMethodLists(const InputArgList &args) {
+static bool shouldEmitRelativeMethodLists(Ctx &ctx, const InputArgList &args) {
   const Arg *arg = args.getLastArg(OPT_objc_relative_method_lists,
                                    OPT_no_objc_relative_method_lists);
   if (arg && arg->getOption().getID() == OPT_objc_relative_method_lists)
@@ -1339,7 +1348,7 @@ static bool shouldEmitRelativeMethodLists(const InputArgList &args) {
       {PLATFORM_BRIDGEOS, VersionTuple(5, 0)},
       {PLATFORM_XROS, VersionTuple(1, 0)},
   }};
-  return greaterEqMinVersion(minVersion, true);
+  return greaterEqMinVersion(ctx, minVersion, true);
 }
 
 void SymbolPatterns::clear() {
@@ -1347,18 +1356,18 @@ void SymbolPatterns::clear() {
   globs.clear();
 }
 
-void SymbolPatterns::insert(StringRef symbolName) {
+void SymbolPatterns::insert(Ctx &ctx, StringRef symbolName) {
   Expected<GlobPattern> pattern = GlobPattern::create(symbolName);
   if (!pattern) {
-    error("invalid symbol-name pattern: " + symbolName + ": " +
-          toString(pattern.takeError()));
+    ctx.e.error("invalid symbol-name pattern: " + symbolName + ": " +
+                toString(pattern.takeError()));
     return;
   }
   // A pattern that denotes a single string is kept as a literal: literals are
   // matched by hash lookup, and only literals seed the force-load of lazy
   // archive members below.
   if (std::optional<std::string> literal = pattern->asLiteral()) {
-    literals.insert(CachedHashStringRef(saver().save(*literal)));
+    literals.insert(CachedHashStringRef(ctx.saver.save(*literal)));
     return;
   }
   globs.emplace_back(std::move(*pattern));
@@ -1379,33 +1388,33 @@ bool SymbolPatterns::match(StringRef symbolName) const {
   return matchLiteral(symbolName) || matchGlob(symbolName);
 }
 
-static void parseSymbolPatternsFile(const Arg *arg,
+static void parseSymbolPatternsFile(Ctx &ctx, const Arg *arg,
                                     SymbolPatterns &symbolPatterns) {
   StringRef path = arg->getValue();
-  std::optional<MemoryBufferRef> buffer = readFile(path);
+  std::optional<MemoryBufferRef> buffer = readFile(ctx, path);
   if (!buffer) {
-    error("Could not read symbol file: " + path);
+    ctx.e.error("Could not read symbol file: " + path);
     return;
   }
   MemoryBufferRef mbref = *buffer;
   for (StringRef line : args::getLines(mbref)) {
     line = line.take_until([](char c) { return c == '#'; }).trim();
     if (!line.empty())
-      symbolPatterns.insert(line);
+      symbolPatterns.insert(ctx, line);
   }
 }
 
-static void handleSymbolPatterns(InputArgList &args,
+static void handleSymbolPatterns(Ctx &ctx, InputArgList &args,
                                  SymbolPatterns &symbolPatterns,
                                  unsigned singleOptionCode,
                                  unsigned listFileOptionCode) {
   for (const Arg *arg : args.filtered(singleOptionCode))
-    symbolPatterns.insert(arg->getValue());
+    symbolPatterns.insert(ctx, arg->getValue());
   for (const Arg *arg : args.filtered(listFileOptionCode))
-    parseSymbolPatternsFile(arg, symbolPatterns);
+    parseSymbolPatternsFile(ctx, arg, symbolPatterns);
 }
 
-static void createFiles(const InputArgList &args) {
+static void createFiles(Ctx &ctx, const InputArgList &args) {
   TimeTraceScope timeScope("Load input files");
   // This loop should be reserved for options whose exact ordering matters.
   // Other options should be handled via filtered() and/or getLastArg().
@@ -1416,36 +1425,39 @@ static void createFiles(const InputArgList &args) {
 
   for (const Arg *arg : args) {
     const Option &opt = arg->getOption();
-    warnIfDeprecatedOption(opt);
-    warnIfUnimplementedOption(opt);
+    warnIfDeprecatedOption(ctx, opt);
+    warnIfUnimplementedOption(ctx, opt);
 
     switch (opt.getID()) {
     case OPT_INPUT:
-      deferFile(rerootPath(arg->getValue()), isLazy, deferredFiles);
+      deferFile(ctx, rerootPath(ctx, arg->getValue()), isLazy, deferredFiles);
       break;
     case OPT_needed_library:
-      deferFile(rerootPath(arg->getValue()), /*isLazy=*/false, deferredFiles,
-                LoadType::CommandLine, /*isNeeded=*/true);
+      deferFile(ctx, rerootPath(ctx, arg->getValue()), /*isLazy=*/false,
+                deferredFiles, LoadType::CommandLine, /*isNeeded=*/true);
       break;
     case OPT_reexport_library:
-      deferFile(rerootPath(arg->getValue()), /*isLazy=*/false, deferredFiles,
-                LoadType::CommandLine, /*isNeeded=*/false, /*isWeak=*/false,
+      deferFile(ctx, rerootPath(ctx, arg->getValue()), /*isLazy=*/false,
+                deferredFiles, LoadType::CommandLine, /*isNeeded=*/false,
+                /*isWeak=*/false,
                 /*isReexport=*/true);
       break;
     case OPT_weak_library:
-      deferFile(rerootPath(arg->getValue()), /*isLazy=*/false, deferredFiles,
-                LoadType::CommandLine, /*isNeeded=*/false, /*isWeak=*/true);
+      deferFile(ctx, rerootPath(ctx, arg->getValue()), /*isLazy=*/false,
+                deferredFiles, LoadType::CommandLine, /*isNeeded=*/false,
+                /*isWeak=*/true);
       break;
     case OPT_filelist:
-      addFileList(arg->getValue(), isLazy, deferredFiles);
+      addFileList(ctx, arg->getValue(), isLazy, deferredFiles);
       break;
     case OPT_force_load:
-      deferFile(rerootPath(arg->getValue()), /*isLazy=*/false, deferredFiles,
-                LoadType::CommandLineForce);
+      deferFile(ctx, rerootPath(ctx, arg->getValue()), /*isLazy=*/false,
+                deferredFiles, LoadType::CommandLineForce);
       break;
     case OPT_load_hidden:
-      deferFile(rerootPath(arg->getValue()), /*isLazy=*/false, deferredFiles,
-                LoadType::CommandLine, /*isNeeded=*/false, /*isWeak=*/false,
+      deferFile(ctx, rerootPath(ctx, arg->getValue()), /*isLazy=*/false,
+                deferredFiles, LoadType::CommandLine, /*isNeeded=*/false,
+                /*isWeak=*/false,
                 /*isReexport=*/false, /*isHidden=*/true);
       break;
     case OPT_l:
@@ -1453,7 +1465,7 @@ static void createFiles(const InputArgList &args) {
     case OPT_reexport_l:
     case OPT_weak_l:
     case OPT_hidden_l:
-      addLibrary(arg->getValue(), opt.getID() == OPT_needed_l,
+      addLibrary(ctx, arg->getValue(), opt.getID() == OPT_needed_l,
                  opt.getID() == OPT_weak_l, opt.getID() == OPT_reexport_l,
                  opt.getID() == OPT_hidden_l,
                  /*isExplicit=*/true, LoadType::CommandLine, deferredFiles);
@@ -1462,21 +1474,21 @@ static void createFiles(const InputArgList &args) {
     case OPT_needed_framework:
     case OPT_reexport_framework:
     case OPT_weak_framework:
-      addFramework(arg->getValue(), opt.getID() == OPT_needed_framework,
+      addFramework(ctx, arg->getValue(), opt.getID() == OPT_needed_framework,
                    opt.getID() == OPT_weak_framework,
                    opt.getID() == OPT_reexport_framework, /*isExplicit=*/true,
                    LoadType::CommandLine, deferredFiles);
       break;
     case OPT_start_lib:
       if (inLib)
-        error("nested --start-lib");
+        ctx.e.error("nested --start-lib");
       inLib = true;
-      if (!config->allLoad)
+      if (!ctx.arg.allLoad)
         isLazy = true;
       break;
     case OPT_end_lib:
       if (!inLib)
-        error("stray --end-lib");
+        ctx.e.error("stray --end-lib");
       inLib = false;
       isLazy = false;
       break;
@@ -1486,36 +1498,37 @@ static void createFiles(const InputArgList &args) {
   }
 
 #if LLVM_ENABLE_THREADS
-  if (config->readWorkers) {
-    multiThreadedPageIn(deferredFiles);
+  if (ctx.arg.readWorkers) {
+    multiThreadedPageIn(ctx, deferredFiles);
 
     DeferredFiles archiveContents;
     for (auto &file : deferredFiles) {
-      if (loadedObjectFrameworks.contains(file.path))
+      if (ctx.loadedObjectFrameworks.contains(file.path))
         continue;
 
-      auto inputFile = processFile(file.buffer, &archiveContents, file.path,
-                                   file.loadType, file.isLazy, file.isExplicit,
-                                   /*isBundleLoader=*/false, file.isHidden);
-      applyDylibMetadata(inputFile, file.isNeeded, file.isWeak,
+      auto inputFile =
+          processFile(ctx, file.buffer, &archiveContents, file.path,
+                      file.loadType, file.isLazy, file.isExplicit,
+                      /*isBundleLoader=*/false, file.isHidden);
+      applyDylibMetadata(ctx, inputFile, file.isNeeded, file.isWeak,
                          file.isReexport);
-      checkAndCacheFramework(inputFile, file.path);
+      checkAndCacheFramework(ctx, inputFile, file.path);
 
       if (ArchiveFile *archive = dyn_cast<ArchiveFile>(inputFile))
         archive->addLazySymbols();
     }
 
     if (!archiveContents.empty())
-      multiThreadedPageIn(archiveContents);
+      multiThreadedPageIn(ctx, archiveContents);
 
-    pageInQueue.stopAllWork = true;
+    ctx.pageInQueue->stopAllWork = true;
   }
 #endif
 }
 
-static void gatherInputSections() {
+static void gatherInputSections(Ctx &ctx) {
   TimeTraceScope timeScope("Gathering input sections");
-  for (const InputFile *file : inputFiles) {
+  for (const InputFile *file : ctx.inputFiles) {
     for (const Section *section : file->sections) {
       // Compact unwind entries require special handling elsewhere. (In
       // contrast, EH frames are handled like regular ConcatInputSections.)
@@ -1525,19 +1538,19 @@ static void gatherInputSections() {
       if (section->name == section_names::addrSig)
         continue;
       for (const Subsection &subsection : section->subsections)
-        addInputSection(subsection.isec);
+        addInputSection(ctx, subsection.isec);
     }
     if (!file->objCImageInfo.empty())
-      in.objCImageInfo->addFile(file);
+      ctx.in.objCImageInfo->addFile(file);
   }
 }
 
-static void codegenDataGenerate() {
+static void codegenDataGenerate(Ctx &ctx) {
   TimeTraceScope timeScope("Generating codegen data");
 
   OutlinedHashTreeRecord globalOutlineRecord;
   StableFunctionMapRecord globalMergeRecord;
-  for (ConcatInputSection *isec : inputSections) {
+  for (ConcatInputSection *isec : ctx.inputSections) {
     if (isec->getSegName() != segment_names::data)
       continue;
     if (isec->getName() == section_names::outlinedHashTree) {
@@ -1571,30 +1584,30 @@ static void codegenDataGenerate() {
     Writer.addRecord(globalMergeRecord);
 
   std::error_code EC;
-  auto fileName = config->codegenDataGeneratePath;
+  auto fileName = ctx.arg.codegenDataGeneratePath;
   assert(!fileName.empty());
   raw_fd_ostream Output(fileName, EC, sys::fs::OF_None);
   if (EC)
-    error("fail to create " + fileName + ": " + EC.message());
+    ctx.e.error("fail to create " + fileName + ": " + EC.message());
 
   if (auto E = Writer.write(Output))
-    error("fail to write CGData: " + toString(std::move(E)));
+    ctx.e.error("fail to write CGData: " + toString(std::move(E)));
 }
 
-static void foldIdenticalLiterals() {
+static void foldIdenticalLiterals(Ctx &ctx) {
   TimeTraceScope timeScope("Fold identical literals");
   // We always create a cStringSection, regardless of whether dedupLiterals is
   // true. If it isn't, we simply create a non-deduplicating CStringSection.
   // Either way, we must unconditionally finalize it here.
-  for (auto *sec : in.cStringSections)
+  for (auto *sec : ctx.in.cStringSections)
     sec->finalizeContents();
-  in.wordLiteralSection->finalizeContents();
+  ctx.in.wordLiteralSection->finalizeContents();
 }
 
-static void addSynthenticMethnames() {
-  std::string &data = *make<std::string>();
+static void addSynthenticMethnames(Ctx &ctx) {
+  std::string &data = *ctx.make<std::string>();
   llvm::raw_string_ostream os(data);
-  for (Symbol *sym : symtab->getSymbols())
+  for (Symbol *sym : ctx.symtab->getSymbols())
     if (isa<Undefined>(sym))
       if (ObjCStubsSection::isObjCStubSymbol(sym))
         os << ObjCStubsSection::getMethname(sym) << '\0';
@@ -1603,26 +1616,26 @@ static void addSynthenticMethnames() {
     return;
 
   const auto *buf = reinterpret_cast<const uint8_t *>(data.c_str());
-  Section &section = *make<Section>(/*file=*/nullptr, segment_names::text,
-                                    section_names::objcMethname,
-                                    S_CSTRING_LITERALS, /*addr=*/0);
+  Section &section = *ctx.make<Section>(
+      ctx, /*file=*/nullptr, segment_names::text, section_names::objcMethname,
+      S_CSTRING_LITERALS, /*addr=*/0);
 
-  auto *isec =
-      make<CStringInputSection>(section, ArrayRef<uint8_t>{buf, data.size()},
-                                /*align=*/1, /*dedupLiterals=*/true);
+  auto *isec = ctx.make<CStringInputSection>(
+      section, ArrayRef<uint8_t>{buf, data.size()},
+      /*align=*/1, /*dedupLiterals=*/true);
   isec->splitIntoPieces();
   for (auto &piece : isec->pieces)
     piece.live = true;
   section.subsections.push_back({0, isec});
-  in.objcMethnameSection->addInput(isec);
-  in.objcMethnameSection->isec->markLive(0);
+  ctx.in.objcMethnameSection->addInput(isec);
+  ctx.in.objcMethnameSection->isec->markLive(0);
 }
 
-static void referenceStubBinder() {
-  bool needsStubHelper = config->outputType == MH_DYLIB ||
-                         config->outputType == MH_EXECUTE ||
-                         config->outputType == MH_BUNDLE;
-  if (!needsStubHelper || !symtab->find("dyld_stub_binder"))
+static void referenceStubBinder(Ctx &ctx) {
+  bool needsStubHelper = ctx.arg.outputType == MH_DYLIB ||
+                         ctx.arg.outputType == MH_EXECUTE ||
+                         ctx.arg.outputType == MH_BUNDLE;
+  if (!needsStubHelper || !ctx.symtab->find("dyld_stub_binder"))
     return;
 
   // dyld_stub_binder is used by dyld to resolve lazy bindings. This code here
@@ -1632,58 +1645,60 @@ static void referenceStubBinder() {
   // "no symbols" diagnostics from `nm`.
   // StubHelperSection::setUp() adds a reference and errors out if
   // dyld_stub_binder doesn't exist in case it is actually needed.
-  symtab->addUndefined("dyld_stub_binder", /*file=*/nullptr, /*isWeak=*/false);
+  ctx.symtab->addUndefined("dyld_stub_binder", /*file=*/nullptr,
+                           /*isWeak=*/false);
 }
 
-static void createAliases() {
-  for (const auto &pair : config->aliasedSymbols) {
-    if (const auto &sym = symtab->find(pair.first)) {
+static void createAliases(Ctx &ctx) {
+  for (const auto &pair : ctx.arg.aliasedSymbols) {
+    if (const auto &sym = ctx.symtab->find(pair.first)) {
       if (const auto &defined = dyn_cast<Defined>(sym)) {
-        symtab->aliasDefined(defined, pair.second, defined->getFile())
+        ctx.symtab->aliasDefined(defined, pair.second, defined->getFile())
             ->noDeadStrip = true;
       } else {
-        error("TODO: support aliasing to symbols of kind " +
-              Twine(sym->kind()));
+        ctx.e.error("TODO: support aliasing to symbols of kind " +
+                    Twine(sym->kind()));
       }
     } else {
-      warn("undefined base symbol '" + pair.first + "' for alias '" +
-           pair.second + "'\n");
+      ctx.e.warn("undefined base symbol '" + pair.first + "' for alias '" +
+                 pair.second + "'\n");
     }
   }
 
-  for (const InputFile *file : inputFiles) {
+  for (const InputFile *file : ctx.inputFiles) {
     if (auto *objFile = dyn_cast<ObjFile>(file)) {
       for (const AliasSymbol *alias : objFile->aliases) {
-        if (const auto &aliased = symtab->find(alias->getAliasedName())) {
+        if (const auto &aliased = ctx.symtab->find(alias->getAliasedName())) {
           if (const auto &defined = dyn_cast<Defined>(aliased)) {
-            symtab->aliasDefined(defined, alias->getName(), alias->getFile(),
-                                 alias->privateExtern);
+            ctx.symtab->aliasDefined(defined, alias->getName(),
+                                     alias->getFile(), alias->privateExtern);
           } else {
             // Common, dylib, and undefined symbols are all valid alias
             // referents (undefineds can become valid Defined symbols later on
             // in the link.)
-            error("TODO: support aliasing to symbols of kind " +
-                  Twine(aliased->kind()));
+            ctx.e.error("TODO: support aliasing to symbols of kind " +
+                        Twine(aliased->kind()));
           }
         } else {
           // This shouldn't happen since MC generates undefined symbols to
           // represent the alias referents. Thus we fatal() instead of just
           // warning here.
-          fatal("unable to find alias referent " + alias->getAliasedName() +
-                " for " + alias->getName());
+          ctx.e.fatal("unable to find alias referent " +
+                      alias->getAliasedName() + " for " + alias->getName());
         }
       }
     }
   }
 }
 
-static void handleExplicitExports() {
+static void handleExplicitExports(Ctx &ctx) {
   static constexpr int kMaxWarnings = 3;
-  if (config->hasExplicitExports) {
+  if (ctx.arg.hasExplicitExports) {
     std::atomic<uint64_t> warningsCount{0};
-    parallelForEach(symtab->getSymbols(), [&warningsCount](Symbol *sym) {
+    parallelForEach(ctx.symtab->getSymbols(), [&ctx,
+                                               &warningsCount](Symbol *sym) {
       if (auto *defined = dyn_cast<Defined>(sym)) {
-        if (config->exportedSymbols.match(sym->getName())) {
+        if (ctx.arg.exportedSymbols.match(sym->getName())) {
           if (defined->privateExtern) {
             if (defined->weakDefCanBeHidden) {
               // weak_def_can_be_hidden symbols behave similarly to
@@ -1696,44 +1711,47 @@ static void handleExplicitExports() {
               // shorten the rest to avoid crowding logs.
               if (warningsCount.fetch_add(1, std::memory_order_relaxed) <
                   kMaxWarnings)
-                warn("cannot export hidden symbol " + toString(*defined) +
-                     "\n>>> defined in " + toString(defined->getFile()));
+                ctx.e.warn("cannot export hidden symbol " +
+                           toString(ctx, *defined) + "\n>>> defined in " +
+                           toString(defined->getFile()));
             }
           }
         } else {
           defined->privateExtern = true;
         }
       } else if (auto *dysym = dyn_cast<DylibSymbol>(sym)) {
-        dysym->shouldReexport = config->exportedSymbols.match(sym->getName());
+        dysym->shouldReexport = ctx.arg.exportedSymbols.match(sym->getName());
       }
     });
     if (warningsCount > kMaxWarnings)
-      warn("<... " + Twine(warningsCount - kMaxWarnings) +
-           " more similar warnings...>");
-  } else if (!config->unexportedSymbols.empty()) {
-    parallelForEach(symtab->getSymbols(), [](Symbol *sym) {
+      ctx.e.warn("<... " + Twine(warningsCount - kMaxWarnings) +
+                 " more similar warnings...>");
+  } else if (!ctx.arg.unexportedSymbols.empty()) {
+    parallelForEach(ctx.symtab->getSymbols(), [&ctx](Symbol *sym) {
       if (auto *defined = dyn_cast<Defined>(sym))
-        if (config->unexportedSymbols.match(defined->getName()))
+        if (ctx.arg.unexportedSymbols.match(defined->getName()))
           defined->privateExtern = true;
     });
   }
 }
 
-static void eraseInitializerSymbols() {
-  for (ConcatInputSection *isec : in.initOffsets->inputs())
+static void eraseInitializerSymbols(Ctx &ctx) {
+  for (ConcatInputSection *isec : ctx.in.initOffsets->inputs())
     for (Defined *sym : isec->symbols)
       sym->used = false;
 }
 
-static SmallVector<StringRef, 0> getRuntimePaths(opt::InputArgList &args) {
+static SmallVector<StringRef, 0> getRuntimePaths(Ctx &ctx,
+                                                 opt::InputArgList &args) {
   SmallVector<StringRef, 0> vals;
   DenseSet<StringRef> seen;
   for (const Arg *arg : args.filtered(OPT_rpath)) {
     StringRef val = arg->getValue();
     if (seen.insert(val).second)
       vals.push_back(val);
-    else if (config->warnDuplicateRpath)
-      warn("duplicate -rpath '" + val + "' ignored [--warn-duplicate-rpath]");
+    else if (ctx.arg.warnDuplicateRpath)
+      ctx.e.warn("duplicate -rpath '" + val +
+                 "' ignored [--warn-duplicate-rpath]");
   }
   return vals;
 }
@@ -1749,9 +1767,9 @@ static SmallVector<StringRef, 0> getAllowableClients(opt::InputArgList &args) {
   return vals;
 }
 
-static void computeColdness() {
+static void computeColdness(Ctx &ctx) {
   TimeTraceScope timeScope("Compute coldness");
-  for (InputSection *isec : inputSections) {
+  for (InputSection *isec : ctx.inputSections) {
     if (!isCodeSection(isec))
       continue;
     isec->isCold =
@@ -1761,85 +1779,62 @@ static void computeColdness() {
 
 namespace lld {
 namespace macho {
-bool link(ArrayRef<const char *> argsArr, llvm::raw_ostream &stdoutOS,
-          llvm::raw_ostream &stderrOS, bool exitEarly, bool disableOutput) {
-  // This driver-specific context will be freed later by lldMain().
-  auto *ctx = new CommonLinkerContext;
+Ctx::Ctx() {
+  priorityBuilder = std::make_unique<PriorityBuilder>(*this);
+  thunkMap = std::make_unique<ThunkMap>();
+#if LLVM_ENABLE_THREADS
+  pageInQueue = std::make_unique<SerialBackgroundWorkQueue>();
+#endif
+}
 
-  ctx->e.initialize(stdoutOS, stderrOS, exitEarly, disableOutput);
-  ctx->e.cleanupCallback = []() {
-    resolvedFrameworks.clear();
-    resolvedLibraries.clear();
-    cachedReads.clear();
-    concatOutputSections.clear();
-    inputFiles.clear();
-    inputSections.clear();
-    inputSectionsOrder = 0;
-    loadedArchives.clear();
-    loadedObjectFrameworks.clear();
-    missingAutolinkWarnings.clear();
-    syntheticSections.clear();
-    thunkMap.clear();
-    unprocessedLCLinkerOptions.clear();
-    ObjCSelRefsHelper::cleanup();
+Ctx::~Ctx() = default;
 
-    firstTLVDataSection = nullptr;
-    tar = nullptr;
-    in = InStruct();
-
-    resetLoadedDylibs();
-    resetOutputSegments();
-    resetWriter();
-    InputFile::resetIdCount();
-
-    objc::doCleanup();
-  };
-
-  ctx->e.logName = args::getFilenameWithoutExe(argsArr[0]);
+static bool linkImpl(Ctx &ctx, ArrayRef<const char *> argsArr) {
+  ctx.e.logName = args::getFilenameWithoutExe(argsArr[0]);
 
   MachOOptTable parser;
-  InputArgList args = parser.parse(*ctx, argsArr.slice(1));
+  InputArgList args = parser.parse(ctx, argsArr.slice(1));
 
-  ctx->e.errorLimitExceededMsg = "too many errors emitted, stopping now "
-                                 "(use --error-limit=0 to see all errors)";
-  ctx->e.errorLimit = args::getInteger(args, OPT_error_limit_eq, 20);
-  ctx->e.verbose = args.hasArg(OPT_verbose);
+  ctx.e.errorLimitExceededMsg = "too many errors emitted, stopping now "
+                                "(use --error-limit=0 to see all errors)";
+  ctx.e.errorLimit = args::getInteger(ctx.e, args, OPT_error_limit_eq, 20);
+  ctx.e.verbose = args.hasArg(OPT_verbose);
 
   if (args.hasArg(OPT_help_hidden)) {
-    parser.printHelp(*ctx, argsArr[0], /*showHidden=*/true);
+    parser.printHelp(ctx, argsArr[0], /*showHidden=*/true);
     return true;
   }
   if (args.hasArg(OPT_help)) {
-    parser.printHelp(*ctx, argsArr[0], /*showHidden=*/false);
+    parser.printHelp(ctx, argsArr[0], /*showHidden=*/false);
     return true;
   }
   if (args.hasArg(OPT_version)) {
-    message(getLLDVersion());
+    ctx.e.message(getLLDVersion(), ctx.e.outs());
     return true;
   }
 
-  config = std::make_unique<Configuration>();
-  symtab = std::make_unique<SymbolTable>();
-  config->outputType = getOutputType(args);
-  target = createTargetInfo(args);
-  depTracker = std::make_unique<DependencyTracker>(
-      args.getLastArgValue(OPT_dependency_info));
+  ctx.symtab = std::make_unique<SymbolTable>(ctx);
+  ctx.arg.outputType = getOutputType(args);
+  ctx.target = createTargetInfo(ctx, args);
+  ctx.depTracker = std::make_unique<DependencyTracker>(
+      ctx, args.getLastArgValue(OPT_dependency_info));
 
-  config->ltoo = args::getInteger(args, OPT_lto_O, 2);
-  if (config->ltoo > 3)
-    error("--lto-O: invalid optimization level: " + Twine(config->ltoo));
-  unsigned ltoCgo =
-      args::getInteger(args, OPT_lto_CGO, args::getCGOptLevel(config->ltoo));
+  ctx.arg.ltoo = args::getInteger(ctx.e, args, OPT_lto_O, 2);
+  if (ctx.arg.ltoo > 3)
+    ctx.e.error("--lto-O: invalid optimization level: " + Twine(ctx.arg.ltoo));
+  unsigned ltoCgo = args::getInteger(ctx.e, args, OPT_lto_CGO,
+                                     args::getCGOptLevel(ctx.arg.ltoo));
   if (auto level = CodeGenOpt::getLevel(ltoCgo))
-    config->ltoCgo = *level;
+    ctx.arg.ltoCgo = *level;
   else
-    error("--lto-CGO: invalid codegen optimization level: " + Twine(ltoCgo));
+    ctx.e.error("--lto-CGO: invalid codegen optimization level: " +
+                Twine(ltoCgo));
 
-  if (errorCount())
+  if (ctx.e.errorCount)
     return false;
 
   if (args.hasArg(OPT_pagezero_size)) {
-    uint64_t pagezeroSize = args::getHex(args, OPT_pagezero_size, 0);
+    uint64_t pagezeroSize = args::getHex(ctx.e, args, OPT_pagezero_size, 0);
 
     // ld64 does something really weird. It attempts to realign the value to the
     // page size, but assumes the page size is 4K. This doesn't work with most
@@ -1850,60 +1845,60 @@ bool link(ArrayRef<const char *> argsArr, llvm::raw_ostream &stdoutOS,
 
     // So we are not copying this weird behavior and doing the it in a logical
     // way, by always rounding down to page size.
-    if (!isAligned(Align(target->getPageSize()), pagezeroSize)) {
-      pagezeroSize -= pagezeroSize % target->getPageSize();
-      warn("__PAGEZERO size is not page aligned, rounding down to 0x" +
-           Twine::utohexstr(pagezeroSize));
+    if (!isAligned(Align(ctx.target->getPageSize()), pagezeroSize)) {
+      pagezeroSize -= pagezeroSize % ctx.target->getPageSize();
+      ctx.e.warn("__PAGEZERO size is not page aligned, rounding down to 0x" +
+                 Twine::utohexstr(pagezeroSize));
     }
 
-    target->pageZeroSize = pagezeroSize;
+    ctx.target->pageZeroSize = pagezeroSize;
   }
 
-  config->osoPrefix = args.getLastArgValue(OPT_oso_prefix);
-  if (!config->osoPrefix.empty()) {
+  ctx.arg.osoPrefix = args.getLastArgValue(OPT_oso_prefix);
+  if (!ctx.arg.osoPrefix.empty()) {
     // The max path length is 4096, in theory. However that seems quite long
     // and seems unlikely that any one would want to strip everything from the
     // path. Hence we've picked a reasonably large number here.
     SmallString<1024> expanded;
     // Expand "." into the current working directory.
-    if (config->osoPrefix == "." && !fs::current_path(expanded)) {
+    if (ctx.arg.osoPrefix == "." && !fs::current_path(expanded)) {
       // Note: LD64 expands "." to be `<current_dir>/
       // (ie., it has a slash suffix) whereas current_path() doesn't.
       // So we have to append '/' to be consistent because this is
       // meaningful for our text based stripping.
       expanded += sys::path::get_separator();
     } else {
-      expanded = config->osoPrefix;
+      expanded = ctx.arg.osoPrefix;
     }
-    config->osoPrefix = saver().save(expanded.str());
+    ctx.arg.osoPrefix = ctx.saver.save(expanded.str());
   }
 
   bool pie = args.hasFlag(OPT_pie, OPT_no_pie, true);
-  if (!supportsNoPie() && !pie) {
-    warn("-no_pie ignored for arm64");
+  if (!supportsNoPie(ctx) && !pie) {
+    ctx.e.warn("-no_pie ignored for arm64");
     pie = true;
   }
 
-  config->isPic = config->outputType == MH_DYLIB ||
-                  config->outputType == MH_BUNDLE ||
-                  (config->outputType == MH_EXECUTE && pie);
+  ctx.arg.isPic = ctx.arg.outputType == MH_DYLIB ||
+                  ctx.arg.outputType == MH_BUNDLE ||
+                  (ctx.arg.outputType == MH_EXECUTE && pie);
 
   // Must be set before any InputSections and Symbols are created.
-  config->deadStrip = args.hasArg(OPT_dead_strip);
-  config->interposable = args.hasArg(OPT_interposable);
+  ctx.arg.deadStrip = args.hasArg(OPT_dead_strip);
+  ctx.arg.interposable = args.hasArg(OPT_interposable);
 
-  config->systemLibraryRoots = getSystemLibraryRoots(args);
+  ctx.arg.systemLibraryRoots = getSystemLibraryRoots(args);
   if (const char *path = getReproduceOption(args)) {
     // Note that --reproduce is a debug option so you can ignore it
     // if you are trying to understand the whole picture of the code.
     Expected<std::unique_ptr<TarWriter>> errOrWriter =
         TarWriter::create(path, path::stem(path));
     if (errOrWriter) {
-      tar = std::move(*errOrWriter);
-      tar->append("response.txt", createResponseFile(args));
-      tar->append("version.txt", getLLDVersion() + "\n");
+      ctx.tar = std::move(*errOrWriter);
+      ctx.tar->append("response.txt", createResponseFile(ctx, args));
+      ctx.tar->append("version.txt", getLLDVersion() + "\n");
     } else {
-      error("--reproduce: " + toString(errOrWriter.takeError()));
+      ctx.e.error("--reproduce: " + toString(errOrWriter.takeError()));
     }
   }
 
@@ -1912,215 +1907,220 @@ bool link(ArrayRef<const char *> argsArr, llvm::raw_ostream &stdoutOS,
     StringRef v(arg->getValue());
     unsigned workers = 0;
     if (!llvm::to_integer(v, workers, 0))
-      error(arg->getSpelling() +
-            ": expected a non-negative integer, but got '" + arg->getValue() +
-            "'");
-    config->readWorkers = workers;
+      ctx.e.error(arg->getSpelling() +
+                  ": expected a non-negative integer, but got '" +
+                  arg->getValue() + "'");
+    ctx.arg.readWorkers = workers;
 #else
-    warn(arg->getSpelling() +
-         ": option unavailable because lld was not built with thread support");
+    ctx.e.warn(
+        arg->getSpelling() +
+        ": option unavailable because lld was not built with thread support");
 #endif
   }
   if (auto *arg = args.getLastArg(OPT_threads_eq)) {
     StringRef v(arg->getValue());
     unsigned threads = 0;
     if (!llvm::to_integer(v, threads, 0) || threads == 0)
-      error(arg->getSpelling() + ": expected a positive integer, but got '" +
-            arg->getValue() + "'");
+      ctx.e.error(arg->getSpelling() +
+                  ": expected a positive integer, but got '" + arg->getValue() +
+                  "'");
     parallel::strategy = hardware_concurrency(threads);
-    config->thinLTOJobs = v;
+    ctx.arg.thinLTOJobs = v;
   }
   if (auto *arg = args.getLastArg(OPT_thinlto_jobs_eq))
-    config->thinLTOJobs = arg->getValue();
-  if (!get_threadpool_strategy(config->thinLTOJobs))
-    error("--thinlto-jobs: invalid job count: " + config->thinLTOJobs);
+    ctx.arg.thinLTOJobs = arg->getValue();
+  if (!get_threadpool_strategy(ctx.arg.thinLTOJobs))
+    ctx.e.error("--thinlto-jobs: invalid job count: " + ctx.arg.thinLTOJobs);
 
   for (const Arg *arg : args.filtered(OPT_u)) {
-    config->explicitUndefineds.push_back(symtab->addUndefined(
+    ctx.arg.explicitUndefineds.push_back(ctx.symtab->addUndefined(
         arg->getValue(), /*file=*/nullptr, /*isWeakRef=*/false));
   }
 
   for (const Arg *arg : args.filtered(OPT_U))
-    config->explicitDynamicLookups.insert(arg->getValue());
+    ctx.arg.explicitDynamicLookups.insert(arg->getValue());
 
-  config->mapFile = args.getLastArgValue(OPT_map);
-  config->optimize = args::getInteger(args, OPT_O, 1);
-  config->outputFile = args.getLastArgValue(OPT_o, "a.out");
-  config->finalOutput =
-      args.getLastArgValue(OPT_final_output, config->outputFile);
-  config->astPaths = args.getAllArgValues(OPT_add_ast_path);
-  config->headerPad = args::getHex(args, OPT_headerpad, /*Default=*/32);
-  config->headerPadMaxInstallNames =
+  ctx.arg.mapFile = args.getLastArgValue(OPT_map);
+  ctx.arg.optimize = args::getInteger(ctx.e, args, OPT_O, 1);
+  ctx.arg.outputFile = args.getLastArgValue(OPT_o, "a.out");
+  ctx.arg.finalOutput =
+      args.getLastArgValue(OPT_final_output, ctx.arg.outputFile);
+  ctx.arg.astPaths = args.getAllArgValues(OPT_add_ast_path);
+  ctx.arg.headerPad = args::getHex(ctx.e, args, OPT_headerpad, /*Default=*/32);
+  ctx.arg.headerPadMaxInstallNames =
       args.hasArg(OPT_headerpad_max_install_names);
-  config->printDylibSearch =
+  ctx.arg.printDylibSearch =
       args.hasArg(OPT_print_dylib_search) || getenv("RC_TRACE_DYLIB_SEARCHING");
-  config->printEachFile = args.hasArg(OPT_t);
-  config->printWhyLoad = args.hasArg(OPT_why_load);
-  config->omitDebugInfo = args.hasArg(OPT_S);
-  config->errorForArchMismatch = args.hasArg(OPT_arch_errors_fatal);
+  ctx.arg.printEachFile = args.hasArg(OPT_t);
+  ctx.arg.printWhyLoad = args.hasArg(OPT_why_load);
+  ctx.arg.omitDebugInfo = args.hasArg(OPT_S);
+  ctx.arg.errorForArchMismatch = args.hasArg(OPT_arch_errors_fatal);
   if (const Arg *arg = args.getLastArg(OPT_bundle_loader)) {
-    if (config->outputType != MH_BUNDLE)
-      error("-bundle_loader can only be used with MachO bundle output");
-    addFile(arg->getValue(), LoadType::CommandLine, /*isLazy=*/false,
+    if (ctx.arg.outputType != MH_BUNDLE)
+      ctx.e.error("-bundle_loader can only be used with MachO bundle output");
+    addFile(ctx, arg->getValue(), LoadType::CommandLine, /*isLazy=*/false,
             /*isExplicit=*/false, /*isBundleLoader=*/true);
   }
   for (auto *arg : args.filtered(OPT_dyld_env)) {
     StringRef envPair(arg->getValue());
     if (!envPair.contains('='))
-      error("-dyld_env's argument is  malformed. Expected "
-            "-dyld_env <ENV_VAR>=<VALUE>, got `" +
-            envPair + "`");
-    config->dyldEnvs.push_back(envPair);
+      ctx.e.error("-dyld_env's argument is  malformed. Expected "
+                  "-dyld_env <ENV_VAR>=<VALUE>, got `" +
+                  envPair + "`");
+    ctx.arg.dyldEnvs.push_back(envPair);
   }
-  if (!config->dyldEnvs.empty() && config->outputType != MH_EXECUTE)
-    error("-dyld_env can only be used when creating executable output");
+  if (!ctx.arg.dyldEnvs.empty() && ctx.arg.outputType != MH_EXECUTE)
+    ctx.e.error("-dyld_env can only be used when creating executable output");
 
   if (const Arg *arg = args.getLastArg(OPT_umbrella)) {
-    if (config->outputType != MH_DYLIB)
-      warn("-umbrella used, but not creating dylib");
-    config->umbrella = arg->getValue();
+    if (ctx.arg.outputType != MH_DYLIB)
+      ctx.e.warn("-umbrella used, but not creating dylib");
+    ctx.arg.umbrella = arg->getValue();
   }
-  config->ltoObjPath = args.getLastArgValue(OPT_object_path_lto);
-  config->ltoNewPmPasses = args.getLastArgValue(OPT_lto_newpm_passes);
-  config->thinLTOCacheDir = args.getLastArgValue(OPT_cache_path_lto);
-  config->thinLTOCachePolicy = getLTOCachePolicy(args);
-  config->thinLTOEmitImportsFiles = args.hasArg(OPT_thinlto_emit_imports_files);
-  config->thinLTOEmitIndexFiles = args.hasArg(OPT_thinlto_emit_index_files) ||
+  ctx.arg.ltoObjPath = args.getLastArgValue(OPT_object_path_lto);
+  ctx.arg.ltoNewPmPasses = args.getLastArgValue(OPT_lto_newpm_passes);
+  ctx.arg.thinLTOCacheDir = args.getLastArgValue(OPT_cache_path_lto);
+  ctx.arg.thinLTOCachePolicy = getLTOCachePolicy(ctx, args);
+  ctx.arg.thinLTOEmitImportsFiles = args.hasArg(OPT_thinlto_emit_imports_files);
+  ctx.arg.thinLTOEmitIndexFiles = args.hasArg(OPT_thinlto_emit_index_files) ||
                                   args.hasArg(OPT_thinlto_index_only) ||
                                   args.hasArg(OPT_thinlto_index_only_eq);
-  config->thinLTOIndexOnly = args.hasArg(OPT_thinlto_index_only) ||
+  ctx.arg.thinLTOIndexOnly = args.hasArg(OPT_thinlto_index_only) ||
                              args.hasArg(OPT_thinlto_index_only_eq);
-  config->thinLTOIndexOnlyArg = args.getLastArgValue(OPT_thinlto_index_only_eq);
-  config->thinLTOObjectSuffixReplace =
-      getOldNewOptions(args, OPT_thinlto_object_suffix_replace_eq);
-  std::tie(config->thinLTOPrefixReplaceOld, config->thinLTOPrefixReplaceNew,
-           config->thinLTOPrefixReplaceNativeObject) =
-      getOldNewOptionsExtra(args, OPT_thinlto_prefix_replace_eq);
-  if (config->thinLTOEmitIndexFiles && !config->thinLTOIndexOnly) {
+  ctx.arg.thinLTOIndexOnlyArg = args.getLastArgValue(OPT_thinlto_index_only_eq);
+  ctx.arg.thinLTOObjectSuffixReplace =
+      getOldNewOptions(ctx, args, OPT_thinlto_object_suffix_replace_eq);
+  std::tie(ctx.arg.thinLTOPrefixReplaceOld, ctx.arg.thinLTOPrefixReplaceNew,
+           ctx.arg.thinLTOPrefixReplaceNativeObject) =
+      getOldNewOptionsExtra(ctx, args, OPT_thinlto_prefix_replace_eq);
+  if (ctx.arg.thinLTOEmitIndexFiles && !ctx.arg.thinLTOIndexOnly) {
     if (args.hasArg(OPT_thinlto_object_suffix_replace_eq))
-      error("--thinlto-object-suffix-replace is not supported with "
-            "--thinlto-emit-index-files");
+      ctx.e.error("--thinlto-object-suffix-replace is not supported with "
+                  "--thinlto-emit-index-files");
     else if (args.hasArg(OPT_thinlto_prefix_replace_eq))
-      error("--thinlto-prefix-replace is not supported with "
-            "--thinlto-emit-index-files");
+      ctx.e.error("--thinlto-prefix-replace is not supported with "
+                  "--thinlto-emit-index-files");
   }
-  if (!config->thinLTOPrefixReplaceNativeObject.empty() &&
-      config->thinLTOIndexOnlyArg.empty()) {
-    error("--thinlto-prefix-replace=old_dir;new_dir;obj_dir must be used with "
-          "--thinlto-index-only=");
+  if (!ctx.arg.thinLTOPrefixReplaceNativeObject.empty() &&
+      ctx.arg.thinLTOIndexOnlyArg.empty()) {
+    ctx.e.error(
+        "--thinlto-prefix-replace=old_dir;new_dir;obj_dir must be used with "
+        "--thinlto-index-only=");
   }
-  config->warnDuplicateRpath =
+  ctx.arg.warnDuplicateRpath =
       args.hasFlag(OPT_warn_duplicate_rpath, OPT_no_warn_duplicate_rpath, true);
-  config->runtimePaths = getRuntimePaths(args);
-  config->allowableClients = getAllowableClients(args);
-  config->allLoad = args.hasFlag(OPT_all_load, OPT_noall_load, false);
-  config->archMultiple = args.hasArg(OPT_arch_multiple);
-  config->applicationExtension = args.hasFlag(
+  ctx.arg.runtimePaths = getRuntimePaths(ctx, args);
+  ctx.arg.allowableClients = getAllowableClients(args);
+  ctx.arg.allLoad = args.hasFlag(OPT_all_load, OPT_noall_load, false);
+  ctx.arg.archMultiple = args.hasArg(OPT_arch_multiple);
+  ctx.arg.applicationExtension = args.hasFlag(
       OPT_application_extension, OPT_no_application_extension, false);
-  config->exportDynamic = args.hasArg(OPT_export_dynamic);
-  config->forceLoadObjC = args.hasArg(OPT_ObjC);
-  config->forceLoadSwift = args.hasArg(OPT_force_load_swift_libs);
-  config->deadStripDylibs = args.hasArg(OPT_dead_strip_dylibs);
-  config->demangle = args.hasArg(OPT_demangle);
-  config->implicitDylibs = !args.hasArg(OPT_no_implicit_dylibs);
-  config->emitFunctionStarts =
+  ctx.arg.exportDynamic = args.hasArg(OPT_export_dynamic);
+  ctx.arg.forceLoadObjC = args.hasArg(OPT_ObjC);
+  ctx.arg.forceLoadSwift = args.hasArg(OPT_force_load_swift_libs);
+  ctx.arg.deadStripDylibs = args.hasArg(OPT_dead_strip_dylibs);
+  ctx.arg.demangle = args.hasArg(OPT_demangle);
+  ctx.arg.implicitDylibs = !args.hasArg(OPT_no_implicit_dylibs);
+  ctx.arg.emitFunctionStarts =
       args.hasFlag(OPT_function_starts, OPT_no_function_starts, true);
-  config->emitDataInCodeInfo =
+  ctx.arg.emitDataInCodeInfo =
       args.hasFlag(OPT_data_in_code_info, OPT_no_data_in_code_info, true);
-  config->emitChainedFixups = shouldEmitChainedFixups(args);
-  config->emitInitOffsets =
-      config->emitChainedFixups || args.hasArg(OPT_init_offsets);
-  config->emitRelativeMethodLists = shouldEmitRelativeMethodLists(args);
-  config->icfLevel = getICFLevel(args);
-  config->keepICFStabs = args.hasArg(OPT_keep_icf_stabs);
-  config->dedupStrings =
+  ctx.arg.emitChainedFixups = shouldEmitChainedFixups(ctx, args);
+  ctx.arg.emitInitOffsets =
+      ctx.arg.emitChainedFixups || args.hasArg(OPT_init_offsets);
+  ctx.arg.emitRelativeMethodLists = shouldEmitRelativeMethodLists(ctx, args);
+  ctx.arg.icfLevel = getICFLevel(ctx, args);
+  ctx.arg.keepICFStabs = args.hasArg(OPT_keep_icf_stabs);
+  ctx.arg.dedupStrings =
       args.hasFlag(OPT_deduplicate_strings, OPT_no_deduplicate_strings, true);
-  config->dedupSymbolStrings = !args.hasArg(OPT_no_deduplicate_symbol_strings);
-  config->deadStripDuplicates = args.hasArg(OPT_dead_strip_duplicates);
-  config->stripSwiftForceLoad =
+  ctx.arg.dedupSymbolStrings = !args.hasArg(OPT_no_deduplicate_symbol_strings);
+  ctx.arg.deadStripDuplicates = args.hasArg(OPT_dead_strip_duplicates);
+  ctx.arg.stripSwiftForceLoad =
       args.hasFlag(OPT_strip_swift_force_load, OPT_no_strip_swift_force_load,
                    /*Default=*/false);
-  config->warnDylibInstallName = args.hasFlag(
+  ctx.arg.warnDylibInstallName = args.hasFlag(
       OPT_warn_dylib_install_name, OPT_no_warn_dylib_install_name, false);
-  config->ignoreOptimizationHints = args.hasArg(OPT_ignore_optimization_hints);
-  config->callGraphProfileSort = args.hasFlag(
+  ctx.arg.ignoreOptimizationHints = args.hasArg(OPT_ignore_optimization_hints);
+  ctx.arg.callGraphProfileSort = args.hasFlag(
       OPT_call_graph_profile_sort, OPT_no_call_graph_profile_sort, true);
-  config->printSymbolOrder = args.getLastArgValue(OPT_print_symbol_order_eq);
-  config->forceExactCpuSubtypeMatch =
+  ctx.arg.printSymbolOrder = args.getLastArgValue(OPT_print_symbol_order_eq);
+  ctx.arg.forceExactCpuSubtypeMatch =
       getenv("LD_DYLIB_CPU_SUBTYPES_MUST_MATCH");
-  config->objcStubsMode = getObjCStubsMode(args);
-  config->ignoreAutoLink = args.hasArg(OPT_ignore_auto_link);
+  ctx.arg.objcStubsMode = getObjCStubsMode(ctx, args);
+  ctx.arg.ignoreAutoLink = args.hasArg(OPT_ignore_auto_link);
   for (const Arg *arg : args.filtered(OPT_ignore_auto_link_option))
-    config->ignoreAutoLinkOptions.insert(arg->getValue());
-  config->strictAutoLink = args.hasArg(OPT_strict_auto_link);
-  config->ltoDebugPassManager = args.hasArg(OPT_lto_debug_pass_manager);
-  config->emitLLVM = args.hasArg(OPT_lto_emit_llvm);
-  config->codegenDataGeneratePath =
+    ctx.arg.ignoreAutoLinkOptions.insert(arg->getValue());
+  ctx.arg.strictAutoLink = args.hasArg(OPT_strict_auto_link);
+  ctx.arg.ltoDebugPassManager = args.hasArg(OPT_lto_debug_pass_manager);
+  ctx.arg.emitLLVM = args.hasArg(OPT_lto_emit_llvm);
+  ctx.arg.codegenDataGeneratePath =
       args.getLastArgValue(OPT_codegen_data_generate_path);
-  config->csProfileGenerate = args.hasArg(OPT_cs_profile_generate);
-  config->csProfilePath = args.getLastArgValue(OPT_cs_profile_path);
-  config->pgoWarnMismatch =
+  ctx.arg.csProfileGenerate = args.hasArg(OPT_cs_profile_generate);
+  ctx.arg.csProfilePath = args.getLastArgValue(OPT_cs_profile_path);
+  ctx.arg.pgoWarnMismatch =
       args.hasFlag(OPT_pgo_warn_mismatch, OPT_no_pgo_warn_mismatch, true);
-  config->warnThinArchiveMissingMembers =
+  ctx.arg.warnThinArchiveMissingMembers =
       args.hasFlag(OPT_warn_thin_archive_missing_members,
                    OPT_no_warn_thin_archive_missing_members, true);
-  config->warnMissingSubsectionsViaSymbols =
+  ctx.arg.warnMissingSubsectionsViaSymbols =
       args.hasFlag(OPT_warn_missing_subsections_via_symbols,
                    OPT_no_warn_missing_subsections_via_symbols, false);
-  config->generateUuid = !args.hasArg(OPT_no_uuid);
-  config->disableVerify = args.hasArg(OPT_disable_verify);
-  config->separateCstringLiteralSections =
+  ctx.arg.generateUuid = !args.hasArg(OPT_no_uuid);
+  ctx.arg.disableVerify = args.hasArg(OPT_disable_verify);
+  ctx.arg.separateCstringLiteralSections =
       args.hasFlag(OPT_separate_cstring_literal_sections,
                    OPT_no_separate_cstring_literal_sections, false);
-  config->tailMergeStrings =
+  ctx.arg.tailMergeStrings =
       args.hasFlag(OPT_tail_merge_strings, OPT_no_tail_merge_strings, false);
   if (auto *arg = args.getLastArg(OPT_slop_scale_eq)) {
     StringRef v(arg->getValue());
     unsigned slop = 0;
     if (!llvm::to_integer(v, slop))
-      error(arg->getSpelling() +
-            ": expected a non-negative integer, but got '" + v + "'");
-    config->slopScale = slop;
+      ctx.e.error(arg->getSpelling() +
+                  ": expected a non-negative integer, but got '" + v + "'");
+    ctx.arg.slopScale = slop;
   }
 
   auto IncompatWithCGSort = [&](StringRef firstArgStr) {
     // Throw an error only if --call-graph-profile-sort is explicitly specified
-    if (config->callGraphProfileSort)
+    if (ctx.arg.callGraphProfileSort)
       if (const Arg *arg = args.getLastArgNoClaim(OPT_call_graph_profile_sort))
-        error(firstArgStr + " is incompatible with " + arg->getSpelling());
+        ctx.e.error(firstArgStr + " is incompatible with " +
+                    arg->getSpelling());
   };
   if (args.hasArg(OPT_irpgo_profile_sort) ||
       args.hasArg(OPT_irpgo_profile_sort_eq))
-    warn("--irpgo-profile-sort is deprecated. Please use "
-         "--bp-startup-sort=function");
+    ctx.e.warn("--irpgo-profile-sort is deprecated. Please use "
+               "--bp-startup-sort=function");
   if (const Arg *arg = args.getLastArg(OPT_irpgo_profile))
-    config->irpgoProfilePath = arg->getValue();
+    ctx.arg.irpgoProfilePath = arg->getValue();
 
   if (const Arg *arg = args.getLastArg(OPT_irpgo_profile_sort)) {
-    config->irpgoProfilePath = arg->getValue();
-    config->bpStartupFunctionSort = true;
+    ctx.arg.irpgoProfilePath = arg->getValue();
+    ctx.arg.bpStartupFunctionSort = true;
     IncompatWithCGSort(arg->getSpelling());
   }
-  config->bpCompressionSortStartupFunctions =
+  ctx.arg.bpCompressionSortStartupFunctions =
       args.hasFlag(OPT_bp_compression_sort_startup_functions,
                    OPT_no_bp_compression_sort_startup_functions, false);
   if (const Arg *arg = args.getLastArg(OPT_bp_startup_sort)) {
     StringRef startupSortStr = arg->getValue();
     if (startupSortStr == "function") {
-      config->bpStartupFunctionSort = true;
+      ctx.arg.bpStartupFunctionSort = true;
     } else if (startupSortStr != "none") {
-      error("unknown value `" + startupSortStr + "` for " + arg->getSpelling());
+      ctx.e.error("unknown value `" + startupSortStr + "` for " +
+                  arg->getSpelling());
     }
     if (startupSortStr != "none")
       IncompatWithCGSort(arg->getSpelling());
   }
-  if (!config->bpStartupFunctionSort &&
-      config->bpCompressionSortStartupFunctions)
-    error("--bp-compression-sort-startup-functions must be used with "
-          "--bp-startup-sort=function");
-  if (config->irpgoProfilePath.empty() && config->bpStartupFunctionSort)
-    error("--bp-startup-sort=function must be used with "
-          "--irpgo-profile");
+  if (!ctx.arg.bpStartupFunctionSort &&
+      ctx.arg.bpCompressionSortStartupFunctions)
+    ctx.e.error("--bp-compression-sort-startup-functions must be used with "
+                "--bp-startup-sort=function");
+  if (ctx.arg.irpgoProfilePath.empty() && ctx.arg.bpStartupFunctionSort)
+    ctx.e.error("--bp-startup-sort=function must be used with "
+                "--irpgo-profile");
   auto addCompressionSortSpec = [&](StringRef value) {
     SmallVector<StringRef, 3> parts;
     value.split(parts, '=');
@@ -2131,191 +2131,199 @@ bool link(ArrayRef<const char *> argsArr, llvm::raw_ostream &stdoutOS,
 
     if (parts.size() > 1 && !parts[1].empty()) {
       if (!to_integer(parts[1], layoutPriority)) {
-        error("--bp-compression-sort-section: expected integer "
-              "for layout_priority, got '" +
-              parts[1] + "'");
+        ctx.e.error("--bp-compression-sort-section: expected integer "
+                    "for layout_priority, got '" +
+                    parts[1] + "'");
         return;
       }
     }
     if (parts.size() > 2 && !parts[2].empty()) {
       unsigned mp;
       if (!to_integer(parts[2], mp)) {
-        error("--bp-compression-sort-section: expected integer "
-              "for match_priority, got '" +
-              parts[2] + "'");
+        ctx.e.error("--bp-compression-sort-section: expected integer "
+                    "for match_priority, got '" +
+                    parts[2] + "'");
         return;
       }
       matchPriority = mp;
     }
     if (parts.size() > 3) {
-      error("--bp-compression-sort-section: too many '=' in '" + value + "'");
+      ctx.e.error("--bp-compression-sort-section: too many '=' in '" + value +
+                  "'");
       return;
     }
 
     auto spec = BPCompressionSortSpec::create(globString, layoutPriority,
                                               matchPriority);
     if (!spec) {
-      error("--bp-compression-sort-section: " + toString(spec.takeError()));
+      ctx.e.error("--bp-compression-sort-section: " +
+                  toString(spec.takeError()));
       return;
     }
-    config->bpCompressionSortSpecs.emplace_back(std::move(*spec));
+    ctx.arg.bpCompressionSortSpecs.emplace_back(std::move(*spec));
   };
 
   for (const Arg *arg : args.filtered(OPT_bp_compression_sort_section))
     addCompressionSortSpec(arg->getValue());
-  if (!config->bpCompressionSortSpecs.empty())
+  if (!ctx.arg.bpCompressionSortSpecs.empty())
     IncompatWithCGSort("--bp-compression-sort-section");
   if (const Arg *arg = args.getLastArg(OPT_bp_compression_sort)) {
     StringRef compressionSortStr = arg->getValue();
     if (compressionSortStr == "function") {
-      config->bpFunctionOrderForCompression = true;
+      ctx.arg.bpFunctionOrderForCompression = true;
     } else if (compressionSortStr == "data") {
-      config->bpDataOrderForCompression = true;
+      ctx.arg.bpDataOrderForCompression = true;
     } else if (compressionSortStr == "both") {
-      config->bpFunctionOrderForCompression = true;
-      config->bpDataOrderForCompression = true;
+      ctx.arg.bpFunctionOrderForCompression = true;
+      ctx.arg.bpDataOrderForCompression = true;
     } else if (compressionSortStr != "none") {
-      error("unknown value `" + compressionSortStr + "` for " +
-            arg->getSpelling());
+      ctx.e.error("unknown value `" + compressionSortStr + "` for " +
+                  arg->getSpelling());
     }
     if (compressionSortStr != "none")
       IncompatWithCGSort(arg->getSpelling());
   }
-  config->bpVerboseSectionOrderer = args.hasArg(OPT_verbose_bp_section_orderer);
+  ctx.arg.bpVerboseSectionOrderer = args.hasArg(OPT_verbose_bp_section_orderer);
 
   for (const Arg *arg : args.filtered(OPT_alias)) {
-    config->aliasedSymbols.push_back(
+    ctx.arg.aliasedSymbols.push_back(
         std::make_pair(arg->getValue(0), arg->getValue(1)));
   }
 
   if (const char *zero = getenv("ZERO_AR_DATE"))
-    config->zeroModTime = strcmp(zero, "0") != 0;
+    ctx.arg.zeroModTime = strcmp(zero, "0") != 0;
   if (args.getLastArg(OPT_reproducible))
-    config->zeroModTime = true;
+    ctx.arg.zeroModTime = true;
 
   std::array<PlatformType, 4> encryptablePlatforms{
       PLATFORM_IOS, PLATFORM_WATCHOS, PLATFORM_TVOS, PLATFORM_XROS};
-  config->emitEncryptionInfo =
+  ctx.arg.emitEncryptionInfo =
       args.hasFlag(OPT_encryptable, OPT_no_encryption,
-                   is_contained(encryptablePlatforms, config->platform()));
+                   is_contained(encryptablePlatforms, ctx.arg.platform()));
 
   if (const Arg *arg = args.getLastArg(OPT_install_name)) {
-    if (config->warnDylibInstallName && config->outputType != MH_DYLIB)
-      warn(
+    if (ctx.arg.warnDylibInstallName && ctx.arg.outputType != MH_DYLIB)
+      ctx.e.warn(
           arg->getAsString(args) +
           ": ignored, only has effect with -dylib [--warn-dylib-install-name]");
     else
-      config->installName = arg->getValue();
-  } else if (config->outputType == MH_DYLIB) {
-    config->installName = config->finalOutput;
+      ctx.arg.installName = arg->getValue();
+  } else if (ctx.arg.outputType == MH_DYLIB) {
+    ctx.arg.installName = ctx.arg.finalOutput;
   }
 
   auto getClientName = [&]() {
-    StringRef cn = path::filename(config->finalOutput);
+    StringRef cn = path::filename(ctx.arg.finalOutput);
     cn.consume_front("lib");
     auto firstDotOrUnderscore = cn.find_first_of("._");
     cn = cn.take_front(firstDotOrUnderscore);
     return cn;
   };
-  config->clientName = args.getLastArgValue(OPT_client_name, getClientName());
+  ctx.arg.clientName = args.getLastArgValue(OPT_client_name, getClientName());
 
   if (args.hasArg(OPT_mark_dead_strippable_dylib)) {
-    if (config->outputType != MH_DYLIB)
-      warn("-mark_dead_strippable_dylib: ignored, only has effect with -dylib");
+    if (ctx.arg.outputType != MH_DYLIB)
+      ctx.e.warn(
+          "-mark_dead_strippable_dylib: ignored, only has effect with -dylib");
     else
-      config->markDeadStrippableDylib = true;
+      ctx.arg.markDeadStrippableDylib = true;
   }
 
   if (const Arg *arg = args.getLastArg(OPT_static, OPT_dynamic))
-    config->staticLink = (arg->getOption().getID() == OPT_static);
+    ctx.arg.staticLink = (arg->getOption().getID() == OPT_static);
 
   if (const Arg *arg =
           args.getLastArg(OPT_flat_namespace, OPT_twolevel_namespace))
-    config->namespaceKind = arg->getOption().getID() == OPT_twolevel_namespace
+    ctx.arg.namespaceKind = arg->getOption().getID() == OPT_twolevel_namespace
                                 ? NamespaceKind::twolevel
                                 : NamespaceKind::flat;
 
-  config->undefinedSymbolTreatment = getUndefinedSymbolTreatment(args);
+  ctx.arg.undefinedSymbolTreatment = getUndefinedSymbolTreatment(ctx, args);
 
-  if (config->outputType == MH_EXECUTE)
-    config->entry = symtab->addUndefined(args.getLastArgValue(OPT_e, "_main"),
-                                         /*file=*/nullptr,
-                                         /*isWeakRef=*/false);
+  if (ctx.arg.outputType == MH_EXECUTE)
+    ctx.arg.entry =
+        ctx.symtab->addUndefined(args.getLastArgValue(OPT_e, "_main"),
+                                 /*file=*/nullptr,
+                                 /*isWeakRef=*/false);
 
-  config->librarySearchPaths =
-      getLibrarySearchPaths(args, config->systemLibraryRoots);
-  config->frameworkSearchPaths =
-      getFrameworkSearchPaths(args, config->systemLibraryRoots);
+  ctx.arg.librarySearchPaths =
+      getLibrarySearchPaths(ctx, args, ctx.arg.systemLibraryRoots);
+  ctx.arg.frameworkSearchPaths =
+      getFrameworkSearchPaths(ctx, args, ctx.arg.systemLibraryRoots);
   if (const Arg *arg =
           args.getLastArg(OPT_search_paths_first, OPT_search_dylibs_first))
-    config->searchDylibsFirst =
+    ctx.arg.searchDylibsFirst =
         arg->getOption().getID() == OPT_search_dylibs_first;
 
-  config->dylibCompatibilityVersion =
-      parseDylibVersion(args, OPT_compatibility_version);
-  config->dylibCurrentVersion = parseDylibVersion(args, OPT_current_version);
+  ctx.arg.dylibCompatibilityVersion =
+      parseDylibVersion(ctx, args, OPT_compatibility_version);
+  ctx.arg.dylibCurrentVersion =
+      parseDylibVersion(ctx, args, OPT_current_version);
 
-  config->dataConst =
-      args.hasFlag(OPT_data_const, OPT_no_data_const, dataConstDefault(args));
-  // Populate config->sectionRenameMap with builtin default renames.
+  ctx.arg.dataConst = args.hasFlag(OPT_data_const, OPT_no_data_const,
+                                   dataConstDefault(ctx, args));
+  // Populate ctx.arg.sectionRenameMap with builtin default renames.
   // Options -rename_section and -rename_segment are able to override.
-  initializeSectionRenameMap();
+  initializeSectionRenameMap(ctx);
   // Reject every special character except '.' and '$'
   // TODO(gkm): verify that this is the proper set of invalid chars
   StringRef invalidNameChars("!\"#%&'()*+,-/:;<=>?@[\\]^`{|}~");
-  auto validName = [invalidNameChars](StringRef s) {
+  auto validName = [&ctx, invalidNameChars](StringRef s) {
     if (s.find_first_of(invalidNameChars) != StringRef::npos)
-      error("invalid name for segment or section: " + s);
+      ctx.e.error("invalid name for segment or section: " + s);
     return s;
   };
   for (const Arg *arg : args.filtered(OPT_rename_section)) {
-    config->sectionRenameMap[{validName(arg->getValue(0)),
+    ctx.arg.sectionRenameMap[{validName(arg->getValue(0)),
                               validName(arg->getValue(1))}] = {
         validName(arg->getValue(2)), validName(arg->getValue(3))};
   }
   for (const Arg *arg : args.filtered(OPT_rename_segment)) {
-    config->segmentRenameMap[validName(arg->getValue(0))] =
+    ctx.arg.segmentRenameMap[validName(arg->getValue(0))] =
         validName(arg->getValue(1));
   }
 
-  config->sectionAlignments = parseSectAlign(args);
+  ctx.arg.sectionAlignments = parseSectAlign(ctx, args);
 
   for (const Arg *arg : args.filtered(OPT_segprot)) {
     StringRef segName = arg->getValue(0);
-    uint32_t maxProt = parseProtection(arg->getValue(1));
-    uint32_t initProt = parseProtection(arg->getValue(2));
+    uint32_t maxProt = parseProtection(ctx, arg->getValue(1));
+    uint32_t initProt = parseProtection(ctx, arg->getValue(2));
 
     // FIXME: Check if this works on more platforms.
     bool allowsDifferentInitAndMaxProt =
-        config->platform() == PLATFORM_MACOS ||
-        config->platform() == PLATFORM_MACCATALYST;
+        ctx.arg.platform() == PLATFORM_MACOS ||
+        ctx.arg.platform() == PLATFORM_MACCATALYST;
     if (allowsDifferentInitAndMaxProt) {
       if (initProt > maxProt)
-        error("invalid argument '" + arg->getAsString(args) +
-              "': init must not be more permissive than max");
+        ctx.e.error("invalid argument '" + arg->getAsString(args) +
+                    "': init must not be more permissive than max");
     } else {
-      if (maxProt != initProt && config->arch() != AK_i386)
-        error("invalid argument '" + arg->getAsString(args) +
-              "': max and init must be the same for non-macOS non-i386 archs");
+      if (maxProt != initProt && ctx.arg.arch() != AK_i386)
+        ctx.e.error(
+            "invalid argument '" + arg->getAsString(args) +
+            "': max and init must be the same for non-macOS non-i386 archs");
     }
 
     if (segName == segment_names::linkEdit)
-      error("-segprot cannot be used to change __LINKEDIT's protections");
-    config->segmentProtections.push_back({segName, maxProt, initProt});
+      ctx.e.error("-segprot cannot be used to change __LINKEDIT's protections");
+    ctx.arg.segmentProtections.push_back({segName, maxProt, initProt});
   }
 
-  config->hasExplicitExports =
+  ctx.arg.hasExplicitExports =
       args.hasArg(OPT_no_exported_symbols) ||
       args.hasArgNoClaim(OPT_exported_symbol, OPT_exported_symbols_list);
-  handleSymbolPatterns(args, config->exportedSymbols, OPT_exported_symbol,
+  handleSymbolPatterns(ctx, args, ctx.arg.exportedSymbols, OPT_exported_symbol,
                        OPT_exported_symbols_list);
-  handleSymbolPatterns(args, config->unexportedSymbols, OPT_unexported_symbol,
-                       OPT_unexported_symbols_list);
-  if (config->hasExplicitExports && !config->unexportedSymbols.empty())
-    error("cannot use both -exported_symbol* and -unexported_symbol* options");
+  handleSymbolPatterns(ctx, args, ctx.arg.unexportedSymbols,
+                       OPT_unexported_symbol, OPT_unexported_symbols_list);
+  if (ctx.arg.hasExplicitExports && !ctx.arg.unexportedSymbols.empty())
+    ctx.e.error(
+        "cannot use both -exported_symbol* and -unexported_symbol* options");
 
-  if (args.hasArg(OPT_no_exported_symbols) && !config->exportedSymbols.empty())
-    error("cannot use both -exported_symbol* and -no_exported_symbols options");
+  if (args.hasArg(OPT_no_exported_symbols) && !ctx.arg.exportedSymbols.empty())
+    ctx.e.error(
+        "cannot use both -exported_symbol* and -no_exported_symbols options");
 
   // Imitating LD64's:
   // -non_global_symbols_no_strip_list and -non_global_symbols_strip_list can't
@@ -2332,26 +2340,26 @@ bool link(ArrayRef<const char *> argsArr, llvm::raw_ostream &stdoutOS,
                        OPT_non_global_symbols_strip_list)) {
       switch (arg->getOption().getID()) {
       case OPT_x:
-        config->localSymbolsPresence = SymtabPresence::None;
+        ctx.arg.localSymbolsPresence = SymtabPresence::None;
         break;
       case OPT_non_global_symbols_no_strip_list:
         if (excludeLocal) {
-          error("cannot use both -non_global_symbols_no_strip_list and "
-                "-non_global_symbols_strip_list");
+          ctx.e.error("cannot use both -non_global_symbols_no_strip_list and "
+                      "-non_global_symbols_strip_list");
         } else {
           includeLocal = true;
-          config->localSymbolsPresence = SymtabPresence::SelectivelyIncluded;
-          parseSymbolPatternsFile(arg, config->localSymbolPatterns);
+          ctx.arg.localSymbolsPresence = SymtabPresence::SelectivelyIncluded;
+          parseSymbolPatternsFile(ctx, arg, ctx.arg.localSymbolPatterns);
         }
         break;
       case OPT_non_global_symbols_strip_list:
         if (includeLocal) {
-          error("cannot use both -non_global_symbols_no_strip_list and "
-                "-non_global_symbols_strip_list");
+          ctx.e.error("cannot use both -non_global_symbols_no_strip_list and "
+                      "-non_global_symbols_strip_list");
         } else {
           excludeLocal = true;
-          config->localSymbolsPresence = SymtabPresence::SelectivelyExcluded;
-          parseSymbolPatternsFile(arg, config->localSymbolPatterns);
+          ctx.arg.localSymbolsPresence = SymtabPresence::SelectivelyExcluded;
+          parseSymbolPatternsFile(ctx, arg, ctx.arg.localSymbolPatterns);
         }
         break;
       default:
@@ -2362,61 +2370,62 @@ bool link(ArrayRef<const char *> argsArr, llvm::raw_ostream &stdoutOS,
   // Explicitly-exported literal symbols must be defined, but might
   // languish in an archive if unreferenced elsewhere or if they are in the
   // non-global strip list. Light a fire under those lazy symbols!
-  for (const CachedHashStringRef &cachedName : config->exportedSymbols.literals)
-    symtab->addUndefined(cachedName.val(), /*file=*/nullptr,
-                         /*isWeakRef=*/false);
+  for (const CachedHashStringRef &cachedName : ctx.arg.exportedSymbols.literals)
+    ctx.symtab->addUndefined(cachedName.val(), /*file=*/nullptr,
+                             /*isWeakRef=*/false);
 
   for (const Arg *arg : args.filtered(OPT_why_live))
-    config->whyLive.insert(arg->getValue());
-  if (!config->whyLive.empty() && !config->deadStrip)
-    warn("-why_live has no effect without -dead_strip, ignoring");
+    ctx.arg.whyLive.insert(ctx, arg->getValue());
+  if (!ctx.arg.whyLive.empty() && !ctx.arg.deadStrip)
+    ctx.e.warn("-why_live has no effect without -dead_strip, ignoring");
 
-  config->saveTemps = args.hasArg(OPT_save_temps);
+  ctx.arg.saveTemps = args.hasArg(OPT_save_temps);
 
-  config->adhocCodesign = args.hasFlag(
+  ctx.arg.adhocCodesign = args.hasFlag(
       OPT_adhoc_codesign, OPT_no_adhoc_codesign,
-      shouldAdhocSignByDefault(config->arch(), config->platform()));
+      shouldAdhocSignByDefault(ctx.arg.arch(), ctx.arg.platform()));
 
   if (args.hasArg(OPT_v)) {
-    message(getLLDVersion(), ctx->e.errs());
-    message(StringRef("Library search paths:") +
-                (config->librarySearchPaths.empty()
-                     ? ""
-                     : "\n\t" + join(config->librarySearchPaths, "\n\t")),
-            ctx->e.errs());
-    message(StringRef("Framework search paths:") +
-                (config->frameworkSearchPaths.empty()
-                     ? ""
-                     : "\n\t" + join(config->frameworkSearchPaths, "\n\t")),
-            ctx->e.errs());
+    ctx.e.message(getLLDVersion(), ctx.e.errs());
+    ctx.e.message(StringRef("Library search paths:") +
+                      (ctx.arg.librarySearchPaths.empty()
+                           ? ""
+                           : "\n\t" + join(ctx.arg.librarySearchPaths, "\n\t")),
+                  ctx.e.errs());
+    ctx.e.message(
+        StringRef("Framework search paths:") +
+            (ctx.arg.frameworkSearchPaths.empty()
+                 ? ""
+                 : "\n\t" + join(ctx.arg.frameworkSearchPaths, "\n\t")),
+        ctx.e.errs());
   }
 
-  config->progName = argsArr[0];
+  ctx.arg.progName = argsArr[0];
 
-  config->timeTraceEnabled = args.hasArg(OPT_time_trace_eq);
-  config->timeTraceGranularity =
-      args::getInteger(args, OPT_time_trace_granularity_eq, 500);
+  ctx.arg.timeTraceEnabled = args.hasArg(OPT_time_trace_eq);
+  ctx.arg.timeTraceGranularity =
+      args::getInteger(ctx.e, args, OPT_time_trace_granularity_eq, 500);
 
   // Initialize time trace profiler.
-  if (config->timeTraceEnabled)
-    timeTraceProfilerInitialize(config->timeTraceGranularity, config->progName);
+  if (ctx.arg.timeTraceEnabled)
+    timeTraceProfilerInitialize(ctx.arg.timeTraceGranularity, ctx.arg.progName);
 
   {
     TimeTraceScope timeScope("ExecuteLinker");
 
     initLLVM(); // must be run before any call to addFile()
-    createFiles(args);
+    createFiles(ctx, args);
 
     // Now that all dylibs have been loaded, search for those that should be
     // re-exported.
     {
-      auto reexportHandler = [](const Arg *arg,
-                                const std::vector<StringRef> &extensions) {
-        config->hasReexports = true;
+      auto reexportHandler = [&ctx](const Arg *arg,
+                                    const std::vector<StringRef> &extensions) {
+        ctx.arg.hasReexports = true;
         StringRef searchName = arg->getValue();
-        if (!markReexport(searchName, extensions))
-          error(arg->getSpelling() + " " + searchName +
-                " does not match a supplied dylib");
+        if (!markReexport(ctx, searchName, extensions))
+          ctx.e.error(arg->getSpelling() + " " + searchName +
+                      " does not match a supplied dylib");
       };
       std::vector<StringRef> extensions = {".tbd"};
       for (const Arg *arg : args.filtered(OPT_sub_umbrella))
@@ -2431,49 +2440,50 @@ bool link(ArrayRef<const char *> argsArr, llvm::raw_ostream &stdoutOS,
 
     // Parse LTO options.
     if (const Arg *arg = args.getLastArg(OPT_mcpu))
-      parseClangOption(saver().save("-mcpu=" + StringRef(arg->getValue())),
+      parseClangOption(ctx,
+                       ctx.saver.save("-mcpu=" + StringRef(arg->getValue())),
                        arg->getSpelling());
 
     for (const Arg *arg : args.filtered(OPT_mllvm)) {
-      parseClangOption(arg->getValue(), arg->getSpelling());
-      config->mllvmOpts.emplace_back(arg->getValue());
+      parseClangOption(ctx, arg->getValue(), arg->getSpelling());
+      ctx.arg.mllvmOpts.emplace_back(arg->getValue());
     }
 
-    config->passPlugins = args::getStrings(args, OPT_load_pass_plugins);
+    ctx.arg.passPlugins = args::getStrings(args, OPT_load_pass_plugins);
 
-    createSyntheticSections();
-    createSyntheticSymbols();
-    addSynthenticMethnames();
+    createSyntheticSections(ctx);
+    createSyntheticSymbols(ctx);
+    addSynthenticMethnames(ctx);
 
-    createAliases();
+    createAliases(ctx);
     // If we are in "explicit exports" mode, hide everything that isn't
     // explicitly exported. Do this before running LTO so that LTO can better
     // optimize.
-    handleExplicitExports();
+    handleExplicitExports(ctx);
 
-    bool didCompileBitcodeFiles = compileBitcodeFiles();
+    bool didCompileBitcodeFiles = compileBitcodeFiles(ctx);
 
-    resolveLCLinkerOptions();
+    resolveLCLinkerOptions(ctx);
 
     // If either --thinlto-index-only or --lto-emit-llvm is given, we should
     // not create object files. Index file creation is already done in
     // compileBitcodeFiles, so we are done if that's the case.
-    if (config->thinLTOIndexOnly || config->emitLLVM)
-      return errorCount() == 0;
+    if (ctx.arg.thinLTOIndexOnly || ctx.arg.emitLLVM)
+      return ctx.e.errorCount == 0;
 
     // LTO may emit a non-hidden (extern) object file symbol even if the
     // corresponding bitcode symbol is hidden. In particular, this happens for
     // cross-module references to hidden symbols under ThinLTO. Thus, if we
     // compiled any bitcode files, we must redo the symbol hiding.
     if (didCompileBitcodeFiles)
-      handleExplicitExports();
-    replaceCommonSymbols();
+      handleExplicitExports(ctx);
+    replaceCommonSymbols(ctx);
 
     StringRef orderFile = args.getLastArgValue(OPT_order_file);
     if (!orderFile.empty())
-      priorityBuilder.parseOrderFile(orderFile);
+      ctx.priorityBuilder->parseOrderFile(orderFile);
 
-    referenceStubBinder();
+    referenceStubBinder(ctx);
 
     // FIXME: should terminate the link early based on errors encountered so
     // far?
@@ -2482,81 +2492,100 @@ bool link(ArrayRef<const char *> argsArr, llvm::raw_ostream &stdoutOS,
       StringRef segName = arg->getValue(0);
       StringRef sectName = arg->getValue(1);
       StringRef fileName = arg->getValue(2);
-      std::optional<MemoryBufferRef> buffer = readFile(fileName);
+      std::optional<MemoryBufferRef> buffer = readFile(ctx, fileName);
       if (buffer)
-        inputFiles.insert(make<OpaqueFile>(*buffer, segName, sectName));
+        ctx.inputFiles.insert(
+            ctx.make<OpaqueFile>(ctx, *buffer, segName, sectName));
     }
 
     for (const Arg *arg : args.filtered(OPT_add_empty_section)) {
       StringRef segName = arg->getValue(0);
       StringRef sectName = arg->getValue(1);
-      inputFiles.insert(make<OpaqueFile>(MemoryBufferRef(), segName, sectName));
+      ctx.inputFiles.insert(
+          ctx.make<OpaqueFile>(ctx, MemoryBufferRef(), segName, sectName));
     }
 
-    gatherInputSections();
+    gatherInputSections(ctx);
 
-    if (!config->codegenDataGeneratePath.empty())
-      codegenDataGenerate();
+    if (!ctx.arg.codegenDataGeneratePath.empty())
+      codegenDataGenerate(ctx);
 
-    if (config->callGraphProfileSort)
-      priorityBuilder.extractCallGraphProfile();
+    if (ctx.arg.callGraphProfileSort)
+      ctx.priorityBuilder->extractCallGraphProfile();
 
-    if (config->deadStrip)
-      markLive();
+    if (ctx.arg.deadStrip)
+      markLive(ctx);
 
     // Ensure that no symbols point inside __mod_init_func sections if they are
     // removed due to -init_offsets. This must run after dead stripping.
-    if (config->emitInitOffsets)
-      eraseInitializerSymbols();
+    if (ctx.arg.emitInitOffsets)
+      eraseInitializerSymbols(ctx);
 
     // Categories are not subject to dead-strip. The __objc_catlist section is
     // marked as NO_DEAD_STRIP and that propagates into all category data.
     if (args.hasArg(OPT_check_category_conflicts))
-      objc::checkCategories();
+      objc::checkCategories(ctx);
 
     // Category merging uses "->live = false" to erase old category data, so
     // it has to run after dead-stripping (markLive).
     if (args.hasFlag(OPT_objc_category_merging, OPT_no_objc_category_merging,
                      false))
-      objc::mergeCategories();
+      objc::mergeCategories(ctx);
 
-    computeColdness();
+    computeColdness(ctx);
 
     // ICF assumes that all literals have been folded already, so we must run
     // foldIdenticalLiterals before foldIdenticalSections.
-    foldIdenticalLiterals();
-    if (config->icfLevel != ICFLevel::none) {
-      if (config->icfLevel == ICFLevel::safe ||
-          config->icfLevel == ICFLevel::safe_thunks)
-        markAddrSigSymbols();
-      foldIdenticalSections(/*onlyCfStrings=*/false);
-    } else if (config->dedupStrings) {
-      foldIdenticalSections(/*onlyCfStrings=*/true);
+    foldIdenticalLiterals(ctx);
+    if (ctx.arg.icfLevel != ICFLevel::none) {
+      if (ctx.arg.icfLevel == ICFLevel::safe ||
+          ctx.arg.icfLevel == ICFLevel::safe_thunks)
+        markAddrSigSymbols(ctx);
+      foldIdenticalSections(ctx, /*onlyCfStrings=*/false);
+    } else if (ctx.arg.dedupStrings) {
+      foldIdenticalSections(ctx, /*onlyCfStrings=*/true);
     }
 
-    stripSwiftForceLoadFixups();
+    stripSwiftForceLoadFixups(ctx);
 
     // Write to an output file.
-    if (target->wordSize == 8)
-      writeResult<LP64>();
+    if (ctx.target->wordSize == 8)
+      writeResult<LP64>(ctx);
     else
-      writeResult<ILP32>();
+      writeResult<ILP32>(ctx);
 
-    depTracker->write(getLLDVersion(), inputFiles, config->outputFile);
+    ctx.depTracker->write(getLLDVersion(), ctx.inputFiles, ctx.arg.outputFile);
   }
 
-  if (config->timeTraceEnabled) {
-    checkError(timeTraceProfilerWrite(
-        args.getLastArgValue(OPT_time_trace_eq).str(), config->outputFile));
+  if (ctx.arg.timeTraceEnabled) {
+    checkError(ctx.e, timeTraceProfilerWrite(
+                          args.getLastArgValue(OPT_time_trace_eq).str(),
+                          ctx.arg.outputFile));
 
     timeTraceProfilerCleanup();
   }
 
-  if (errorCount() != 0 || config->strictAutoLink)
-    for (const auto &warning : missingAutolinkWarnings)
-      warn(warning);
+  if (ctx.e.errorCount != 0 || ctx.arg.strictAutoLink)
+    for (const auto &warning : ctx.missingAutolinkWarnings)
+      ctx.e.warn(warning);
 
-  return errorCount() == 0;
+  return ctx.e.errorCount == 0;
+}
+
+bool link(ArrayRef<const char *> argsArr, llvm::raw_ostream &stdoutOS,
+          llvm::raw_ostream &stderrOS, bool exitEarly, bool disableOutput) {
+  // If fatal() unwinds the link, the context is leaked on purpose: tasks that
+  // the link spawned on the parallel executor may still be using it. lldMain()
+  // then reports that lld cannot run again.
+  auto context = std::make_unique<Ctx>();
+  Ctx &ctx = *context;
+  ctx.e.initialize(stdoutOS, stderrOS, exitEarly, disableOutput);
+
+  bool ret = linkImpl(ctx, argsArr);
+  // Exit before the context is destroyed, so that its destructors are skipped.
+  if (exitEarly)
+    exitLld(ctx.e, !ret);
+  return ret;
 }
 } // namespace macho
 } // namespace lld
