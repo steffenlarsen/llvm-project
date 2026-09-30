@@ -883,10 +883,9 @@ Error DataAggregator::parseAllInputs(BinaryContext &BC) {
     Job->DA->PerfPath = PerfPath;
   }
 
-  ThreadPoolStrategy SavedStrategy = parallel::strategy;
-  parallel::strategy = hardware_concurrency(opts::PerfDataJobs);
+  parallel::Executor Executor(hardware_concurrency(opts::PerfDataJobs));
   Error ParseErrors =
-      parallelForEachError(Jobs, [](AggregatorJob *Job) -> Error {
+      parallelForEachError(Executor, Jobs, [](AggregatorJob *Job) -> Error {
         if (Error E = Job->DA->parseInput()) {
           Job->DiagStream.flush();
           return createStringError(
@@ -896,7 +895,6 @@ Error DataAggregator::parseAllInputs(BinaryContext &BC) {
         Job->DA->Parsed = true;
         return Error::success();
       });
-  parallel::strategy = SavedStrategy;
 
   for (AggregatorJob *Job : Jobs) {
     if (Job->DA->Parsed)

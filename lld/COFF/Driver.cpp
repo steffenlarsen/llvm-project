@@ -83,11 +83,16 @@ COFFSyncStream coff::Fatal(COFFLinkerContext &ctx) {
 uint64_t coff::errCount(COFFLinkerContext &ctx) { return ctx.e.errorCount; }
 
 namespace lld::coff {
-
 bool link(ArrayRef<const char *> args, llvm::raw_ostream &stdoutOS,
-          llvm::raw_ostream &stderrOS, bool exitEarly, bool disableOutput) {
+          llvm::raw_ostream &stderrOS, bool exitEarly, bool disableOutput,
+          llvm::parallel::Executor *executor) {
   // This driver-specific context will be freed later by unsafeLldMain().
   auto *ctx = new COFFLinkerContext;
+  // Until /threads: is parsed, use the whole host executor.
+  if (executor) {
+    ctx->hostExecutor = executor;
+    ctx->executor = parallel::ExecutorRef(*executor);
+  }
 
   ctx->e.initialize(stdoutOS, stderrOS, exitEarly, disableOutput);
   ctx->e.logName = args::getFilenameWithoutExe(args[0]);
@@ -1664,6 +1669,7 @@ void LinkerDriver::linkerMain(ArrayRef<const char *> argsArr) {
 
   // /threads: takes a positive integer and provides the default value for
   // /opt:lldltojobs=.
+  ThreadPoolStrategy threadLimit;
   if (auto *arg = args.getLastArg(OPT_threads)) {
     StringRef v(arg->getValue());
     unsigned threads = 0;
@@ -1671,9 +1677,10 @@ void LinkerDriver::linkerMain(ArrayRef<const char *> argsArr) {
       Err(ctx) << arg->getSpelling()
                << ": expected a positive integer, but got '" << arg->getValue()
                << "'";
-    parallel::strategy = hardware_concurrency(threads);
+    threadLimit = hardware_concurrency(threads);
     config->thinLTOJobs = v.str();
   }
+  ctx.executor = ctx.createExecutor(ctx.hostExecutor, threadLimit);
 
   if (args.hasArg(OPT_show_timing))
     config->showTiming = true;

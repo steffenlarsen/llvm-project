@@ -11,7 +11,6 @@
 #include "llvm/Config/llvm-config.h"
 #include "llvm/Support/ExponentialBackoff.h"
 #include "llvm/Support/Jobserver.h"
-#include "llvm/Support/ManagedStatic.h"
 #include "llvm/Support/Threading.h"
 
 #include <atomic>
@@ -24,13 +23,11 @@
 using namespace llvm;
 using namespace llvm::parallel;
 
-llvm::ThreadPoolStrategy parallel::strategy;
-
 #if LLVM_ENABLE_THREADS
 
 static thread_local unsigned threadIndex = UINT_MAX;
 
-namespace {
+namespace llvm::parallel::detail {
 
 /// Runs closures on a thread pool in filo order.
 class ThreadPoolExecutor {
@@ -83,13 +80,6 @@ public:
 
   ~ThreadPoolExecutor() { stop(); }
 
-  struct Creator {
-    static void *call() { return new ThreadPoolExecutor(strategy); }
-  };
-  struct Deleter {
-    static void call(void *Ptr) { ((ThreadPoolExecutor *)Ptr)->stop(); }
-  };
-
   struct WorkItem {
     std::function<void()> F;
     std::reference_wrapper<parallel::detail::Latch> L;
@@ -120,6 +110,13 @@ public:
   }
 
   size_t getThreadCount() const { return ThreadCount; }
+
+#ifndef NDEBUG
+  bool hasQueuedWork() {
+    std::lock_guard<std::mutex> Lock(Mutex);
+    return !WorkStack.empty();
+  }
+#endif
 
 private:
   // Pop one task from the queue and run it. Must be called with Lock held;
@@ -193,50 +190,66 @@ private:
 
   JobserverClient *TheJobserver = nullptr;
 };
-} // namespace
+} // namespace llvm::parallel::detail
 
-static ThreadPoolExecutor *getDefaultExecutor() {
-#ifdef _WIN32
-  // The ManagedStatic enables the ThreadPoolExecutor to be stopped via
-  // llvm_shutdown() on Windows. This is important to avoid various race
-  // conditions at process exit that can cause crashes or deadlocks.
+using parallel::detail::ThreadPoolExecutor;
 
-  static ManagedStatic<ThreadPoolExecutor, ThreadPoolExecutor::Creator,
-                       ThreadPoolExecutor::Deleter>
-      ManagedExec;
-  static std::unique_ptr<ThreadPoolExecutor> Exec(&(*ManagedExec));
-  return Exec.get();
+Executor::Executor(ThreadPoolStrategy S) {
+  // A single thread would only take work from the caller, which instead runs
+  // it inline.
+  if (S.ThreadsRequested != 1)
+    Impl = std::make_unique<ThreadPoolExecutor>(S);
+}
+
+Executor::~Executor() {
+  // Stopping the pool discards queued work, which would leave its TaskGroup
+  // waiting forever.
+  assert((!Impl || !Impl->hasQueuedWork()) &&
+         "executor destroyed with work queued");
+}
+
+size_t Executor::getThreadCount() const {
+  return Impl ? Impl->getThreadCount() : 1;
+}
+
+void Executor::stop() {
+  if (Impl)
+    Impl->stop();
+}
+
+ExecutorRef::ExecutorRef(Executor &E, ThreadPoolStrategy Limit)
+    : Exec(E.Impl.get()),
+      MaxThreads(Limit.ThreadsRequested ? Limit.compute_thread_count() : 0),
+      Parallel(Exec && Limit.ThreadsRequested != 1) {}
+
+size_t ExecutorRef::getThreadCount() const {
+  if (!isParallel())
+    return 1;
+  size_t PoolSize = Exec->getThreadCount();
+  return MaxThreads ? std::min<size_t>(MaxThreads, PoolSize) : PoolSize;
+}
 #else
-  // ManagedStatic is not desired on other platforms. When `Exec` is destroyed
-  // by llvm_shutdown(), worker threads will clean up and invoke TLS
-  // destructors. This can lead to race conditions if other threads attempt to
-  // access TLS objects that have already been destroyed.
-  static ThreadPoolExecutor Exec(strategy);
-  return &Exec;
-#endif
-}
+Executor::Executor(ThreadPoolStrategy S) {}
 
-size_t parallel::getThreadCount() {
-  return getDefaultExecutor()->getThreadCount();
-}
+Executor::~Executor() = default;
+
+size_t Executor::getThreadCount() const { return 1; }
+
+void Executor::stop() {}
+
+ExecutorRef::ExecutorRef(Executor &E, ThreadPoolStrategy Limit) {}
+
+size_t ExecutorRef::getThreadCount() const { return 1; }
 #endif
 
-TaskGroup::TaskGroup()
-    : Parallel(
-#if LLVM_ENABLE_THREADS
-          strategy.ThreadsRequested != 1
-#else
-          false
-#endif
-      ) {
-}
+TaskGroup::TaskGroup(ExecutorRef E) : E(E), Parallel(E.isParallel()) {}
 
 TaskGroup::~TaskGroup() {
 #if LLVM_ENABLE_THREADS
   // In a nested TaskGroup (threadIndex != -1u), actively help drain the queue.
   bool IsNested = threadIndex != UINT_MAX;
   if (Parallel && IsNested)
-    getDefaultExecutor()->helpSync(L);
+    E.Exec->helpSync(L);
 #endif
   L.sync();
 }
@@ -245,17 +258,17 @@ void TaskGroup::spawn(std::function<void()> F) {
 #if LLVM_ENABLE_THREADS
   if (Parallel) {
     L.inc();
-    getDefaultExecutor()->add(std::move(F), L);
+    E.Exec->add(std::move(F), L);
     return;
   }
 #endif
   F();
 }
 
-void llvm::parallelFor(size_t Begin, size_t End,
+void llvm::parallelFor(ExecutorRef E, size_t Begin, size_t End,
                        function_ref<void(size_t)> Fn) {
 #if LLVM_ENABLE_THREADS
-  if (strategy.ThreadsRequested != 1) {
+  if (E.isParallel()) {
     size_t NumItems = End - Begin;
     if (NumItems == 0)
       return;
@@ -264,7 +277,7 @@ void llvm::parallelFor(size_t Begin, size_t End,
     // For lld, per-file work is somewhat uneven, so a multipler > 1 is safer.
     // While 2 vs 4 vs 8 makes no measurable difference, 4 is used as a
     // reasonable default.
-    size_t NumWorkers = std::min<size_t>(NumItems, getThreadCount());
+    size_t NumWorkers = std::min<size_t>(NumItems, E.getThreadCount());
     size_t ChunkSize = std::max(size_t(1), NumItems / (NumWorkers * 4));
     std::atomic<size_t> Idx{Begin};
     auto Worker = [&] {
@@ -280,7 +293,7 @@ void llvm::parallelFor(size_t Begin, size_t End,
 
     // Run one worker on the calling thread: starts working immediately and
     // avoids an idle thread.
-    TaskGroup TG;
+    TaskGroup TG(E);
     while (--NumWorkers)
       TG.spawn(Worker);
     Worker();

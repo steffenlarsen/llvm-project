@@ -138,7 +138,8 @@ bool DXContainerPDB::runOnModule(Module &M) {
   });
 
   BumpPtrAllocator Allocator;
-  pdb::PDBFileBuilder Builder(Allocator);
+  // A backend has no thread count to honour, so build the PDB on this thread.
+  pdb::PDBFileBuilder Builder(Allocator, parallel::ExecutorRef::sequential());
 
   // DirectXShaderCompiler uses block size 512.
   if (Error Err = Builder.initialize(512))

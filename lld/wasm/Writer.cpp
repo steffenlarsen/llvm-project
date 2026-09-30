@@ -230,7 +230,7 @@ void Writer::writeHeader() {
 
 void Writer::writeSections() {
   uint8_t *buf = buffer->getBufferStart();
-  parallelForEach(outputSections, [buf](OutputSection *s) {
+  parallelForEach(ctx.executor, outputSections, [buf](OutputSection *s) {
     assert(s->isNeeded());
     s->writeTo(buf);
   });
@@ -249,7 +249,7 @@ computeHash(llvm::MutableArrayRef<uint8_t> hashBuf,
   std::vector<uint8_t> hashes(chunks.size() * hashBuf.size());
 
   // Compute hash values.
-  parallelFor(0, chunks.size(), [&](size_t i) {
+  parallelFor(ctx.executor, 0, chunks.size(), [&](size_t i) {
     hashFn(hashes.data() + i * hashBuf.size(), chunks[i]);
   });
 

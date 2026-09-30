@@ -907,7 +907,7 @@ public:
 
 protected:
   void init(llvm::function_ref<void(InputFile *, InputChunk &, OutputChunk &)>);
-  static void
+  void
   parseDebugNames(Ctx &, InputChunk &inputChunk, OutputChunk &chunk,
                   llvm::DWARFDataExtractor &namesExtractor,
                   llvm::DataExtractor &strExtractor,
@@ -928,6 +928,8 @@ protected:
   std::unique_ptr<OutputChunk[]> chunks;
   llvm::SpecificBumpPtrAllocator<Abbrev> abbrevAlloc;
   SmallVector<Abbrev *, 0> abbrevTable;
+  // Index entries are read in parallel, one input file per task.
+  PerThreadSpecificAlloc<IndexEntry> indexEntryAlloc;
   SmallVector<char, 0> abbrevTableBuf;
 
   ArrayRef<OutputChunk> getChunks() const {

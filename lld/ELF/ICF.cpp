@@ -414,7 +414,7 @@ void ICF<ELFT>::parallelForEachClass(
     llvm::function_ref<void(size_t, size_t)> fn) {
   // If threading is disabled or the number of sections are
   // too small to use threading, call Fn sequentially.
-  if (parallel::strategy.ThreadsRequested == 1 || sections.size() < 1024) {
+  if (!ctx.executor.isParallel() || sections.size() < 1024) {
     forEachClassRange(0, sections.size(), fn);
     ++cnt;
     return;
@@ -433,11 +433,11 @@ void ICF<ELFT>::parallelForEachClass(
   boundaries[0] = 0;
   boundaries[numShards] = sections.size();
 
-  parallelFor(1, numShards, [&](size_t i) {
+  parallelFor(ctx.executor, 1, numShards, [&](size_t i) {
     boundaries[i] = findBoundary((i - 1) * step, sections.size());
   });
 
-  parallelFor(1, numShards + 1, [&](size_t i) {
+  parallelFor(ctx.executor, 1, numShards + 1, [&](size_t i) {
     if (boundaries[i - 1] < boundaries[i])
       forEachClassRange(boundaries[i - 1], boundaries[i], fn);
   });
@@ -488,7 +488,7 @@ template <class ELFT> void ICF<ELFT>::run() {
   }
 
   // Initially, we use hash values to partition sections.
-  parallelForEach(sections, [&](InputSection *s) {
+  parallelForEach(ctx.executor, sections, [&](InputSection *s) {
     // Set MSB to 1 to avoid collisions with unique IDs.
     s->eqClass[0] = xxh3_64bits(s->content()) | (1U << 31);
   });
@@ -497,7 +497,7 @@ template <class ELFT> void ICF<ELFT>::run() {
   // reduce the average sizes of equivalence classes, i.e. segregate() which has
   // a large time complexity will have less work to do.
   for (unsigned cnt = 0; cnt != 2; ++cnt) {
-    parallelForEach(sections, [&](InputSection *s) {
+    parallelForEach(ctx.executor, sections, [&](InputSection *s) {
       const RelsOrRelas<ELFT> rels = s->template relsOrRelas<ELFT>();
       if (rels.areRelocsCrel())
         combineRelocHashes(cnt, s, rels.crels);
@@ -511,10 +511,10 @@ template <class ELFT> void ICF<ELFT>::run() {
   // From now on, sections in Sections vector are ordered so that sections
   // in the same equivalence class are consecutive in the vector.
   SmallVector<uint64_t, 0> keys(sections.size());
-  parallelFor(0, sections.size(), [&](size_t i) {
+  parallelFor(ctx.executor, 0, sections.size(), [&](size_t i) {
     keys[i] = uint64_t(sections[i]->eqClass[0]) << 32 | i;
   });
-  parallelSort(keys.begin(), keys.end());
+  parallelSort(ctx.executor, keys.begin(), keys.end());
   SmallVector<InputSection *, 0> sorted;
   sorted.reserve(keys.size());
   for (uint64_t k : keys)
@@ -570,7 +570,7 @@ template <class ELFT> void ICF<ELFT>::run() {
   };
   for (Symbol *sym : ctx.symtab->getSymbols())
     fold(sym);
-  parallelForEach(ctx.objectFiles, [&](ELFFileBase *file) {
+  parallelForEach(ctx.executor, ctx.objectFiles, [&](ELFFileBase *file) {
     for (Symbol *sym : file->getLocalSymbols())
       fold(sym);
   });

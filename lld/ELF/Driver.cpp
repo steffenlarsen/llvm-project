@@ -127,13 +127,19 @@ static void initContext(Ctx &ctx, LinkerScript &script, StringRef arg0) {
 namespace lld {
 namespace elf {
 bool link(ArrayRef<const char *> args, llvm::raw_ostream &stdoutOS,
-          llvm::raw_ostream &stderrOS, bool exitEarly, bool disableOutput) {
+          llvm::raw_ostream &stderrOS, bool exitEarly, bool disableOutput,
+          llvm::parallel::Executor *executor) {
   // This driver-specific context will be freed later by unsafeLldMain().
   auto *context = new Ctx;
   Ctx &ctx = *context;
   LinkerScript script(ctx);
   ctx.e.initialize(stdoutOS, stderrOS, exitEarly, disableOutput);
   initContext(ctx, script, args[0]);
+  // Until --threads is parsed, use the whole host executor.
+  if (executor) {
+    ctx.hostExecutor = executor;
+    ctx.executor = parallel::ExecutorRef(*executor);
+  }
 
   ctx.driver.linkerMain(args);
 
@@ -1896,6 +1902,7 @@ static void readConfigs(Ctx &ctx, opt::InputArgList &args) {
   // --thinlto-jobs=. If unspecified, cap the number of threads since
   // overhead outweighs optimization for used parallel algorithms for the
   // non-LTO parts.
+  ThreadPoolStrategy threadLimit;
   if (auto *arg = args.getLastArg(OPT_threads)) {
     StringRef v(arg->getValue());
     unsigned threads = 0;
@@ -1903,15 +1910,18 @@ static void readConfigs(Ctx &ctx, opt::InputArgList &args) {
       ErrAlways(ctx) << arg->getSpelling()
                      << ": expected a positive integer, but got '"
                      << arg->getValue() << "'";
-    parallel::strategy = hardware_concurrency(threads);
+    threadLimit = hardware_concurrency(threads);
     ctx.arg.thinLTOJobs = v;
-  } else if (parallel::strategy.compute_thread_count() > 16) {
+  } else if ((ctx.hostExecutor
+                  ? ctx.hostExecutor->getThreadCount()
+                  : hardware_concurrency().compute_thread_count()) > 16) {
     Log(ctx) << "set maximum concurrency to 16, specify --threads= to change";
-    parallel::strategy = hardware_concurrency(16);
+    threadLimit = hardware_concurrency(16);
   }
+  ctx.executor = ctx.createExecutor(ctx.hostExecutor, threadLimit);
   if (auto *arg = args.getLastArg(OPT_thinlto_jobs_eq))
     ctx.arg.thinLTOJobs = arg->getValue();
-  ctx.arg.threadCount = parallel::strategy.compute_thread_count();
+  ctx.arg.threadCount = ctx.executor.getThreadCount();
 
   if (ctx.arg.ltoPartitions == 0)
     ErrAlways(ctx) << "--lto-partitions: number of threads must be > 0";
@@ -2148,7 +2158,7 @@ void LinkerDriver::loadFiles() {
 
   {
     llvm::TimeTraceScope timeScope("Parallel load");
-    parallelFor(0, loadJobs.size(), [&](size_t i) {
+    parallelFor(ctx.executor, 0, loadJobs.size(), [&](size_t i) {
       LoadJob &job = loadJobs[i];
       switch (job.kind) {
       case LoadJob::Obj:
@@ -2988,7 +2998,7 @@ static void redirectSymbols(Ctx &ctx, ArrayRef<WrappedSymbol> wrapped) {
     return;
 
   // Update pointers in input files.
-  parallelForEach(ctx.objectFiles, [&](ELFFileBase *file) {
+  parallelForEach(ctx.executor, ctx.objectFiles, [&](ELFFileBase *file) {
     for (Symbol *&sym : file->getMutableGlobalSymbols())
       if (Symbol *s = map.lookup(sym))
         sym = s;
@@ -3371,11 +3381,11 @@ template <class ELFT> void LinkerDriver::link(opt::InputArgList &args) {
 
   // No more lazy bitcode can be extracted at this point. Do post parse work
   // like checking duplicate symbols.
-  parallelForEach(ctx.objectFiles, [](ELFFileBase *file) {
+  parallelForEach(ctx.executor, ctx.objectFiles, [](ELFFileBase *file) {
     initSectionsAndLocalSyms(file, /*ignoreComdats=*/false);
   });
-  parallelForEach(ctx.objectFiles, postParseObjectFile);
-  parallelForEach(ctx.bitcodeFiles,
+  parallelForEach(ctx.executor, ctx.objectFiles, postParseObjectFile);
+  parallelForEach(ctx.executor, ctx.bitcodeFiles,
                   [](BitcodeFile *file) { file->postParse(); });
   for (auto &it : ctx.nonPrevailingSyms) {
     Symbol &sym = *it.first;
@@ -3465,10 +3475,10 @@ template <class ELFT> void LinkerDriver::link(opt::InputArgList &args) {
   // compileBitcodeFiles may have produced lto.tmp object files. After this, no
   // more file will be added.
   auto newObjectFiles = ArrayRef(ctx.objectFiles).slice(numObjsBeforeLTO);
-  parallelForEach(newObjectFiles, [](ELFFileBase *file) {
+  parallelForEach(ctx.executor, newObjectFiles, [](ELFFileBase *file) {
     initSectionsAndLocalSyms(file, /*ignoreComdats=*/true);
   });
-  parallelForEach(newObjectFiles, postParseObjectFile);
+  parallelForEach(ctx.executor, newObjectFiles, postParseObjectFile);
   for (const DuplicateSymbol &d : ctx.duplicates)
     reportDuplicate(ctx, *d.sym, d.file, d.section, d.value);
 

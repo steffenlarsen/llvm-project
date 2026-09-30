@@ -72,7 +72,8 @@ MockPublics::MockPublics(size_t StreamSize, BumpPtrAllocator &Allocator,
                          msf::MSFBuilder Builder)
     : Stream({Allocator.Allocate<uint8_t>(StreamSize), StreamSize},
              llvm::endianness::little),
-      MsfBuilder(std::move(Builder)), Gsi(this->MsfBuilder) {}
+      MsfBuilder(std::move(Builder)),
+      Gsi(this->MsfBuilder, parallel::ExecutorRef::sequential()) {}
 
 Expected<std::unique_ptr<MockPublics>>
 MockPublics::create(BumpPtrAllocator &Allocator, size_t StreamSize) {

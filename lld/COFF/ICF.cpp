@@ -223,10 +223,10 @@ void ICF::forEachClass(std::function<void(size_t, size_t)> fn) {
   size_t boundaries[numShards + 1];
   boundaries[0] = 0;
   boundaries[numShards] = chunks.size();
-  parallelFor(1, numShards, [&](size_t i) {
+  parallelFor(ctx.executor, 1, numShards, [&](size_t i) {
     boundaries[i] = findBoundary((i - 1) * step, chunks.size());
   });
-  parallelFor(1, numShards + 1, [&](size_t i) {
+  parallelFor(ctx.executor, 1, numShards + 1, [&](size_t i) {
     if (boundaries[i - 1] < boundaries[i]) {
       forEachClassRange(boundaries[i - 1], boundaries[i], fn);
     }
@@ -260,14 +260,14 @@ void ICF::run() {
         sc->eqClass[0] = nextId++;
 
   // Initially, we use hash values to partition sections.
-  parallelForEach(chunks, [&](SectionChunk *sc) {
+  parallelForEach(ctx.executor, chunks, [&](SectionChunk *sc) {
     sc->eqClass[0] = xxh3_64bits(sc->getContents());
   });
 
   // Combine the hashes of the sections referenced by each section into its
   // hash.
   for (unsigned cnt = 0; cnt != 2; ++cnt) {
-    parallelForEach(chunks, [&](SectionChunk *sc) {
+    parallelForEach(ctx.executor, chunks, [&](SectionChunk *sc) {
       uint32_t hash = sc->eqClass[cnt % 2];
       for (Symbol *b : sc->symbols())
         if (auto *sym = dyn_cast_or_null<DefinedRegular>(b))

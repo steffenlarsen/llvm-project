@@ -3382,6 +3382,7 @@ void DWARFLinker::verifyInput(const DWARFFile &File) {
   std::string Buffer;
   raw_string_ostream OS(Buffer);
   DIDumpOptions DumpOpts;
+  DumpOpts.Executor = Options.Executor;
   if (!File.Dwarf->verify(OS, DumpOpts.noImplicitRecursion())) {
     if (Options.InputVerificationHandler)
       Options.InputVerificationHandler(File, OS.str());

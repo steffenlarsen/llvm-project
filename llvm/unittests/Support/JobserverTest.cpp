@@ -268,12 +268,8 @@ protected:
   std::unique_ptr<ScopedFifo> TheFifo;
   std::thread MakeThread;
   std::atomic<bool> StopMakeThread{false};
-  // Save and restore the global parallel strategy to avoid interfering with
-  // other tests in the same process.
-  ThreadPoolStrategy SavedStrategy;
 
   void SetUp() override {
-    SavedStrategy = parallel::strategy;
     TheFifo = std::make_unique<ScopedFifo>();
     ASSERT_TRUE(TheFifo->isValid());
 
@@ -289,8 +285,6 @@ protected:
     }
     unsetenv("MAKEFLAGS");
     TheFifo.reset();
-    // Restore the original strategy to ensure subsequent tests are unaffected.
-    parallel::strategy = SavedStrategy;
   }
 
   // Starts a background thread that emulates `make`. It populates the FIFO
@@ -426,7 +420,7 @@ TEST_F(JobserverStrategyTest, ThreadPoolConcurrencyIsLimited) {
 
 // Parent-side driver that spawns a fresh process to run the child test which
 // validates that parallelFor respects the jobserver limit when it is the first
-// user of the default executor in that process.
+// user of the jobserver client in that process.
 TEST_F(JobserverStrategyTest, ParallelForIsLimited_Subprocess) {
   // Mark child execution.
   setenv("LLVM_JOBSERVER_TEST_CHILD", "1", 1);
@@ -448,8 +442,8 @@ TEST_F(JobserverStrategyTest, ParallelForIsLimited_Subprocess) {
   ASSERT_EQ(RC, 0) << "Executable failed with exit code " << RC;
 }
 
-// Child-side test: create FIFO and make-proxy in this process, set the
-// jobserver strategy, and then run parallelFor.
+// Child-side test: create FIFO and make-proxy in this process, create an
+// executor with the jobserver strategy, and then run parallelFor.
 TEST_F(JobserverStrategyTest, ParallelForIsLimited_SubprocessChild) {
   if (!getenv("LLVM_JOBSERVER_TEST_CHILD"))
     GTEST_SKIP() << "Not running in child mode";
@@ -461,13 +455,12 @@ TEST_F(JobserverStrategyTest, ParallelForIsLimited_SubprocessChild) {
 
   startMakeProxy(NumExplicitJobs);
 
-  // Set the global strategy before any default executor is created.
-  parallel::strategy = jobserver_concurrency();
+  parallel::Executor Executor(jobserver_concurrency());
 
   std::atomic<int> ActiveTasks{0};
   std::atomic<int> MaxActiveTasks{0};
 
-  parallelFor(0, NumTasks, [&]([[maybe_unused]] int i) {
+  parallelFor(Executor, 0, NumTasks, [&]([[maybe_unused]] int i) {
     int CurrentActive = ++ActiveTasks;
     int OldMax = MaxActiveTasks.load();
     while (CurrentActive > OldMax)
@@ -500,7 +493,7 @@ TEST_F(JobserverStrategyTest, ParallelSortIsLimited_Subprocess) {
 }
 
 // Child-side test: ensure parallelSort runs and completes correctly under the
-// jobserver strategy when it owns default executor initialization.
+// jobserver strategy when it is the first user of the jobserver client.
 TEST_F(JobserverStrategyTest, ParallelSortIsLimited_SubprocessChild) {
   if (!getenv("LLVM_JOBSERVER_TEST_CHILD"))
     GTEST_SKIP() << "Not running in child mode";
@@ -508,7 +501,7 @@ TEST_F(JobserverStrategyTest, ParallelSortIsLimited_SubprocessChild) {
   const int NumExplicitJobs = 3;
   startMakeProxy(NumExplicitJobs);
 
-  parallel::strategy = jobserver_concurrency();
+  parallel::Executor Executor(jobserver_concurrency());
 
   std::vector<int> V(1024);
   std::mt19937 randEngine;
@@ -516,7 +509,7 @@ TEST_F(JobserverStrategyTest, ParallelSortIsLimited_SubprocessChild) {
   for (int &i : V)
     i = dist(randEngine);
 
-  parallelSort(V.begin(), V.end());
+  parallelSort(Executor, V.begin(), V.end());
   ASSERT_TRUE(llvm::is_sorted(V));
 }
 

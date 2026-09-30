@@ -38,8 +38,9 @@ namespace llvm {
 class WritableBinaryStream;
 }
 
-PDBFileBuilder::PDBFileBuilder(BumpPtrAllocator &Allocator)
-    : Allocator(Allocator), InjectedSourceTable(2) {}
+PDBFileBuilder::PDBFileBuilder(BumpPtrAllocator &Allocator,
+                               parallel::ExecutorRef Executor)
+    : Allocator(Allocator), Executor(Executor), InjectedSourceTable(2) {}
 
 PDBFileBuilder::~PDBFileBuilder() = default;
 
@@ -61,7 +62,7 @@ InfoStreamBuilder &PDBFileBuilder::getInfoBuilder() {
 
 DbiStreamBuilder &PDBFileBuilder::getDbiBuilder() {
   if (!Dbi)
-    Dbi = std::make_unique<DbiStreamBuilder>(*Msf);
+    Dbi = std::make_unique<DbiStreamBuilder>(*Msf, Executor);
   return *Dbi;
 }
 
@@ -87,7 +88,7 @@ PDBStringTableBuilder &PDBFileBuilder::getStringTableBuilder() {
 
 GSIStreamBuilder &PDBFileBuilder::getGsiBuilder() {
   if (!Gsi)
-    Gsi = std::make_unique<GSIStreamBuilder>(*Msf);
+    Gsi = std::make_unique<GSIStreamBuilder>(*Msf, Executor);
   return *Gsi;
 }
 

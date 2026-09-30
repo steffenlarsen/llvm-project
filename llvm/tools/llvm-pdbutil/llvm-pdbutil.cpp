@@ -88,6 +88,7 @@
 #include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/LineIterator.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/Parallel.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/PrettyStackTrace.h"
 #include "llvm/Support/Process.h"
@@ -835,7 +836,8 @@ static void yamlToPdb(StringRef Path, unsigned DocNum) {
     ExitOnErr(
         createStringErrorV("failed to parse YAML input: {0}", EC.message()));
 
-  PDBFileBuilder Builder(Allocator);
+  parallel::Executor Executor;
+  PDBFileBuilder Builder(Allocator, Executor);
 
   uint32_t BlockSize = 4096;
   if (YamlObj.Headers)
@@ -1474,7 +1476,8 @@ static void mergePdbs() {
   }
 
   // Then write the PDB.
-  PDBFileBuilder Builder(Allocator);
+  parallel::Executor Executor;
+  PDBFileBuilder Builder(Allocator, Executor);
   ExitOnErr(Builder.initialize(4096));
   // Add each of the reserved streams.  We might not put any data in them,
   // but at least they have to be present.

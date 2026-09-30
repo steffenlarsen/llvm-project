@@ -349,7 +349,7 @@ Symbol *UnwindInfoSectionImpl::canonicalizePersonality(Symbol *personality) {
 // is no source address to make a relative location meaningful.
 void UnwindInfoSectionImpl::relocateCompactUnwind(
     std::vector<CompactUnwindEntry> &cuEntries) {
-  parallelFor(0, symbolsVec.size(), [&](size_t i) {
+  parallelFor(config->executor, 0, symbolsVec.size(), [&](size_t i) {
     CompactUnwindEntry &cu = cuEntries[i];
     const Defined *d = symbolsVec[i].second;
     cu.functionAddress = d->getVA();

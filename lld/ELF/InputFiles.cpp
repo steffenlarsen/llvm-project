@@ -919,9 +919,9 @@ void ObjFile<ELFT>::initializeSections(bool ignoreComdats,
       // simply handle such sections as non-mergeable ones. Degrading like this
       // is acceptable because section merging is optional.
       if (auto *ms = dyn_cast<MergeInputSection>(s)) {
-        s = makeThreadLocal<InputSection>(ms->file, ms->name, ms->type,
-                                          ms->flags, ms->addralign, ms->entsize,
-                                          ms->contentMaybeDecompress());
+        s = makeThreadLocal(ctx.inputSectionAlloc, ms->file, ms->name, ms->type,
+                            ms->flags, ms->addralign, ms->entsize,
+                            ms->contentMaybeDecompress());
         sections[info] = s;
       }
 
@@ -936,8 +936,8 @@ void ObjFile<ELFT>::initializeSections(bool ignoreComdats,
       // specified, we need to copy them to the output. (Some post link analysis
       // tools specify --emit-relocs to obtain the information.)
       if (ctx.arg.copyRelocs) {
-        auto *isec = makeThreadLocal<InputSection>(
-            *this, sec, check(obj.getSectionName(sec, shstrtab)));
+        auto *isec = makeThreadLocal(ctx.inputSectionAlloc, *this, sec,
+                                     check(obj.getSectionName(sec, shstrtab)));
         // If the relocated section is discarded (due to /DISCARD/ or
         // --gc-sections), the relocation section should be discarded as well.
         s->dependentSections.push_back(isec);
@@ -1111,7 +1111,8 @@ InputSectionBase *ObjFile<ELFT>::getRelocTarget(uint32_t idx, uint32_t info) {
 }
 
 // The function may be called concurrently for different input files. For
-// allocation, prefer makeThreadLocal which does not require holding a lock.
+// allocation, prefer makeThreadLocal with a per-thread arena of ctx, which does
+// not require holding a lock.
 template <class ELFT>
 InputSectionBase *ObjFile<ELFT>::createInputSection(uint32_t idx,
                                                     const Elf_Shdr &sec,
@@ -1190,11 +1191,11 @@ InputSectionBase *ObjFile<ELFT>::createInputSection(uint32_t idx,
   // .eh_frame_hdr section for runtime. So we handle them with a special
   // class. For relocatable outputs, they are just passed through.
   if (name == ".eh_frame" && !ctx.arg.relocatable)
-    return makeThreadLocal<EhInputSection>(*this, sec, name);
+    return makeThreadLocal(ctx.ehInputSectionAlloc, *this, sec, name);
 
   if ((sec.sh_flags & SHF_MERGE) && shouldMerge(sec, name))
-    return makeThreadLocal<MergeInputSection>(*this, sec, name);
-  return makeThreadLocal<InputSection>(*this, sec, name);
+    return makeThreadLocal(ctx.mergeInputSectionAlloc, *this, sec, name);
+  return makeThreadLocal(ctx.inputSectionAlloc, *this, sec, name);
 }
 
 // Initialize symbols. symbols is a parallel array to the corresponding ELF
@@ -1332,7 +1333,8 @@ void ObjFile<ELFT>::initSectionsAndLocalSyms(bool ignoreComdats) {
 
   if (!firstGlobal)
     return;
-  SymbolUnion *locals = makeThreadLocalN<SymbolUnion>(firstGlobal);
+  SymbolUnion *locals =
+      makeThreadLocalN<SymbolUnion>(ctx.threadAlloc, firstGlobal);
 
   ArrayRef<Elf_Sym> eSyms = this->getELFSyms<ELFT>();
   for (size_t i = 0, end = firstGlobal; i != end; ++i) {

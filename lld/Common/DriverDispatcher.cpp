@@ -144,7 +144,8 @@ static Driver whichDriver(llvm::SmallVectorImpl<const char *> &argsV,
   if (it == drivers.end()) {
     // Driver is invalid or not available in this build.
     return [](llvm::ArrayRef<const char *>, llvm::raw_ostream &,
-              llvm::raw_ostream &, bool, bool) { return false; };
+              llvm::raw_ostream &, bool, bool,
+              llvm::parallel::Executor *) { return false; };
   }
   return it->d;
 }
@@ -156,11 +157,13 @@ bool inTestOutputDisabled = false;
 /// windows linker based on the argv[0] or -flavor option.
 int unsafeLldMain(llvm::ArrayRef<const char *> args,
                   llvm::raw_ostream &stdoutOS, llvm::raw_ostream &stderrOS,
-                  llvm::ArrayRef<DriverDef> drivers, bool exitEarly) {
+                  llvm::ArrayRef<DriverDef> drivers, bool exitEarly,
+                  llvm::parallel::Executor *executor) {
   SmallVector<const char *, 256> argsV(args);
   Driver d = whichDriver(argsV, drivers);
   // Run the driver. If an error occurs, false will be returned.
-  int r = !d(argsV, stdoutOS, stderrOS, exitEarly, inTestOutputDisabled);
+  int r =
+      !d(argsV, stdoutOS, stderrOS, exitEarly, inTestOutputDisabled, executor);
   // At this point 'r' is either 1 for error, and 0 for no error.
 
   // Call exit() if we can to avoid calling destructors.
@@ -177,7 +180,8 @@ int unsafeLldMain(llvm::ArrayRef<const char *> args,
 
 Result lld::lldMain(llvm::ArrayRef<const char *> args,
                     llvm::raw_ostream &stdoutOS, llvm::raw_ostream &stderrOS,
-                    llvm::ArrayRef<DriverDef> drivers) {
+                    llvm::ArrayRef<DriverDef> drivers,
+                    llvm::parallel::Executor *executor) {
   int r = 0;
   {
     // The crash recovery is here only to be able to recover from arbitrary
@@ -186,7 +190,7 @@ Result lld::lldMain(llvm::ArrayRef<const char *> args,
     llvm::CrashRecoveryContext crc;
     if (!crc.RunSafely([&]() {
           r = unsafeLldMain(args, stdoutOS, stderrOS, drivers,
-                            /*exitEarly=*/false);
+                            /*exitEarly=*/false, executor);
         }))
       return {crc.RetCode, /*canRunAgain=*/false};
   }

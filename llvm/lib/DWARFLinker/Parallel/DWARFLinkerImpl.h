@@ -92,6 +92,9 @@ public:
   /// Use the specified thread pool to link the object files.
   void setThreadPool(ThreadPoolInterface *Pool) override { ThreadPool = Pool; }
 
+  /// Use the specified executor for the parallel work within the link.
+  void setExecutor(llvm::parallel::ExecutorRef E) override { Executor = E; }
+
   /// Add kind of accelerator tables to be generated.
   void addAccelTableKind(AccelTableKind Kind) override {
     assert(!llvm::is_contained(GlobalData.getOptions().AccelTables, Kind));
@@ -437,6 +440,9 @@ protected:
 
   /// Thread pool that links the object files, or null to use a private pool.
   ThreadPoolInterface *ThreadPool = nullptr;
+
+  /// Executor for the parallel work within the link, if one was set.
+  std::optional<llvm::parallel::ExecutorRef> Executor;
   /// @}
 };
 

@@ -18,6 +18,7 @@
 #include "llvm/DebugInfo/DWARF/DWARFDie.h"
 #include "llvm/DebugInfo/DWARF/LowLevel/DWARFExpression.h"
 #include "llvm/Support/Compiler.h"
+#include "llvm/Support/Parallel.h"
 #include <map>
 namespace llvm {
 class DWARFUnit;
@@ -141,6 +142,8 @@ public:
   virtual Error setTargetDWARFVersion(uint16_t TargetDWARFVersion) = 0;
   /// Set the thread pool used to link the object files.
   virtual void setThreadPool(ThreadPoolInterface *Pool) = 0;
+  /// Set where the linker runs its parallel work, e.g. input verification.
+  virtual void setExecutor(llvm::parallel::ExecutorRef Executor) = 0;
 };
 } // end namespace dwarf_linker
 } // end namespace llvm

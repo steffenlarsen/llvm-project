@@ -16,6 +16,7 @@
 
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Object/ObjectFile.h"
+#include "llvm/Support/Parallel.h"
 #include "llvm/Support/WithColor.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cassert>
@@ -215,6 +216,8 @@ struct DIDumpOptions {
   llvm::SmallVector<unsigned, 0> FilterChildTag;
   std::function<llvm::StringRef(uint64_t DwarfRegNum, bool IsEH)>
       GetNameForDWARFReg;
+  /// Where verification runs its parallel work.
+  parallel::ExecutorRef Executor = parallel::ExecutorRef::sequential();
 
   /// Return default option set for printing a single DIE without children.
   static DIDumpOptions getForSingleDIE() {

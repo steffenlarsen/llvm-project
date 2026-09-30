@@ -280,6 +280,11 @@ public:
   /// The classic linker does not use a shared thread pool.
   void setThreadPool(ThreadPoolInterface *Pool) override {}
 
+  /// Use the specified executor to verify the input DWARF.
+  void setExecutor(llvm::parallel::ExecutorRef Executor) override {
+    Options.Executor = Executor;
+  }
+
   /// Add kind of accelerator tables to be generated.
   void addAccelTableKind(AccelTableKind Kind) override {
     assert(!llvm::is_contained(Options.AccelTables, Kind));
@@ -821,6 +826,10 @@ private:
 
     /// Number of threads.
     unsigned Threads = 1;
+
+    /// Where the input DWARF is verified.
+    llvm::parallel::ExecutorRef Executor =
+        llvm::parallel::ExecutorRef::sequential();
 
     /// The accelerator table kinds
     SmallVector<AccelTableKind, 1> AccelTables;

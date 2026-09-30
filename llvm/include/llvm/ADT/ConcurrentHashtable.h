@@ -102,7 +102,7 @@ class ConcurrentHashTableByPtr {
 public:
   ConcurrentHashTableByPtr(
       AllocatorTy &Allocator, uint64_t EstimatedSize = 100000,
-      size_t ThreadsNum = parallel::strategy.compute_thread_count(),
+      size_t ThreadsNum = hardware_concurrency().compute_thread_count(),
       size_t InitialNumberOfBuckets = 128)
       : MultiThreadAllocator(Allocator) {
     assert((ThreadsNum > 0) && "ThreadsNum must be greater than 0");

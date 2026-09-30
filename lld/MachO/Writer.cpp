@@ -1202,8 +1202,8 @@ void Writer::finalizeLinkEditSegment() {
       dataInCodeSection, functionStartsSection,
   };
 
-  parallelForEach(linkEditSections.begin(), linkEditSections.end(),
-                  [](LinkEditSection *osec) {
+  parallelForEach(config->executor, linkEditSections.begin(),
+                  linkEditSections.end(), [](LinkEditSection *osec) {
                     if (osec)
                       osec->finalizeContents();
                   });
@@ -1255,9 +1255,9 @@ void Writer::writeSections() {
   for (const OutputSegment *seg : outputSegments)
     append_range(osecs, seg->getSections());
 
-  parallelForEach(osecs.begin(), osecs.end(), [&](const OutputSection *osec) {
-    osec->writeTo(buf + osec->fileOff);
-  });
+  parallelForEach(
+      config->executor, osecs.begin(), osecs.end(),
+      [&](const OutputSection *osec) { osec->writeTo(buf + osec->fileOff); });
 }
 
 void Writer::applyOptimizationHints() {
@@ -1267,7 +1267,7 @@ void Writer::applyOptimizationHints() {
 
   uint8_t *buf = buffer->getBufferStart();
   TimeTraceScope timeScope("Apply linker optimization hints");
-  parallelForEach(inputFiles, [buf](const InputFile *file) {
+  parallelForEach(config->executor, inputFiles, [buf](const InputFile *file) {
     if (const auto *objFile = dyn_cast<ObjFile>(file))
       macho::applyOptimizationHints(buf, *objFile);
   });
@@ -1284,7 +1284,7 @@ void Writer::writeUuid() {
 
   // Leave one slot for filename
   std::vector<uint64_t> hashes(chunks.size() + 1);
-  parallelFor(0, chunks.size(),
+  parallelFor(config->executor, 0, chunks.size(),
               [&](size_t i) { hashes[i] = xxh3_64bits(chunks[i]); });
   // Append the output filename so that identical binaries with different names
   // don't get the same UUID.

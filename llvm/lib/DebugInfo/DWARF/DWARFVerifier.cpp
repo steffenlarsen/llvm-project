@@ -1344,44 +1344,46 @@ void DWARFVerifier::verifyDebugNamesCULists(const DWARFDebugNames &AccelTable) {
   for (const auto &CU : DCtx.compile_units())
     CUOffsets.insert(CU->getOffset());
 
-  parallelForEach(AccelTable, [&](const DWARFDebugNames::NameIndex &NI) {
-    if (NI.getCUCount() == 0) {
-      ErrorCategory.Report("Name Index doesn't index any CU", [&]() {
-        error() << formatv("Name Index @ {0:x} does not index any CU\n",
-                           NI.getUnitOffset());
+  parallelForEach(
+      DumpOpts.Executor, AccelTable, [&](const DWARFDebugNames::NameIndex &NI) {
+        if (NI.getCUCount() == 0) {
+          ErrorCategory.Report("Name Index doesn't index any CU", [&]() {
+            error() << formatv("Name Index @ {0:x} does not index any CU\n",
+                               NI.getUnitOffset());
+          });
+          return;
+        }
+        for (uint32_t CU = 0, End = NI.getCUCount(); CU < End; ++CU) {
+          uint64_t Offset = NI.getCUOffset(CU);
+          if (!CUOffsets.count(Offset)) {
+            ErrorCategory.Report(
+                "Name Index references non-existing CU", [&]() {
+                  error() << formatv("Name Index @ {0:x} references a "
+                                     "non-existing CU @ {1:x}\n",
+                                     NI.getUnitOffset(), Offset);
+                });
+            continue;
+          }
+          uint64_t DuplicateCUOffset = 0;
+          {
+            std::lock_guard<std::mutex> Lock(AccessMutex);
+            auto Iter = CUMap.find(Offset);
+            if (Iter != CUMap.end())
+              DuplicateCUOffset = Iter->second;
+            else
+              CUMap[Offset] = NI.getUnitOffset();
+          }
+          if (DuplicateCUOffset) {
+            ErrorCategory.Report("Duplicate Name Index", [&]() {
+              error() << formatv(
+                  "Name Index @ {0:x} references a CU @ {1:x}, but "
+                  "this CU is already indexed by Name Index @ {2:x}\n",
+                  NI.getUnitOffset(), Offset, DuplicateCUOffset);
+            });
+            continue;
+          }
+        }
       });
-      return;
-    }
-    for (uint32_t CU = 0, End = NI.getCUCount(); CU < End; ++CU) {
-      uint64_t Offset = NI.getCUOffset(CU);
-      if (!CUOffsets.count(Offset)) {
-        ErrorCategory.Report("Name Index references non-existing CU", [&]() {
-          error() << formatv(
-              "Name Index @ {0:x} references a non-existing CU @ {1:x}\n",
-              NI.getUnitOffset(), Offset);
-        });
-        continue;
-      }
-      uint64_t DuplicateCUOffset = 0;
-      {
-        std::lock_guard<std::mutex> Lock(AccessMutex);
-        auto Iter = CUMap.find(Offset);
-        if (Iter != CUMap.end())
-          DuplicateCUOffset = Iter->second;
-        else
-          CUMap[Offset] = NI.getUnitOffset();
-      }
-      if (DuplicateCUOffset) {
-        ErrorCategory.Report("Duplicate Name Index", [&]() {
-          error() << formatv(
-              "Name Index @ {0:x} references a CU @ {1:x}, but "
-              "this CU is already indexed by Name Index @ {2:x}\n",
-              NI.getUnitOffset(), Offset, DuplicateCUOffset);
-        });
-        continue;
-      }
-    }
-  });
 
   for (const auto &CU : DCtx.compile_units()) {
     if (CUMap.count(CU->getOffset()) == 0)
@@ -2055,13 +2057,13 @@ void DWARFVerifier::verifyNameIndexCompleteness(
 
 /// Extracts all the data for CU/TUs so we can access it in parallel without
 /// locks.
-static void extractCUsTus(DWARFContext &DCtx) {
+static void extractCUsTus(DWARFContext &DCtx, parallel::ExecutorRef Executor) {
   // Abbrev DeclSet is shared beween the units.
   for (auto &CUTU : DCtx.normal_units()) {
     CUTU->getUnitDIE();
     CUTU->getBaseAddress();
   }
-  parallelForEach(DCtx.normal_units(), [&](const auto &CUTU) {
+  parallelForEach(Executor, DCtx.normal_units(), [&](const auto &CUTU) {
     if (Error E = CUTU->tryExtractDIEsIfNeeded(false))
       DCtx.getRecoverableErrorHandler()(std::move(E));
   });
@@ -2078,10 +2080,11 @@ static void extractCUsTus(DWARFContext &DCtx) {
       CUTU->getUnitDIE();
       CUTU->getBaseAddress();
     }
-    parallelForEach(NonSkeletonContext.dwo_units(), [&](const auto &CUTU) {
-      if (Error E = CUTU->tryExtractDIEsIfNeeded(false))
-        DCtx.getRecoverableErrorHandler()(std::move(E));
-    });
+    parallelForEach(Executor, NonSkeletonContext.dwo_units(),
+                    [&](const auto &CUTU) {
+                      if (Error E = CUTU->tryExtractDIEsIfNeeded(false))
+                        DCtx.getRecoverableErrorHandler()(std::move(E));
+                    });
     // If context is for DWP we only need to extract once.
     if (NonSkeletonContext.isDWP())
       break;
@@ -2108,9 +2111,10 @@ void DWARFVerifier::verifyDebugNames(const DWARFSection &AccelSection,
   verifyDebugNamesCULists(AccelTable);
   for (const auto &NI : AccelTable)
     verifyNameIndexBuckets(NI, StrData);
-  parallelForEach(AccelTable, [&](const DWARFDebugNames::NameIndex &NI) {
-    verifyNameIndexAbbrevs(NI);
-  });
+  parallelForEach(DumpOpts.Executor, AccelTable,
+                  [&](const DWARFDebugNames::NameIndex &NI) {
+                    verifyNameIndexAbbrevs(NI);
+                  });
 
   // Don't attempt Entry validation if any of the previous checks found errors
   if (OriginalNumErrors != ErrorCategory.GetNumErrors())
@@ -2122,11 +2126,12 @@ void DWARFVerifier::verifyDebugNames(const DWARFSection &AccelSection,
     CUOffsetsToDUMap[CU->getOffset()] =
         CU->getNonSkeletonUnitDIE().getDwarfUnit();
   }
-  extractCUsTus(DCtx);
+  extractCUsTus(DCtx, DumpOpts.Executor);
   for (const DWARFDebugNames::NameIndex &NI : AccelTable) {
-    parallelForEach(NI, [&](DWARFDebugNames::NameTableEntry NTE) {
-      verifyNameIndexEntries(NI, NTE, CUOffsetsToDUMap);
-    });
+    parallelForEach(DumpOpts.Executor, NI,
+                    [&](DWARFDebugNames::NameTableEntry NTE) {
+                      verifyNameIndexEntries(NI, NTE, CUOffsetsToDUMap);
+                    });
   }
 
   auto populateNameToOffset =
@@ -2180,7 +2185,7 @@ void DWARFVerifier::verifyDebugNames(const DWARFSection &AccelSection,
               CUDie.getDwarfUnit()->getNonSkeletonUnitDIE(false);
           if (CUDie != NonSkeletonUnitDie) {
             parallelForEach(
-                NonSkeletonUnitDie.getDwarfUnit()->dies(),
+                DumpOpts.Executor, NonSkeletonUnitDie.getDwarfUnit()->dies(),
                 [&](const DWARFDebugInfoEntry &Die) {
                   verifyNameIndexCompleteness(
                       DWARFDie(NonSkeletonUnitDie.getDwarfUnit(), &Die), NI,
@@ -2188,10 +2193,11 @@ void DWARFVerifier::verifyDebugNames(const DWARFSection &AccelSection,
                 });
           }
         } else {
-          parallelForEach(CU->dies(), [&](const DWARFDebugInfoEntry &Die) {
-            verifyNameIndexCompleteness(DWARFDie(CU, &Die), NI,
-                                        NamesToDieOffsets);
-          });
+          parallelForEach(DumpOpts.Executor, CU->dies(),
+                          [&](const DWARFDebugInfoEntry &Die) {
+                            verifyNameIndexCompleteness(DWARFDie(CU, &Die), NI,
+                                                        NamesToDieOffsets);
+                          });
         }
       }
     }

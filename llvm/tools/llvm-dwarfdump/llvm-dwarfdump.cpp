@@ -393,6 +393,10 @@ static void error(StringRef Prefix, std::error_code EC) {
   error(Prefix, errorCodeToError(EC));
 }
 
+/// Where --verify runs its parallel work.
+static parallel::ExecutorRef VerifyExecutor =
+    parallel::ExecutorRef::sequential();
+
 static DIDumpOptions getDumpOpts(DWARFContext &C) {
   DIDumpOptions DumpOpts;
   DumpOpts.DumpType = DumpType;
@@ -414,6 +418,7 @@ static DIDumpOptions getDumpOpts(DWARFContext &C) {
     DumpOpts.ShowAggregateErrors = ErrorDetails != OnlyDetailsNoSummary &&
                                    ErrorDetails != NoDetailsOnlySummary;
     DumpOpts.JsonErrSummaryFile = JsonErrSummaryFile;
+    DumpOpts.Executor = VerifyExecutor;
     return DumpOpts.noImplicitRecursion();
   }
   return DumpOpts;
@@ -974,11 +979,11 @@ int main(int argc, char **argv) {
 
   bool Success = true;
   if (Verify) {
-    if (!VerifyNumThreads)
-      parallel::strategy =
-          hardware_concurrency(hardware_concurrency().compute_thread_count());
-    else
-      parallel::strategy = hardware_concurrency(VerifyNumThreads);
+    parallel::Executor Executor(
+        VerifyNumThreads ? hardware_concurrency(VerifyNumThreads)
+                         : hardware_concurrency(
+                               hardware_concurrency().compute_thread_count()));
+    VerifyExecutor = Executor;
     for (StringRef Object : Objects)
       Success &= handleFile(Object, verifyObjectFile, OutputFile.os());
   } else if (Statistics) {

@@ -57,6 +57,8 @@ Ctx::Ctx() {}
 void Ctx::reset() {
   arg.~Config();
   new (&arg) Config();
+  hostExecutor = nullptr;
+  executor = parallel::ExecutorRef::sequential();
   objectFiles.clear();
   stubFiles.clear();
   sharedFiles.clear();
@@ -126,7 +128,8 @@ static bool hasZOption(opt::InputArgList &args, StringRef key) {
 } // anonymous namespace
 
 bool link(ArrayRef<const char *> args, llvm::raw_ostream &stdoutOS,
-          llvm::raw_ostream &stderrOS, bool exitEarly, bool disableOutput) {
+          llvm::raw_ostream &stderrOS, bool exitEarly, bool disableOutput,
+          llvm::parallel::Executor *executor) {
   // This driver-specific context will be freed later by unsafeLldMain().
   auto *context = new CommonLinkerContext;
 
@@ -138,6 +141,12 @@ bool link(ArrayRef<const char *> args, llvm::raw_ostream &stdoutOS,
       "-error-limit=0 to see all errors)";
 
   symtab = make<SymbolTable>();
+
+  // Until --threads= is parsed, use the whole host executor.
+  if (executor) {
+    ctx.hostExecutor = executor;
+    ctx.executor = parallel::ExecutorRef(*executor);
+  }
 
   initLLVM();
   LinkerDriver(ctx).linkerMain(args);
@@ -639,15 +648,17 @@ static void readConfigs(opt::InputArgList &args) {
 
   // --threads= takes a positive integer and provides the default value for
   // --thinlto-jobs=.
+  ThreadPoolStrategy threadLimit;
   if (auto *arg = args.getLastArg(OPT_threads)) {
     StringRef v(arg->getValue());
     unsigned threads = 0;
     if (!llvm::to_integer(v, threads, 0) || threads == 0)
       error(arg->getSpelling() + ": expected a positive integer, but got '" +
             arg->getValue() + "'");
-    parallel::strategy = hardware_concurrency(threads);
+    threadLimit = hardware_concurrency(threads);
     ctx.arg.thinLTOJobs = v;
   }
+  ctx.executor = context().createExecutor(ctx.hostExecutor, threadLimit);
   if (auto *arg = args.getLastArg(OPT_thinlto_jobs))
     ctx.arg.thinLTOJobs = arg->getValue();
 
@@ -1234,7 +1245,7 @@ static void wrapSymbols(ArrayRef<WrappedSymbol> wrapped) {
   }
 
   // Update pointers in input files.
-  parallelForEach(ctx.objectFiles, [&](InputFile *file) {
+  parallelForEach(ctx.executor, ctx.objectFiles, [&](InputFile *file) {
     MutableArrayRef<Symbol *> syms = file->getMutableSymbols();
     for (Symbol *&sym : syms)
       if (Symbol *s = map.lookup(sym))
@@ -1250,7 +1261,7 @@ static void splitSections() {
   // splitIntoPieces needs to be called on each MergeInputChunk
   // before calling finalizeContents().
   LLVM_DEBUG(llvm::dbgs() << "splitSections\n");
-  parallelForEach(ctx.objectFiles, [](ObjFile *file) {
+  parallelForEach(ctx.executor, ctx.objectFiles, [](ObjFile *file) {
     for (InputChunk *seg : file->segments) {
       if (auto *s = dyn_cast<MergeInputChunk>(seg))
         s->splitIntoPieces();

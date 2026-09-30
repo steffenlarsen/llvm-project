@@ -1429,7 +1429,7 @@ void elf::processArmCmseSymbols(Ctx &ctx) {
 
   // If this is an Arm CMSE secure app, replace references to entry symbol <sym>
   // with its corresponding special symbol __acle_se_<sym>.
-  parallelForEach(ctx.objectFiles, [&](InputFile *file) {
+  parallelForEach(ctx.executor, ctx.objectFiles, [&](InputFile *file) {
     MutableArrayRef<Symbol *> syms = file->getMutableSymbols();
     for (Symbol *&sym : syms) {
       StringRef symName = sym->getName();
@@ -1603,7 +1603,7 @@ template <typename ELFT> void elf::writeARMCmseImportLib(Ctx &ctx) {
       sectionHeaderOff + shnum * sizeof(typename ELFT::Shdr);
   const unsigned flags =
       ctx.arg.mmapOutputFile ? (unsigned)FileOutputBuffer::F_mmap : 0;
-  unlinkAsync(ctx.arg.cmseOutputLib);
+  unlinkAsync(ctx.arg.cmseOutputLib, ctx.executor.isParallel());
   Expected<std::unique_ptr<FileOutputBuffer>> bufferOrErr =
       FileOutputBuffer::create(ctx.arg.cmseOutputLib, fileSize, flags);
   if (!bufferOrErr) {
@@ -1643,7 +1643,7 @@ template <typename ELFT> void elf::writeARMCmseImportLib(Ctx &ctx) {
 
   // Write section contents to a mmap'ed file.
   {
-    parallel::TaskGroup tg;
+    parallel::TaskGroup tg(ctx.executor);
     for (auto &[osec, _] : osIsPairs)
       osec->template writeTo<ELFT>(ctx, buf + osec->offset, tg);
   }

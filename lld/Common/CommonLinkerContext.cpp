@@ -43,6 +43,15 @@ CommonLinkerContext::~CommonLinkerContext() {
     lctx = nullptr;
 }
 
+parallel::ExecutorRef
+CommonLinkerContext::createExecutor(parallel::Executor *host,
+                                    ThreadPoolStrategy limit) {
+  if (host)
+    return parallel::ExecutorRef(*host, limit);
+  ownedExecutor = std::make_unique<parallel::Executor>(limit);
+  return parallel::ExecutorRef(*ownedExecutor);
+}
+
 CommonLinkerContext &lld::commonContext() {
   assert(lctx);
   return *lctx;

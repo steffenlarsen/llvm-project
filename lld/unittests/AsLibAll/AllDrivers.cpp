@@ -11,6 +11,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "lld/Common/Driver.h"
+#include "llvm/Support/Parallel.h"
 #include "gmock/gmock.h"
 
 LLD_HAS_DRIVER(coff)
@@ -19,10 +20,11 @@ LLD_HAS_DRIVER(mingw)
 LLD_HAS_DRIVER(macho)
 LLD_HAS_DRIVER(wasm)
 
-static bool lldInvoke(std::vector<const char *> args) {
+static bool lldInvoke(std::vector<const char *> args,
+                      llvm::parallel::Executor *executor = nullptr) {
   args.push_back("--version");
   lld::Result r =
-      lld::lldMain(args, llvm::outs(), llvm::errs(), LLD_ALL_DRIVERS);
+      lld::lldMain(args, llvm::outs(), llvm::errs(), LLD_ALL_DRIVERS, executor);
   return !r.retCode && r.canRunAgain;
 }
 
@@ -32,4 +34,13 @@ TEST(AsLib, AllDrivers) {
   EXPECT_TRUE(lldInvoke({"ld", "-m", "i386pe"})); // MinGW
   EXPECT_TRUE(lldInvoke({"lld-link"}));
   EXPECT_TRUE(lldInvoke({"wasm-ld"}));
+}
+
+TEST(AsLib, AllDriversHostExecutor) {
+  llvm::parallel::Executor executor(llvm::hardware_concurrency(2));
+  EXPECT_TRUE(lldInvoke({"ld.lld"}, &executor));
+  EXPECT_TRUE(lldInvoke({"ld64.lld"}, &executor));
+  EXPECT_TRUE(lldInvoke({"ld", "-m", "i386pe"}, &executor)); // MinGW
+  EXPECT_TRUE(lldInvoke({"lld-link"}, &executor));
+  EXPECT_TRUE(lldInvoke({"wasm-ld"}, &executor));
 }

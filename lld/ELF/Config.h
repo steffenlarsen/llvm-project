@@ -28,6 +28,7 @@
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/GlobPattern.h"
+#include "llvm/Support/Parallel.h"
 #include "llvm/Support/TarWriter.h"
 #include <atomic>
 #include <memory>
@@ -44,6 +45,7 @@ class ELFFileBase;
 class SharedFile;
 class InputSectionBase;
 class EhInputSection;
+class MergeInputSection;
 class Defined;
 class Undefined;
 class Symbol;
@@ -656,6 +658,20 @@ struct Ctx : CommonLinkerContext {
   LinkerDriver driver;
   LinkerScript *script;
   std::unique_ptr<TargetInfo> target;
+
+  // The executor passed to lldMain(), if any.
+  llvm::parallel::Executor *hostExecutor = nullptr;
+  // Where this link runs its parallel work: the host executor, or else a pool
+  // owned by this link, limited by --threads. Sequential until then.
+  llvm::parallel::ExecutorRef executor =
+      llvm::parallel::ExecutorRef::sequential();
+
+  // Arenas for objects created by parallel tasks, see makeThreadLocal.
+  PerThreadSpecificAlloc<InputSection> inputSectionAlloc;
+  PerThreadSpecificAlloc<EhInputSection> ehInputSectionAlloc;
+  PerThreadSpecificAlloc<MergeInputSection> mergeInputSectionAlloc;
+  // For trivially destructible data, such as relocations and local symbols.
+  llvm::parallel::PerThreadBumpPtrAllocator threadAlloc;
 
   // These variables are initialized by Writer and should not be used before
   // Writer is initialized.

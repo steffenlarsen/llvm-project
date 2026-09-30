@@ -15,6 +15,7 @@
 #include "llvm/ADT/Twine.h"
 #include "llvm/BinaryFormat/Wasm.h"
 #include "llvm/Support/CachePruning.h"
+#include "llvm/Support/Parallel.h"
 #include <optional>
 
 namespace llvm {
@@ -143,6 +144,13 @@ struct Config {
 // The Ctx object hold all other (non-configuration) global state.
 struct Ctx {
   Config arg;
+
+  // The executor passed to lldMain(), if any.
+  llvm::parallel::Executor *hostExecutor = nullptr;
+  // Where this link runs its parallel work: the host executor, or else a pool
+  // owned by this link, limited by --threads=. Sequential until then.
+  llvm::parallel::ExecutorRef executor =
+      llvm::parallel::ExecutorRef::sequential();
 
   llvm::SmallVector<ObjFile *, 0> objectFiles;
   llvm::SmallVector<StubFile *, 0> stubFiles;

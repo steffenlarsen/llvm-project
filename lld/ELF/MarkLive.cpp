@@ -570,7 +570,7 @@ static void processSectionEdges(
 // (DFS for cache locality), then queues deeper discoveries for the next level.
 template <class ELFT, bool TrackWhyLive>
 void MarkLive<ELFT, TrackWhyLive>::markParallel() {
-  const size_t numThreads = parallel::getThreadCount();
+  const size_t numThreads = ctx.executor.getThreadCount();
   auto visit = [&](InputSection &sec, int depth,
                    SmallVector<InputSection *, 0> &localQueue,
                    auto &self) -> void {
@@ -599,7 +599,7 @@ void MarkLive<ELFT, TrackWhyLive>::markParallel() {
     // Workers claim items off a shared counter and accumulate deeper
     // discoveries into their own local queue, merged into `queue` below.
     std::atomic<ptrdiff_t> next{ptrdiff_t(queue.size())};
-    parallelFor(0, numThreads, [&](size_t shard) {
+    parallelFor(ctx.executor, 0, numThreads, [&](size_t shard) {
       for (ptrdiff_t i; (i = next.fetch_sub(1, std::memory_order_relaxed)) > 0;)
         visit(*queue[i - 1], 0, queues[shard], visit);
     });
@@ -624,7 +624,7 @@ template <class ELFT> void elf::markLive(Ctx &ctx) {
     // See markUsedSymbols.
     if (ctx.arg.copyRelocs &&
         (ctx.arg.discard != DiscardPolicy::None || ctx.arg.retainSymbols))
-      parallelForEach(ctx.objectFiles, [](ELFFileBase *file) {
+      parallelForEach(ctx.executor, ctx.objectFiles, [](ELFFileBase *file) {
         for (InputSectionBase *sec : file->getSections())
           if (sec)
             markUsedSymbols<ELFT>(*sec);
@@ -632,7 +632,7 @@ template <class ELFT> void elf::markLive(Ctx &ctx) {
     return;
   }
 
-  parallelForEach(ctx.inputSections,
+  parallelForEach(ctx.executor, ctx.inputSections,
                   [](InputSectionBase *sec) { sec->markDead(); });
 
   // Follow the graph to mark all live sections.
@@ -643,7 +643,7 @@ template <class ELFT> void elf::markLive(Ctx &ctx) {
 
   // Determine which DSOs are needed. A DSO is needed if a non-weak SharedSymbol
   // is used from a live section.
-  parallelForEach(ctx.symtab->getSymbols(), [](Symbol *sym) {
+  parallelForEach(ctx.executor, ctx.symtab->getSymbols(), [](Symbol *sym) {
     if (auto *ss = dyn_cast<SharedSymbol>(sym))
       if (ss->hasFlag(USED) && !ss->isWeak())
         cast<SharedFile>(ss->file)->isNeeded = true;

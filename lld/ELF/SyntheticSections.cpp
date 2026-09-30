@@ -1564,12 +1564,12 @@ void DynamicReloc::finalize(Ctx &ctx, SymbolTableBaseSection *symt) {
 
 void RelocationBaseSection::computeRels() {
   SymbolTableBaseSection *symTab = ctx.in.dynSymTab.get();
-  parallelForEach(relativeRelocs, [&ctx = ctx, symTab](DynamicReloc &rel) {
-    rel.finalize(ctx, symTab);
-  });
-  parallelForEach(relocs, [&ctx = ctx, symTab](DynamicReloc &rel) {
-    rel.finalize(ctx, symTab);
-  });
+  parallelForEach(
+      ctx.executor, relativeRelocs,
+      [&ctx = ctx, symTab](DynamicReloc &rel) { rel.finalize(ctx, symTab); });
+  parallelForEach(
+      ctx.executor, relocs,
+      [&ctx = ctx, symTab](DynamicReloc &rel) { rel.finalize(ctx, symTab); });
 
   // Place IRELATIVE relocations last so that other dynamic relocations are
   // applied before IFUNC resolvers run.
@@ -1580,7 +1580,7 @@ void RelocationBaseSection::computeRels() {
   // Sort by (!IsRelative,SymIndex,r_offset). DT_REL[A]COUNT requires us to
   // place R_*_RELATIVE first. SymIndex is to improve locality, while r_offset
   // is to make results easier to read.
-  parallelSort(relativeRelocs.begin(), relativeRelocs.end(),
+  parallelSort(ctx.executor, relativeRelocs.begin(), relativeRelocs.end(),
                [](auto &a, auto &b) { return a.r_offset < b.r_offset; });
   // Non-relative relocations are few, so don't bother with parallelSort.
   if (combreloc)
@@ -2668,10 +2668,11 @@ static uint32_t getDebugNamesHeaderSize(uint32_t augmentationStringSize) {
 }
 
 static Expected<DebugNamesBaseSection::IndexEntry *>
-readEntry(uint64_t &offset, const DWARFDebugNames::NameIndex &ni,
+readEntry(PerThreadSpecificAlloc<DebugNamesBaseSection::IndexEntry> &alloc,
+          uint64_t &offset, const DWARFDebugNames::NameIndex &ni,
           uint64_t entriesBase, DWARFDataExtractor &namesExtractor,
           const LLDDWARFSection &namesSec) {
-  auto ie = makeThreadLocal<DebugNamesBaseSection::IndexEntry>();
+  auto ie = makeThreadLocal(alloc);
   ie->poolOffset = offset;
   Error err = Error::success();
   uint64_t ulebVal = namesExtractor.getULEB128(&offset, &err);
@@ -2789,7 +2790,8 @@ void DebugNamesBaseSection::parseDebugNames(
       while (offset < namesSec.Data.size() && namesSec.Data[offset] != 0) {
         // Read & store all entries (for the same string).
         Expected<IndexEntry *> ieOrErr =
-            readEntry(offset, ni, locs.EntriesBase, namesExtractor, namesSec);
+            readEntry(indexEntryAlloc, offset, ni, locs.EntriesBase,
+                      namesExtractor, namesSec);
         if (!ieOrErr) {
           Err(ctx) << namesSec.sec << ": " << ieOrErr.takeError();
           return;
@@ -2944,7 +2946,7 @@ std::pair<uint32_t, uint32_t> DebugNamesBaseSection::computeEntryPool(
   const uint8_t cuAttrSize = getMergedCuCountForm(hdr.CompUnitCount).first;
   DenseMap<CachedHashStringRef, size_t> maps[numShards];
 
-  parallelFor(0, concurrency, [&](size_t threadId) {
+  parallelFor(ctx.executor, 0, concurrency, [&](size_t threadId) {
     for (auto i : seq(numChunks)) {
       InputChunk &inputChunk = inputChunks[i];
       for (auto j : seq(inputChunk.nameData.size())) {
@@ -2984,7 +2986,7 @@ std::pair<uint32_t, uint32_t> DebugNamesBaseSection::computeEntryPool(
   // Compute entry offsets in parallel. First, compute offsets relative to the
   // current shard.
   uint32_t offsets[numShards];
-  parallelFor(0, numShards, [&](size_t shard) {
+  parallelFor(ctx.executor, 0, numShards, [&](size_t shard) {
     uint32_t offset = 0;
     for (NameEntry &ne : nameVecs[shard]) {
       ne.entryOffset = offset;
@@ -3000,7 +3002,7 @@ std::pair<uint32_t, uint32_t> DebugNamesBaseSection::computeEntryPool(
   });
   // Then add shard offsets.
   std::partial_sum(offsets, std::end(offsets), offsets);
-  parallelFor(1, numShards, [&](size_t shard) {
+  parallelFor(ctx.executor, 1, numShards, [&](size_t shard) {
     uint32_t offset = offsets[shard - 1];
     for (NameEntry &ne : nameVecs[shard]) {
       ne.entryOffset += offset;
@@ -3011,7 +3013,7 @@ std::pair<uint32_t, uint32_t> DebugNamesBaseSection::computeEntryPool(
 
   // Update the DW_IDX_parent entries that refer to real parents (have
   // DW_FORM_ref4).
-  parallelFor(0, numShards, [&](size_t shard) {
+  parallelFor(ctx.executor, 0, numShards, [&](size_t shard) {
     for (NameEntry &ne : nameVecs[shard]) {
       for (IndexEntry &ie : ne.entries()) {
         if (!ie.parentEntry)
@@ -3059,7 +3061,7 @@ void DebugNamesBaseSection::init(
   chunks = std::make_unique<OutputChunk[]>(files.size());
   {
     TimeTraceScope timeScope("Merge .debug_names", "parse");
-    parallelFor(0, files.size(), [&](size_t i) {
+    parallelFor(ctx.executor, 0, files.size(), [&](size_t i) {
       parseFile(files[i], inputChunks[i], chunks[i]);
     });
   }
@@ -3133,7 +3135,7 @@ void DebugNamesSection<ELFT>::getNameRelocs(
 template <class ELFT> void DebugNamesSection<ELFT>::finalizeContents() {
   // Get relocations of .debug_names sections.
   auto relocs = std::make_unique<DenseMap<uint32_t, uint32_t>[]>(numChunks);
-  parallelFor(0, numChunks, [&](size_t i) {
+  parallelFor(ctx.executor, 0, numChunks, [&](size_t i) {
     InputSection *sec = inputSections[i];
     invokeOnRelocs(*sec, getNameRelocs, *sec->file, relocs.get()[i]);
 
@@ -3144,7 +3146,7 @@ template <class ELFT> void DebugNamesSection<ELFT>::finalizeContents() {
   });
 
   // Relocate string offsets in the name table with .debug_str + X relocations.
-  parallelForEach(nameVecs, [&](auto &nameVec) {
+  parallelForEach(ctx.executor, nameVecs, [&](auto &nameVec) {
     for (NameEntry &ne : nameVec)
       ne.stringOffset = relocs.get()[ne.chunkIdx].lookup(ne.stringOffset);
   });
@@ -3349,7 +3351,7 @@ createSymbols(
   auto map =
       std::make_unique<DenseMap<CachedHashStringRef, size_t>[]>(numShards);
   auto symbols = std::make_unique<SmallVector<GdbSymbol, 0>[]>(numShards);
-  parallelFor(0, concurrency, [&](size_t threadId) {
+  parallelFor(ctx.executor, 0, concurrency, [&](size_t threadId) {
     uint32_t i = 0;
     for (ArrayRef<NameAttrEntry> entries : nameAttrs) {
       for (const NameAttrEntry &ent : entries) {
@@ -3434,7 +3436,7 @@ std::unique_ptr<GdbIndexSection> GdbIndexSection::create(Ctx &ctx) {
   SmallVector<GdbChunk, 0> chunks(files.size());
   SmallVector<SmallVector<NameAttrEntry, 0>, 0> nameAttrs(files.size());
 
-  parallelFor(0, files.size(), [&](size_t i) {
+  parallelFor(ctx.executor, 0, files.size(), [&](size_t i) {
     // To keep memory usage low, we don't want to keep cached DWARFContext, so
     // avoid getDwarf() here.
     ObjFile<ELFT> *file = cast<ObjFile<ELFT>>(files[i]);
@@ -3518,7 +3520,7 @@ void GdbIndexSection::writeTo(uint8_t *buf) {
 
   // Write the string pool.
   hdr->constantPoolOff = buf - start;
-  parallelForEach(symbols, [&](GdbSymbol &sym) {
+  parallelForEach(ctx.executor, symbols, [&](GdbSymbol &sym) {
     memcpy(buf + sym.nameOff, sym.name.data(), sym.name.size());
   });
 
@@ -3764,7 +3766,7 @@ void MergeTailSection::finalizeContents() {
 }
 
 void MergeNoTailSection::writeTo(uint8_t *buf) {
-  parallelFor(0, numShards,
+  parallelFor(ctx.executor, 0, numShards,
               [&](size_t i) { shards[i].write(buf + shardOffsets[i]); });
 }
 
@@ -3787,7 +3789,7 @@ void MergeNoTailSection::finalizeContents() {
       llvm::bit_floor(std::min<size_t>(ctx.arg.threadCount, numShards));
 
   // Add section pieces to the builders.
-  parallelFor(0, concurrency, [&](size_t threadId) {
+  parallelFor(ctx.executor, 0, concurrency, [&](size_t threadId) {
     for (MergeInputSection *sec : sections) {
       for (size_t i = 0, e = sec->pieces.size(); i != e; ++i) {
         if (!sec->pieces[i].live)
@@ -3812,7 +3814,7 @@ void MergeNoTailSection::finalizeContents() {
 
   // So far, section pieces have offsets from beginning of shards, but
   // we want offsets from beginning of the whole section. Fix them.
-  parallelForEach(sections, [&](MergeInputSection *sec) {
+  parallelForEach(ctx.executor, sections, [&](MergeInputSection *sec) {
     for (SectionPiece &piece : sec->pieces)
       if (piece.live)
         piece.outputOff += shardOffsets[getShardId(piece.hash)];
@@ -3823,7 +3825,7 @@ template <class ELFT> void elf::splitSections(Ctx &ctx) {
   llvm::TimeTraceScope timeScope("Split sections");
   // splitIntoPieces needs to be called on each MergeInputSection
   // before calling finalizeContents().
-  parallelForEach(ctx.objectFiles, [](ELFFileBase *file) {
+  parallelForEach(ctx.executor, ctx.objectFiles, [](ELFFileBase *file) {
     for (InputSectionBase *sec : file->getSections()) {
       if (!sec)
         continue;

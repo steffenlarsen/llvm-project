@@ -1257,7 +1257,7 @@ void SymtabSection::emitStabs() {
     ObjFile *file = cast<ObjFile>(defined->originalIsec->getFile());
     stabFiles[file] = "";
   }
-  parallelForEach(stabFiles,
+  parallelForEach(config->executor, stabFiles,
                   [&](auto &it) { it.second = it.first->sourceFile(); });
 
   // Emit STABS symbols so that dsymutil and/or the debugger can map address
@@ -1607,7 +1607,7 @@ void CodeSignatureSection::writeHashes(uint8_t *buf) const {
   // NOTE: Changes to this functionality should be repeated in llvm-objcopy's
   // MachOWriter::writeSignatureData.
   uint8_t *hashes = buf + fileOff + allHeadersSize;
-  parallelFor(0, getBlockCount(), [&](size_t i) {
+  parallelFor(config->executor, 0, getBlockCount(), [&](size_t i) {
     sha256(buf + i * blockSize,
            std::min(static_cast<size_t>(fileOff - i * blockSize), blockSize),
            hashes + i * hashSize);

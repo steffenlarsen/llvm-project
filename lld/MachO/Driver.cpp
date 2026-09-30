@@ -330,6 +330,21 @@ public:
     }
     mutex.unlock();
   }
+
+  // Abandons the remaining work and waits for the running work, which uses
+  // this link's executor, to notice. Leaves the queue ready for another link.
+  void stopAndJoin() {
+    stopAllWork = true;
+    // Only the caller's thread changes `running`. Do not hold `mutex` here, as
+    // the worker takes it between work items.
+    if (running) {
+      running->join();
+      delete running;
+      running = nullptr;
+    }
+    queue.clear();
+    stopAllWork = false;
+  }
 };
 
 static SerialBackgroundWorkQueue pageInQueue;
@@ -375,7 +390,7 @@ void multiThreadedPageInBackground(DeferredFiles &deferred) {
 
   { // Create scope for waiting for the taskGroup
     std::atomic_size_t index = 0;
-    llvm::parallel::TaskGroup taskGroup;
+    llvm::parallel::TaskGroup taskGroup(config->executor);
     for (int w = 0; w < config->readWorkers; w++)
       taskGroup.spawn([&index, &preloadDeferredFile, &deferred]() {
         while (!pageInQueue.stopAllWork) {
@@ -1508,7 +1523,7 @@ static void createFiles(const InputArgList &args) {
     if (!archiveContents.empty())
       multiThreadedPageIn(archiveContents);
 
-    pageInQueue.stopAllWork = true;
+    pageInQueue.stopAndJoin();
   }
 #endif
 }
@@ -1681,37 +1696,39 @@ static void handleExplicitExports() {
   static constexpr int kMaxWarnings = 3;
   if (config->hasExplicitExports) {
     std::atomic<uint64_t> warningsCount{0};
-    parallelForEach(symtab->getSymbols(), [&warningsCount](Symbol *sym) {
-      if (auto *defined = dyn_cast<Defined>(sym)) {
-        if (config->exportedSymbols.match(sym->getName())) {
-          if (defined->privateExtern) {
-            if (defined->weakDefCanBeHidden) {
-              // weak_def_can_be_hidden symbols behave similarly to
-              // private_extern symbols in most cases, except for when
-              // it is explicitly exported.
-              // The former can be exported but the latter cannot.
-              defined->privateExtern = false;
+    parallelForEach(
+        config->executor, symtab->getSymbols(), [&warningsCount](Symbol *sym) {
+          if (auto *defined = dyn_cast<Defined>(sym)) {
+            if (config->exportedSymbols.match(sym->getName())) {
+              if (defined->privateExtern) {
+                if (defined->weakDefCanBeHidden) {
+                  // weak_def_can_be_hidden symbols behave similarly to
+                  // private_extern symbols in most cases, except for when
+                  // it is explicitly exported.
+                  // The former can be exported but the latter cannot.
+                  defined->privateExtern = false;
+                } else {
+                  // Only print the first 3 warnings verbosely, and
+                  // shorten the rest to avoid crowding logs.
+                  if (warningsCount.fetch_add(1, std::memory_order_relaxed) <
+                      kMaxWarnings)
+                    warn("cannot export hidden symbol " + toString(*defined) +
+                         "\n>>> defined in " + toString(defined->getFile()));
+                }
+              }
             } else {
-              // Only print the first 3 warnings verbosely, and
-              // shorten the rest to avoid crowding logs.
-              if (warningsCount.fetch_add(1, std::memory_order_relaxed) <
-                  kMaxWarnings)
-                warn("cannot export hidden symbol " + toString(*defined) +
-                     "\n>>> defined in " + toString(defined->getFile()));
+              defined->privateExtern = true;
             }
+          } else if (auto *dysym = dyn_cast<DylibSymbol>(sym)) {
+            dysym->shouldReexport =
+                config->exportedSymbols.match(sym->getName());
           }
-        } else {
-          defined->privateExtern = true;
-        }
-      } else if (auto *dysym = dyn_cast<DylibSymbol>(sym)) {
-        dysym->shouldReexport = config->exportedSymbols.match(sym->getName());
-      }
-    });
+        });
     if (warningsCount > kMaxWarnings)
       warn("<... " + Twine(warningsCount - kMaxWarnings) +
            " more similar warnings...>");
   } else if (!config->unexportedSymbols.empty()) {
-    parallelForEach(symtab->getSymbols(), [](Symbol *sym) {
+    parallelForEach(config->executor, symtab->getSymbols(), [](Symbol *sym) {
       if (auto *defined = dyn_cast<Defined>(sym))
         if (config->unexportedSymbols.match(defined->getName()))
           defined->privateExtern = true;
@@ -1762,7 +1779,8 @@ static void computeColdness() {
 namespace lld {
 namespace macho {
 bool link(ArrayRef<const char *> argsArr, llvm::raw_ostream &stdoutOS,
-          llvm::raw_ostream &stderrOS, bool exitEarly, bool disableOutput) {
+          llvm::raw_ostream &stderrOS, bool exitEarly, bool disableOutput,
+          llvm::parallel::Executor *executor) {
   // This driver-specific context will be freed later by lldMain().
   auto *ctx = new CommonLinkerContext;
 
@@ -1819,6 +1837,11 @@ bool link(ArrayRef<const char *> argsArr, llvm::raw_ostream &stdoutOS,
   }
 
   config = std::make_unique<Configuration>();
+  // Until --threads= is parsed, use the whole host executor.
+  if (executor) {
+    config->hostExecutor = executor;
+    config->executor = parallel::ExecutorRef(*executor);
+  }
   symtab = std::make_unique<SymbolTable>();
   config->outputType = getOutputType(args);
   target = createTargetInfo(args);
@@ -1921,15 +1944,18 @@ bool link(ArrayRef<const char *> argsArr, llvm::raw_ostream &stdoutOS,
          ": option unavailable because lld was not built with thread support");
 #endif
   }
+  ThreadPoolStrategy threadLimit;
   if (auto *arg = args.getLastArg(OPT_threads_eq)) {
     StringRef v(arg->getValue());
     unsigned threads = 0;
     if (!llvm::to_integer(v, threads, 0) || threads == 0)
       error(arg->getSpelling() + ": expected a positive integer, but got '" +
             arg->getValue() + "'");
-    parallel::strategy = hardware_concurrency(threads);
+    threadLimit = hardware_concurrency(threads);
     config->thinLTOJobs = v;
   }
+  config->executor =
+      context().createExecutor(config->hostExecutor, threadLimit);
   if (auto *arg = args.getLastArg(OPT_thinlto_jobs_eq))
     config->thinLTOJobs = arg->getValue();
   if (!get_threadpool_strategy(config->thinLTOJobs))

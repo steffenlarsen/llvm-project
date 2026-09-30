@@ -1086,7 +1086,7 @@ void LinkerScript::addOrphanSections() {
   // can be precomputed in parallel.
   SmallVector<StringRef, 0> names(ctx.inputSections.size());
   if (!copyRelocs) {
-    parallelFor(0, ctx.inputSections.size(), [&](size_t i) {
+    parallelFor(ctx.executor, 0, ctx.inputSections.size(), [&](size_t i) {
       InputSectionBase *s = ctx.inputSections[i];
       if (s->isLive() && !s->parent)
         names[i] = getOutputSectionName(s);

@@ -67,7 +67,7 @@ class PDBLinker {
 
 public:
   PDBLinker(COFFLinkerContext &ctx)
-      : builder(bAlloc()), tMerger(ctx, bAlloc()), ctx(ctx) {
+      : builder(bAlloc(), ctx.executor), tMerger(ctx, bAlloc()), ctx(ctx) {
     // This isn't strictly necessary, but link.exe usually puts an empty string
     // as the first "valid" string in the string table, so we do the same in
     // order to maintain as much byte-for-byte compatibility as possible.

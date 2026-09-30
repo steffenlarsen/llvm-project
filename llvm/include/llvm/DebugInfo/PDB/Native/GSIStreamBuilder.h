@@ -17,6 +17,7 @@
 #include "llvm/Support/BinaryStreamRef.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Error.h"
+#include "llvm/Support/Parallel.h"
 
 namespace llvm {
 namespace codeview {
@@ -47,7 +48,8 @@ struct SymbolDenseMapInfo;
 class GSIStreamBuilder {
 
 public:
-  LLVM_ABI explicit GSIStreamBuilder(msf::MSFBuilder &Msf);
+  LLVM_ABI explicit GSIStreamBuilder(msf::MSFBuilder &Msf,
+                                     parallel::ExecutorRef Executor);
   LLVM_ABI ~GSIStreamBuilder();
 
   GSIStreamBuilder(const GSIStreamBuilder &) = delete;
@@ -89,6 +91,7 @@ private:
   uint32_t GlobalsStreamIndex = kInvalidStreamIndex;
   uint32_t RecordStreamIndex = kInvalidStreamIndex;
   msf::MSFBuilder &Msf;
+  parallel::ExecutorRef Executor;
   std::unique_ptr<GSIHashStreamBuilder> PSH;
   std::unique_ptr<GSIHashStreamBuilder> GSH;
 

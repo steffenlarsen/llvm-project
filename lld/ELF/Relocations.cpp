@@ -1198,7 +1198,7 @@ template <class ELFT> void elf::scanRelocations(Ctx &ctx) {
   size_t numWorkers = ctx.arg.emachine == EM_MIPS
                           ? 1
                           : std::min<size_t>(ctx.arg.threadCount, numFiles + 1);
-  parallelFor(0, numWorkers, [&](unsigned shard) {
+  parallelFor(ctx.executor, 0, numWorkers, [&](unsigned shard) {
     // Tasks claim work items off a shared counter: item i < numFiles scans
     // ctx.objectFiles[i] while the last item scans special sections.
     for (size_t i;
@@ -2048,7 +2048,7 @@ template <class ELFT> void elf::checkNoCrossRefs(Ctx &ctx) {
         auto *isd = dyn_cast<InputSectionDescription>(cmd);
         if (!isd)
           continue;
-        parallelForEach(isd->sections, [&](InputSection *sec) {
+        parallelForEach(ctx.executor, isd->sections, [&](InputSection *sec) {
           invokeOnRelocs(*sec, scanCrossRefs<ELFT>, ctx, noxref, osec, sec);
         });
       }

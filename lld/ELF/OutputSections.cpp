@@ -391,7 +391,7 @@ template <class ELFT> void OutputSection::maybeCompress(Ctx &ctx) {
   auto buf = std::make_unique<uint8_t[]>(size);
   // Write uncompressed data to a temporary zero-initialized buffer.
   {
-    parallel::TaskGroup tg;
+    parallel::TaskGroup tg(ctx.executor);
     writeTo<ELFT>(ctx, buf.get(), tg);
   }
   // The generic ABI specifies "The sh_size and sh_addralign fields of the
@@ -412,7 +412,7 @@ template <class ELFT> void OutputSection::maybeCompress(Ctx &ctx) {
   // http://facebook.github.io/zstd/zstd_manual.html "Streaming compression -
   // HowTo".
   if (ctype == DebugCompressionType::Zstd) {
-    parallelFor(0, numShards, [&](size_t i) {
+    parallelFor(ctx.executor, 0, numShards, [&](size_t i) {
       SmallVector<uint8_t, 0> out;
       ZSTD_CCtx *cctx = ZSTD_createCCtx();
       ZSTD_CCtx_setParameter(cctx, ZSTD_c_compressionLevel, level);
@@ -451,7 +451,7 @@ template <class ELFT> void OutputSection::maybeCompress(Ctx &ctx) {
     // shards but the last to flush the output to a byte boundary to be
     // concatenated with the next shard.
     auto shardsAdler = std::make_unique<uint32_t[]>(numShards);
-    parallelFor(0, numShards, [&](size_t i) {
+    parallelFor(ctx.executor, 0, numShards, [&](size_t i) {
       shardsOut[i] = deflateShard(ctx, shardsIn[i], level,
                                   i != numShards - 1 ? Z_SYNC_FLUSH : Z_FINISH);
       shardsAdler[i] = adler32(1, shardsIn[i].data(), shardsIn[i].size());
@@ -523,7 +523,7 @@ void OutputSection::writeTo(Ctx &ctx, uint8_t *buf, parallel::TaskGroup &tg) {
     // Compute shard offsets.
     for (size_t i = 1; i != compressed.numShards; ++i)
       offsets[i] = offsets[i - 1] + compressed.shards[i - 1].size();
-    parallelFor(0, compressed.numShards, [&](size_t i) {
+    parallelFor(ctx.executor, 0, compressed.numShards, [&](size_t i) {
       memcpy(buf + offsets[i], compressed.shards[i].data(),
              compressed.shards[i].size());
     });
@@ -902,7 +902,7 @@ void OutputSection::checkDynRelAddends(Ctx &ctx) {
   assert(isStaticRelSecType(type));
   SmallVector<InputSection *, 0> storage;
   ArrayRef<InputSection *> sections = getInputSections(*this, storage);
-  parallelFor(0, sections.size(), [&](size_t i) {
+  parallelFor(ctx.executor, 0, sections.size(), [&](size_t i) {
     // When linking with -r or --emit-relocs we might also call this function
     // for input .rel[a].<sec> sections which we simply pass through to the
     // output. We skip over those and only look at the synthetic relocation

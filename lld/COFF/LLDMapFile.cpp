@@ -77,7 +77,7 @@ static DenseMap<DefinedRegular *, std::string>
 getSymbolStrings(const COFFLinkerContext &ctx,
                  ArrayRef<DefinedRegular *> syms) {
   std::vector<std::string> str(syms.size());
-  parallelFor((size_t)0, syms.size(), [&](size_t i) {
+  parallelFor(ctx.executor, (size_t)0, syms.size(), [&](size_t i) {
     raw_string_ostream os(str[i]);
     writeHeader(os, syms[i]->getRVA(), 0, 0);
     os << indent16 << toString(ctx, *syms[i]);

@@ -409,10 +409,10 @@ void ICF::forEachClass(llvm::function_ref<void(size_t, size_t)> func) {
   size_t boundaries[shards + 1];
   boundaries[0] = 0;
   boundaries[shards] = icfInputs.size();
-  parallelFor(1, shards, [&](size_t i) {
+  parallelFor(config->executor, 1, shards, [&](size_t i) {
     boundaries[i] = findBoundary((i - 1) * step, icfInputs.size());
   });
-  parallelFor(1, shards + 1, [&](size_t i) {
+  parallelFor(config->executor, 1, shards + 1, [&](size_t i) {
     if (boundaries[i - 1] < boundaries[i]) {
       forEachClassRange(boundaries[i - 1], boundaries[i], func);
     }
@@ -423,7 +423,7 @@ void ICF::forEachClass(llvm::function_ref<void(size_t, size_t)> func) {
 void ICF::run() {
   // Into each origin-section hash, combine all reloc referent section hashes.
   for (icfPass = 0; icfPass < 2; ++icfPass) {
-    parallelForEach(icfInputs, [&](ConcatInputSection *isec) {
+    parallelForEach(config->executor, icfInputs, [&](ConcatInputSection *isec) {
       uint32_t hash = isec->icfEqClass[icfPass % 2];
       for (const Relocation &r : isec->relocs) {
         if (auto *sym = r.referent.dyn_cast<Symbol *>()) {
@@ -660,7 +660,7 @@ void macho::foldIdenticalSections(bool onlyCfStrings) {
       isec->icfEqClass[0] = ++icfUniqueID;
     }
   }
-  parallelForEach(foldable, [](ConcatInputSection *isec) {
+  parallelForEach(config->executor, foldable, [](ConcatInputSection *isec) {
     assert(isec->icfEqClass[0] == 0); // don't overwrite a unique ID!
     uint64_t hash;
     if (isFoldableIgnoringRelocatedBytes(isec)) {

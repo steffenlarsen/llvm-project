@@ -21,7 +21,8 @@ namespace {
 TEST(PerThreadBumpPtrAllocatorTest, Simple) {
   PerThreadBumpPtrAllocator Allocator;
 
-  parallel::TaskGroup tg;
+  parallel::Executor Executor;
+  parallel::TaskGroup tg(Executor);
 
   tg.spawn([&]() {
     uint64_t *Var =
@@ -43,7 +44,8 @@ TEST(PerThreadBumpPtrAllocatorTest, ParallelAllocation) {
 
   static size_t constexpr NumAllocations = 1000;
 
-  parallelFor(0, NumAllocations, [&](size_t Idx) {
+  parallel::Executor Executor;
+  parallelFor(Executor, 0, NumAllocations, [&](size_t Idx) {
     uint64_t *ptr =
         (uint64_t *)Allocator.Allocate(sizeof(uint64_t), alignof(uint64_t));
     *ptr = Idx;
@@ -52,7 +54,7 @@ TEST(PerThreadBumpPtrAllocatorTest, ParallelAllocation) {
   EXPECT_LE(sizeof(uint64_t) * NumAllocations, Allocator.getTotalMemory());
   // Sub-allocators are created lazily, one per thread that allocated.
   EXPECT_GE(Allocator.getNumberOfAllocators(), 1u);
-  EXPECT_LE(Allocator.getNumberOfAllocators(), parallel::getThreadCount());
+  EXPECT_LE(Allocator.getNumberOfAllocators(), Executor.getThreadCount());
 }
 
 #if LLVM_ENABLE_THREADS

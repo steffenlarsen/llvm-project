@@ -1075,7 +1075,7 @@ Error handleOverrideImages(
 Expected<SmallVector<StringRef>>
 linkAndWrapDeviceFiles(ArrayRef<SmallVector<OffloadFile>> LinkerInputFiles,
                        const InputArgList &Args, char **Argv, int Argc,
-                       bool NeedsWrapping) {
+                       bool NeedsWrapping, parallel::ExecutorRef Executor) {
   llvm::TimeTraceScope TimeScope("Handle all device input");
 
   std::mutex ImageMtx;
@@ -1086,80 +1086,81 @@ linkAndWrapDeviceFiles(ArrayRef<SmallVector<OffloadFile>> LinkerInputFiles,
     if (Error Err = handleOverrideImages(Args, Images))
       return std::move(Err);
 
-  auto Err = parallelForEachError(LinkerInputFiles, [&](auto &Input) -> Error {
-    llvm::TimeTraceScope TimeScope("Link device input");
+  auto Err = parallelForEachError(
+      Executor, LinkerInputFiles, [&](auto &Input) -> Error {
+        llvm::TimeTraceScope TimeScope("Link device input");
 
-    // Each thread needs its own copy of the base arguments to maintain
-    // per-device argument storage of synthetic strings.
-    const OptTable &Tbl = getOptTable();
-    BumpPtrAllocator Alloc;
-    StringSaver Saver(Alloc);
-    auto BaseArgs =
-        Tbl.parseArgs(Argc, Argv, OPT_INVALID, Saver, [](StringRef Err) {
-          reportError(createStringError(Err));
-        });
-    auto LinkerArgs = getLinkerArgs(Input, BaseArgs);
+        // Each thread needs its own copy of the base arguments to maintain
+        // per-device argument storage of synthetic strings.
+        const OptTable &Tbl = getOptTable();
+        BumpPtrAllocator Alloc;
+        StringSaver Saver(Alloc);
+        auto BaseArgs =
+            Tbl.parseArgs(Argc, Argv, OPT_INVALID, Saver, [](StringRef Err) {
+              reportError(createStringError(Err));
+            });
+        auto LinkerArgs = getLinkerArgs(Input, BaseArgs);
 
-    uint16_t ActiveOffloadKindMask = 0u;
-    for (const auto &File : Input)
-      ActiveOffloadKindMask |= File.getBinary()->getOffloadKind();
+        uint16_t ActiveOffloadKindMask = 0u;
+        for (const auto &File : Input)
+          ActiveOffloadKindMask |= File.getBinary()->getOffloadKind();
 
-    // Linking images of SYCL offload kind with images of other kind is not
-    // supported.
-    // TODO: Remove the above limitation.
-    if ((ActiveOffloadKindMask & OFK_SYCL) &&
-        ((ActiveOffloadKindMask ^ OFK_SYCL) != 0))
-      return createStringError("Linking images of SYCL offload kind with "
-                               "images of any other kind is not supported");
+        // Linking images of SYCL offload kind with images of other kind is not
+        // supported.
+        // TODO: Remove the above limitation.
+        if ((ActiveOffloadKindMask & OFK_SYCL) &&
+            ((ActiveOffloadKindMask ^ OFK_SYCL) != 0))
+          return createStringError("Linking images of SYCL offload kind with "
+                                   "images of any other kind is not supported");
 
-    // Write any remaining device inputs to an output file.
-    SmallVector<StringRef> InputFiles;
-    for (const OffloadFile &File : Input) {
-      auto FileNameOrErr = writeOffloadFile(File);
-      if (!FileNameOrErr)
-        return FileNameOrErr.takeError();
-      InputFiles.emplace_back(*FileNameOrErr);
-    }
+        // Write any remaining device inputs to an output file.
+        SmallVector<StringRef> InputFiles;
+        for (const OffloadFile &File : Input) {
+          auto FileNameOrErr = writeOffloadFile(File);
+          if (!FileNameOrErr)
+            return FileNameOrErr.takeError();
+          InputFiles.emplace_back(*FileNameOrErr);
+        }
 
-    // Link the remaining device files using the device linker.
-    auto OutputOrErr =
-        linkDevice(InputFiles, LinkerArgs, ActiveOffloadKindMask);
-    if (!OutputOrErr)
-      return OutputOrErr.takeError();
+        // Link the remaining device files using the device linker.
+        auto OutputOrErr =
+            linkDevice(InputFiles, LinkerArgs, ActiveOffloadKindMask);
+        if (!OutputOrErr)
+          return OutputOrErr.takeError();
 
-    // Store the offloading image for each linked output file.
-    for (OffloadKind Kind = OFK_OpenMP; Kind != OFK_LAST;
-         Kind = static_cast<OffloadKind>((uint16_t)(Kind) << 1)) {
-      if ((ActiveOffloadKindMask & Kind) == 0)
-        continue;
-      llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>> FileOrErr =
-          llvm::MemoryBuffer::getFileOrSTDIN(*OutputOrErr);
-      if (std::error_code EC = FileOrErr.getError()) {
-        if (DryRun)
-          FileOrErr = MemoryBuffer::getMemBuffer("", *OutputOrErr);
-        else
-          return createFileError(*OutputOrErr, EC);
-      }
+        // Store the offloading image for each linked output file.
+        for (OffloadKind Kind = OFK_OpenMP; Kind != OFK_LAST;
+             Kind = static_cast<OffloadKind>((uint16_t)(Kind) << 1)) {
+          if ((ActiveOffloadKindMask & Kind) == 0)
+            continue;
+          llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>> FileOrErr =
+              llvm::MemoryBuffer::getFileOrSTDIN(*OutputOrErr);
+          if (std::error_code EC = FileOrErr.getError()) {
+            if (DryRun)
+              FileOrErr = MemoryBuffer::getMemBuffer("", *OutputOrErr);
+            else
+              return createFileError(*OutputOrErr, EC);
+          }
 
-      // Manually containerize offloading images not in ELF format.
-      if (Error E = containerizeRawImage(*FileOrErr, Kind, LinkerArgs))
-        return E;
+          // Manually containerize offloading images not in ELF format.
+          if (Error E = containerizeRawImage(*FileOrErr, Kind, LinkerArgs))
+            return E;
 
-      std::scoped_lock<decltype(ImageMtx)> Guard(ImageMtx);
-      OffloadingImage TheImage{};
-      TheImage.TheImageKind =
-          Args.hasArg(OPT_embed_bitcode) ? IMG_Bitcode : IMG_Object;
-      TheImage.TheOffloadKind = Kind;
-      TheImage.StringData["triple"] =
-          Args.MakeArgString(LinkerArgs.getLastArgValue(OPT_triple_EQ));
-      TheImage.StringData["arch"] =
-          Args.MakeArgString(LinkerArgs.getLastArgValue(OPT_arch_EQ));
-      TheImage.Image = std::move(*FileOrErr);
+          std::scoped_lock<decltype(ImageMtx)> Guard(ImageMtx);
+          OffloadingImage TheImage{};
+          TheImage.TheImageKind =
+              Args.hasArg(OPT_embed_bitcode) ? IMG_Bitcode : IMG_Object;
+          TheImage.TheOffloadKind = Kind;
+          TheImage.StringData["triple"] =
+              Args.MakeArgString(LinkerArgs.getLastArgValue(OPT_triple_EQ));
+          TheImage.StringData["arch"] =
+              Args.MakeArgString(LinkerArgs.getLastArgValue(OPT_arch_EQ));
+          TheImage.Image = std::move(*FileOrErr);
 
-      Images[Kind].emplace_back(std::move(TheImage));
-    }
-    return Error::success();
-  });
+          Images[Kind].emplace_back(std::move(TheImage));
+        }
+        return Error::success();
+      });
   if (Err)
     return std::move(Err);
 
@@ -1556,11 +1557,11 @@ int main(int Argc, char **Argv) {
   else
     ExecutableName = Triple.isOSWindows() ? "a.exe" : "a.out";
 
-  parallel::strategy = hardware_concurrency(1);
+  ThreadPoolStrategy WrapperJobs = hardware_concurrency(1);
   if (auto *Arg = Args.getLastArg(OPT_wrapper_jobs)) {
     StringRef Val = Arg->getValue();
     if (Val.equals_insensitive("jobserver"))
-      parallel::strategy = jobserver_concurrency();
+      WrapperJobs = jobserver_concurrency();
     else {
       unsigned Threads = 0;
       if (!llvm::to_integer(Val, Threads) || Threads == 0)
@@ -1568,7 +1569,7 @@ int main(int Argc, char **Argv) {
             "%s: expected a positive integer or 'jobserver', got '%s'",
             Arg->getSpelling().data(), Val.data()));
       else
-        parallel::strategy = hardware_concurrency(Threads);
+        WrapperJobs = hardware_concurrency(Threads);
     }
   }
 
@@ -1595,8 +1596,9 @@ int main(int Argc, char **Argv) {
 
     // Link and process the device images. The function may emit a direct fat
     // binary if --emit-fatbin-only is specified.
+    parallel::Executor Executor(WrapperJobs);
     auto FilesOrErr = linkAndWrapDeviceFiles(*DeviceInputFiles, Args, Argv,
-                                             Argc, !EmitFatbinOnly);
+                                             Argc, !EmitFatbinOnly, Executor);
     if (!FilesOrErr)
       reportError(FilesOrErr.takeError());
 

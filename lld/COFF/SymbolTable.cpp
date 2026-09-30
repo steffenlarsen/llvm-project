@@ -644,7 +644,7 @@ void SymbolTable::initializeECThunks() {
   // On ARM64EC, the __imp_ symbol references the auxiliary IAT, while the
   // __imp_aux_ symbol references the regular IAT. However, x86_64 code expects
   // both to reference the regular IAT, so adjust the symbol if necessary.
-  parallelForEach(ctx.objFileInstances, [&](ObjFile *file) {
+  parallelForEach(ctx.executor, ctx.objFileInstances, [&](ObjFile *file) {
     if (file->getMachineType() != AMD64)
       return;
     for (auto &sym : file->getMutableSymbols()) {

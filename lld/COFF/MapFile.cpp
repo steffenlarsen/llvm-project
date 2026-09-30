@@ -63,7 +63,8 @@ static void writeFormattedTimestamp(raw_ostream &os, time_t tds) {
                time->tm_sec, time->tm_year + 1900);
 }
 
-static void sortUniqueSymbols(std::vector<Defined *> &syms,
+static void sortUniqueSymbols(parallel::ExecutorRef executor,
+                              std::vector<Defined *> &syms,
                               uint64_t imageBase) {
   // Build helper vector
   using SortEntry = std::pair<Defined *, size_t>;
@@ -73,20 +74,21 @@ static void sortUniqueSymbols(std::vector<Defined *> &syms,
     v[i] = SortEntry(syms[i], i);
 
   // Remove duplicate symbol pointers
-  parallelSort(v, std::less<SortEntry>());
+  parallelSort(executor, v, std::less<SortEntry>());
   auto end = llvm::unique(v, [](const SortEntry &a, const SortEntry &b) {
     return a.first == b.first;
   });
   v.erase(end, v.end());
 
   // Sort by RVA then original order
-  parallelSort(v, [imageBase](const SortEntry &a, const SortEntry &b) {
-    // Add config.imageBase to avoid comparing "negative" RVAs.
-    // This can happen with symbols of Absolute kind
-    uint64_t rvaa = imageBase + a.first->getRVA();
-    uint64_t rvab = imageBase + b.first->getRVA();
-    return rvaa < rvab || (rvaa == rvab && a.second < b.second);
-  });
+  parallelSort(executor, v,
+               [imageBase](const SortEntry &a, const SortEntry &b) {
+                 // Add config.imageBase to avoid comparing "negative" RVAs.
+                 // This can happen with symbols of Absolute kind
+                 uint64_t rvaa = imageBase + a.first->getRVA();
+                 uint64_t rvab = imageBase + b.first->getRVA();
+                 return rvaa < rvab || (rvaa == rvab && a.second < b.second);
+               });
 
   syms.resize(v.size());
   for (size_t i = 0, e = v.size(); i < e; ++i)
@@ -134,15 +136,15 @@ static void getSymbols(const COFFLinkerContext &ctx,
       syms.push_back(file->auxImpCopySym);
   }
 
-  sortUniqueSymbols(syms, ctx.config.imageBase);
-  sortUniqueSymbols(staticSyms, ctx.config.imageBase);
+  sortUniqueSymbols(ctx.executor, syms, ctx.config.imageBase);
+  sortUniqueSymbols(ctx.executor, staticSyms, ctx.config.imageBase);
 }
 
 // Construct a map from symbols to their stringified representations.
 static DenseMap<Defined *, std::string>
 getSymbolStrings(const COFFLinkerContext &ctx, ArrayRef<Defined *> syms) {
   std::vector<std::string> str(syms.size());
-  parallelFor((size_t)0, syms.size(), [&](size_t i) {
+  parallelFor(ctx.executor, (size_t)0, syms.size(), [&](size_t i) {
     raw_string_ostream os(str[i]);
     Defined *sym = syms[i];
 

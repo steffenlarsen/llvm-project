@@ -280,7 +280,7 @@ void SymbolTable::scanVersionScript() {
   // Exact matching takes precedence over wildcard matching, so a wildcard
   // assigns a version only if none has been assigned.
   if (!pats.empty()) {
-    parallelForEach(symVector, [&](Symbol *sym) {
+    parallelForEach(ctx.executor, symVector, [&](Symbol *sym) {
       if (sym->versionScriptAssigned || sym->hasVersionSuffix ||
           !canBeVersioned(*sym))
         return;
@@ -302,7 +302,7 @@ void SymbolTable::scanVersionScript() {
     }
   }
   if (!pats.empty()) {
-    parallelForEach(symVector, [&](Symbol *sym) {
+    parallelForEach(ctx.executor, symVector, [&](Symbol *sym) {
       if (!canBeVersioned(*sym))
         return;
       StringRef name = sym->getName();

@@ -264,29 +264,32 @@ static void demoteSymbolsAndComputeIsPreemptible(Ctx &ctx) {
   llvm::TimeTraceScope timeScope("Demote symbols");
   ArrayRef<Symbol *> syms = ctx.symtab->getSymbols();
   constexpr size_t chunkSize = 4096;
-  parallelFor(0, (syms.size() + chunkSize - 1) / chunkSize, [&](size_t c) {
-    DenseMap<InputFile *, DenseMap<SectionBase *, size_t>> sectionIndexMap;
-    size_t begin = c * chunkSize;
-    for (Symbol *sym :
-         syms.slice(begin, std::min(chunkSize, syms.size() - begin))) {
-      if (auto *d = dyn_cast<Defined>(sym)) {
-        if (d->section && !d->section->isLive())
-          demoteDefined(*d, sectionIndexMap[d->file]);
-      } else {
-        auto *s = dyn_cast<SharedSymbol>(sym);
-        if (sym->isLazy() || (s && !cast<SharedFile>(s->file)->isNeeded)) {
-          uint8_t binding = sym->isLazy() ? sym->binding : uint8_t(STB_WEAK);
-          Undefined(ctx.internalFile, sym->getName(), binding, sym->stOther,
-                    sym->type)
-              .overwrite(*sym);
-          sym->versionId = VER_NDX_GLOBAL;
-        }
-      }
+  parallelFor(
+      ctx.executor, 0, (syms.size() + chunkSize - 1) / chunkSize,
+      [&](size_t c) {
+        DenseMap<InputFile *, DenseMap<SectionBase *, size_t>> sectionIndexMap;
+        size_t begin = c * chunkSize;
+        for (Symbol *sym :
+             syms.slice(begin, std::min(chunkSize, syms.size() - begin))) {
+          if (auto *d = dyn_cast<Defined>(sym)) {
+            if (d->section && !d->section->isLive())
+              demoteDefined(*d, sectionIndexMap[d->file]);
+          } else {
+            auto *s = dyn_cast<SharedSymbol>(sym);
+            if (sym->isLazy() || (s && !cast<SharedFile>(s->file)->isNeeded)) {
+              uint8_t binding =
+                  sym->isLazy() ? sym->binding : uint8_t(STB_WEAK);
+              Undefined(ctx.internalFile, sym->getName(), binding, sym->stOther,
+                        sym->type)
+                  .overwrite(*sym);
+              sym->versionId = VER_NDX_GLOBAL;
+            }
+          }
 
-      sym->isPreemptible = (sym->isUndefined() || sym->isExported) &&
-                           computeIsPreemptible(ctx, *sym);
-    }
-  });
+          sym->isPreemptible = (sym->isUndefined() || sym->isExported) &&
+                               computeIsPreemptible(ctx, *sym);
+        }
+      });
 }
 
 static OutputSection *findSection(Ctx &ctx, StringRef name) {
@@ -456,7 +459,7 @@ static void demoteAndCopyLocalSymbols(Ctx &ctx) {
   llvm::TimeTraceScope timeScope("Add local symbols");
   auto symsVec =
       std::make_unique<SmallVector<Symbol *, 0>[]>(ctx.objectFiles.size());
-  parallelFor(0, ctx.objectFiles.size(), [&](size_t i) {
+  parallelFor(ctx.executor, 0, ctx.objectFiles.size(), [&](size_t i) {
     DenseMap<SectionBase *, size_t> sectionIndexMap;
     for (Symbol *b : ctx.objectFiles[i]->getLocalSymbols()) {
       assert(b->isLocal() && "should have been caught in initializeSymbols()");
@@ -1672,7 +1675,7 @@ template <class ELFT> void Writer<ELFT>::finalizeAddressDependentContent() {
 // the end of the section are relaxed.
 static void fixSymbolsAfterShrinking(Ctx &ctx) {
   for (InputFile *File : ctx.objectFiles) {
-    parallelForEach(File->getSymbols(), [&](Symbol *Sym) {
+    parallelForEach(ctx.executor, File->getSymbols(), [&](Symbol *Sym) {
       auto *def = dyn_cast<Defined>(Sym);
       if (!def)
         return;
@@ -2920,7 +2923,7 @@ template <class ELFT> void Writer<ELFT>::openFile() {
     return;
   }
 
-  unlinkAsync(ctx.arg.outputFile);
+  unlinkAsync(ctx.arg.outputFile, ctx.executor.isParallel());
   unsigned flags = 0;
   if (!ctx.arg.relocatable)
     flags |= FileOutputBuffer::F_executable;
@@ -2939,7 +2942,7 @@ template <class ELFT> void Writer<ELFT>::openFile() {
 }
 
 template <class ELFT> void Writer<ELFT>::writeSectionsBinary() {
-  parallel::TaskGroup tg;
+  parallel::TaskGroup tg(ctx.executor);
   for (OutputSection *sec : ctx.outputSections)
     if (sec->flags & SHF_ALLOC)
       sec->writeTo<ELFT>(ctx, ctx.bufferStart + sec->offset, tg);
@@ -3002,13 +3005,13 @@ template <class ELFT> void Writer<ELFT>::writeSections() {
     // In -r or --emit-relocs mode, write the relocation sections first as in
     // ELf_Rel targets we might find out that we need to modify the relocated
     // section while doing it.
-    parallel::TaskGroup tg;
+    parallel::TaskGroup tg(ctx.executor);
     for (OutputSection *sec : ctx.outputSections)
       if (isStaticRelSecType(sec->type))
         sec->writeTo<ELFT>(ctx, ctx.bufferStart + sec->offset, tg);
   }
   {
-    parallel::TaskGroup tg;
+    parallel::TaskGroup tg(ctx.executor);
     for (OutputSection *sec : ctx.outputSections)
       if (!isStaticRelSecType(sec->type))
         sec->writeTo<ELFT>(ctx, ctx.bufferStart + sec->offset, tg);
@@ -3027,7 +3030,7 @@ template <class ELFT> void Writer<ELFT>::writeSections() {
 // chunks, compute a hash for each chunk, and then compute a hash value
 // of the hash values.
 static void
-computeHash(llvm::MutableArrayRef<uint8_t> hashBuf,
+computeHash(Ctx &ctx, llvm::MutableArrayRef<uint8_t> hashBuf,
             llvm::ArrayRef<uint8_t> data,
             std::function<void(uint8_t *dest, ArrayRef<uint8_t> arr)> hashFn) {
   std::vector<ArrayRef<uint8_t>> chunks = split(data, 1024 * 1024);
@@ -3035,7 +3038,7 @@ computeHash(llvm::MutableArrayRef<uint8_t> hashBuf,
   std::unique_ptr<uint8_t[]> hashes(new uint8_t[hashesSize]);
 
   // Compute hash values.
-  parallelFor(0, chunks.size(), [&](size_t i) {
+  parallelFor(ctx.executor, 0, chunks.size(), [&](size_t i) {
     hashFn(hashes.get() + i * hashBuf.size(), chunks[i]);
   });
 
@@ -3066,17 +3069,17 @@ template <class ELFT> void Writer<ELFT>::writeBuildId() {
   // efficient BLAKE3.
   switch (ctx.arg.buildId) {
   case BuildIdKind::Fast:
-    computeHash(output, input, [](uint8_t *dest, ArrayRef<uint8_t> arr) {
+    computeHash(ctx, output, input, [](uint8_t *dest, ArrayRef<uint8_t> arr) {
       write64le(dest, xxh3_64bits(arr));
     });
     break;
   case BuildIdKind::Md5:
-    computeHash(output, input, [&](uint8_t *dest, ArrayRef<uint8_t> arr) {
+    computeHash(ctx, output, input, [&](uint8_t *dest, ArrayRef<uint8_t> arr) {
       memcpy(dest, BLAKE3::hash<16>(arr).data(), hashSize);
     });
     break;
   case BuildIdKind::Sha1:
-    computeHash(output, input, [&](uint8_t *dest, ArrayRef<uint8_t> arr) {
+    computeHash(ctx, output, input, [&](uint8_t *dest, ArrayRef<uint8_t> arr) {
       memcpy(dest, BLAKE3::hash<20>(arr).data(), hashSize);
     });
     break;

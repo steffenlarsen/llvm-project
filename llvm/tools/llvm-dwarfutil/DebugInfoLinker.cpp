@@ -16,6 +16,7 @@
 #include "llvm/DebugInfo/DWARF/LowLevel/DWARFExpression.h"
 #include "llvm/Object/ObjectFile.h"
 #include "llvm/Support/FormatVariadic.h"
+#include "llvm/Support/Parallel.h"
 #include "llvm/Support/ThreadPool.h"
 #include "llvm/Support/Threading.h"
 #include <memory>
@@ -353,6 +354,9 @@ Error linkDebugInfoImpl(object::ObjectFile &File, const Options &Options,
   // link() below. The classic linker ignores it.
   DefaultThreadPool ThreadPool(hardware_concurrency(Options.NumThreads));
   DebugInfoLinker->setThreadPool(&ThreadPool);
+  // Likewise for the parallel work within the link.
+  llvm::parallel::Executor Executor(hardware_concurrency(Options.NumThreads));
+  DebugInfoLinker->setExecutor(Executor);
 
   if constexpr (std::is_same<Linker,
                              dwarf_linker::parallel::DWARFLinker>::value) {
@@ -479,7 +483,8 @@ Error linkDebugInfoImpl(object::ObjectFile &File, const Options &Options,
 Error linkDebugInfo(object::ObjectFile &File, const Options &Options,
                     raw_pwrite_stream &OutStream) {
   if (Options.UseDWARFLinkerParallel)
-    return linkDebugInfoImpl<parallel::DWARFLinker>(File, Options, OutStream);
+    return linkDebugInfoImpl<dwarf_linker::parallel::DWARFLinker>(File, Options,
+                                                                  OutStream);
   else
     return linkDebugInfoImpl<classic::DWARFLinker>(File, Options, OutStream);
 }

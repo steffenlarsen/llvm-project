@@ -18,6 +18,7 @@
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/Parallel.h"
 #include <memory>
 
 namespace llvm {
@@ -39,7 +40,9 @@ class TpiStreamBuilder;
 
 class PDBFileBuilder {
 public:
-  LLVM_ABI explicit PDBFileBuilder(BumpPtrAllocator &Allocator);
+  /// Parallel work while building the PDB runs on \p Executor.
+  LLVM_ABI explicit PDBFileBuilder(BumpPtrAllocator &Allocator,
+                                   parallel::ExecutorRef Executor);
   LLVM_ABI ~PDBFileBuilder();
   PDBFileBuilder(const PDBFileBuilder &) = delete;
   PDBFileBuilder &operator=(const PDBFileBuilder &) = delete;
@@ -90,6 +93,7 @@ private:
                             const msf::MSFLayout &Layout);
 
   BumpPtrAllocator &Allocator;
+  parallel::ExecutorRef Executor;
 
   std::unique_ptr<msf::MSFBuilder> Msf;
   std::unique_ptr<InfoStreamBuilder> Info;

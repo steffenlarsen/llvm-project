@@ -12,6 +12,10 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/Support/raw_ostream.h"
 
+namespace llvm::parallel {
+class Executor;
+} // namespace llvm::parallel
+
 namespace lld {
 enum Flavor {
   Invalid,
@@ -23,7 +27,8 @@ enum Flavor {
 };
 
 using Driver = bool (*)(llvm::ArrayRef<const char *>, llvm::raw_ostream &,
-                        llvm::raw_ostream &, bool, bool);
+                        llvm::raw_ostream &, bool, bool,
+                        llvm::parallel::Executor *);
 
 struct DriverDef {
   Flavor f;
@@ -41,8 +46,14 @@ struct Result {
 // and re-entry would not be possible anymore. Use exitLld() in that case to
 // properly exit your application and avoid intermittent crashes on exit caused
 // by cleanup.
+//
+// If `executor` is given, the link runs its parallel work on that executor,
+// using at most as many of its threads as the link's --threads option allows.
+// This lets a host share one thread pool between links. Otherwise the link
+// creates its own pool, sized by --threads, and destroys it when it is done.
 Result lldMain(llvm::ArrayRef<const char *> args, llvm::raw_ostream &stdoutOS,
-               llvm::raw_ostream &stderrOS, llvm::ArrayRef<DriverDef> drivers);
+               llvm::raw_ostream &stderrOS, llvm::ArrayRef<DriverDef> drivers,
+               llvm::parallel::Executor *executor = nullptr);
 } // namespace lld
 
 // With this macro, library users must specify which drivers they use, provide
@@ -52,7 +63,8 @@ Result lldMain(llvm::ArrayRef<const char *> args, llvm::raw_ostream &stdoutOS,
   namespace lld {                                                              \
   namespace name {                                                             \
   bool link(llvm::ArrayRef<const char *> args, llvm::raw_ostream &stdoutOS,    \
-            llvm::raw_ostream &stderrOS, bool exitEarly, bool disableOutput);  \
+            llvm::raw_ostream &stderrOS, bool exitEarly, bool disableOutput,   \
+            llvm::parallel::Executor *executor);                               \
   }                                                                            \
   }
 

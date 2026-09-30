@@ -655,7 +655,7 @@ void DwarfLinkerForBinary::copySwiftReflectionMetadata(
 
 bool DwarfLinkerForBinary::link(const DebugMap &Map) {
   if (Options.DWARFLinkerType == DsymutilDWARFLinkerType::Parallel)
-    return linkImpl<parallel::DWARFLinker>(Map, Options.FileType);
+    return linkImpl<dwarf_linker::parallel::DWARFLinker>(Map, Options.FileType);
 
   return linkImpl<classic::DWARFLinker>(Map, Options.FileType);
 }
@@ -721,10 +721,12 @@ bool DwarfLinkerForBinary::linkImpl(
       return false;
     }
 
-    if constexpr (std::is_same<Linker, parallel::DWARFLinker>::value) {
+    if constexpr (std::is_same<Linker,
+                               dwarf_linker::parallel::DWARFLinker>::value) {
       GeneralLinker->setOutputDWARFHandler(
           Map.getTriple(),
-          [&](std::shared_ptr<parallel::SectionDescriptorBase> Section) {
+          [&](std::shared_ptr<dwarf_linker::parallel::SectionDescriptorBase>
+                  Section) {
             Streamer->emitSectionContents(Section->getContents(),
                                           Section->getKind());
           });
@@ -748,6 +750,7 @@ bool DwarfLinkerForBinary::linkImpl(
   GeneralLinker->setPrependPath(Options.PrependPath);
   GeneralLinker->setKeepFunctionForStatic(Options.KeepFunctionForStatic);
   GeneralLinker->setThreadPool(ThreadPool);
+  GeneralLinker->setExecutor(Options.Executor);
   GeneralLinker->setInputVerificationHandler(
       [&](const DWARFFile &File, llvm::StringRef Output) {
         std::lock_guard<std::mutex> Guard(ErrorHandlerMutex);
