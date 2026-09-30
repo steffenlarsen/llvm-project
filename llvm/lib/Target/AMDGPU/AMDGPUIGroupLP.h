@@ -12,12 +12,34 @@
 #include "llvm/ADT/BitmaskEnum.h"
 #include "llvm/CodeGen/ScheduleDAGMutation.h"
 #include <memory>
+#include <optional>
 
 namespace llvm {
 
 namespace AMDGPU {
 // The current phase of instruction scheduling
 enum class SchedulingPhase { Initial, PreRAReentry, PostRA };
+
+/// IGLP analysis results computed while scheduling a function pre-RA and
+/// reused by its later scheduling phases, whose DAGs differ (e.g. post-RA
+/// physical register dependencies). Kept per function so concurrent
+/// compilations do not share it.
+struct IGLPPreRAAnalysis {
+  // MFMASmallGemmSingleWaveOpt (iglp_opt(1)).
+  unsigned DSWCount = 0;
+  unsigned DSWWithPermCount = 0;
+  unsigned DSWWithSharedVMEMCount = 0;
+  // MFMAExpInterleaveOpt (iglp_opt(2)).
+  unsigned TransPipeCount = 0;
+  unsigned MFMAPipeCount = 0;
+  unsigned AddPipeCount = 0;
+  unsigned MFMAEnablement = 0;
+  unsigned ExpRequirement = 0;
+  unsigned MFMAChains = 0;
+  bool HasCvt = false;
+  bool HasChainBetweenCvt = false;
+  std::optional<unsigned> FirstPipeDSR;
+};
 
 /// Operand 0 immediate for IGLP_OPT pseudo instructions.
 enum IGLPStrategyID : int {

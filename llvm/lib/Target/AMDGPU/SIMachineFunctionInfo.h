@@ -14,6 +14,7 @@
 #define LLVM_LIB_TARGET_AMDGPU_SIMACHINEFUNCTIONINFO_H
 
 #include "AMDGPUArgumentUsageInfo.h"
+#include "AMDGPUIGroupLP.h"
 #include "AMDGPUMachineFunctionInfo.h"
 #include "AMDGPUTargetMachine.h"
 #include "GCNSubtarget.h"
@@ -629,6 +630,8 @@ private:
 private:
   Register VGPRForAGPRCopy;
 
+  AMDGPU::IGLPPreRAAnalysis IGLPAnalysis;
+
   bool allocateVirtualVGPRForSGPRSpills(MachineFunction &MF, int FI,
                                         unsigned LaneIndex);
   bool allocatePhysicalVGPRForSGPRSpills(MachineFunction &MF, int FI,
@@ -643,6 +646,8 @@ public:
   void setVGPRForAGPRCopy(Register NewVGPRForAGPRCopy) {
     VGPRForAGPRCopy = NewVGPRForAGPRCopy;
   }
+
+  AMDGPU::IGLPPreRAAnalysis &getIGLPPreRAAnalysis() { return IGLPAnalysis; }
 
   bool isCalleeSavedReg(const MCPhysReg *CSRegs, MCPhysReg Reg) const;
 
