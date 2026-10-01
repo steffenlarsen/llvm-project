@@ -41,6 +41,10 @@ struct Result {
 // and re-entry would not be possible anymore. Use exitLld() in that case to
 // properly exit your application and avoid intermittent crashes on exit caused
 // by cleanup.
+//
+// LLD does not register LLVM targets itself. To link bitcode files (LTO), the
+// caller must first register the targets it needs, e.g. with the
+// InitializeAll* functions from llvm/Support/TargetSelect.h.
 Result lldMain(llvm::ArrayRef<const char *> args, llvm::raw_ostream &stdoutOS,
                llvm::raw_ostream &stderrOS, llvm::ArrayRef<DriverDef> drivers);
 } // namespace lld

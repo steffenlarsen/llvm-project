@@ -49,7 +49,6 @@
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Process.h"
 #include "llvm/Support/TarWriter.h"
-#include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/Threading.h"
 #include "llvm/Support/TimeProfiler.h"
 #include "llvm/TargetParser/Host.h"
@@ -772,17 +771,6 @@ static bool markReexport(StringRef searchName, ArrayRef<StringRef> extensions) {
     }
   }
   return false;
-}
-
-// This function is called on startup. We need this for LTO since
-// LTO calls LLVM functions to compile bitcode files to native code.
-// Technically this can be delayed until we read bitcode files, but
-// we don't bother to do lazily because the initialization is fast.
-static void initLLVM() {
-  InitializeAllTargets();
-  InitializeAllTargetMCs();
-  InitializeAllAsmPrinters();
-  InitializeAllAsmParsers();
 }
 
 static bool compileBitcodeFiles() {
@@ -2404,7 +2392,6 @@ bool link(ArrayRef<const char *> argsArr, llvm::raw_ostream &stdoutOS,
   {
     TimeTraceScope timeScope("ExecuteLinker");
 
-    initLLVM(); // must be run before any call to addFile()
     createFiles(args);
 
     // Now that all dylibs have been loaded, search for those that should be

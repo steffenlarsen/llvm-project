@@ -30,7 +30,6 @@
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Process.h"
 #include "llvm/Support/TarWriter.h"
-#include "llvm/Support/TargetSelect.h"
 #include "llvm/TargetParser/Host.h"
 #include <optional>
 
@@ -82,17 +81,6 @@ enum {
 #undef OPTION
 };
 
-// This function is called on startup. We need this for LTO since
-// LTO calls LLVM functions to compile bitcode files to native code.
-// Technically this can be delayed until we read bitcode files, but
-// we don't bother to do lazily because the initialization is fast.
-static void initLLVM() {
-  InitializeAllTargets();
-  InitializeAllTargetMCs();
-  InitializeAllAsmPrinters();
-  InitializeAllAsmParsers();
-}
-
 class LinkerDriver {
 public:
   LinkerDriver(Ctx &);
@@ -139,7 +127,6 @@ bool link(ArrayRef<const char *> args, llvm::raw_ostream &stdoutOS,
 
   symtab = make<SymbolTable>();
 
-  initLLVM();
   LinkerDriver(ctx).linkerMain(args);
 
   return errorCount() == 0;

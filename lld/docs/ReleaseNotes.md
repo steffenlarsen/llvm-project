@@ -31,6 +31,15 @@ from the [LLVM releases web site](https://llvm.org/releases/).
 
 ### Breaking changes
 
+* When LLD is used as a library, the ELF, COFF, Mach-O and WebAssembly drivers
+  no longer register all LLVM targets on every link. Library users that link
+  bitcode files must now register the targets they need before calling
+  `lld::lldMain`, e.g. with `llvm::InitializeAllTargets()`,
+  `InitializeAllTargetMCs()`, `InitializeAllAsmPrinters()` and
+  `InitializeAllAsmParsers()`. The `lld` executable does this itself. The
+  registration modified process-global state, which raced with other threads
+  in the same process that were using the `TargetRegistry`.
+
 ### COFF Improvements
 
 ### MinGW Improvements

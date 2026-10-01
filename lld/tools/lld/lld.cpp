@@ -37,6 +37,7 @@
 #include "llvm/Support/Path.h"
 #include "llvm/Support/PluginLoader.h"
 #include "llvm/Support/Process.h"
+#include "llvm/Support/TargetSelect.h"
 #include "llvm/TargetParser/Host.h"
 #include "llvm/TargetParser/Triple.h"
 #include <cstdlib>
@@ -80,6 +81,14 @@ int lld_main(int argc, char **argv, const llvm::ToolContext &) {
         << "crashing due to environment variable FORCE_LLD_DIAGNOSTICS_CRASH\n";
     LLVM_BUILTIN_TRAP;
   }
+
+  // Needed for LTO. This is done here rather than in the drivers because it
+  // modifies the process-global TargetRegistry, which LLD-as-a-library users
+  // may be reading from other threads while a link is running.
+  InitializeAllTargets();
+  InitializeAllTargetMCs();
+  InitializeAllAsmPrinters();
+  InitializeAllAsmParsers();
 
   ArrayRef<const char *> args(argv, argv + argc);
 
