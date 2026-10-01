@@ -22,6 +22,7 @@
 
 #include "llvm/Bitcode/BitcodeWriter.h"
 #include "llvm/IR/LegacyPassManager.h"
+#include "llvm/IR/PassTimingInfo.h"
 #include "llvm/IRReader/IRReader.h"
 #include "llvm/Linker/Linker.h"
 #include "llvm/MC/TargetRegistry.h"
@@ -253,6 +254,7 @@ std::optional<SmallVector<char, 0>> ModuleToObject::run() {
   // Translate the module to LLVM IR.
   llvm::LLVMContext llvmContext;
   setupLLVMContext(llvmContext);
+  llvm::CommandLineTimePassesScope timePasses(llvmContext);
   std::unique_ptr<llvm::Module> llvmModule = translateToLLVMIR(llvmContext);
   if (!llvmModule) {
     getOperation().emitError() << "Failed creating the llvm::Module.";

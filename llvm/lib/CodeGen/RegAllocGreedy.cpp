@@ -721,7 +721,7 @@ MCRegister RAGreedy::tryEvict(const LiveInterval &VirtReg,
                               uint8_t CostPerUseLimit,
                               const SmallVirtRegSet &FixedRegisters) {
   NamedRegionTimer T("evict", "Evict", TimerGroupName, TimerGroupDescription,
-                     TimePassesIsEnabled);
+                     TimingState);
 
   MCRegister BestPhys = EvictAdvisor->tryFindEvictionCandidate(
       VirtReg, Order, CostPerUseLimit, FixedRegisters);
@@ -1986,7 +1986,7 @@ MCRegister RAGreedy::trySplit(const LiveInterval &VirtReg,
   // Local intervals are handled separately.
   if (LIS->intervalIsInOneMBB(VirtReg)) {
     NamedRegionTimer T("local_split", "Local Splitting", TimerGroupName,
-                       TimerGroupDescription, TimePassesIsEnabled);
+                       TimerGroupDescription, TimingState);
     SA->analyze(&VirtReg);
     MCRegister PhysReg = tryLocalSplit(VirtReg, Order, NewVRegs);
     if (PhysReg || !NewVRegs.empty())
@@ -1995,7 +1995,7 @@ MCRegister RAGreedy::trySplit(const LiveInterval &VirtReg,
   }
 
   NamedRegionTimer T("global_split", "Global Splitting", TimerGroupName,
-                     TimerGroupDescription, TimePassesIsEnabled);
+                     TimerGroupDescription, TimingState);
 
   SA->analyze(&VirtReg);
 
@@ -2735,8 +2735,8 @@ MCRegister RAGreedy::selectOrSplitImpl(const LiveInterval &VirtReg,
   }
 
   // Finally spill VirtReg itself.
-  NamedRegionTimer T("spill", "Spiller", TimerGroupName,
-                     TimerGroupDescription, TimePassesIsEnabled);
+  NamedRegionTimer T("spill", "Spiller", TimerGroupName, TimerGroupDescription,
+                     TimingState);
   LiveRangeEdit LRE(&VirtReg, NewVRegs, *MF, *LIS, VRM, this, &DeadRemats);
   spiller().spill(LRE, &Order);
   ExtraInfo->setStage(NewVRegs.begin(), NewVRegs.end(), RS_Done);

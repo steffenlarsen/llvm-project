@@ -15,38 +15,87 @@
 #ifndef LLVM_IR_PASSTIMINGINFO_H
 #define LLVM_IR_PASSTIMINGINFO_H
 
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Timer.h"
 #include <memory>
+#include <optional>
 #include <utility>
 
 namespace llvm {
 
+class LLVMContext;
 class Pass;
 class PassInstrumentationCallbacks;
 class raw_ostream;
 
 /// If the user specifies the -time-passes argument on an LLVM tool command line
 /// then the value of this boolean will be true, otherwise false.
-/// This is the storage for the -time-passes option.
+/// This is the storage for the -time-passes option. Compilation never reads
+/// it: code that parses a command line uses it to decide whether to give the
+/// compilation's LLVMContext a PassTimingState.
 LLVM_ABI extern bool TimePassesIsEnabled;
 /// If TimePassesPerRun is true, there would be one line of report for
 /// each pass invocation.
 /// If TimePassesPerRun is false, there would be only one line of
 /// report for each pass (even there are more than one pass objects).
 /// (For new pass manager only)
+/// This is the storage for the -time-passes-per-run option, see
+/// TimePassesIsEnabled.
 LLVM_ABI extern bool TimePassesPerRun;
 
-/// If -time-passes has been specified, report the timings immediately and then
-/// reset the timers to zero. By default it uses the stream created by
-/// CreateInfoOutputFile().
-LLVM_ABI void reportAndResetTimings(raw_ostream *OutStream = nullptr);
+/// The timers of one compilation: those of the passes run by either pass
+/// manager, and the named region timers of code that runs on the
+/// compilation's LLVMContext. Compilations that run concurrently in one process
+/// are timed independently by giving each its own state.
+///
+/// A state is attached with LLVMContext::setPassTimingState and must only be
+/// used by one thread at a time. Its timers only count the CPU time of the
+/// thread running them.
+class PassTimingState : public TimerRegistry {
+  bool PerRun;
 
-/// Request the timer for this legacy-pass-manager's pass instance.
-LLVM_ABI Timer *getPassTimer(Pass *);
+  /// Map that counts instances of legacy passes.
+  StringMap<unsigned> PassIDCountMap;
+  /// Timers for legacy pass instances.
+  DenseMap<Pass *, std::unique_ptr<Timer>> LegacyPassTimers;
+
+  Timer *newLegacyPassTimer(StringRef PassID, StringRef PassDesc);
+
+public:
+  /// See TimePassesPerRun for \p PerRun.
+  LLVM_ABI explicit PassTimingState(bool PerRun = false);
+  LLVM_ABI ~PassTimingState();
+
+  bool isPerRun() const { return PerRun; }
+
+  /// Get the timer for this legacy-pass-manager's pass instance.
+  LLVM_ABI Timer *getLegacyPassTimer(Pass *P);
+
+  /// Report the pass timings immediately and then reset the timers to zero. By
+  /// default it uses the stream created by CreateInfoOutputFile().
+  LLVM_ABI void reportAndResetTimings(raw_ostream *OutStream = nullptr);
+};
+
+/// Request the timer for this legacy-pass-manager's pass instance, or null if
+/// \p State is null.
+LLVM_ABI Timer *getPassTimer(Pass *, PassTimingState *State);
+
+/// For library entry points that compile on a context they are given but have
+/// no command line of their own: while in scope, gives \p Context a
+/// PassTimingState if -time-passes is set and \p Context has none, and reports
+/// the timings when going out of scope.
+class CommandLineTimePassesScope {
+  LLVMContext &Context;
+  std::optional<PassTimingState> State;
+
+public:
+  LLVM_ABI explicit CommandLineTimePassesScope(LLVMContext &Context);
+  LLVM_ABI ~CommandLineTimePassesScope();
+};
 
 /// This class implements -time-passes functionality for new pass manager.
 /// It provides the pass-instrumentation callbacks that measure the pass
@@ -58,11 +107,12 @@ class TimePassesHandler {
   /// to all the instance of a given pass) + sequential invocation counter.
   using PassInvocationID = std::pair<StringRef, unsigned>;
 
+  /// The state that owns the timer groups, or null if timing is disabled.
+  PassTimingState *State;
+
   /// Groups of timers for passes and analyses.
-  TimerGroup &PassTG =
-      NamedRegionTimer::getNamedTimerGroup(PassGroupName, PassGroupDesc);
-  TimerGroup &AnalysisTG = NamedRegionTimer::getNamedTimerGroup(
-      AnalysisGroupName, AnalysisGroupDesc);
+  TimerGroup *PassTG = nullptr;
+  TimerGroup *AnalysisTG = nullptr;
 
   using TimerVector = llvm::SmallVector<std::unique_ptr<Timer>, 4>;
   /// Map of timers for pass invocations
@@ -80,9 +130,6 @@ class TimePassesHandler {
   /// CreateInfoOutputFile().
   raw_ostream *OutStream = nullptr;
 
-  bool Enabled;
-  bool PerRun;
-
 public:
   static constexpr StringRef PassGroupName = "pass";
   static constexpr StringRef AnalysisGroupName = "analysis";
@@ -90,8 +137,9 @@ public:
   static constexpr StringRef AnalysisGroupDesc =
       "Analysis execution timing report";
 
-  LLVM_ABI TimePassesHandler();
-  LLVM_ABI TimePassesHandler(bool Enabled, bool PerRun = false);
+  /// Time passes into the timer groups of \p State, which must outlive the
+  /// handler. Timing is disabled if \p State is null.
+  LLVM_ABI explicit TimePassesHandler(PassTimingState *State);
 
   /// Prints out timing information and then resets the timers.
   LLVM_ABI void print();

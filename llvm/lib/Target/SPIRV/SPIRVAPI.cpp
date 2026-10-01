@@ -18,6 +18,7 @@
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/PassTimingInfo.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Pass.h"
@@ -110,6 +111,7 @@ SPIRVTranslate(Module *M, std::string &SpirvObj, std::string &ErrMsg,
   }
   M->setDataLayout(MaybeDL.get());
 
+  CommandLineTimePassesScope TimePasses(M->getContext());
   TargetLibraryInfoImpl TLII(M->getTargetTriple());
   legacy::PassManager PM;
   PM.add(new TargetLibraryInfoWrapperPass(TLII));

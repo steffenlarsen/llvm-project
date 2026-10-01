@@ -129,9 +129,9 @@ static cl::opt<bool>
 #endif
 
 struct SplitModuleTimer : NamedRegionTimer {
-  SplitModuleTimer(StringRef Name, StringRef Desc)
+  SplitModuleTimer(const Module &M, StringRef Name, StringRef Desc)
       : NamedRegionTimer(Name, Desc, DEBUG_TYPE, "AMDGPU Module Splitting",
-                         TimePassesIsEnabled) {}
+                         M.getContext().getPassTimingState()) {}
 };
 
 //===----------------------------------------------------------------------===//
@@ -172,7 +172,7 @@ static bool isNonCopyable(const Function &F) {
 /// \return The module's total cost.
 static CostType calculateFunctionCosts(GetTTIFn GetTTI, Module &M,
                                        FunctionsCostMap &CostMap) {
-  SplitModuleTimer SMT("calculateFunctionCosts", "cost analysis");
+  SplitModuleTimer SMT(M, "calculateFunctionCosts", "cost analysis");
 
   LLVM_DEBUG(dbgs() << "[cost analysis] calculating function costs\n");
   CostType ModuleCost = 0;
@@ -486,7 +486,7 @@ static bool handleCalleesMD(const Instruction &I,
 }
 
 void SplitGraph::buildGraph(CallGraph &CG) {
-  SplitModuleTimer SMT("buildGraph", "graph construction");
+  SplitModuleTimer SMT(M, "buildGraph", "graph construction");
   LLVM_DEBUG(
       dbgs()
       << "[build graph] constructing graph representation of the input\n");
@@ -969,12 +969,14 @@ RecursiveSearchSplitting::RecursiveSearchSplitting(
 
 void RecursiveSearchSplitting::run() {
   {
-    SplitModuleTimer SMT("recursive_search_prepare", "preparing worklist");
+    SplitModuleTimer SMT(SG.getModule(), "recursive_search_prepare",
+                         "preparing worklist");
     setupWorkList();
   }
 
   {
-    SplitModuleTimer SMT("recursive_search_pick", "partitioning");
+    SplitModuleTimer SMT(SG.getModule(), "recursive_search_pick",
+                         "partitioning");
     SplitProposal SP(SG, NumParts);
     pickPartition(/*BranchDepth=*/0, /*Idx=*/0, std::move(SP));
   }
@@ -1295,8 +1297,9 @@ static void printPartitionSummary(raw_ostream &OS, unsigned N, const Module &M,
      << "% of the source\n";
 }
 
-static void evaluateProposal(SplitProposal &Best, SplitProposal New) {
-  SplitModuleTimer SMT("proposal_evaluation", "proposal ranking algorithm");
+static void evaluateProposal(const Module &M, SplitProposal &Best,
+                             SplitProposal New) {
+  SplitModuleTimer SMT(M, "proposal_evaluation", "proposal ranking algorithm");
 
   LLVM_DEBUG({
     New.verifyCompleteness();
@@ -1443,7 +1446,7 @@ static void splitAMDGPUModule(
     if (!Proposal)
       Proposal = std::move(SP);
     else
-      evaluateProposal(*Proposal, std::move(SP));
+      evaluateProposal(M, *Proposal, std::move(SP));
   };
 
   // TODO: It would be very easy to create new strategies by just adding a base
@@ -1474,7 +1477,7 @@ static void splitAMDGPUModule(
   bool ImportAllGVs = true;
 
   for (unsigned PID = 0; PID < NumParts; ++PID) {
-    SplitModuleTimer SMT2("modules_creation",
+    SplitModuleTimer SMT2(M, "modules_creation",
                           "creating modules for each partition");
     LLVM_DEBUG(dbgs() << "[split] creating new modules\n");
 
@@ -1534,7 +1537,8 @@ static void splitAMDGPUModule(
 PreservedAnalyses AMDGPUSplitModulePass::run(Module &M,
                                              ModuleAnalysisManager &MAM) {
   SplitModuleTimer SMT(
-      "total", "total pass runtime (incl. potentially waiting for lockfile)");
+      M, "total",
+      "total pass runtime (incl. potentially waiting for lockfile)");
 
   FunctionAnalysisManager &FAM =
       MAM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();

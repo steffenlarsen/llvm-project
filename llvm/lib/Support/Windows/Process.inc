@@ -90,6 +90,19 @@ void Process::GetTimeUsage(TimePoint<> &elapsed,
   sys_time = toDuration(KernelTime);
 }
 
+void Process::GetThreadTimeUsage(TimePoint<> &elapsed,
+                                 std::chrono::nanoseconds &user_time,
+                                 std::chrono::nanoseconds &sys_time) {
+  FILETIME ThreadCreate, ThreadExit, KernelTime, UserTime;
+  if (GetThreadTimes(GetCurrentThread(), &ThreadCreate, &ThreadExit,
+                     &KernelTime, &UserTime) == 0)
+    return GetTimeUsage(elapsed, user_time, sys_time);
+
+  elapsed = std::chrono::system_clock::now();
+  user_time = toDuration(UserTime);
+  sys_time = toDuration(KernelTime);
+}
+
 // Some LLVM programs such as llvm-reduce produce core files as a normal part of
 // their operation. To prevent the disk from filling up, this configuration item
 // does what's necessary to prevent their generation.

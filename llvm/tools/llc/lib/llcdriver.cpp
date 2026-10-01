@@ -35,6 +35,7 @@
 #include "llvm/IR/LLVMRemarkStreamer.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/PassTimingInfo.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/IRReader/IRReader.h"
 #include "llvm/InitializePasses.h"
@@ -441,8 +442,14 @@ extern "C" int llcMain(int argc, char **argv) {
     }
   });
 
+  std::optional<PassTimingState> TimingState;
+  if (TimePassesIsEnabled)
+    TimingState.emplace(TimePassesPerRun);
+
   LLVMContext Context;
   Context.setDiscardValueNames(DiscardValueNames);
+  if (TimingState)
+    Context.setPassTimingState(&*TimingState);
 
   // Set a diagnostic handler that doesn't exit on the first error
   Context.setDiagnosticHandler(std::make_unique<LLCDiagnosticHandler>());

@@ -20,6 +20,7 @@
 #include "llvm/Config/llvm-config.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DiagnosticPrinter.h"
+#include "llvm/IR/PassTimingInfo.h"
 #include "llvm/LTO/LTO.h"
 #include "llvm/Object/Error.h"
 #include "llvm/Remarks/HotnessThresholdParser.h"
@@ -981,6 +982,8 @@ static std::unique_ptr<LTO> createLTO(IndexWriteCallback OnIndexWrite,
 
   Conf.TimeTraceEnabled = !options::time_trace_file.empty();
   Conf.TimeTraceGranularity = options::time_trace_granularity;
+  Conf.TimePasses = TimePassesIsEnabled;
+  Conf.TimePassesPerRun = TimePassesPerRun;
 
   LTO::LTOKind ltoKind = LTO::LTOK_Default;
   if (options::unifiedlto)

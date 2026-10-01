@@ -49,6 +49,7 @@ class LiveIntervals;
 class LiveRegMatrix;
 class MachineInstr;
 class MachineRegisterInfo;
+class PassTimingState;
 template<typename T> class SmallVectorImpl;
 class Spiller;
 class TargetRegisterInfo;
@@ -70,6 +71,8 @@ protected:
   LiveIntervals *LIS = nullptr;
   LiveRegMatrix *Matrix = nullptr;
   RegisterClassInfo RegClassInfo;
+  /// Times the allocation of the current function, if it is timed.
+  PassTimingState *TimingState = nullptr;
 
 private:
   /// Private, callees should go through shouldAllocateRegister

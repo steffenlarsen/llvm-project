@@ -166,7 +166,7 @@ bool CompilerInstance::executeAction(FrontendAction &act) {
   invoc.setLoweringOptions();
 
   if (invoc.getEnableTimers()) {
-    llvm::TimePassesIsEnabled = true;
+    passTiming = std::make_unique<llvm::PassTimingState>();
 
     timingStreamMLIR = std::make_unique<Fortran::support::string_ostream>();
     timingStreamLLVM = std::make_unique<Fortran::support::string_ostream>();

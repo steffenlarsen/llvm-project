@@ -15,6 +15,7 @@
 #include "llvm/Support/DataTypes.h"
 #include "llvm/Support/Mutex.h"
 #include <cassert>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -22,6 +23,7 @@ namespace llvm {
 
 class TimerGlobals;
 class TimerGroup;
+class TimerRegistry;
 class raw_ostream;
 
 class TimeRecord {
@@ -30,6 +32,9 @@ class TimeRecord {
   double SystemTime = 0.0;           ///< System time elapsed.
   ssize_t MemUsed = 0;               ///< Memory allocated (in bytes).
   uint64_t InstructionsExecuted = 0; ///< Number of instructions executed
+
+  static TimeRecord getCurrentTimeImpl(bool Start, bool ThreadCPUTime);
+
 public:
   TimeRecord() = default;
 
@@ -38,6 +43,10 @@ public:
   /// matters if the time to get the memory usage is significant and shouldn't
   /// be counted as part of a duration.
   LLVM_ABI static TimeRecord getCurrentTime(bool Start = true);
+
+  /// Like getCurrentTime, but the user and system times only count the calling
+  /// thread. Memory usage and executed instructions are still process-wide.
+  LLVM_ABI static TimeRecord getCurrentThreadTime(bool Start = true);
 
   double getProcessTime() const { return UserTime + SystemTime; }
   double getUserTime() const { return UserTime; }
@@ -173,10 +182,19 @@ public:
 /// statement.  All timers with the same name are merged.  This is primarily
 /// used for debugging and for hunting performance problems.
 struct NamedRegionTimer : TimeRegion {
+  /// Time the region with a timer from the process-wide registry, which is
+  /// shared by all threads.
   LLVM_ABI explicit NamedRegionTimer(StringRef Name, StringRef Description,
                                      StringRef GroupName,
                                      StringRef GroupDescription,
                                      bool Enabled = true);
+
+  /// Time the region with a timer from \p Registry. The region is not timed
+  /// if \p Registry is null.
+  LLVM_ABI explicit NamedRegionTimer(StringRef Name, StringRef Description,
+                                     StringRef GroupName,
+                                     StringRef GroupDescription,
+                                     TimerRegistry *Registry);
 
   // Create or get a TimerGroup stored in the same global map owned by
   // NamedRegionTimer.
@@ -209,6 +227,7 @@ class TimerGroup {
   Timer *FirstTimer = nullptr; ///< First timer in the group.
   std::vector<PrintRecord> TimersToPrint;
   bool PrintOnExit;
+  bool ThreadCPUTime = false; ///< Do timers only count their thread's CPU?
 
   TimerGroup **Prev; ///< Pointer to Next field of previous timergroup in list.
   TimerGroup *Next;  ///< Pointer to next timergroup in list.
@@ -233,6 +252,12 @@ public:
     Name.assign(NewName.begin(), NewName.end());
     Description.assign(NewDescription.begin(), NewDescription.end());
   }
+
+  /// Make the user and system times of the timers in this group only count
+  /// the CPU time of the thread that runs them, rather than of the whole
+  /// process. Use this when other threads may be busy while a timer runs.
+  void setThreadCPUTime(bool Enable) { ThreadCPUTime = Enable; }
+  bool usesThreadCPUTime() const { return ThreadCPUTime; }
 
   /// Print any started timers in this group, optionally resetting timers after
   /// printing them.
@@ -266,6 +291,7 @@ public:
 
 private:
   friend class Timer;
+  friend class TimerRegistry;
   LLVM_ABI friend void PrintStatisticsJSON(raw_ostream &OS);
   void addTimer(Timer &T);
   void removeTimer(Timer &T);
@@ -273,6 +299,59 @@ private:
   void PrintQueuedTimers(raw_ostream &OS);
   void printJSONValue(raw_ostream &OS, const PrintRecord &R,
                       const char *suffix, double Value);
+};
+
+/// A set of named timer groups, each holding timers looked up by name, as used
+/// by NamedRegionTimer. A compilation that owns a registry gets timers that are
+/// separate from those of every other compilation in the process, so that
+/// concurrent compilations can be timed independently.
+///
+/// A registry is not thread-safe: only one thread may use it at a time. Its
+/// groups are still registered with TimerGroup::printAll, and are printed when
+/// the registry is destroyed if they hold timing data that was not printed.
+class TimerRegistry {
+  struct GroupEntry {
+    std::unique_ptr<TimerGroup> Group;
+    StringMap<Timer> Timers;
+  };
+  StringMap<GroupEntry> Groups;
+  std::vector<TimerGroup *> GroupsInCreationOrder;
+  bool ThreadCPUTime;
+
+  GroupEntry &getGroupEntry(StringRef GroupName, StringRef GroupDescription);
+
+public:
+  /// If \p ThreadCPUTime is true, the registry's groups only count the CPU
+  /// time of the thread running their timers. See
+  /// TimerGroup::setThreadCPUTime.
+  LLVM_ABI explicit TimerRegistry(bool ThreadCPUTime = false);
+  TimerRegistry(const TimerRegistry &) = delete;
+  TimerRegistry &operator=(const TimerRegistry &) = delete;
+  LLVM_ABI ~TimerRegistry();
+
+  /// Get the timer called \p Name in the group called \p GroupName, creating
+  /// either if needed.
+  LLVM_ABI Timer &getTimer(StringRef Name, StringRef Description,
+                           StringRef GroupName, StringRef GroupDescription);
+
+  /// Get the group called \p GroupName, creating it if needed.
+  LLVM_ABI TimerGroup &getTimerGroup(StringRef GroupName,
+                                     StringRef GroupDescription);
+
+  /// Move the timing data of \p Other into this registry and reset the timers
+  /// of \p Other. Data is added to the group with the same name, summing
+  /// timers that have the same name and description. This includes data of
+  /// timers that were already destroyed. Several threads may merge into the
+  /// same registry at once, as long as nothing else uses it meanwhile.
+  LLVM_ABI void mergeFrom(TimerRegistry &Other);
+
+  /// Print the started timers of every group in creation order, and reset
+  /// them.
+  LLVM_ABI void print(raw_ostream &OS);
+
+  /// Clear the timers of every group, so that they are not printed when the
+  /// registry is destroyed.
+  LLVM_ABI void clear();
 };
 
 } // end namespace llvm

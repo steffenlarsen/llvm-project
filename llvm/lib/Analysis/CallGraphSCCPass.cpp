@@ -137,7 +137,7 @@ bool CGPassManager::RunPassOnSCC(Pass *P, CallGraphSCC &CurSCC,
       unsigned InstrCount, SCCCount = 0;
       StringMap<std::pair<unsigned, unsigned>> FunctionToInstrCount;
       bool EmitICRemark = M.shouldEmitInstrCountChangedRemark();
-      TimeRegion PassTimer(getPassTimer(CGSP));
+      TimeRegion PassTimer(getPassTimer(CGSP, TPM->getPassTimingState()));
       if (EmitICRemark)
         InstrCount = initSizeRemarkInfo(M, FunctionToInstrCount);
       Changed = CGSP->runOnSCC(CurSCC);
@@ -176,7 +176,7 @@ bool CGPassManager::RunPassOnSCC(Pass *P, CallGraphSCC &CurSCC,
     if (Function *F = CGN->getFunction()) {
       dumpPassInfo(P, EXECUTION_MSG, ON_FUNCTION_MSG, F->getName());
       {
-        TimeRegion PassTimer(getPassTimer(FPP));
+        TimeRegion PassTimer(getPassTimer(FPP, TPM->getPassTimingState()));
         Changed |= FPP->runOnFunction(*F);
       }
       F->getContext().yield();

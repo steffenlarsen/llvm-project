@@ -22,6 +22,7 @@
 #include "llvm/Bitcode/BitcodeWriter.h"
 #include "llvm/DTLTO/DTLTO.h"
 #include "llvm/IR/DiagnosticPrinter.h"
+#include "llvm/IR/PassTimingInfo.h"
 #include "llvm/LTO/Config.h"
 #include "llvm/LTO/LTO.h"
 #include "llvm/Support/Caching.h"
@@ -94,6 +95,8 @@ lto::Config BitcodeCompiler::createConfig() {
   c.PGOWarnMismatch = ctx.config.ltoPGOWarnMismatch;
   c.SampleProfile = ctx.config.ltoSampleProfileName;
   c.TimeTraceEnabled = ctx.config.timeTraceEnabled;
+  c.TimePasses = llvm::TimePassesIsEnabled;
+  c.TimePassesPerRun = llvm::TimePassesPerRun;
   c.TimeTraceGranularity = ctx.config.timeTraceGranularity;
   c.RemarksFilename = ctx.config.optRemarksFilename;
   c.RemarksPasses = ctx.config.optRemarksPasses;

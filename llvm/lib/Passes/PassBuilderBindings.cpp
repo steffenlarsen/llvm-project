@@ -14,6 +14,7 @@
 #include "llvm-c/Transforms/PassBuilder.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/PassTimingInfo.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Passes/StandardInstrumentations.h"
@@ -51,6 +52,7 @@ DEFINE_SIMPLE_CONVERSION_FUNCTIONS(LLVMPassBuilderOptions,
 static LLVMErrorRef runPasses(Module *Mod, Function *Fun, const char *Passes,
                               TargetMachine *Machine,
                               LLVMPassBuilderOptions *PassOpts) {
+  CommandLineTimePassesScope TimePasses(Mod->getContext());
   bool Debug = PassOpts->DebugLogging;
   bool VerifyEach = PassOpts->VerifyEach;
 

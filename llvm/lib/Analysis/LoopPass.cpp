@@ -202,7 +202,7 @@ bool LPPassManager::runOnFunction(Function &F) {
       bool LocalChanged = false;
       {
         PassManagerPrettyStackEntry X(P, *CurrentLoop->getHeader());
-        TimeRegion PassTimer(getPassTimer(P));
+        TimeRegion PassTimer(getPassTimer(P, TPM->getPassTimingState()));
 #ifdef EXPENSIVE_CHECKS
         uint64_t RefHash = P->structuralHash(F);
 #endif
@@ -245,7 +245,7 @@ bool LPPassManager::runOnFunction(Function &F) {
         // loop in the function every time. That level of checking can be
         // enabled with the -verify-loop-info option.
         {
-          TimeRegion PassTimer(getPassTimer(&LIWP));
+          TimeRegion PassTimer(getPassTimer(&LIWP, TPM->getPassTimingState()));
           CurrentLoop->verifyLoop();
         }
         // Here we apply same reasoning as in the above case. Only difference

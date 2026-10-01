@@ -70,7 +70,7 @@ std::unique_ptr<Module> llvm::parseIR(MemoryBufferRef Buffer, SMDiagnostic &Err,
                                       llvm::AsmParserContext *ParserContext) {
   NamedRegionTimer T(TimeIRParsingName, TimeIRParsingDescription,
                      TimeIRParsingGroupName, TimeIRParsingGroupDescription,
-                     TimePassesIsEnabled);
+                     Context.getPassTimingState());
   if (isBitcode((const unsigned char *)Buffer.getBufferStart(),
                 (const unsigned char *)Buffer.getBufferEnd())) {
     Expected<std::unique_ptr<Module>> ModuleOrErr =

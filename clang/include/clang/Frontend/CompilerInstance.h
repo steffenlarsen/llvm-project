@@ -38,6 +38,7 @@
 namespace llvm {
 class raw_fd_ostream;
 class PassPlugin;
+class PassTimingState;
 class Timer;
 class TimerGroup;
 }
@@ -141,6 +142,9 @@ class CompilerInstance : public ModuleLoader {
 
   /// The frontend timer.
   std::unique_ptr<llvm::Timer> FrontendTimer;
+
+  /// The timers of the LLVM passes of this compilation.
+  std::unique_ptr<llvm::PassTimingState> PassTiming;
 
   /// The ASTReader, if one exists.
   IntrusiveRefCntPtr<ASTReader> TheASTReader;
@@ -681,6 +685,11 @@ public:
     assert(FrontendTimer && "Compiler instance has no frontend timer!");
     return *FrontendTimer;
   }
+
+  /// The timers of the LLVM passes of this compilation, or null if they are
+  /// not timed. They outlive the compilation's LLVMContext, so that they can
+  /// be reported after it is gone.
+  llvm::PassTimingState *getPassTimingState() const { return PassTiming.get(); }
 
   /// }
   /// @name Output Files

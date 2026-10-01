@@ -357,6 +357,14 @@ void LLVMContext::setOptPassGate(OptPassGate& OPG) {
   pImpl->setOptPassGate(OPG);
 }
 
+PassTimingState *LLVMContext::getPassTimingState() const {
+  return pImpl->TimingState;
+}
+
+void LLVMContext::setPassTimingState(PassTimingState *State) {
+  pImpl->TimingState = State;
+}
+
 const DiagnosticHandler *LLVMContext::getDiagHandlerPtr() const {
   return pImpl->DiagHandler.get();
 }

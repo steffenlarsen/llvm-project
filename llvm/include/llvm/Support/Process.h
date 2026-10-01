@@ -87,6 +87,13 @@ public:
                                     std::chrono::nanoseconds &user_time,
                                     std::chrono::nanoseconds &sys_time);
 
+  /// Like GetTimeUsage, but \p user_time and \p sys_time only count the CPU
+  /// time of the calling thread. If the operating system does not support
+  /// per-thread CPU times, the process-wide times are returned instead.
+  LLVM_ABI static void GetThreadTimeUsage(TimePoint<> &elapsed,
+                                          std::chrono::nanoseconds &user_time,
+                                          std::chrono::nanoseconds &sys_time);
+
   /// This function makes the necessary calls to the operating system to
   /// prevent core files or any other kind of large memory dumps that can
   /// occur when a program fails.

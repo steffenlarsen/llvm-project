@@ -355,6 +355,7 @@ void FunctionPassManagerImpl::releaseMemoryOnTheFly() {
 bool FunctionPassManagerImpl::run(Function &F) {
   bool Changed = false;
 
+  TimingState = F.getContext().getPassTimingState();
   initializeAllAnalysisInfo();
   for (unsigned Index = 0; Index < getNumContainedManagers(); ++Index) {
     Changed |= getContainedManager(Index)->runOnFunction(F);
@@ -522,6 +523,7 @@ char PassManagerImpl::ID = 0;
 bool PassManagerImpl::run(Module &M) {
   bool Changed = false;
 
+  TimingState = M.getContext().getPassTimingState();
   dumpArguments();
   dumpPasses();
 
@@ -892,7 +894,7 @@ void PMDataManager::verifyPreservedAnalysis(Pass *P) {
   // Verify preserved analysis
   for (AnalysisID AID : PreservedSet) {
     if (Pass *AP = findAnalysisPass(AID, true)) {
-      TimeRegion PassTimer(getPassTimer(AP));
+      TimeRegion PassTimer(getPassTimer(AP, TPM->getPassTimingState()));
       AP->verifyAnalysis();
     }
   }
@@ -965,7 +967,7 @@ void PMDataManager::freePass(Pass *P, StringRef Msg,
   {
     // If the pass crashes releasing memory, remember this.
     PassManagerPrettyStackEntry X(P);
-    TimeRegion PassTimer(getPassTimer(P));
+    TimeRegion PassTimer(getPassTimer(P, TPM->getPassTimingState()));
 
     P->releaseMemory();
   }
@@ -1410,7 +1412,7 @@ bool FPPassManager::runOnFunction(Function &F) {
 
     {
       PassManagerPrettyStackEntry X(FP, F);
-      TimeRegion PassTimer(getPassTimer(FP));
+      TimeRegion PassTimer(getPassTimer(FP, TPM->getPassTimingState()));
 #ifdef EXPENSIVE_CHECKS
       uint64_t RefHash = FP->structuralHash(F);
 #endif
@@ -1569,7 +1571,7 @@ MPPassManager::runOnModule(Module &M) {
 
     {
       PassManagerPrettyStackEntry X(MP, M);
-      TimeRegion PassTimer(getPassTimer(MP));
+      TimeRegion PassTimer(getPassTimer(MP, TPM->getPassTimingState()));
 
 #ifdef EXPENSIVE_CHECKS
       uint64_t RefHash = MP->structuralHash(M);

@@ -134,7 +134,22 @@ LTOCodeGenerator::LTOCodeGenerator(LLVMContext &Context)
   Config.CSIRProfile = LTOCSIRProfile;
 }
 
-LTOCodeGenerator::~LTOCodeGenerator() = default;
+LTOCodeGenerator::~LTOCodeGenerator() {
+  // Context belongs to the client and may outlive TimingState.
+  if (TimingState)
+    Context.setPassTimingState(nullptr);
+}
+
+void LTOCodeGenerator::setUpTimePasses() {
+  if (!TimePassesIsEnabled || TimingState)
+    return;
+  TimingState = std::make_unique<PassTimingState>(TimePassesPerRun);
+  Context.setPassTimingState(TimingState.get());
+  PartitionTimingState = std::make_unique<PassTimingState>(TimePassesPerRun);
+  Config.TimePasses = true;
+  Config.TimePassesPerRun = TimePassesPerRun;
+  Config.TimePassesSink = PartitionTimingState.get();
+}
 
 void LTOCodeGenerator::setAsmUndefinedRefs(LTOModule *Mod) {
   AsmUndefinedRefs.insert_range(Mod->getAsmUndefinedRefs());
@@ -563,6 +578,7 @@ bool LTOCodeGenerator::optimize() {
   Config.RunCSIRInstr = LTORunCSIRInstr;
   Config.CSIRProfile = LTOCSIRProfile;
   Config.SampleProfile = SampleProfileFile;
+  setUpTimePasses();
 
   auto DiagFileOrErr = lto::setupLLVMOptimizationRemarks(
       Context, RemarksFilename, RemarksPasses, RemarksFormat,
@@ -639,6 +655,8 @@ bool LTOCodeGenerator::compileOptimized(AddStreamFn AddStream,
   if (!this->determineTarget())
     return false;
 
+  setUpTimePasses();
+
   // We always run the verifier once on the merged module.  If it has already
   // been called in optimize(), this call will return early.
   verifyMergedModuleOnce();
@@ -662,7 +680,10 @@ bool LTOCodeGenerator::compileOptimized(AddStreamFn AddStream,
   else if (AreStatisticsEnabled())
     PrintStatistics();
 
-  reportAndResetTimings();
+  if (TimingState) {
+    TimingState->mergeFrom(*PartitionTimingState);
+    TimingState->print(*CreateInfoOutputFile());
+  }
 
   finishOptimizationRemarks();
 

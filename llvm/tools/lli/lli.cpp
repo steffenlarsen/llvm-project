@@ -45,6 +45,7 @@
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/PassTimingInfo.h"
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/IRReader/IRReader.h"
@@ -366,6 +367,31 @@ private:
     return true;
   }
 };
+
+/// Times each compilation into its own PassTimingState and adds the timings to
+/// those of the whole run. The JIT may compile on several threads at once, in
+/// separate contexts.
+class TimingIRCompiler : public orc::IRCompileLayer::IRCompiler {
+  std::unique_ptr<IRCompiler> Compiler;
+  PassTimingState &RunTimingState;
+
+public:
+  TimingIRCompiler(std::unique_ptr<IRCompiler> Compiler,
+                   PassTimingState &RunTimingState)
+      : IRCompiler(Compiler->getManglingOptions()),
+        Compiler(std::move(Compiler)), RunTimingState(RunTimingState) {}
+
+  Expected<std::unique_ptr<MemoryBuffer>> operator()(Module &M) override {
+    PassTimingState TimingState(RunTimingState.isPerRun());
+    LLVMContext &Context = M.getContext();
+    PassTimingState *Prev = Context.getPassTimingState();
+    Context.setPassTimingState(&TimingState);
+    auto Obj = (*Compiler)(M);
+    Context.setPassTimingState(Prev);
+    RunTimingState.mergeFrom(TimingState);
+    return Obj;
+  }
+};
 } // namespace
 
 // On Mingw and Cygwin, an external symbol named '__main' is called from the
@@ -413,7 +439,7 @@ static CodeGenOptLevel getOptLevel() {
 }
 
 static Error loadDylibs();
-static int runOrcJIT(const char *ProgName);
+static int runOrcJIT(const char *ProgName, PassTimingState *TimingState);
 static void disallowOrcOptions();
 static Expected<std::unique_ptr<orc::ExecutorProcessControl>> launchRemote();
 
@@ -452,13 +478,19 @@ int main(int argc, char **argv, char * const *envp) {
     exit(1);
   }
 
+  std::optional<PassTimingState> TimingState;
+  if (TimePassesIsEnabled)
+    TimingState.emplace(TimePassesPerRun);
+
   if (UseJITKind == JITKind::MCJIT || ForceInterpreter)
     disallowOrcOptions();
   else
-    return runOrcJIT(argv[0]);
+    return runOrcJIT(argv[0], TimingState ? &*TimingState : nullptr);
 
   // Old lli implementation based on ExecutionEngine and MCJIT.
   LLVMContext Context;
+  if (TimingState)
+    Context.setPassTimingState(&*TimingState);
 
   // Load the bitcode...
   SMDiagnostic Err;
@@ -933,11 +965,15 @@ static Error tryEnableDebugSupport(orc::LLJIT &J) {
   return Error::success();
 }
 
-static int runOrcJIT(const char *ProgName) {
+static int runOrcJIT(const char *ProgName, PassTimingState *TimingState) {
   // Start setting up the JIT environment.
 
   // Parse the main module.
   orc::ThreadSafeContext TSCtx(std::make_unique<LLVMContext>());
+  // Time parsing the input modules. This is detached before anything is
+  // compiled; compiles are timed by TimingIRCompiler.
+  TSCtx.withContextDo(
+      [&](LLVMContext *Ctx) { Ctx->setPassTimingState(TimingState); });
   auto MainModule = ExitOnErr(loadModule(InputFile, TSCtx));
 
   // Get TargetTriple and DataLayout from the main module if they're explicitly
@@ -994,27 +1030,31 @@ static int runOrcJIT(const char *ProgName) {
       orc::ExecutorAddr::fromPtr(exitOnLazyCallThroughFailure));
   Builder.setNumCompileThreads(LazyJITCompileThreads);
 
-  // If the object cache is enabled then set a custom compile function
-  // creator to use the cache.
+  // If the object cache is enabled or passes are timed then set a custom
+  // compile function creator to use the cache and time each compilation.
   std::unique_ptr<LLIObjectCache> CacheManager;
-  if (EnableCacheManager) {
-
+  if (EnableCacheManager)
     CacheManager = std::make_unique<LLIObjectCache>(ObjectCacheDir);
-
+  if (EnableCacheManager || TimingState) {
     Builder.setCompileFunctionCreator(
-      [&](orc::JITTargetMachineBuilder JTMB)
+        [&](orc::JITTargetMachineBuilder JTMB)
             -> Expected<std::unique_ptr<orc::IRCompileLayer::IRCompiler>> {
-        if (LazyJITCompileThreads > 0)
-          return std::make_unique<orc::ConcurrentIRCompiler>(std::move(JTMB),
-                                                        CacheManager.get());
-
-        auto TM = JTMB.createTargetMachine();
-        if (!TM)
-          return TM.takeError();
-
-        return std::make_unique<orc::TMOwningSimpleCompiler>(std::move(*TM),
-                                                        CacheManager.get());
-      });
+          std::unique_ptr<orc::IRCompileLayer::IRCompiler> Compiler;
+          if (LazyJITCompileThreads > 0) {
+            Compiler = std::make_unique<orc::ConcurrentIRCompiler>(
+                std::move(JTMB), CacheManager.get());
+          } else {
+            auto TM = JTMB.createTargetMachine();
+            if (!TM)
+              return TM.takeError();
+            Compiler = std::make_unique<orc::TMOwningSimpleCompiler>(
+                std::move(*TM), CacheManager.get());
+          }
+          if (TimingState)
+            Compiler = std::make_unique<TimingIRCompiler>(std::move(Compiler),
+                                                          *TimingState);
+          return std::move(Compiler);
+        });
   }
 
   // Enable debugging of JIT'd code (only works on JITLink for ELF and MachO).
@@ -1178,6 +1218,10 @@ static int runOrcJIT(const char *ProgName) {
     auto Obj = ExitOnErr(errorOrToExpected(MemoryBuffer::getFile(ObjPath)));
     ExitOnErr(J->addObjectFile(std::move(Obj)));
   }
+
+  // Everything is parsed, so stop timing on TSCtx. See TimingIRCompiler.
+  TSCtx.withContextDo(
+      [](LLVMContext *Ctx) { Ctx->setPassTimingState(nullptr); });
 
   // Run any static constructors.
   ExitOnErr(J->initialize(J->getMainJITDylib()));

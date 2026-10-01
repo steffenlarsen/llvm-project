@@ -28,6 +28,7 @@
 #include "llvm/Bitcode/BitcodeWriter.h"
 #include "llvm/Config/Targets.h"
 #include "llvm/IR/LegacyPassManager.h"
+#include "llvm/IR/PassTimingInfo.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/FileUtilities.h"
 #include "llvm/Support/FormatVariadic.h"
@@ -559,6 +560,7 @@ SPIRVSerializer::moduleToObject(llvm::Module &llvmModule) {
 std::optional<SmallVector<char, 0>> SPIRVSerializer::run() {
   // Translate the module to LLVM IR.
   llvm::LLVMContext llvmContext;
+  llvm::CommandLineTimePassesScope timePasses(llvmContext);
   std::unique_ptr<llvm::Module> llvmModule = translateToLLVMIR(llvmContext);
   if (!llvmModule) {
     getOperation().emitError() << "Failed creating the llvm::Module.";

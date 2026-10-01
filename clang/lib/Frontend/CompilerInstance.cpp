@@ -50,6 +50,7 @@
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Config/llvm-config.h"
+#include "llvm/IR/PassTimingInfo.h"
 #include "llvm/Plugins/PassPlugin.h"
 #include "llvm/Support/AdvisoryLock.h"
 #include "llvm/Support/BuryPointer.h"
@@ -751,6 +752,8 @@ void CompilerInstance::createCodeCompletionConsumer() {
 
 void CompilerInstance::createFrontendTimer() {
   timerGroup.reset(new llvm::TimerGroup("clang", "Clang time report"));
+  // Other compilations in the process may be running at the same time.
+  timerGroup->setThreadCPUTime(true);
   FrontendTimer.reset(new llvm::Timer("frontend", "Front end", *timerGroup));
 }
 
@@ -982,6 +985,9 @@ void CompilerInstance::PrepareForExecution() {
     createFrontendTimer();
     getFrontendTimer().startTimer();
   }
+  if (getCodeGenOpts().TimePasses && !PassTiming)
+    PassTiming = std::make_unique<llvm::PassTimingState>(
+        static_cast<bool>(getCodeGenOpts().TimePassesPerRun));
 
   // FIXME: Consider consolidating additional per-instance setup here:
   // - llvm::timeTraceProfilerInitialize) when TimeTracePath is set.

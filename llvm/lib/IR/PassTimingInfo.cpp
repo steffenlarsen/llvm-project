@@ -9,21 +9,21 @@
 // This file implements the LLVM Pass Timing infrastructure for both
 // new and legacy pass managers.
 //
-// PassTimingInfo Class - This class is used to calculate information about the
-// amount of time each pass takes to execute.  This only happens when
-// -time-passes is enabled on the command line.
+// PassTimingState Class - This class is used to calculate information about the
+// amount of time each pass takes to execute.  This only happens when the
+// LLVMContext of the compilation has one, e.g. because -time-passes is enabled
+// on the command line.
 //
 //===----------------------------------------------------------------------===//
 
 #include "llvm/IR/PassTimingInfo.h"
 #include "llvm/ADT/Statistic.h"
+#include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/PassInstrumentation.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/FormatVariadic.h"
-#include "llvm/Support/ManagedStatic.h"
-#include "llvm/Support/Mutex.h"
 #include "llvm/Support/TypeName.h"
 #include "llvm/Support/raw_ostream.h"
 #include <string>
@@ -46,90 +46,38 @@ static cl::opt<bool, true> EnableTimingPerRun(
     cl::desc("Time each pass run, printing elapsed time for each run on exit"),
     cl::callback([](const bool &) { TimePassesIsEnabled = true; }));
 
-namespace {
-namespace legacy {
-
 //===----------------------------------------------------------------------===//
-// Legacy pass manager's PassTimingInfo implementation
+// PassTimingState implementation
+//===----------------------------------------------------------------------===//
 
-/// Provides an interface for collecting pass timing information.
-///
-/// It was intended to be generic but now we decided to split
-/// interfaces completely. This is now exclusively for legacy-pass-manager use.
-class PassTimingInfo {
-public:
-  using PassInstanceID = void *;
+PassTimingState::PassTimingState(bool PerRun)
+    : TimerRegistry(/*ThreadCPUTime=*/true), PerRun(PerRun) {}
 
-private:
-  StringMap<unsigned> PassIDCountMap; ///< Map that counts instances of passes
-  DenseMap<PassInstanceID, std::unique_ptr<Timer>> TimingData; ///< timers for pass instances
-  TimerGroup *PassTG = nullptr;
+PassTimingState::~PassTimingState() = default;
 
-public:
-  /// Initializes the static \p TheTimeInfo member to a non-null value when
-  /// -time-passes is enabled. Leaves it null otherwise.
-  ///
-  /// This method may be called multiple times.
-  static void init();
-
-  /// Prints out timing information and then resets the timers.
-  /// By default it uses the stream created by CreateInfoOutputFile().
-  void print(raw_ostream *OutStream = nullptr);
-
-  /// Returns the timer for the specified pass if it exists.
-  Timer *getPassTimer(Pass *, PassInstanceID);
-
-  static PassTimingInfo *TheTimeInfo;
-
-private:
-  Timer *newPassTimer(StringRef PassID, StringRef PassDesc);
-};
-
-static ManagedStatic<sys::SmartMutex<true>> TimingInfoMutex;
-
-void PassTimingInfo::init() {
-  if (TheTimeInfo || !TimePassesIsEnabled)
-    return;
-
-  // Constructed the first time this is called, iff -time-passes is enabled.
-  // This guarantees that the object will be constructed after static globals,
-  // thus it will be destroyed before them.
-  static ManagedStatic<PassTimingInfo> TTI;
-  if (!TTI->PassTG)
-    TTI->PassTG = &NamedRegionTimer::getNamedTimerGroup(
-        TimePassesHandler::PassGroupName, TimePassesHandler::PassGroupDesc);
-  TheTimeInfo = &*TTI;
-}
-
-/// Prints out timing information and then resets the timers.
-void PassTimingInfo::print(raw_ostream *OutStream) {
-  assert(PassTG && "PassTG is null, did you call PassTimingInfo::Init()?");
-  PassTG->print(OutStream ? *OutStream : *CreateInfoOutputFile(), true);
-}
-
-Timer *PassTimingInfo::newPassTimer(StringRef PassID, StringRef PassDesc) {
+Timer *PassTimingState::newLegacyPassTimer(StringRef PassID,
+                                           StringRef PassDesc) {
   unsigned &num = PassIDCountMap[PassID];
   num++;
   // Appending description with a pass-instance number for all but the first one
   std::string PassDescNumbered =
       num <= 1 ? PassDesc.str() : formatv("{0} #{1}", PassDesc, num).str();
-  assert(PassTG && "PassTG is null, did you call PassTimingInfo::Init()?");
-  return new Timer(PassID, PassDescNumbered, *PassTG);
+  return new Timer(PassID, PassDescNumbered,
+                   getTimerGroup(TimePassesHandler::PassGroupName,
+                                 TimePassesHandler::PassGroupDesc));
 }
 
-Timer *PassTimingInfo::getPassTimer(Pass *P, PassInstanceID Pass) {
+Timer *PassTimingState::getLegacyPassTimer(Pass *P) {
   if (P->getAsPMDataManager())
     return nullptr;
 
-  init();
-  sys::SmartScopedLock<true> Lock(*TimingInfoMutex);
   StringRef PassName = P->getPassName();
   StringRef PassArgument;
   if (const PassInfo *PI = Pass::lookupPassInfo(P->getPassID()))
     PassArgument = PI->getPassArgument();
   StringRef TimerName = PassArgument.empty() ? PassName : PassArgument;
 
-  std::unique_ptr<Timer> &T = TimingData[Pass];
+  std::unique_ptr<Timer> &T = LegacyPassTimers[P];
 
   // This map outlives the pass instances it is keyed on, so a new pass can be
   // allocated at a destroyed one's address. Its timer carries the old name.
@@ -137,26 +85,33 @@ Timer *PassTimingInfo::getPassTimer(Pass *P, PassInstanceID Pass) {
     T.reset();
 
   if (!T)
-    T.reset(newPassTimer(TimerName, PassName));
+    T.reset(newLegacyPassTimer(TimerName, PassName));
   return T.get();
 }
 
-PassTimingInfo *PassTimingInfo::TheTimeInfo;
-} // namespace legacy
-} // namespace
-
-Timer *llvm::getPassTimer(Pass *P) {
-  legacy::PassTimingInfo::init();
-  if (legacy::PassTimingInfo::TheTimeInfo)
-    return legacy::PassTimingInfo::TheTimeInfo->getPassTimer(P, P);
-  return nullptr;
+void PassTimingState::reportAndResetTimings(raw_ostream *OutStream) {
+  getTimerGroup(TimePassesHandler::PassGroupName,
+                TimePassesHandler::PassGroupDesc)
+      .print(OutStream ? *OutStream : *CreateInfoOutputFile(), true);
 }
 
-/// If timing is enabled, report the times collected up to now and then reset
-/// them.
-void llvm::reportAndResetTimings(raw_ostream *OutStream) {
-  if (legacy::PassTimingInfo::TheTimeInfo)
-    legacy::PassTimingInfo::TheTimeInfo->print(OutStream);
+Timer *llvm::getPassTimer(Pass *P, PassTimingState *State) {
+  return State ? State->getLegacyPassTimer(P) : nullptr;
+}
+
+CommandLineTimePassesScope::CommandLineTimePassesScope(LLVMContext &Context)
+    : Context(Context) {
+  if (!TimePassesIsEnabled || Context.getPassTimingState())
+    return;
+  State.emplace(TimePassesPerRun);
+  Context.setPassTimingState(&*State);
+}
+
+CommandLineTimePassesScope::~CommandLineTimePassesScope() {
+  if (!State)
+    return;
+  Context.setPassTimingState(nullptr);
+  State->print(*CreateInfoOutputFile());
 }
 
 //===----------------------------------------------------------------------===//
@@ -166,8 +121,8 @@ void llvm::reportAndResetTimings(raw_ostream *OutStream) {
 /// Returns the timer for the specified pass invocation of \p PassID.
 /// Each time it creates a new timer.
 Timer &TimePassesHandler::getPassTimer(StringRef PassID, bool IsPass) {
-  TimerGroup &TG = IsPass ? PassTG : AnalysisTG;
-  if (!PerRun) {
+  TimerGroup &TG = IsPass ? *PassTG : *AnalysisTG;
+  if (!State->isPerRun()) {
     TimerVector &Timers = TimingData[PassID];
     if (Timers.size() == 0)
       Timers.emplace_back(new Timer(PassID, PassID, TG));
@@ -188,18 +143,19 @@ Timer &TimePassesHandler::getPassTimer(StringRef PassID, bool IsPass) {
   return *T;
 }
 
-TimePassesHandler::TimePassesHandler(bool Enabled, bool PerRun)
-    : Enabled(Enabled), PerRun(PerRun) {}
-
-TimePassesHandler::TimePassesHandler()
-    : TimePassesHandler(TimePassesIsEnabled, TimePassesPerRun) {}
+TimePassesHandler::TimePassesHandler(PassTimingState *State) : State(State) {
+  if (!State)
+    return;
+  PassTG = &State->getTimerGroup(PassGroupName, PassGroupDesc);
+  AnalysisTG = &State->getTimerGroup(AnalysisGroupName, AnalysisGroupDesc);
+}
 
 void TimePassesHandler::setOutStream(raw_ostream &Out) {
   OutStream = &Out;
 }
 
 void TimePassesHandler::print() {
-  if (!Enabled)
+  if (!State)
     return;
   std::unique_ptr<raw_ostream> MaybeCreated;
   raw_ostream *OS = OutStream;
@@ -209,8 +165,8 @@ void TimePassesHandler::print() {
     MaybeCreated = CreateInfoOutputFile();
     OS = &*MaybeCreated;
   }
-  PassTG.print(*OS, true);
-  AnalysisTG.print(*OS, true);
+  PassTG->print(*OS, true);
+  AnalysisTG->print(*OS, true);
 }
 
 LLVM_DUMP_METHOD void TimePassesHandler::dump() const {
@@ -303,7 +259,7 @@ void TimePassesHandler::stopAnalysisTimer(StringRef PassID) {
 }
 
 void TimePassesHandler::registerCallbacks(PassInstrumentationCallbacks &PIC) {
-  if (!Enabled)
+  if (!State)
     return;
 
   PIC.registerBeforeNonSkippedPassCallback(

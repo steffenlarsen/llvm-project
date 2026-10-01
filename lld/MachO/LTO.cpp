@@ -18,6 +18,7 @@
 #include "lld/Common/Strings.h"
 #include "lld/Common/TargetOptionsCommandFlags.h"
 #include "llvm/Bitcode/BitcodeWriter.h"
+#include "llvm/IR/PassTimingInfo.h"
 #include "llvm/LTO/Config.h"
 #include "llvm/LTO/LTO.h"
 #include "llvm/Support/Caching.h"
@@ -54,6 +55,8 @@ static lto::Config createConfig() {
   c.AlwaysEmitRegularLTOObj = !config->ltoObjPath.empty();
 
   c.TimeTraceEnabled = config->timeTraceEnabled;
+  c.TimePasses = llvm::TimePassesIsEnabled;
+  c.TimePassesPerRun = llvm::TimePassesPerRun;
   c.TimeTraceGranularity = config->timeTraceGranularity;
   c.DebugPassManager = config->ltoDebugPassManager;
   c.CSIRProfile = std::string(config->csProfilePath);

@@ -20,6 +20,7 @@
 #include "llvm/IR/GlobalValue.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/LegacyPassManager.h"
+#include "llvm/IR/PassTimingInfo.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/CodeGen.h"
 #include "llvm/Support/Compiler.h"
@@ -195,6 +196,17 @@ struct Config {
   /// Time trace granularity.
   unsigned TimeTraceGranularity = 500;
 
+  /// Whether to time passes, as with -time-passes and -time-passes-per-run.
+  /// LTO::run reports the timings of all of its contexts when it finishes.
+  bool TimePasses = false;
+  bool TimePassesPerRun = false;
+
+  /// Where each LTOLLVMContext merges its pass timings when it is destroyed.
+  /// LTO sets this if TimePasses is set. Contexts merge into it from several
+  /// threads, so it must not be attached to a context. If it is null, each
+  /// context reports its own timings.
+  PassTimingState *TimePassesSink = nullptr;
+
   bool ShouldDiscardValueNames = true;
   DiagnosticHandlerFunction DiagHandler;
 
@@ -329,13 +341,25 @@ struct LTOLLVMDiagnosticHandler : public DiagnosticHandler {
 // FIXME: This should not be required as diagnostic handler is not callback.
 struct LTOLLVMContext : LLVMContext {
 
-  LTOLLVMContext(const Config &C) : DiagHandler(C.DiagHandler) {
+  LTOLLVMContext(const Config &C)
+      : DiagHandler(C.DiagHandler), TimePassesSink(C.TimePassesSink) {
     setDiscardValueNames(C.ShouldDiscardValueNames);
     enableDebugTypeODRUniquing();
     setDiagnosticHandler(
         std::make_unique<LTOLLVMDiagnosticHandler>(&DiagHandler), true);
+    // Each context has its own timers, as contexts can be used concurrently.
+    if (C.TimePasses) {
+      TimingState = std::make_unique<PassTimingState>(C.TimePassesPerRun);
+      setPassTimingState(TimingState.get());
+    }
+  }
+  ~LTOLLVMContext() {
+    if (TimingState && TimePassesSink)
+      TimePassesSink->mergeFrom(*TimingState);
   }
   DiagnosticHandlerFunction DiagHandler;
+  std::unique_ptr<PassTimingState> TimingState;
+  PassTimingState *TimePassesSink;
 };
 
 }

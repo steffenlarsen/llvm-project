@@ -700,6 +700,11 @@ LTO::LTO(Config Conf, ThinBackend Backend,
     Alloc = std::make_unique<BumpPtrAllocator>();
     GlobalResolutionSymbolSaver = std::make_unique<llvm::StringSaver>(*Alloc);
   }
+  if (this->Conf.TimePasses) {
+    TimePassesSink =
+        std::make_unique<PassTimingState>(this->Conf.TimePassesPerRun);
+    this->Conf.TimePassesSink = TimePassesSink.get();
+  }
 }
 
 // Requires a destructor for MapVector<BitcodeModule>.
@@ -1377,6 +1382,13 @@ Error LTO::run(AddStreamFn AddStream, FileCache Cache) {
 
   if (StatsFile)
     PrintStatisticsJSON(StatsFile->os());
+
+  // The backend contexts merged their timings into TimePassesSink when they
+  // were destroyed. RegularLTO.Ctx was created before TimePassesSink.
+  if (TimePassesSink) {
+    TimePassesSink->mergeFrom(*RegularLTO.Ctx.TimingState);
+    TimePassesSink->print(*CreateInfoOutputFile());
+  }
 
   return Result;
 }

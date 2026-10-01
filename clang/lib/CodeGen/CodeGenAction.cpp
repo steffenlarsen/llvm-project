@@ -42,9 +42,7 @@
 #include "llvm/LTO/LTOBackend.h"
 #include "llvm/Linker/Linker.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/ManagedStatic.h"
 #include "llvm/Support/MemoryBuffer.h"
-#include "llvm/Support/Mutex.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/TimeProfiler.h"
 #include "llvm/Support/Timer.h"
@@ -57,10 +55,6 @@ using namespace clang;
 using namespace llvm;
 
 #define DEBUG_TYPE "codegenaction"
-
-namespace {
-llvm::ManagedStatic<llvm::sys::SmartMutex<true>> TimePassesMutex;
-}
 
 namespace clang {
 
@@ -97,11 +91,8 @@ BackendConsumer::BackendConsumer(CompilerInstance &CI, BackendAction Action,
       LinkModules(std::move(LinkModules)), DiagConsumer(Diags, CodeGenOpts) {
   DiagConsumer.setCurLinkModule(CurLinkModule);
   TimerIsEnabled = CodeGenOpts.TimePasses;
-  {
-    llvm::sys::SmartScopedLock<true> Lock(*TimePassesMutex);
-    llvm::TimePassesIsEnabled = CodeGenOpts.TimePasses;
-    llvm::TimePassesPerRun = CodeGenOpts.TimePassesPerRun;
-  }
+  // Set even if null: C may have been used by an earlier compilation.
+  C.setPassTimingState(CI.getPassTimingState());
   if (CodeGenOpts.TimePasses)
     LLVMIRGeneration.init("irgen", "LLVM IR generation", CI.getTimerGroup());
 }
@@ -337,6 +328,9 @@ CodeGenAction::~CodeGenAction() {
   TheModule.reset();
   if (OwnsVMContext)
     delete VMContext;
+  else
+    // The context may outlive the CompilerInstance that owns its timers.
+    VMContext->setPassTimingState(nullptr);
 }
 
 bool CodeGenAction::hasIRSupport() const { return true; }

@@ -132,6 +132,34 @@ void Process::GetTimeUsage(TimePoint<> &elapsed,
 #include <mach/mach.h>
 #endif
 
+void Process::GetThreadTimeUsage(TimePoint<> &elapsed,
+                                 std::chrono::nanoseconds &user_time,
+                                 std::chrono::nanoseconds &sys_time) {
+#if defined(HAVE_GETRUSAGE) && defined(RUSAGE_THREAD)
+  elapsed = std::chrono::system_clock::now();
+  struct rusage RU;
+  ::getrusage(RUSAGE_THREAD, &RU);
+  user_time = toDuration(RU.ru_utime);
+  sys_time = toDuration(RU.ru_stime);
+#elif defined(HAVE_MACH_MACH_H) && !defined(__GNU__)
+  elapsed = std::chrono::system_clock::now();
+  mach_port_t Thread = mach_thread_self();
+  thread_basic_info_data_t Info;
+  mach_msg_type_number_t Count = THREAD_BASIC_INFO_COUNT;
+  kern_return_t Result =
+      thread_info(Thread, THREAD_BASIC_INFO, (thread_info_t)&Info, &Count);
+  mach_port_deallocate(mach_task_self(), Thread);
+  if (Result != KERN_SUCCESS)
+    return GetTimeUsage(elapsed, user_time, sys_time);
+  user_time = std::chrono::seconds(Info.user_time.seconds) +
+              std::chrono::microseconds(Info.user_time.microseconds);
+  sys_time = std::chrono::seconds(Info.system_time.seconds) +
+             std::chrono::microseconds(Info.system_time.microseconds);
+#else
+  GetTimeUsage(elapsed, user_time, sys_time);
+#endif
+}
+
 // Some LLVM programs such as llvm-reduce produce core files as a normal part of
 // their operation. To prevent the disk from filling up, this function does
 // what's necessary to prevent their generation.

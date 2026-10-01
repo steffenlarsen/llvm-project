@@ -16,6 +16,7 @@
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/PassTimingInfo.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/CBindingWrapping.h"
 #include "llvm/Support/FileSystem.h"
@@ -296,6 +297,7 @@ static LLVMBool LLVMTargetMachineEmit(LLVMTargetMachineRef T, LLVMModuleRef M,
   TargetMachine* TM = unwrap(T);
   Module* Mod = unwrap(M);
 
+  CommandLineTimePassesScope TimePasses(Mod->getContext());
   legacy::PassManager pass;
 
   std::string error;

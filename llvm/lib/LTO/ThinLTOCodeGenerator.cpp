@@ -58,6 +58,7 @@
 #include "llvm/Transforms/IPO/Internalize.h"
 #include "llvm/Transforms/IPO/WholeProgramDevirt.h"
 #include "llvm/Transforms/Utils/FunctionImportUtils.h"
+#include <optional>
 
 #if !defined(_MSC_VER) && !defined(__MINGW32__)
 #include <unistd.h>
@@ -976,12 +977,42 @@ ThinLTOCodeGenerator::writeGeneratedObject(int count, StringRef CacheEntryPath,
   return std::string(OutputPath);
 }
 
+namespace {
+/// Times the passes run on the context of one task, and adds the timings to
+/// those of the whole run when the task finishes. Tasks run concurrently, so
+/// each needs its own timers.
+class TaskTimingState {
+  std::optional<PassTimingState> State;
+  PassTimingState *RunState;
+
+public:
+  TaskTimingState(LLVMContext &Context, std::optional<PassTimingState> &Run)
+      : RunState(Run ? &*Run : nullptr) {
+    if (!RunState)
+      return;
+    State.emplace(RunState->isPerRun());
+    Context.setPassTimingState(&*State);
+  }
+  ~TaskTimingState() {
+    if (State)
+      RunState->mergeFrom(*State);
+  }
+};
+} // namespace
+
 // Main entry point for the ThinLTO processing
 void ThinLTOCodeGenerator::run() {
   timeTraceProfilerBegin("ThinLink", StringRef(""));
   llvm::scope_exit TimeTraceScopeExit([]() {
     if (llvm::timeTraceProfilerEnabled())
       llvm::timeTraceProfilerEnd();
+  });
+  std::optional<PassTimingState> RunTimingState;
+  if (TimePassesIsEnabled)
+    RunTimingState.emplace(TimePassesPerRun);
+  llvm::scope_exit ReportTimings([&]() {
+    if (RunTimingState)
+      RunTimingState->print(*CreateInfoOutputFile());
   });
   // Prepare the resulting object vector
   assert(ProducedBinaries.empty() && "The generator should not be reused");
@@ -1004,6 +1035,7 @@ void ThinLTOCodeGenerator::run() {
       Pool.async([&](int count) {
         LLVMContext Context;
         Context.setDiscardValueNames(LTODiscardValueNames);
+        TaskTimingState TaskTiming(Context, RunTimingState);
 
         // Parse module now
         auto TheModule = loadModuleFromInput(Mod.get(), Context, false,
@@ -1177,6 +1209,7 @@ void ThinLTOCodeGenerator::run() {
         LLVMContext Context;
         Context.setDiscardValueNames(LTODiscardValueNames);
         Context.enableDebugTypeODRUniquing();
+        TaskTimingState TaskTiming(Context, RunTimingState);
         auto DiagFileOrErr = lto::setupLLVMOptimizationRemarks(
             Context, RemarksFilename, RemarksPasses, RemarksFormat,
             RemarksWithHotness, RemarksHotnessThreshold, count);
@@ -1242,5 +1275,4 @@ void ThinLTOCodeGenerator::run() {
   // If statistics were requested, print them out now.
   if (llvm::AreStatisticsEnabled())
     llvm::PrintStatistics();
-  reportAndResetTimings();
 }

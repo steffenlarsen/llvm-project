@@ -20,6 +20,7 @@
 #include "flang/Semantics/runtime-type-info.h"
 #include "flang/Semantics/semantics.h"
 #include "flang/Support/StringOstream.h"
+#include "llvm/IR/PassTimingInfo.h"
 #include "llvm/Plugins/PassPlugin.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
@@ -109,6 +110,10 @@ class CompilerInstance {
   std::unique_ptr<Fortran::support::string_ostream> timingStreamLLVM;
   std::unique_ptr<Fortran::support::string_ostream> timingStreamCodeGen;
   /// @}
+
+  /// The timers of the LLVM passes, which run on the LLVM context of the
+  /// frontend action.
+  std::unique_ptr<llvm::PassTimingState> passTiming;
 
 public:
   CompilerInstance();
@@ -318,6 +323,9 @@ public:
     assert(timingStreamLLVM && "Timing stream for LLVM was not set");
     return *timingStreamLLVM;
   }
+
+  /// Get the timers of the LLVM passes, or null if timing is disabled.
+  llvm::PassTimingState *getPassTimingState() { return passTiming.get(); }
 
   /// Get the timing stream fro the legacy LLVM pass manager.
   /// NOTE: If the codegen is updated to use the new pass manager, this should

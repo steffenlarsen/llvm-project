@@ -2476,7 +2476,8 @@ void DotCfgChangeReporter::registerCallbacks(
 StandardInstrumentations::StandardInstrumentations(
     LLVMContext &Context, bool DebugLogging, bool VerifyEach,
     PrintPassOptions PrintPassOpts)
-    : PrintPass(DebugLogging, PrintPassOpts), OptNone(DebugLogging),
+    : PrintPass(DebugLogging, PrintPassOpts),
+      TimePasses(Context.getPassTimingState()), OptNone(DebugLogging),
       OptPassGate(Context),
       PrintChangedIR(PrintChanged == ChangePrinter::Verbose),
       PrintChangedDiff(PrintChanged == ChangePrinter::DiffVerbose ||

@@ -225,6 +225,9 @@ private:
 
   void finishOptimizationRemarks();
 
+  /// Time passes if -time-passes is set, which libLTO parses late.
+  void setUpTimePasses();
+
   LLVMContext &Context;
   std::unique_ptr<Module> MergedModule;
   std::unique_ptr<Linker> TheLinker;
@@ -247,6 +250,12 @@ private:
   LLVMRemarkFileHandle DiagnosticOutputFile;
   std::unique_ptr<ToolOutputFile> StatsFile = nullptr;
   std::string SaveIRBeforeOptPath;
+
+  /// Times passes run on Context, if -time-passes is set.
+  std::unique_ptr<PassTimingState> TimingState;
+  /// Collects the timings of parallel code generation partitions, which run
+  /// on other threads in their own contexts.
+  std::unique_ptr<PassTimingState> PartitionTimingState;
 
   lto::Config Config;
 };

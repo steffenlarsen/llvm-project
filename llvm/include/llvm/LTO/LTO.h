@@ -465,6 +465,10 @@ protected:
 
   Config Conf;
 
+  /// The pass timings of all of the link's contexts, if Conf.TimePasses is
+  /// set.
+  std::unique_ptr<PassTimingState> TimePassesSink;
+
   struct RegularLTOState {
     LLVM_ABI RegularLTOState(unsigned ParallelCodeGenParallelismLevel,
                              const Config &Conf);

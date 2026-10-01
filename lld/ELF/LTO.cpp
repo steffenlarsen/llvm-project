@@ -20,6 +20,7 @@
 #include "llvm/BinaryFormat/ELF.h"
 #include "llvm/Bitcode/BitcodeWriter.h"
 #include "llvm/DTLTO/DTLTO.h"
+#include "llvm/IR/PassTimingInfo.h"
 #include "llvm/LTO/Config.h"
 #include "llvm/LTO/LTO.h"
 #include "llvm/Support/Caching.h"
@@ -150,6 +151,8 @@ static lto::Config createConfig(Ctx &ctx) {
 
   c.TimeTraceEnabled = ctx.arg.timeTraceEnabled;
   c.TimeTraceGranularity = ctx.arg.timeTraceGranularity;
+  c.TimePasses = llvm::TimePassesIsEnabled;
+  c.TimePassesPerRun = llvm::TimePassesPerRun;
 
   c.CSIRProfile = std::string(ctx.arg.ltoCSProfileFile);
   c.RunCSIRInstr = ctx.arg.ltoCSProfileGenerate;

@@ -14,6 +14,7 @@
 
 #include "DebugOptions.h"
 
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/Config/config.h"
@@ -45,10 +46,6 @@ using namespace llvm;
 // access. Use of getters also has the benefit of making it a bit more explicit
 // that a global is being used.
 //===----------------------------------------------------------------------===//
-namespace {
-class Name2PairMap;
-}
-
 static std::string &libSupportInfoOutputFilename();
 static bool trackSpace();
 static bool sortTimers();
@@ -56,7 +53,7 @@ static bool sortTimers();
 static SignpostEmitter &signposts();
 static sys::SmartMutex<true> &timerLock();
 static TimerGroup &defaultTimerGroup();
-static Name2PairMap &namedGroupedTimers();
+static TimerRegistry &namedGroupedTimers();
 static bool isTimerGlobalsConstructed();
 
 //===----------------------------------------------------------------------===//
@@ -125,18 +122,20 @@ static uint64_t getCurInstructionsExecuted() {
   return 0;
 }
 
-TimeRecord TimeRecord::getCurrentTime(bool Start) {
+TimeRecord TimeRecord::getCurrentTimeImpl(bool Start, bool ThreadCPUTime) {
   using Seconds = std::chrono::duration<double, std::ratio<1>>;
   TimeRecord Result;
   sys::TimePoint<> now;
   std::chrono::nanoseconds user, sys;
+  auto GetTimeUsage = ThreadCPUTime ? sys::Process::GetThreadTimeUsage
+                                    : sys::Process::GetTimeUsage;
 
   if (Start) {
     Result.MemUsed = getMemUsage();
     Result.InstructionsExecuted = getCurInstructionsExecuted();
-    sys::Process::GetTimeUsage(now, user, sys);
+    GetTimeUsage(now, user, sys);
   } else {
-    sys::Process::GetTimeUsage(now, user, sys);
+    GetTimeUsage(now, user, sys);
     Result.InstructionsExecuted = getCurInstructionsExecuted();
     Result.MemUsed = getMemUsage();
   }
@@ -147,19 +146,32 @@ TimeRecord TimeRecord::getCurrentTime(bool Start) {
   return Result;
 }
 
+TimeRecord TimeRecord::getCurrentTime(bool Start) {
+  return getCurrentTimeImpl(Start, /*ThreadCPUTime=*/false);
+}
+
+TimeRecord TimeRecord::getCurrentThreadTime(bool Start) {
+  return getCurrentTimeImpl(Start, /*ThreadCPUTime=*/true);
+}
+
+static TimeRecord getCurrentTimeForGroup(bool Start, const TimerGroup *TG) {
+  return TG && TG->usesThreadCPUTime() ? TimeRecord::getCurrentThreadTime(Start)
+                                       : TimeRecord::getCurrentTime(Start);
+}
+
 void Timer::startTimer() {
   assert(!Running && "Cannot start a running timer");
   Running = Triggered = true;
 #if LLVM_SUPPORT_XCODE_SIGNPOSTS
   signposts().startInterval(this, getName());
 #endif
-  StartTime = TimeRecord::getCurrentTime(true);
+  StartTime = getCurrentTimeForGroup(/*Start=*/true, TG);
 }
 
 void Timer::stopTimer() {
   assert(Running && "Cannot stop a paused timer");
   Running = false;
-  Time += TimeRecord::getCurrentTime(false);
+  Time += getCurrentTimeForGroup(/*Start=*/false, TG);
   Time -= StartTime;
 #if LLVM_SUPPORT_XCODE_SIGNPOSTS
   signposts().endInterval(this, getName());
@@ -200,65 +212,108 @@ void TimeRecord::print(const TimeRecord &Total, raw_ostream &OS) const {
     OS << format("%9" PRId64 "  ", (int64_t)getInstructionsExecuted());
 }
 
+//===----------------------------------------------------------------------===//
+//   TimerRegistry Implementation
+//===----------------------------------------------------------------------===//
+
+TimerRegistry::TimerRegistry(bool ThreadCPUTime)
+    : ThreadCPUTime(ThreadCPUTime) {}
+
+// Each group entry destroys its timers before its group, which accumulates
+// their timing data and prints it if it was not printed yet.
+TimerRegistry::~TimerRegistry() = default;
+
+TimerRegistry::GroupEntry &
+TimerRegistry::getGroupEntry(StringRef GroupName, StringRef GroupDescription) {
+  GroupEntry &Entry = Groups[GroupName];
+  if (!Entry.Group) {
+    Entry.Group = std::make_unique<TimerGroup>(GroupName, GroupDescription,
+                                               /*PrintOnExit=*/true);
+    Entry.Group->setThreadCPUTime(ThreadCPUTime);
+    GroupsInCreationOrder.push_back(Entry.Group.get());
+  }
+  return Entry;
+}
+
+Timer &TimerRegistry::getTimer(StringRef Name, StringRef Description,
+                               StringRef GroupName,
+                               StringRef GroupDescription) {
+  GroupEntry &Entry = getGroupEntry(GroupName, GroupDescription);
+  Timer &T = Entry.Timers[Name];
+  if (!T.isInitialized())
+    T.init(Name, Description, *Entry.Group);
+  return T;
+}
+
+TimerGroup &TimerRegistry::getTimerGroup(StringRef GroupName,
+                                         StringRef GroupDescription) {
+  return *getGroupEntry(GroupName, GroupDescription).Group;
+}
+
+void TimerRegistry::mergeFrom(TimerRegistry &Other) {
+  // The timer lock serializes concurrent merges into this registry.
+  sys::SmartScopedLock<true> L(timerLock());
+  for (TimerGroup *From : Other.GroupsInCreationOrder) {
+    From->prepareToPrintList(/*ResetTime=*/true);
+    if (From->TimersToPrint.empty())
+      continue;
+    TimerGroup &To = getTimerGroup(From->Name, From->Description);
+    for (const TimerGroup::PrintRecord &Record : From->TimersToPrint) {
+      auto It = find_if(To.TimersToPrint, [&](const auto &Existing) {
+        return Existing.Name == Record.Name &&
+               Existing.Description == Record.Description;
+      });
+      if (It == To.TimersToPrint.end())
+        To.TimersToPrint.push_back(Record);
+      else
+        It->Time += Record.Time;
+    }
+    From->TimersToPrint.clear();
+  }
+}
+
+void TimerRegistry::print(raw_ostream &OS) {
+  for (TimerGroup *TG : GroupsInCreationOrder)
+    TG->print(OS, /*ResetAfterPrint=*/true);
+}
+
+void TimerRegistry::clear() {
+  for (TimerGroup *TG : GroupsInCreationOrder) {
+    TG->clear();
+    TG->TimersToPrint.clear();
+  }
+}
 
 //===----------------------------------------------------------------------===//
 //   NamedRegionTimer Implementation
 //===----------------------------------------------------------------------===//
 
-namespace {
-
-using Name2TimerMap = StringMap<Timer>;
-
-class Name2PairMap {
-  StringMap<std::pair<TimerGroup*, Name2TimerMap> > Map;
-public:
-  ~Name2PairMap() {
-    for (StringMap<std::pair<TimerGroup*, Name2TimerMap> >::iterator
-         I = Map.begin(), E = Map.end(); I != E; ++I)
-      delete I->second.first;
-  }
-
-  Timer &get(StringRef Name, StringRef Description, StringRef GroupName,
-             StringRef GroupDescription) {
-    sys::SmartScopedLock<true> L(timerLock());
-
-    std::pair<TimerGroup *, Name2TimerMap> &GroupEntry =
-        getGroupEntry(GroupName, GroupDescription);
-    Timer &T = GroupEntry.second[Name];
-    if (!T.isInitialized())
-      T.init(Name, Description, *GroupEntry.first);
-    return T;
-  }
-
-  TimerGroup &getTimerGroup(StringRef GroupName, StringRef GroupDescription) {
-    sys::SmartScopedLock<true> L(timerLock());
-    return *getGroupEntry(GroupName, GroupDescription).first;
-  }
-
-private:
-  std::pair<TimerGroup *, Name2TimerMap> &
-  getGroupEntry(StringRef GroupName, StringRef GroupDescription) {
-    std::pair<TimerGroup *, Name2TimerMap> &GroupEntry = Map[GroupName];
-    if (!GroupEntry.first)
-      GroupEntry.first =
-          new TimerGroup(GroupName, GroupDescription, /*PrintOnExit=*/true);
-
-    return GroupEntry;
-  }
-};
-
+static Timer &getProcessWideTimer(StringRef Name, StringRef Description,
+                                  StringRef GroupName,
+                                  StringRef GroupDescription) {
+  sys::SmartScopedLock<true> L(timerLock());
+  return namedGroupedTimers().getTimer(Name, Description, GroupName,
+                                       GroupDescription);
 }
 
 NamedRegionTimer::NamedRegionTimer(StringRef Name, StringRef Description,
                                    StringRef GroupName,
                                    StringRef GroupDescription, bool Enabled)
-    : TimeRegion(!Enabled
-                     ? nullptr
-                     : &namedGroupedTimers().get(Name, Description, GroupName,
+    : TimeRegion(!Enabled ? nullptr
+                          : &getProcessWideTimer(Name, Description, GroupName,
                                                  GroupDescription)) {}
+
+NamedRegionTimer::NamedRegionTimer(StringRef Name, StringRef Description,
+                                   StringRef GroupName,
+                                   StringRef GroupDescription,
+                                   TimerRegistry *Registry)
+    : TimeRegion(Registry ? &Registry->getTimer(Name, Description, GroupName,
+                                                GroupDescription)
+                          : nullptr) {}
 
 TimerGroup &NamedRegionTimer::getNamedTimerGroup(StringRef GroupName,
                                                  StringRef GroupDescription) {
+  sys::SmartScopedLock<true> L(timerLock());
   return namedGroupedTimers().getTimerGroup(GroupName, GroupDescription);
 }
 
@@ -539,7 +594,7 @@ public:
   // the defaultTimerGroup uses the timerLock. Most of these also depend on the
   // options above.
   std::once_flag InitDeferredFlag;
-  std::optional<Name2PairMap> NamedGroupedTimersPtr;
+  std::optional<TimerRegistry> NamedGroupedTimersPtr;
 
   TimerGlobals &initDeferred() {
     std::call_once(InitDeferredFlag,
@@ -562,7 +617,7 @@ static sys::SmartMutex<true> &timerLock() {
 static TimerGroup &defaultTimerGroup() {
   return ManagedTimerGlobals->DefaultTimerGroup;
 }
-static Name2PairMap &namedGroupedTimers() {
+static TimerRegistry &namedGroupedTimers() {
   return *ManagedTimerGlobals->initDeferred().NamedGroupedTimersPtr;
 }
 

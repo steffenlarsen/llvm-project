@@ -180,6 +180,7 @@ bool CodeGenAction::beginSourceFileAction() {
     llvmModule.reset(nullptr);
   llvmCtx = std::make_unique<llvm::LLVMContext>();
   CompilerInstance &ci = this->getInstance();
+  llvmCtx->setPassTimingState(ci.getPassTimingState());
   mlir::DefaultTimingManager &timingMgr = ci.getTimingManager();
   mlir::TimingScope &timingScopeRoot = ci.getTimingScopeRoot();
 
@@ -1493,7 +1494,8 @@ void CodeGenAction::executeAction() {
         ci, diags, targetMachine, action, *llvmModule, codeGenOpts,
         ci.isOutputStreamNull() ? *os : ci.getOutputStream());
     if (timingMgr.isEnabled())
-      llvm::reportAndResetTimings(&ci.getTimingStreamCodeGen());
+      ci.getPassTimingState()->reportAndResetTimings(
+          &ci.getTimingStreamCodeGen());
     return;
   }
 }

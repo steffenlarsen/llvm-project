@@ -64,6 +64,8 @@ void RegAllocBase::init(VirtRegMap &vrm, LiveIntervals &lis,
   VRM = &vrm;
   LIS = &lis;
   Matrix = &mat;
+  TimingState =
+      vrm.getMachineFunction().getFunction().getContext().getPassTimingState();
   MRI->freezeReservedRegs();
   RegClassInfo.runOnMachineFunction(vrm.getMachineFunction());
   FailedVRegs.clear();
@@ -74,7 +76,7 @@ void RegAllocBase::init(VirtRegMap &vrm, LiveIntervals &lis,
 // them on the priority queue for later assignment.
 void RegAllocBase::seedLiveRegs() {
   NamedRegionTimer T("seed", "Seed Live Regs", TimerGroupName,
-                     TimerGroupDescription, TimePassesIsEnabled);
+                     TimerGroupDescription, TimingState);
   for (unsigned i = 0, e = MRI->getNumVirtRegs(); i != e; ++i) {
     Register Reg = Register::index2VirtReg(i);
     if (MRI->reg_nodbg_empty(Reg))

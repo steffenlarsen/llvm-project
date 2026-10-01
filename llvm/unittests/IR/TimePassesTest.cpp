@@ -18,6 +18,7 @@
 #include <llvm/IR/PassManager.h>
 #include <llvm/IR/PassTimingInfo.h>
 #include <llvm/Support/raw_ostream.h>
+#include <thread>
 
 using namespace llvm;
 
@@ -68,7 +69,9 @@ TEST(TimePassesTest, LegacyCustomOut) {
   PassInstrumentationCallbacks PIC;
   PassInstrumentation PI(&PIC);
 
+  PassTimingState TimingState;
   LLVMContext Context;
+  Context.setPassTimingState(&TimingState);
   Module M("TestModule", Context);
 
   SmallString<0> TimePassesStr;
@@ -79,12 +82,11 @@ TEST(TimePassesTest, LegacyCustomOut) {
   PM1.add(new Pass1());
   PM1.add(new Pass2());
 
-  // Enable time-passes and run passes.
-  TimePassesIsEnabled = true;
+  // Run passes on the timed context.
   PM1.run(M);
 
   // Generating report.
-  reportAndResetTimings(&ReportStream);
+  TimingState.reportAndResetTimings(&ReportStream);
 
   // There should be Pass1 and Pass2 in the report
   EXPECT_FALSE(TimePassesStr.empty());
@@ -94,7 +96,7 @@ TEST(TimePassesTest, LegacyCustomOut) {
 
   // Clear and generate report again.
   TimePassesStr.clear();
-  reportAndResetTimings(&ReportStream);
+  TimingState.reportAndResetTimings(&ReportStream);
 
   // Since we did not run any passes since last print, report should be empty.
   EXPECT_TRUE(TimePassesStr.empty());
@@ -105,16 +107,89 @@ TEST(TimePassesTest, LegacyCustomOut) {
   PM2.run(M);
 
   // Generate report again.
-  reportAndResetTimings(&ReportStream);
+  TimingState.reportAndResetTimings(&ReportStream);
 
   // There should be Pass2 in this report and no Pass1.
   EXPECT_FALSE(TimePassesStr.str().empty());
   EXPECT_TRUE(TimePassesStr.str().contains("report"));
   EXPECT_FALSE(TimePassesStr.str().contains("Pass1"));
   EXPECT_TRUE(TimePassesStr.str().contains("Pass2"));
+}
 
-  // Reset flag to not affect other tests.
-  TimePassesIsEnabled = false;
+static std::string runLegacyPassAndReport(PassTimingState &TimingState,
+                                          LLVMContext &Context, Pass *P) {
+  Module M("TestModule", Context);
+  legacy::PassManager PM;
+  PM.add(P);
+  PM.run(M);
+
+  SmallString<0> Report;
+  raw_svector_ostream ReportStream(Report);
+  TimingState.reportAndResetTimings(&ReportStream);
+  return Report.str().str();
+}
+
+// Each context's passes are timed by its own state.
+TEST(TimePassesTest, LegacyIsolation) {
+  PassTimingState StateA, StateB;
+  LLVMContext ContextA, ContextB;
+  ContextA.setPassTimingState(&StateA);
+  ContextB.setPassTimingState(&StateB);
+
+  std::string ReportA = runLegacyPassAndReport(StateA, ContextA, new Pass1());
+  std::string ReportB = runLegacyPassAndReport(StateB, ContextB, new Pass2());
+  EXPECT_TRUE(StringRef(ReportA).contains("Pass1"));
+  EXPECT_FALSE(StringRef(ReportA).contains("Pass2"));
+  EXPECT_TRUE(StringRef(ReportB).contains("Pass2"));
+  EXPECT_FALSE(StringRef(ReportB).contains("Pass1"));
+
+  // Passes run on a context without a state are not timed, even after passes
+  // were timed on another context.
+  LLVMContext Untimed;
+  Module M("TestModule", Untimed);
+  legacy::PassManager PM;
+  PM.add(new Pass1());
+  PM.run(M);
+  SmallString<0> Report;
+  raw_svector_ostream ReportStream(Report);
+  StateA.reportAndResetTimings(&ReportStream);
+  EXPECT_TRUE(Report.empty());
+}
+
+// Compilations on different threads can be timed at the same time, each
+// into its own state, even when they time regions with the same names.
+TEST(TimePassesTest, Concurrent) {
+  auto Compile = [](Pass *(*CreatePass)(), std::string &Report) {
+    PassTimingState TimingState;
+    LLVMContext Context;
+    Context.setPassTimingState(&TimingState);
+    for (int I = 0; I < 100; ++I) {
+      Module M("TestModule", Context);
+      legacy::PassManager PM;
+      PM.add(CreatePass());
+      PM.run(M);
+      for (int J = 0; J < 100; ++J)
+        NamedRegionTimer T("region", "Region", "group", "Group",
+                           Context.getPassTimingState());
+    }
+    raw_string_ostream ReportStream(Report);
+    TimingState.print(ReportStream);
+  };
+
+  std::string ReportA, ReportB;
+  std::thread ThreadA(
+      Compile, []() -> Pass * { return new Pass1(); }, std::ref(ReportA));
+  std::thread ThreadB(
+      Compile, []() -> Pass * { return new Pass2(); }, std::ref(ReportB));
+  ThreadA.join();
+  ThreadB.join();
+
+  EXPECT_TRUE(StringRef(ReportA).contains("Pass1"));
+  EXPECT_FALSE(StringRef(ReportA).contains("Pass2"));
+  EXPECT_TRUE(StringRef(ReportA).contains("Region"));
+  EXPECT_TRUE(StringRef(ReportB).contains("Pass2"));
+  EXPECT_FALSE(StringRef(ReportB).contains("Pass1"));
+  EXPECT_TRUE(StringRef(ReportB).contains("Region"));
 }
 
 class MyPass1 : public OptionalPassInfoMixin<MyPass1> {};
@@ -133,8 +208,9 @@ TEST(TimePassesTest, CustomOut) {
   raw_svector_ostream ReportStream(TimePassesStr);
 
   // Setup time-passes handler and redirect output to the stream.
+  PassTimingState TimingState;
   std::unique_ptr<TimePassesHandler> TimePasses =
-      std::make_unique<TimePassesHandler>(true);
+      std::make_unique<TimePassesHandler>(&TimingState);
   TimePasses->setOutStream(ReportStream);
   TimePasses->registerCallbacks(PIC);
 

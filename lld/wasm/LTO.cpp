@@ -19,6 +19,7 @@
 #include "llvm/ADT/Twine.h"
 #include "llvm/Bitcode/BitcodeWriter.h"
 #include "llvm/IR/DiagnosticPrinter.h"
+#include "llvm/IR/PassTimingInfo.h"
 #include "llvm/LTO/Config.h"
 #include "llvm/LTO/LTO.h"
 #include "llvm/Support/Caching.h"
@@ -68,6 +69,8 @@ static lto::Config createConfig() {
 
   c.CGOptLevel = ctx.arg.ltoCgo;
   c.DebugPassManager = ctx.arg.ltoDebugPassManager;
+  c.TimePasses = llvm::TimePassesIsEnabled;
+  c.TimePassesPerRun = llvm::TimePassesPerRun;
   c.AlwaysEmitRegularLTOObj = !ctx.arg.ltoObjPath.empty();
 
   if (auto relocModel = getRelocModelFromCMModel())

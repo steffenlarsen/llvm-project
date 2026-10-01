@@ -63,6 +63,7 @@ class GlobalValue;
 class InlineAsm;
 class LLVMRemarkStreamer;
 class OptPassGate;
+class PassTimingState;
 namespace remarks {
 class RemarkStreamer;
 }
@@ -1845,6 +1846,9 @@ public:
   /// The lifetime of the object must be guaranteed to extend as long as the
   /// LLVMContext is used by compilation.
   void setOptPassGate(OptPassGate &);
+
+  /// The object that times compilation on this context, if any. Not owned.
+  PassTimingState *TimingState = nullptr;
 
   /// Mapping of blocks to collections of "trailing" DbgVariableRecords. As part
   /// of the "RemoveDIs" project, debug-info variable location records are going

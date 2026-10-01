@@ -20,6 +20,7 @@
 #include "llvm/CodeGen/CommandFlags.h"
 #include "llvm/DTLTO/DTLTO.h"
 #include "llvm/IR/DiagnosticPrinter.h"
+#include "llvm/IR/PassTimingInfo.h"
 #include "llvm/LTO/LTO.h"
 #include "llvm/Plugins/PassPlugin.h"
 #include "llvm/Remarks/HotnessThresholdParser.h"
@@ -346,6 +347,8 @@ static int run(int argc, char **argv) {
     Conf.TimeTraceEnabled = TimeTrace;
     Conf.TimeTraceGranularity = TimeTraceGranularity;
   }
+  Conf.TimePasses = TimePassesIsEnabled;
+  Conf.TimePassesPerRun = TimePassesPerRun;
   Conf.CPU = codegen::getMCPU();
   Conf.Options = codegen::InitTargetOptionsFromCodeGenFlags(Triple());
   Conf.MAttrs = codegen::getMAttrs();

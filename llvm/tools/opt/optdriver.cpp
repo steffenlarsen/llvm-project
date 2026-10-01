@@ -32,6 +32,7 @@
 #include "llvm/IR/LegacyPassNameParser.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/ModuleSummaryIndex.h"
+#include "llvm/IR/PassTimingInfo.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/IRReader/IRReader.h"
 #include "llvm/InitializePasses.h"
@@ -471,7 +472,13 @@ optMain(int argc, char **argv,
   if (Error E = passPluginArguments(Extensions, PluginArgs))
     reportFatalUsageError(std::move(E));
 
+  std::optional<PassTimingState> TimingState;
+  if (TimePassesIsEnabled)
+    TimingState.emplace(TimePassesPerRun);
+
   LLVMContext Context;
+  if (TimingState)
+    Context.setPassTimingState(&*TimingState);
 
   // TODO: remove shouldForceLegacyPM().
   const bool UseNPM =

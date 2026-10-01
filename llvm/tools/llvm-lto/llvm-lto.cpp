@@ -27,6 +27,7 @@
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/ModuleSummaryIndex.h"
+#include "llvm/IR/PassTimingInfo.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/IRReader/IRReader.h"
 #include "llvm/LTO/legacy/LTOCodeGenerator.h"
@@ -53,6 +54,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <memory>
+#include <optional>
 #include <string>
 #include <system_error>
 #include <tuple>
@@ -892,8 +894,14 @@ private:
     if (!ThinLTOIndex.empty())
       errs() << "Warning: -thinlto-index ignored for optimize stage";
 
+    std::optional<PassTimingState> TimingState;
+    if (TimePassesIsEnabled)
+      TimingState.emplace(TimePassesPerRun);
+
     for (auto &Filename : InputFilenames) {
       LLVMContext Ctx;
+      if (TimingState)
+        Ctx.setPassTimingState(&*TimingState);
       auto Buffer = loadFile(Filename);
       auto Input = loadInputFile(Buffer->getMemBufferRef());
       auto TheModule = loadModuleFromInput(*Input, Ctx);

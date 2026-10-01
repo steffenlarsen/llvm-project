@@ -29,6 +29,8 @@
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/TargetRegisterInfo.h"
 #include "llvm/IR/DebugLoc.h"
+#include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/PassTimingInfo.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/CommandLine.h"
@@ -1469,7 +1471,11 @@ bool HexagonGenInsert::runOnMachineFunction(MachineFunction &MF) {
   if (skipFunction(MF.getFunction()))
     return false;
 
-  bool Timing = OptTiming, TimingDetail = Timing && OptTimingDetail;
+  // Detailed timing also requires the function to be timed.
+  PassTimingState *TimingState =
+      OptTiming && OptTimingDetail
+          ? MF.getFunction().getContext().getPassTimingState()
+          : nullptr;
   bool Changed = false;
 
   // Verify: one, but not both.
@@ -1520,7 +1526,7 @@ bool HexagonGenInsert::runOnMachineFunction(MachineFunction &MF) {
 
   {
     NamedRegionTimer _T("collection", "collection", TGName, TGDesc,
-                        TimingDetail);
+                        TimingState);
     collectInBlock(RootB, AvailR);
     // Complete the information gathered in IFMap.
     computeRemovableRegisters();
@@ -1535,7 +1541,7 @@ bool HexagonGenInsert::runOnMachineFunction(MachineFunction &MF) {
     return Changed;
 
   {
-    NamedRegionTimer _T("pruning", "pruning", TGName, TGDesc, TimingDetail);
+    NamedRegionTimer _T("pruning", "pruning", TGName, TGDesc, TimingState);
     pruneCandidates();
   }
 
@@ -1548,7 +1554,7 @@ bool HexagonGenInsert::runOnMachineFunction(MachineFunction &MF) {
     return Changed;
 
   {
-    NamedRegionTimer _T("selection", "selection", TGName, TGDesc, TimingDetail);
+    NamedRegionTimer _T("selection", "selection", TGName, TGDesc, TimingState);
     selectCandidates();
   }
 
@@ -1569,7 +1575,7 @@ bool HexagonGenInsert::runOnMachineFunction(MachineFunction &MF) {
 
   {
     NamedRegionTimer _T("generation", "generation", TGName, TGDesc,
-                        TimingDetail);
+                        TimingState);
     generateInserts();
   }
 

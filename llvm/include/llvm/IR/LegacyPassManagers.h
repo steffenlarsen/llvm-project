@@ -91,6 +91,7 @@ template <typename T> class ArrayRef;
 class Module;
 class StringRef;
 class Value;
+class PassTimingState;
 class PMDataManager;
 
 // enums for debugging strings
@@ -216,12 +217,19 @@ public:
   void dumpPasses() const;
   void dumpArguments() const;
 
+  /// The timing state of the LLVMContext of the IR being run on, or null if
+  /// passes are not timed.
+  PassTimingState *getPassTimingState() const { return TimingState; }
+
   // Active Pass Managers
   PMStack activeStack;
 
 protected:
   /// Collection of pass managers
   SmallVector<PMDataManager *, 8> PassManagers;
+
+  /// Set from the IR's LLVMContext when a run starts.
+  PassTimingState *TimingState = nullptr;
 
 private:
   /// Collection of pass managers that are not directly maintained
