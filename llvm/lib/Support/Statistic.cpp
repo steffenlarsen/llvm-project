@@ -24,6 +24,8 @@
 
 #include "DebugOptions.h"
 
+#include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/STLFunctionalExtras.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
@@ -66,9 +68,7 @@ namespace {
 class StatisticInfo {
   std::vector<TrackingStatistic *> Stats;
 
-  friend void llvm::PrintStatistics();
   friend void llvm::PrintStatistics(raw_ostream &OS);
-  friend void llvm::PrintStatisticsJSON(raw_ostream &OS);
 
   /// Sort statistics by debugtype,name,description.
   void sort();
@@ -87,6 +87,12 @@ public:
   }
 
   void reset();
+
+  /// Print the statistics in JSON format, followed by the timers printed by
+  /// \p PrintTimers. It is given the delimiter to print before the next value
+  /// and returns the one to print after the last value it printed.
+  void printJSON(raw_ostream &OS,
+                 function_ref<const char *(const char *Delim)> PrintTimers);
 };
 } // end anonymous namespace
 
@@ -200,16 +206,15 @@ void llvm::PrintStatistics(raw_ostream &OS) {
   OS.flush();
 }
 
-void llvm::PrintStatisticsJSON(raw_ostream &OS) {
-  sys::SmartScopedLock<true> Reader(*StatLock);
-  StatisticInfo &Stats = *StatInfo;
-
-  Stats.sort();
+void StatisticInfo::printJSON(
+    raw_ostream &OS,
+    function_ref<const char *(const char *Delim)> PrintTimers) {
+  sort();
 
   // Print all of the statistics.
   OS << "{\n";
   const char *delim = "";
-  for (const TrackingStatistic *Stat : Stats.Stats) {
+  for (const TrackingStatistic *Stat : Stats) {
     OS << delim;
     assert(yaml::needsQuotes(Stat->getDebugType()) == yaml::QuotingType::None &&
            "Statistic group/type name is simple.");
@@ -220,24 +225,45 @@ void llvm::PrintStatisticsJSON(raw_ostream &OS) {
     delim = ",\n";
   }
   // Print timers.
-  TimerGroup::printAllJSONValues(OS, delim);
+  PrintTimers(delim);
 
   OS << "\n}\n";
   OS.flush();
 }
 
-void llvm::PrintStatistics() {
+void llvm::PrintStatisticsJSON(raw_ostream &OS) {
+  sys::SmartScopedLock<true> Reader(*StatLock);
+  StatInfo->printJSON(OS, [&](const char *Delim) {
+    return TimerGroup::printAllJSONValues(OS, Delim);
+  });
+}
+
+void llvm::PrintStatisticsJSON(raw_ostream &OS,
+                               ArrayRef<TimerGroup *> TimerGroups) {
+  sys::SmartScopedLock<true> Reader(*StatLock);
+  StatInfo->printJSON(OS, [&](const char *Delim) {
+    for (TimerGroup *TG : TimerGroups)
+      Delim = TG->printJSONValues(OS, Delim);
+    return Delim;
+  });
+}
+
+/// Print statistics to the file returned by CreateInfoOutputFile(), using
+/// \p PrintJSON if -stats-json is given.
+static void
+printStatisticsToInfoOutputFile(function_ref<void(raw_ostream &)> PrintJSON) {
 #if LLVM_ENABLE_STATS
   sys::SmartScopedLock<true> Reader(*StatLock);
   StatisticInfo &Stats = *StatInfo;
 
   // Statistics not enabled?
-  if (Stats.Stats.empty()) return;
+  if (Stats.statistics().empty())
+    return;
 
   // Get the stream to write to.
   std::unique_ptr<raw_ostream> OutStream = CreateInfoOutputFile();
   if (StatsAsJSON)
-    PrintStatisticsJSON(*OutStream);
+    PrintJSON(*OutStream);
   else
     PrintStatistics(*OutStream);
 
@@ -252,6 +278,16 @@ void llvm::PrintStatistics() {
                  << "Build with asserts or with -DLLVM_FORCE_ENABLE_STATS\n";
   }
 #endif
+}
+
+void llvm::PrintStatistics() {
+  printStatisticsToInfoOutputFile(
+      [](raw_ostream &OS) { PrintStatisticsJSON(OS); });
+}
+
+void llvm::PrintStatistics(ArrayRef<TimerGroup *> TimerGroups) {
+  printStatisticsToInfoOutputFile(
+      [&](raw_ostream &OS) { PrintStatisticsJSON(OS, TimerGroups); });
 }
 
 std::vector<std::pair<StringRef, uint64_t>> llvm::GetStatistics() {

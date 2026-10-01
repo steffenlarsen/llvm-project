@@ -817,7 +817,10 @@ void PlistDiagnostics::FlushDiagnosticsImpl(
     o << " <key>statistics</key>\n";
     std::string stats;
     llvm::raw_string_ostream os(stats);
-    llvm::PrintStatisticsJSON(os);
+    SmallVector<llvm::TimerGroup *, 1> TimerGroups;
+    if (DiagOpts.StatsTimerGroup)
+      TimerGroups.push_back(DiagOpts.StatsTimerGroup);
+    llvm::PrintStatisticsJSON(os, TimerGroups);
     EmitString(o, html::EscapeText(stats)) << '\n';
   }
 

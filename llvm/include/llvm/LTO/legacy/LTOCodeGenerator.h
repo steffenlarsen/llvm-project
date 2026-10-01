@@ -227,6 +227,8 @@ private:
 
   /// Time passes if -time-passes is set, which libLTO parses late.
   void setUpTimePasses();
+  /// The timer groups of the passes run on Context, if any.
+  ArrayRef<TimerGroup *> getTimerGroups() const;
 
   LLVMContext &Context;
   std::unique_ptr<Module> MergedModule;

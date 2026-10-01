@@ -13,5 +13,7 @@ void foo(void) {}
 // CHECK-NEXT: </array>
 // CHECK-NEXT: <key>statistics</key>
 // CHECK-NEXT: <string>{
+// The analyzer's own timers are serialized with the statistics.
+// CHECK: time.analyzer.syntaxchecks.wall
 // CHECK: }
 // CHECK-NEXT: </string>

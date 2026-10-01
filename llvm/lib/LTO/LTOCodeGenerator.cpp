@@ -140,6 +140,10 @@ LTOCodeGenerator::~LTOCodeGenerator() {
     Context.setPassTimingState(nullptr);
 }
 
+ArrayRef<TimerGroup *> LTOCodeGenerator::getTimerGroups() const {
+  return TimingState ? TimingState->getTimerGroups() : ArrayRef<TimerGroup *>();
+}
+
 void LTOCodeGenerator::setUpTimePasses() {
   if (!TimePassesIsEnabled || TimingState)
     return;
@@ -340,9 +344,9 @@ bool LTOCodeGenerator::compileOptimizedToFile(const char **Name) {
   // If statistics were requested, save them to the specified file or
   // print them out after codegen.
   if (StatsFile)
-    PrintStatisticsJSON(StatsFile->os());
+    PrintStatisticsJSON(StatsFile->os(), getTimerGroups());
   else if (AreStatisticsEnabled())
-    PrintStatistics();
+    PrintStatistics(getTimerGroups());
 
   if (useAIXSystemAssembler())
     if (!runAIXSystemAssembler(Filename))
@@ -673,17 +677,18 @@ bool LTOCodeGenerator::compileOptimized(AddStreamFn AddStream,
   assert(!Err && "unexpected code-generation failure");
   (void)Err;
 
+  if (TimingState)
+    TimingState->mergeFrom(*PartitionTimingState);
+
   // If statistics were requested, save them to the specified file or
   // print them out after codegen.
   if (StatsFile)
-    PrintStatisticsJSON(StatsFile->os());
+    PrintStatisticsJSON(StatsFile->os(), getTimerGroups());
   else if (AreStatisticsEnabled())
-    PrintStatistics();
+    PrintStatistics(getTimerGroups());
 
-  if (TimingState) {
-    TimingState->mergeFrom(*PartitionTimingState);
+  if (TimingState)
     TimingState->print(*CreateInfoOutputFile());
-  }
 
   finishOptimizationRemarks();
 

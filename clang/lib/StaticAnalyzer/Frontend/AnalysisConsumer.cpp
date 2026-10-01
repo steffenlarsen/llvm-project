@@ -143,8 +143,9 @@ public:
 
     EntryPointStat::lockRegistry(getMainFileName(CI.getInvocation()),
                                  CI.getASTContext());
-    DigestAnalyzerOptions();
 
+    // Before DigestAnalyzerOptions(), which gives AnalyzerTimers to the
+    // consumers that serialize statistics.
     if (Opts.AnalyzerDisplayProgress || Opts.PrintStats ||
         Opts.ShouldSerializeStats || !Opts.DumpEntryPointStatsToCSV.empty()) {
       AnalyzerTimers = std::make_unique<llvm::TimerGroup>(
@@ -161,6 +162,8 @@ public:
           *AnalyzerTimers);
     }
 
+    DigestAnalyzerOptions();
+
     if (Opts.PrintStats || Opts.ShouldSerializeStats) {
       llvm::EnableStatistics(/* DoPrintOnExit= */ false);
     }
@@ -174,18 +177,23 @@ public:
 
   ~AnalysisConsumer() override {
     if (Opts.PrintStats) {
-      llvm::PrintStatistics();
+      // Only print the timers of this analysis, others may be running.
+      SmallVector<llvm::TimerGroup *, 1> TimerGroups;
+      if (AnalyzerTimers)
+        TimerGroups.push_back(AnalyzerTimers.get());
+      llvm::PrintStatistics(TimerGroups);
     }
   }
 
   void DigestAnalyzerOptions() {
+    PathDiagnosticConsumerOptions DiagOpts = Opts.getDiagOpts();
+    DiagOpts.StatsTimerGroup = AnalyzerTimers.get();
     switch (Opts.AnalysisDiagOpt) {
     case PD_NONE:
       break;
 #define ANALYSIS_DIAGNOSTICS(NAME, CMDFLAG, DESC, CREATEFN)                    \
   case PD_##NAME:                                                              \
-    CREATEFN(Opts.getDiagOpts(), PathConsumers, OutDir, PP, CTU,              \
-             MacroExpansions);                                                 \
+    CREATEFN(DiagOpts, PathConsumers, OutDir, PP, CTU, MacroExpansions);       \
     break;
 #include "clang/StaticAnalyzer/Core/Analyses.def"
     default:

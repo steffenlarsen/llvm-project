@@ -1274,5 +1274,6 @@ void ThinLTOCodeGenerator::run() {
 
   // If statistics were requested, print them out now.
   if (llvm::AreStatisticsEnabled())
-    llvm::PrintStatistics();
+    llvm::PrintStatistics(RunTimingState ? RunTimingState->getTimerGroups()
+                                         : ArrayRef<TimerGroup *>());
 }

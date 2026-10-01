@@ -1380,15 +1380,18 @@ Error LTO::run(AddStreamFn AddStream, FileCache Cache) {
     // reduce peak memory before importing.
     Result = runThinLTO(AddStream, Cache, GUIDPreservedSymbols);
 
-  if (StatsFile)
-    PrintStatisticsJSON(StatsFile->os());
-
   // The backend contexts merged their timings into TimePassesSink when they
   // were destroyed. RegularLTO.Ctx was created before TimePassesSink.
-  if (TimePassesSink) {
+  if (TimePassesSink)
     TimePassesSink->mergeFrom(*RegularLTO.Ctx.TimingState);
+
+  if (StatsFile)
+    PrintStatisticsJSON(StatsFile->os(), TimePassesSink
+                                             ? TimePassesSink->getTimerGroups()
+                                             : ArrayRef<TimerGroup *>());
+
+  if (TimePassesSink)
     TimePassesSink->print(*CreateInfoOutputFile());
-  }
 
   return Result;
 }

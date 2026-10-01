@@ -43,9 +43,11 @@
 
 namespace llvm {
 
+template <typename T> class ArrayRef;
 class raw_ostream;
 class raw_fd_ostream;
 class StringRef;
+class TimerGroup;
 
 class TrackingStatistic {
 public:
@@ -186,8 +188,14 @@ LLVM_ABI bool AreStatisticsEnabled();
 /// Return a stream to print our output on.
 LLVM_ABI std::unique_ptr<raw_ostream> CreateInfoOutputFile();
 
-/// Print statistics to the file returned by CreateInfoOutputFile().
+/// Print statistics to the file returned by CreateInfoOutputFile(). With
+/// -stats-json, this includes all timers in the process, see
+/// PrintStatisticsJSON(raw_ostream &).
 LLVM_ABI void PrintStatistics();
+
+/// Like PrintStatistics(), but with -stats-json only includes the timers of
+/// \p TimerGroups.
+LLVM_ABI void PrintStatistics(ArrayRef<TimerGroup *> TimerGroups);
 
 /// Print statistics to the given output stream.
 LLVM_ABI void PrintStatistics(raw_ostream &OS);
@@ -196,7 +204,16 @@ LLVM_ABI void PrintStatistics(raw_ostream &OS);
 /// Timer, TimerGroup). Note that the timers are cleared after printing and will
 /// not be printed in human readable form or in a second call of
 /// PrintStatisticsJSON().
+///
+/// As this includes the timers of every compilation in the process, while
+/// other threads may be using them, it is only meant for tools. Library code
+/// should use the overload below.
 LLVM_ABI void PrintStatisticsJSON(raw_ostream &OS);
+
+/// Like PrintStatisticsJSON(raw_ostream &), but only includes the timers of
+/// \p TimerGroups, e.g. those of one compilation.
+LLVM_ABI void PrintStatisticsJSON(raw_ostream &OS,
+                                  ArrayRef<TimerGroup *> TimerGroups);
 
 /// Get the statistics. This can be used to look up the value of
 /// statistics without needing to parse JSON.

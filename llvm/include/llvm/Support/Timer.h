@@ -9,6 +9,7 @@
 #ifndef LLVM_SUPPORT_TIMER_H
 #define LLVM_SUPPORT_TIMER_H
 
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Compiler.h"
@@ -337,6 +338,11 @@ public:
   /// Get the group called \p GroupName, creating it if needed.
   LLVM_ABI TimerGroup &getTimerGroup(StringRef GroupName,
                                      StringRef GroupDescription);
+
+  /// Get the groups of the registry, in creation order.
+  ArrayRef<TimerGroup *> getTimerGroups() const {
+    return GroupsInCreationOrder;
+  }
 
   /// Move the timing data of \p Other into this registry and reset the timers
   /// of \p Other. Data is added to the group with the same name, summing

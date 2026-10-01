@@ -7,8 +7,11 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/ADT/Statistic.h"
+#include "llvm/Support/Timer.h"
 #include "llvm/Support/raw_ostream.h"
 #include "gtest/gtest.h"
+#include <atomic>
+#include <thread>
 using namespace llvm;
 
 using OptionalStatistic = std::optional<std::pair<StringRef, uint64_t>>;
@@ -167,6 +170,53 @@ TEST(StatisticTest, API) {
   // we can't tell if it failed anyway.
   ResetStatistics();
 #endif
+}
+
+// The JSON only includes the timers of the given groups. It does not touch the
+// timers of other groups, which may belong to other compilations.
+TEST(StatisticTest, JSONTimerGroups) {
+  TimerGroup Mine("mine", "My timers", /*PrintOnExit=*/false);
+  TimerGroup Other("other", "Other timers", /*PrintOnExit=*/false);
+  Timer MyTimer("mytimer", "My timer", Mine);
+  Timer OtherTimer("othertimer", "Other timer", Other);
+  MyTimer.startTimer();
+  MyTimer.stopTimer();
+  OtherTimer.startTimer();
+
+  std::string JSON;
+  raw_string_ostream OS(JSON);
+  PrintStatisticsJSON(OS, {&Mine});
+  EXPECT_NE(JSON.find("time.mine.mytimer.wall"), std::string::npos);
+  EXPECT_EQ(JSON.find("othertimer"), std::string::npos);
+  EXPECT_TRUE(OtherTimer.isRunning());
+  OtherTimer.stopTimer();
+}
+
+// Printing the statistics of one compilation is safe while another compilation
+// uses its timers on another thread.
+TEST(StatisticTest, JSONTimerGroupsConcurrent) {
+  TimerGroup Mine("mine", "My timers", /*PrintOnExit=*/false);
+  TimerGroup Other("other", "Other timers", /*PrintOnExit=*/false);
+  Timer MyTimer("mytimer", "My timer", Mine);
+  MyTimer.startTimer();
+  MyTimer.stopTimer();
+
+  std::atomic<bool> Done = false;
+  std::thread OtherCompilation([&] {
+    Timer OtherTimer("othertimer", "Other timer", Other);
+    while (!Done) {
+      OtherTimer.startTimer();
+      OtherTimer.stopTimer();
+    }
+  });
+  for (int I = 0; I < 1000; ++I) {
+    std::string JSON;
+    raw_string_ostream OS(JSON);
+    PrintStatisticsJSON(OS, {&Mine});
+    EXPECT_EQ(JSON.find("othertimer"), std::string::npos);
+  }
+  Done = true;
+  OtherCompilation.join();
 }
 
 } // end anonymous namespace

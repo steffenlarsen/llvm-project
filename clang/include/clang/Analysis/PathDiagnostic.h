@@ -35,6 +35,10 @@
 #include <utility>
 #include <vector>
 
+namespace llvm {
+class TimerGroup;
+} // namespace llvm
+
 namespace clang {
 
 class AnalysisDeclContext;
@@ -86,6 +90,10 @@ struct PathDiagnosticConsumerOptions {
   /// Whether the consumer should present the name of the entity that emitted
   /// the diagnostic (eg., a checker) so that the user knew how to disable it.
   bool ShouldDisplayDiagnosticName = false;
+
+  /// The timers to include with the statistics if ShouldSerializeStats is set.
+  /// Other timers in the process may belong to other compilations.
+  llvm::TimerGroup *StatsTimerGroup = nullptr;
 };
 
 class PathDiagnosticConsumer {

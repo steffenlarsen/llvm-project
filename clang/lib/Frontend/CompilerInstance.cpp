@@ -1071,7 +1071,13 @@ bool CompilerInstance::ExecuteAction(FrontendAction &Act) {
       getDiagnostics().Report(diag::warn_fe_unable_to_open_stats_file)
           << StatsFile << EC.message();
     } else {
-      llvm::PrintStatisticsJSON(*StatS);
+      // Only print the timers of this compilation, others may be running.
+      SmallVector<llvm::TimerGroup *> TimerGroups;
+      if (timerGroup)
+        TimerGroups.push_back(timerGroup.get());
+      if (PassTiming)
+        llvm::append_range(TimerGroups, PassTiming->getTimerGroups());
+      llvm::PrintStatisticsJSON(*StatS, TimerGroups);
     }
   }
 
