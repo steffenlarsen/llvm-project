@@ -115,14 +115,12 @@ private:
 
   const RegisterBank *getRegBankFromID(RegBankLLTMappingApplyID ID);
 
-  bool
-  applyMappingDst(MachineInstr &MI, unsigned &OpIdx,
-                  const SmallVectorImpl<RegBankLLTMappingApplyID> &MethodIDs);
+  bool applyMappingDst(MachineInstr &MI, unsigned &OpIdx,
+                       ArrayRef<RegBankLLTMappingApplyID> MethodIDs);
 
-  bool
-  applyMappingSrc(MachineInstr &MI, unsigned &OpIdx,
-                  const SmallVectorImpl<RegBankLLTMappingApplyID> &MethodIDs,
-                  WaterfallInfo &WFI);
+  bool applyMappingSrc(MachineInstr &MI, unsigned &OpIdx,
+                       ArrayRef<RegBankLLTMappingApplyID> MethodIDs,
+                       WaterfallInfo &WFI);
 
   unsigned setBufferOffsets(MachineIRBuilder &B, Register CombinedOffset,
                             Register &VOffsetReg, Register &SOffsetReg,

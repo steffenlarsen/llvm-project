@@ -9,9 +9,9 @@
 #ifndef LLVM_LIB_TARGET_AMDGPU_AMDGPUREGBANKLEGALIZERULES_H
 #define LLVM_LIB_TARGET_AMDGPU_AMDGPUREGBANKLEGALIZERULES_H
 
-#include "llvm/ADT/DenseMap.h"
-#include "llvm/ADT/SmallVector.h"
-#include <functional>
+#include "llvm/ADT/ArrayRef.h"
+#include <cstdint>
+#include <initializer_list>
 
 namespace llvm {
 
@@ -36,7 +36,7 @@ bool isAnyPtr(LLT Ty, unsigned Width);
 // Most often checking one operand is enough to decide which RegBankLLTMapping
 // to apply (see Fast Rules), IDs are useful when two or more operands need to
 // be checked.
-enum UniformityLLTOpPredicateID {
+enum UniformityLLTOpPredicateID : uint8_t {
   // Represents non-register and physical register operands.
   _,
   // scalars
@@ -165,7 +165,7 @@ enum UniformityLLTOpPredicateID {
 // In most cases, this serves as a LLT and register bank assert.
 // Can change operands and insert copies, extends, truncs, and read-any-lanes.
 // Anything more complicated requires LoweringMethod.
-enum RegBankLLTMappingApplyID {
+enum RegBankLLTMappingApplyID : uint8_t {
   InvalidMapping,
   None,
   IntrId,
@@ -308,7 +308,7 @@ enum RegBankLLTMappingApplyID {
 // For example S64 AND is available on sgpr, for that reason S64 AND is legal in
 // context of Legalizer that only checks LLT. But S64 AND is not available on
 // vgpr. Lower it to two S32 vgpr ANDs.
-enum LoweringMethodID {
+enum LoweringMethodID : uint8_t {
   DoNotLower,
   VccExtToSel,
   UniExtToSel,
@@ -354,154 +354,167 @@ enum LoweringMethodID {
   LowerGetRounding
 };
 
-enum FastRulesTypes {
+enum FastRulesTypes : uint8_t {
   NoFastRules,
   Standard,  // S16, S32, S64, V2S16
   StandardB, // B32, B64, B96, B128
   Vector,    // S32, V2S32, V3S32, V4S32
 };
 
+// Subtarget features that rules depend on. A rule can require features to be
+// present or absent, see FeatureCond.
+enum RegBankLegalizeFeature : uint8_t {
+  UseVMulU64Inst,
+  HasScalarMulHiInsts,
+  HasScalarSMulU64,
+  HasScalarCompareEq64,
+  Has16BitInsts,
+  HasAtomicFlatPkAdd16Insts,
+  HasAtomicBufferGlobalPkAddF16Insts,
+  HasAtomicDsPkAdd16Insts,
+  HasScalarDwordx3Loads,
+  HasScalarSubwordLoads,
+  UseRealTrue16Insts,
+  HasSALUFloatInsts,
+  HasPseudoScalarTrans,
+  HasSafeSmemPrefetch,
+  HasVmemPrefInsts,
+  HasSALUMinimumMaximumInsts,
+  HasGFX90AInsts
+};
+
+using FeatureMask = uint32_t;
+
+constexpr FeatureMask featureBit(RegBankLegalizeFeature F) {
+  return FeatureMask(1) << F;
+}
+
+// Features that must be present (Required) and absent (Forbidden) for a rule
+// to apply. The default condition always holds.
+struct FeatureCond {
+  FeatureMask Required = 0;
+  FeatureMask Forbidden = 0;
+
+  constexpr bool holds(FeatureMask Features) const {
+    return (Features & Required) == Required && !(Features & Forbidden);
+  }
+};
+
+constexpr FeatureCond If(RegBankLegalizeFeature F) {
+  return {featureBit(F), 0};
+}
+constexpr FeatureCond IfNot(RegBankLegalizeFeature F) {
+  return {0, featureBit(F)};
+}
+constexpr FeatureCond operator&&(FeatureCond A, FeatureCond B) {
+  return {A.Required | B.Required, A.Forbidden | B.Forbidden};
+}
+
 struct RegBankLLTMapping {
-  SmallVector<RegBankLLTMappingApplyID, 2> DstOpMapping;
-  SmallVector<RegBankLLTMappingApplyID, 4> SrcOpMapping;
+  static constexpr unsigned MaxDstOps = 2;
+  static constexpr unsigned MaxSrcOps = 10;
+  RegBankLLTMappingApplyID DstOps[MaxDstOps] = {};
+  RegBankLLTMappingApplyID SrcOps[MaxSrcOps] = {};
+  uint8_t NumDstOps = 0;
+  uint8_t NumSrcOps = 0;
   LoweringMethodID LoweringMethod;
-  RegBankLLTMapping(
+
+  // Lists longer than MaxDstOps or MaxSrcOps do not compile in the constant
+  // rule tables.
+  constexpr RegBankLLTMapping(
       std::initializer_list<RegBankLLTMappingApplyID> DstOpMappingList,
       std::initializer_list<RegBankLLTMappingApplyID> SrcOpMappingList,
-      LoweringMethodID LoweringMethod = DoNotLower);
+      LoweringMethodID LoweringMethod = DoNotLower)
+      : NumDstOps(DstOpMappingList.size()), NumSrcOps(SrcOpMappingList.size()),
+        LoweringMethod(LoweringMethod) {
+    unsigned I = 0;
+    for (RegBankLLTMappingApplyID ID : DstOpMappingList)
+      DstOps[I++] = ID;
+    I = 0;
+    for (RegBankLLTMappingApplyID ID : SrcOpMappingList)
+      SrcOps[I++] = ID;
+  }
+
+  ArrayRef<RegBankLLTMappingApplyID> getDstOpMapping() const {
+    return ArrayRef(DstOps, NumDstOps);
+  }
+  ArrayRef<RegBankLLTMappingApplyID> getSrcOpMapping() const {
+    return ArrayRef(SrcOps, NumSrcOps);
+  }
 };
 
 struct PredicateMapping {
-  SmallVector<UniformityLLTOpPredicateID, 4> OpUniformityAndTypes;
-  std::function<bool(const MachineInstr &)> TestFunc;
-  PredicateMapping(
+  static constexpr unsigned MaxOps = 9;
+  UniformityLLTOpPredicateID OpUniformityAndTypes[MaxOps] = {};
+  uint8_t NumOps = 0;
+  bool (*TestFunc)(const MachineInstr &) = nullptr;
+
+  constexpr PredicateMapping() = default;
+  constexpr PredicateMapping(
       std::initializer_list<UniformityLLTOpPredicateID> OpList,
-      std::function<bool(const MachineInstr &)> TestFunc = nullptr);
+      bool (*TestFunc)(const MachineInstr &) = nullptr)
+      : NumOps(OpList.size()), TestFunc(TestFunc) {
+    unsigned I = 0;
+    for (UniformityLLTOpPredicateID ID : OpList)
+      OpUniformityAndTypes[I++] = ID;
+  }
 
   bool match(const MachineInstr &MI, const MachineUniformityInfo &MUI,
              const MachineRegisterInfo &MRI) const;
 };
 
+// One rule of a SetOfRulesForOpcode.
 struct RegBankLegalizeRule {
+  enum KindTy : uint8_t {
+    // "Fast Rules": applies when operand 0 is uniform (or divergent) and of
+    // type FastTy.
+    UniformFast,
+    DivergentFast,
+    // "Slow Rules": applies when Predicate matches.
+    Slow
+  };
+  KindTy Kind;
+  UniformityLLTOpPredicateID FastTy;
   PredicateMapping Predicate;
   RegBankLLTMapping OperandMapping;
+  FeatureCond Cond;
 };
 
-class SetOfRulesForOpcode {
-  // "Slow Rules". More complex 'Rules[i].Predicate', check them one by one.
-  SmallVector<RegBankLegalizeRule, 4> Rules;
+// The rules for a group of opcodes, in a constant table. Rules are kept for all
+// subtargets; Cond selects those of a subtarget.
+struct SetOfRulesForOpcode {
+  bool IsIntrinsic;
+  FastRulesTypes FastTypes;
+  const unsigned *Opcodes;
+  unsigned NumOpcodes;
+  const RegBankLegalizeRule *Rules;
+  unsigned NumRules;
 
-  // "Fast Rules"
-  // Instead of testing each 'Rules[i].Predicate' we do direct access to
-  // RegBankLLTMapping using getFastPredicateSlot. For example if:
-  // - FastTypes == Standard Uni[0] holds Mapping in case Op 0 is uniform S32
-  // - FastTypes == Vector Div[3] holds Mapping in case Op 0 is divergent V4S32
-  FastRulesTypes FastTypes = NoFastRules;
-#define InvMapping RegBankLLTMapping({InvalidMapping}, {InvalidMapping})
-  RegBankLLTMapping Uni[4] = {InvMapping, InvMapping, InvMapping, InvMapping};
-  RegBankLLTMapping Div[4] = {InvMapping, InvMapping, InvMapping, InvMapping};
+  ArrayRef<RegBankLegalizeRule> rules() const {
+    return ArrayRef(Rules, NumRules);
+  }
 
-public:
-  SetOfRulesForOpcode();
-  SetOfRulesForOpcode(FastRulesTypes FastTypes);
-
-  const RegBankLLTMapping *
-  findMappingForMI(const MachineInstr &MI, const MachineRegisterInfo &MRI,
-                   const MachineUniformityInfo &MUI) const;
-
-  void addRule(RegBankLegalizeRule Rule);
-
-  void addFastRuleDivergent(UniformityLLTOpPredicateID Ty,
-                            RegBankLLTMapping RuleApplyIDs);
-  void addFastRuleUniform(UniformityLLTOpPredicateID Ty,
-                          RegBankLLTMapping RuleApplyIDs);
-
-private:
-  int getFastPredicateSlot(UniformityLLTOpPredicateID Ty) const;
+  // "Fast Rules": instead of testing each rule's Predicate, look up the rule
+  // for the type and uniformity of operand 0. If fast rules are enabled, a
+  // rule must be added for each type that "could match fast Predicate". If
+  // not, InvalidMapping is returned which results in failure, and the "Slow
+  // Rules" are not searched.
+  const RegBankLLTMapping *findMappingForMI(const MachineInstr &MI,
+                                            const MachineRegisterInfo &MRI,
+                                            const MachineUniformityInfo &MUI,
+                                            FeatureMask Features) const;
 };
 
-// Essentially 'map<Opcode(or intrinsic_opcode), SetOfRulesForOpcode>' but a
-// little more efficient.
+// Essentially 'map<Opcode(or intrinsic_opcode), SetOfRulesForOpcode>' for the
+// features of a subtarget. The rules themselves are constant tables shared by
+// all subtargets.
 class RegBankLegalizeRules {
-  const GCNSubtarget *ST;
-  MachineRegisterInfo *MRI;
-  // Separate maps for G-opcodes and intrinsics since they are in different
-  // enums. Multiple opcodes can share same set of rules.
-  // RulesAlias = map<Opcode, KeyOpcode>
-  // Rules = map<KeyOpcode, SetOfRulesForOpcode>
-  SmallDenseMap<unsigned, unsigned, 256> GRulesAlias;
-  SmallDenseMap<unsigned, SetOfRulesForOpcode, 128> GRules;
-  SmallDenseMap<unsigned, unsigned, 128> IRulesAlias;
-  SmallDenseMap<unsigned, SetOfRulesForOpcode, 64> IRules;
-  class RuleSetInitializer {
-    SetOfRulesForOpcode *RuleSet;
-
-  public:
-    // Used for clang-format line breaks and to force  writing all rules for
-    // opcode in same place.
-    template <class AliasMap, class RulesMap>
-    RuleSetInitializer(std::initializer_list<unsigned> OpcList,
-                       AliasMap &RulesAlias, RulesMap &Rules,
-                       FastRulesTypes FastTypes = NoFastRules) {
-      unsigned KeyOpcode = *OpcList.begin();
-      for (unsigned Opc : OpcList) {
-        [[maybe_unused]] auto [_, NewInput] =
-            RulesAlias.try_emplace(Opc, KeyOpcode);
-        assert(NewInput && "Can't redefine existing Rules");
-      }
-
-      auto [DenseMapIter, NewInput] = Rules.try_emplace(KeyOpcode, FastTypes);
-      assert(NewInput && "Can't redefine existing Rules");
-
-      RuleSet = &DenseMapIter->second;
-    }
-
-    RuleSetInitializer(const RuleSetInitializer &) = delete;
-    RuleSetInitializer &operator=(const RuleSetInitializer &) = delete;
-    RuleSetInitializer(RuleSetInitializer &&) = delete;
-    RuleSetInitializer &operator=(RuleSetInitializer &&) = delete;
-    ~RuleSetInitializer() = default;
-
-    RuleSetInitializer &Div(UniformityLLTOpPredicateID Ty,
-                            RegBankLLTMapping RuleApplyIDs,
-                            bool STPred = true) {
-      if (STPred)
-        RuleSet->addFastRuleDivergent(Ty, RuleApplyIDs);
-      return *this;
-    }
-
-    RuleSetInitializer &Uni(UniformityLLTOpPredicateID Ty,
-                            RegBankLLTMapping RuleApplyIDs,
-                            bool STPred = true) {
-      if (STPred)
-        RuleSet->addFastRuleUniform(Ty, RuleApplyIDs);
-      return *this;
-    }
-
-    RuleSetInitializer &Any(RegBankLegalizeRule Init, bool STPred = true) {
-      if (STPred)
-        RuleSet->addRule(Init);
-      return *this;
-    }
-  };
-
-  RuleSetInitializer addRulesForGOpcs(std::initializer_list<unsigned> OpcList,
-                                      FastRulesTypes FastTypes = NoFastRules);
-
-  RuleSetInitializer addRulesForIOpcs(std::initializer_list<unsigned> OpcList,
-                                      FastRulesTypes FastTypes = NoFastRules);
+  FeatureMask Features = 0;
 
 public:
-  // Initialize rules for all opcodes.
-  RegBankLegalizeRules(const GCNSubtarget &ST, MachineRegisterInfo &MRI);
+  explicit RegBankLegalizeRules(const GCNSubtarget &ST);
 
-  // In case we don't want to regenerate same rules, we can use already
-  // generated rules but need to refresh references to objects that are
-  // created for this run.
-  void refreshRefs(const GCNSubtarget &_ST, MachineRegisterInfo &_MRI) {
-    ST = &_ST;
-    MRI = &_MRI;
-  };
+  FeatureMask getFeatures() const { return Features; }
 
   const SetOfRulesForOpcode *getRulesForOpc(MachineInstr &MI) const;
 };

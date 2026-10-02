@@ -96,20 +96,6 @@ FunctionPass *llvm::createAMDGPURegBankLegalizeLegacyPass() {
   return new AMDGPURegBankLegalizeLegacy();
 }
 
-const RegBankLegalizeRules &getRules(const GCNSubtarget &ST,
-                                     MachineRegisterInfo &MRI) {
-  static std::mutex GlobalMutex;
-  static SmallDenseMap<unsigned, std::unique_ptr<RegBankLegalizeRules>>
-      CacheForRuleSet;
-  std::lock_guard<std::mutex> Lock(GlobalMutex);
-  auto [It, Inserted] = CacheForRuleSet.try_emplace(ST.getGeneration());
-  if (Inserted)
-    It->second = std::make_unique<RegBankLegalizeRules>(ST, MRI);
-  else
-    It->second->refreshRefs(ST, MRI);
-  return *It->second;
-}
-
 class AMDGPURegBankLegalizeCombiner {
   MachineIRBuilder &B;
   MachineRegisterInfo &MRI;
@@ -445,8 +431,8 @@ runRegBankLegalize(MachineFunction &MF,
   MachineRegisterInfo &MRI = MF.getRegInfo();
   const RegisterBankInfo &RBI = *ST.getRegBankInfo();
 
-  // RegBankLegalizeRules is initialized with assigning sets of IDs to opcodes.
-  const RegBankLegalizeRules &RBLRules = getRules(ST, MRI);
+  // RegBankLegalizeRules selects the rules for the subtarget's features.
+  RegBankLegalizeRules RBLRules(ST);
 
   // Logic that does legalization based on IDs assigned to Opcode.
   RegBankLegalizeHelper RBLHelper(B, MUI, &VT, RBI, RBLRules);
