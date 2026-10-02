@@ -25,6 +25,8 @@ extern char **environ;
 #endif
 
 #if defined(LLVM_ON_UNIX)
+#include <pthread.h>
+#include <signal.h>
 #include <unistd.h>
 void sleep_for(unsigned int seconds) {
   sleep(seconds);
@@ -413,6 +415,119 @@ TEST_F(ProgramEnvTest, TestExecuteNoWaitTimeoutPolling) {
 
   ASSERT_GT(LoopCount, 1u) << "LoopCount should be >1";
 }
+
+TEST_F(ProgramEnvTest, TestExecuteAndWaitConcurrentTimeouts) {
+  using namespace llvm::sys;
+
+  if (const char *Child = getenv("LLVM_PROGRAM_TEST_CONCURRENT_TIMEOUTS")) {
+    if (StringRef(Child) == "slow")
+      sleep_for(/*seconds*/ 10);
+    exit(0);
+  }
+
+  std::string Executable =
+      sys::fs::getMainExecutable(TestMainArgv0, &ProgramTestStringArg1);
+  StringRef argv[] = {
+      Executable,
+      "--gtest_filter=ProgramEnvTest.TestExecuteAndWaitConcurrentTimeouts"};
+  std::vector<StringRef> SlowEnv(getEnviron().begin(), getEnviron().end());
+  SlowEnv.push_back("LLVM_PROGRAM_TEST_CONCURRENT_TIMEOUTS=slow");
+  std::vector<StringRef> FastEnv(getEnviron().begin(), getEnviron().end());
+  FastEnv.push_back("LLVM_PROGRAM_TEST_CONCURRENT_TIMEOUTS=fast");
+
+  // Wait on two threads other than the main one, as a multi-threaded library
+  // user would. The second wait, with a long timeout, must not disable the
+  // first one's short timeout.
+  int SlowRetCode = 0, FastRetCode = 0;
+  std::string SlowError, FastError;
+  std::thread SlowWait([&] {
+    SlowRetCode =
+        ExecuteAndWait(Executable, argv, SlowEnv, {},
+                       /*SecondsToWait=*/1, /*MemoryLimit=*/0, &SlowError);
+  });
+  std::this_thread::sleep_for(std::chrono::milliseconds(200));
+  std::thread FastWait([&] {
+    FastRetCode =
+        ExecuteAndWait(Executable, argv, FastEnv, {},
+                       /*SecondsToWait=*/60, /*MemoryLimit=*/0, &FastError);
+  });
+  SlowWait.join();
+  FastWait.join();
+  EXPECT_EQ(-2, SlowRetCode) << SlowError;
+  EXPECT_EQ(0, FastRetCode) << FastError;
+}
+
+#ifdef LLVM_ON_UNIX
+static void IgnoreSignal(int) {}
+
+TEST_F(ProgramEnvTest, TestExecuteAndWaitTimeoutKeepsSIGALRM) {
+  using namespace llvm::sys;
+
+  if (getenv("LLVM_PROGRAM_TEST_KEEPS_SIGALRM"))
+    exit(0);
+
+  std::string Executable =
+      sys::fs::getMainExecutable(TestMainArgv0, &ProgramTestStringArg1);
+  StringRef argv[] = {
+      Executable,
+      "--gtest_filter=ProgramEnvTest.TestExecuteAndWaitTimeoutKeepsSIGALRM"};
+  addEnvVar("LLVM_PROGRAM_TEST_KEEPS_SIGALRM=1");
+
+  // A timed wait must leave the caller's SIGALRM handler and alarm alone.
+  struct sigaction Act = {}, Old;
+  Act.sa_handler = IgnoreSignal;
+  sigemptyset(&Act.sa_mask);
+  ASSERT_EQ(0, sigaction(SIGALRM, &Act, &Old));
+  alarm(1000);
+
+  std::string Error;
+  int RetCode = ExecuteAndWait(Executable, argv, getEnviron(), {},
+                               /*SecondsToWait=*/60, /*MemoryLimit=*/0, &Error);
+  unsigned AlarmLeft = alarm(0);
+  struct sigaction After;
+  sigaction(SIGALRM, &Old, &After);
+
+  EXPECT_EQ(0, RetCode) << Error;
+  EXPECT_GT(AlarmLeft, 0u);
+  EXPECT_EQ(After.sa_handler, &IgnoreSignal);
+}
+
+TEST_F(ProgramEnvTest, TestExecuteAndWaitTimeoutIgnoresOtherSignals) {
+  using namespace llvm::sys;
+
+  if (getenv("LLVM_PROGRAM_TEST_OTHER_SIGNALS")) {
+    sleep_for(/*seconds*/ 1);
+    exit(0);
+  }
+
+  std::string Executable =
+      sys::fs::getMainExecutable(TestMainArgv0, &ProgramTestStringArg1);
+  StringRef argv[] = {Executable,
+                      "--gtest_filter=ProgramEnvTest."
+                      "TestExecuteAndWaitTimeoutIgnoresOtherSignals"};
+  addEnvVar("LLVM_PROGRAM_TEST_OTHER_SIGNALS=1");
+
+  // A signal whose handler interrupts system calls must not end a timed wait
+  // early, and so must not get the child killed.
+  struct sigaction Act = {}, Old;
+  Act.sa_handler = IgnoreSignal;
+  sigemptyset(&Act.sa_mask);
+  ASSERT_EQ(0, sigaction(SIGUSR1, &Act, &Old));
+  pthread_t Waiter = pthread_self();
+  std::thread Signaller([Waiter] {
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    pthread_kill(Waiter, SIGUSR1);
+  });
+
+  std::string Error;
+  int RetCode = ExecuteAndWait(Executable, argv, getEnviron(), {},
+                               /*SecondsToWait=*/60, /*MemoryLimit=*/0, &Error);
+  Signaller.join();
+  sigaction(SIGUSR1, &Old, nullptr);
+
+  EXPECT_EQ(0, RetCode) << Error;
+}
+#endif
 
 TEST(ProgramTest, TestExecuteNegative) {
   std::string Executable = "i_dont_exist";

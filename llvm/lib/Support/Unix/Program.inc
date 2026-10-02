@@ -20,17 +20,31 @@
 #include "Unix.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Config/config.h"
+#include "llvm/Config/llvm-config.h" // for LLVM_ENABLE_THREADS
 #include "llvm/Support/AutoConvert.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Errc.h"
+#include "llvm/Support/ExponentialBackoff.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/StringSaver.h"
 #include "llvm/Support/raw_ostream.h"
+#include <algorithm>
+#include <chrono>
+#include <climits>
 #include <fcntl.h>
 #include <signal.h>
 #include <sys/resource.h>
 #include <sys/stat.h>
+#if defined(__linux__)
+#include <poll.h>
+#include <sys/syscall.h>
+#endif
+#if LLVM_ENABLE_THREADS
+#include <condition_variable>
+#include <mutex>
+#include <pthread.h>
+#endif
 #if HAVE_UNISTD_H
 #include <unistd.h>
 #endif
@@ -133,8 +147,6 @@ static bool RedirectIO_PS(const std::string *Path, int FD, std::string *ErrMsg,
   return false;
 }
 #endif
-
-static void TimeOutHandler(int Sig) {}
 
 static void SetMemoryLimits(unsigned size) {
   struct rlimit r;
@@ -377,33 +389,146 @@ pid_t(llvm::sys::wait4)(pid_t pid, int *status, int options,
 }
 #endif
 
+#ifndef __Fuchsia__
+// Timed waits must not use SIGALRM and alarm(): the handler and the timer are
+// shared by the whole process, so concurrent waits would cancel each other's
+// timeouts, and the signal may interrupt another thread instead of the waiting
+// one. The functions below wait for the child to exit, without reaping it, by
+// other means.
+using WaitDeadline = std::chrono::steady_clock::time_point;
+
+#if defined(__linux__) && defined(SYS_pidfd_open)
+/// Waits with a pidfd, which becomes readable when the child exits. Returns
+/// whether the child exited before Deadline, or std::nullopt if pidfds are not
+/// available (Linux before 5.3, or a sandbox).
+static std::optional<bool> waitForExitWithPidfd(pid_t ChildPid,
+                                                WaitDeadline Deadline) {
+  int PidFD = static_cast<int>(::syscall(SYS_pidfd_open, ChildPid, 0));
+  if (PidFD == -1)
+    return std::nullopt;
+  struct pollfd PollFD = {PidFD, POLLIN, 0};
+  int Ready;
+  do {
+    int64_t RemainingMS = std::chrono::ceil<std::chrono::milliseconds>(
+                              Deadline - std::chrono::steady_clock::now())
+                              .count();
+    Ready =
+        ::poll(&PollFD, 1,
+               static_cast<int>(std::clamp<int64_t>(RemainingMS, 0, INT_MAX)));
+    // Retry if interrupted, or if the timeout was clamped to INT_MAX.
+  } while ((Ready == -1 && errno == EINTR) ||
+           (Ready == 0 && std::chrono::steady_clock::now() < Deadline));
+  ::close(PidFD);
+  if (Ready == -1)
+    return std::nullopt;
+  return Ready > 0;
+}
+#endif
+
+#if LLVM_ENABLE_THREADS
+namespace {
+struct ExitWaiter {
+  pid_t ChildPid;
+  std::mutex Mutex;
+  std::condition_variable Exited;
+  bool HasExited = false;
+};
+} // namespace
+
+static void *waitForExitOnThread(void *Arg) {
+  auto *Waiter = static_cast<ExitWaiter *>(Arg);
+  siginfo_t Info;
+  while (::waitid(P_PID, Waiter->ChildPid, &Info, WEXITED | WNOWAIT) == -1 &&
+         errno == EINTR) {
+  }
+  {
+    std::lock_guard<std::mutex> Lock(Waiter->Mutex);
+    Waiter->HasExited = true;
+  }
+  Waiter->Exited.notify_one();
+  return nullptr;
+}
+
+/// Waits on a thread blocked in waitid(), which only returns once the child
+/// exits, so the child is killed if it is still running at Deadline. Returns
+/// whether the child exited before Deadline, or std::nullopt if no thread could
+/// be created.
+static std::optional<bool> waitForExitWithThread(pid_t ChildPid,
+                                                 WaitDeadline Deadline) {
+  ExitWaiter Waiter;
+  Waiter.ChildPid = ChildPid;
+  // Start the thread with all signals blocked, so that it is never chosen to
+  // handle the process's signals.
+  sigset_t AllSignals, OldMask;
+  sigfillset(&AllSignals);
+  pthread_sigmask(SIG_SETMASK, &AllSignals, &OldMask);
+  pthread_t Thread;
+  int Err = pthread_create(&Thread, nullptr, waitForExitOnThread, &Waiter);
+  pthread_sigmask(SIG_SETMASK, &OldMask, nullptr);
+  if (Err)
+    return std::nullopt;
+
+  bool Exited;
+  {
+    std::unique_lock<std::mutex> Lock(Waiter.Mutex);
+    Exited = Waiter.Exited.wait_until(Lock, Deadline,
+                                      [&] { return Waiter.HasExited; });
+  }
+  if (!Exited)
+    kill(ChildPid, SIGKILL);
+  pthread_join(Thread, nullptr);
+  return Exited;
+}
+#endif
+
+/// Waits by checking whether the child has exited with increasing intervals.
+/// Returns whether the child exited before Deadline.
+static bool waitForExitByPolling(pid_t ChildPid, WaitDeadline Deadline) {
+  ExponentialBackoff Backoff(Deadline - std::chrono::steady_clock::now(),
+                             std::chrono::milliseconds(1),
+                             std::chrono::milliseconds(10));
+  do {
+    siginfo_t Info;
+    Info.si_pid = 0;
+    // On an error, let the wait4() that reaps the child report it.
+    if (::waitid(P_PID, ChildPid, &Info, WEXITED | WNOHANG | WNOWAIT) == -1 ||
+        Info.si_pid != 0)
+      return true;
+  } while (Backoff.waitForNextAttempt());
+  return false;
+}
+
+/// Waits until the child has exited, without reaping it, or until Deadline.
+/// Returns whether the child exited. If it did not and \p KillOnTimeout, the
+/// child may have been sent SIGKILL.
+static bool waitForExit(pid_t ChildPid, WaitDeadline Deadline,
+                        bool KillOnTimeout) {
+#if defined(__linux__) && defined(SYS_pidfd_open)
+  if (std::optional<bool> Exited = waitForExitWithPidfd(ChildPid, Deadline))
+    return *Exited;
+#endif
+#if LLVM_ENABLE_THREADS
+  // The thread cannot be stopped before the child exits, so it is only used
+  // when the child is killed on timeout.
+  if (KillOnTimeout)
+    if (std::optional<bool> Exited = waitForExitWithThread(ChildPid, Deadline))
+      return *Exited;
+#endif
+  return waitForExitByPolling(ChildPid, Deadline);
+}
+#endif
+
 ProcessInfo llvm::sys::Wait(const ProcessInfo &PI,
                             std::optional<unsigned> SecondsToWait,
                             std::string *ErrMsg,
                             std::optional<ProcessStatistics> *ProcStat,
                             bool Polling) {
-  struct sigaction Act, Old;
   assert(PI.Pid && "invalid pid to wait on, process not started?");
 
   int WaitPidOptions = 0;
   pid_t ChildPid = PI.Pid;
-  bool WaitUntilTerminates = false;
-  if (!SecondsToWait) {
-    WaitUntilTerminates = true;
-  } else {
-    if (*SecondsToWait == 0)
-      WaitPidOptions = WNOHANG;
-
-    // Install a timeout handler.  The handler itself does nothing, but the
-    // simple fact of having a handler at all causes the wait below to return
-    // with EINTR, unlike if we used SIG_IGN.
-    memset(&Act, 0, sizeof(Act));
-    Act.sa_handler = TimeOutHandler;
-    sigemptyset(&Act.sa_mask);
-    sigaction(SIGALRM, &Act, &Old);
-    // FIXME The alarm signal may be delivered to another thread.
-    alarm(*SecondsToWait);
-  }
+  if (SecondsToWait && *SecondsToWait == 0)
+    WaitPidOptions = WNOHANG;
 
   // Parent process: Wait for the child process to terminate.
   int status = 0;
@@ -413,9 +538,38 @@ ProcessInfo llvm::sys::Wait(const ProcessInfo &PI,
   if (ProcStat)
     ProcStat->reset();
 
+  if (SecondsToWait && *SecondsToWait > 0 &&
+      !waitForExit(ChildPid,
+                   std::chrono::steady_clock::now() +
+                       std::chrono::seconds(*SecondsToWait),
+                   /*KillOnTimeout=*/!Polling)) {
+    // As when wait4() fails, Pid is -1 on a timeout.
+    WaitResult.Pid = -1;
+    if (Polling)
+      return WaitResult;
+
+    // Kill the child.
+    kill(PI.Pid, SIGKILL);
+
+    // Wait for child to die
+    pid_t DeadPid;
+    do {
+      DeadPid = waitpid(ChildPid, &status, 0);
+    } while (DeadPid == -1 && errno == EINTR);
+    if (DeadPid != ChildPid)
+      MakeErrMsg(ErrMsg, "Child timed out but wouldn't die");
+    else
+      MakeErrMsg(ErrMsg, "Child timed out", 0);
+
+    WaitResult.ReturnCode = -2; // Timeout detected
+    return WaitResult;
+  }
+
+  // After a timed wait the child has exited, so this does not block.
   do {
     WaitResult.Pid = sys::wait4(ChildPid, &status, WaitPidOptions, &Info);
-  } while (WaitUntilTerminates && WaitResult.Pid == -1 && errno == EINTR);
+  } while (!(WaitPidOptions & WNOHANG) && WaitResult.Pid == -1 &&
+           errno == EINTR);
 #endif
 
   if (WaitResult.Pid != PI.Pid) {
@@ -423,36 +577,10 @@ ProcessInfo llvm::sys::Wait(const ProcessInfo &PI,
       // Non-blocking wait.
       return WaitResult;
     } else {
-      if (SecondsToWait && errno == EINTR && !Polling) {
-        // Kill the child.
-        kill(PI.Pid, SIGKILL);
-
-        // Turn off the alarm and restore the signal handler
-        alarm(0);
-        sigaction(SIGALRM, &Old, nullptr);
-
-        // Wait for child to die
-        // FIXME This could grab some other child process out from another
-        // waiting thread and then leave a zombie anyway.
-        if (wait(&status) != ChildPid)
-          MakeErrMsg(ErrMsg, "Child timed out but wouldn't die");
-        else
-          MakeErrMsg(ErrMsg, "Child timed out", 0);
-
-        WaitResult.ReturnCode = -2; // Timeout detected
-        return WaitResult;
-      } else if (errno != EINTR) {
-        MakeErrMsg(ErrMsg, "Error waiting for child process");
-        WaitResult.ReturnCode = -1;
-        return WaitResult;
-      }
+      MakeErrMsg(ErrMsg, "Error waiting for child process");
+      WaitResult.ReturnCode = -1;
+      return WaitResult;
     }
-  }
-
-  // We exited normally without timeout, so turn off the timer.
-  if (SecondsToWait && !WaitUntilTerminates) {
-    alarm(0);
-    sigaction(SIGALRM, &Old, nullptr);
   }
 
 #ifndef __Fuchsia__
