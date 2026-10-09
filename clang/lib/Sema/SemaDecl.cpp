@@ -21486,6 +21486,20 @@ void Sema::ActOnPragmaWeakAlias(IdentifierInfo* Name,
   }
 }
 
+/// Whether the definition \p FD is only handed to the ASTConsumer, and thus to
+/// CodeGen, once it is used, so that it is never emitted unless it is used.
+static bool isOnlyHandedToConsumerWhenUsed(const FunctionDecl *FD) {
+  // Lambda call operators are defined by their lambda expressions, which are
+  // not top-level declarations.
+  if (isLambdaMethod(FD))
+    return true;
+  // Implicit functions and functions defaulted on their first declaration are
+  // defined when they are used, see DefineDefaultedFunction. Members of
+  // dllexport classes are handed over anyway, but their linkage already makes
+  // them emitted.
+  return FD->isImplicit() || FD->getCanonicalDecl()->isDefaulted();
+}
+
 Sema::FunctionEmissionStatus Sema::getEmissionStatus(const FunctionDecl *FD,
                                                      bool Final) {
   assert(FD && "Expected non-null FunctionDecl");
@@ -21560,6 +21574,31 @@ Sema::FunctionEmissionStatus Sema::getEmissionStatus(const FunctionDecl *FD,
       return FunctionEmissionStatus::CUDADiscarded;
 
     if (IsEmittedForExternalSymbol())
+      return FunctionEmissionStatus::Emitted;
+
+    // CodeGen also emits a function regardless of its uses if it is forced to,
+    // so its deferred diagnostics must not wait for a use.
+    auto IsForcedToBeEmitted = [this, FD, Final]() {
+      const FunctionDecl *Def = FD->getDefinition();
+      if (!Def || Def->hasSkippedBody())
+        return false;
+      // Immediate functions are never emitted. Whether an immediate-escalating
+      // function is immediate is only known once its body is complete, so
+      // leave that to the check at the end of the translation unit.
+      if (Def->isImmediateFunction() ||
+          (!Final && LangOpts.CPlusPlus20 && Def->isImmediateEscalating()))
+        return false;
+      if (isOnlyHandedToConsumerWhenUsed(Def))
+        return false;
+      // An available externally definition is only emitted to be inlined into
+      // its callers, whose deferred diagnostics include its own.
+      ASTContext &Ctx = getASTContext();
+      if (Ctx.GetGVALinkageForFunction(Def) == GVA_AvailableExternally)
+        return false;
+      return Ctx.shouldEmitCUDADecl(Def) && Ctx.DeclMustBeCodeGenerated(Def);
+    };
+
+    if (IsForcedToBeEmitted())
       return FunctionEmissionStatus::Emitted;
   }
 
