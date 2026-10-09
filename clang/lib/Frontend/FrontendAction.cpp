@@ -1255,6 +1255,23 @@ bool FrontendAction::BeginSourceFile(CompilerInstance &CI,
   // A precompiled header holds one target's AST, but every target of a
   // multi-target compilation shares one AST.
   if (!CI.getMultiTargetAuxInvocations().empty()) {
+    // An optional one is only an optimization, so it is simply not used.
+    auto DropOptionalPCH = [](PreprocessorOptions &PPO) {
+      if (!PPO.ImplicitPCHIsOptional || PPO.ImplicitPCHInclude.empty())
+        return false;
+      PPO.ImplicitPCHInclude.clear();
+      PPO.ImplicitPCHIsOptional = false;
+      PPO.ImplicitPCHAutoGenerateHeader.clear();
+      return true;
+    };
+    bool Dropped = DropOptionalPCH(CI.getPreprocessorOpts());
+    for (const std::shared_ptr<CompilerInvocation> &Aux :
+         CI.getMultiTargetAuxInvocations())
+      Dropped |= DropOptionalPCH(Aux->getPreprocessorOpts());
+    if (Dropped)
+      CI.getDiagnostics().Report(diag::remark_pch_skip)
+          << "compiling for multiple targets at once";
+
     StringRef PCH = CI.getPreprocessorOpts().ImplicitPCHInclude;
     for (const std::shared_ptr<CompilerInvocation> &Aux :
          CI.getMultiTargetAuxInvocations())

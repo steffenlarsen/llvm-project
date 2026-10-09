@@ -40,6 +40,17 @@
 // RUN:   %t/use.hip 2>&1 | FileCheck -check-prefix=DEVICE-PCH %s
 // DEVICE-PCH: error: precompiled header '{{[^']*}}device.pch' cannot be used when compiling for multiple targets at once
 
+// An optional precompiled header, as -fhip-pch requests, is only an
+// optimization: it is neither built nor used, and the headers are parsed.
+// RUN: %clang_cc1 -triple x86_64-unknown-linux-gnu -aux-triple amdgcn-amd-amdhsa \
+// RUN:   -aux-target-cpu gfx90a -x hip -fsyntax-only -include %t/pre.h \
+// RUN:   -include-pch %t/cache -fpch-optional -fpch-auto-generate=%t/pre.h -Rpch-build \
+// RUN:   "-multi-target-aux-invocation=-triple amdgcn-amd-amdhsa -aux-triple x86_64-unknown-linux-gnu -target-cpu gfx90a -fcuda-is-device -x hip -include %t/pre.h -include-pch %t/cache -fpch-optional -fpch-auto-generate=%t/pre.h" \
+// RUN:   %t/use.hip 2>&1 | FileCheck -check-prefix=OPTIONAL %s
+// RUN: not ls %t/cache
+// OPTIONAL: remark: not using a precompiled header: compiling for multiple targets at once
+// OPTIONAL-NOT: error
+
 //--- pre.h
 #define __device__ __attribute__((device))
 __device__ inline int twice(int x) { return 2 * x; }
