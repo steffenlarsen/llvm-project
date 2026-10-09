@@ -70,6 +70,10 @@ struct MergedSegment {
 /// Content hash of a token, comparable between preprocessors.
 LLVM_ABI uint64_t hashToken(const Token &T);
 
+/// The same, for a token of \p PP's. A literal expanded from a macro read
+/// from an AST file carries no data of its own, so its spelling stands in.
+LLVM_ABI uint64_t hashToken(const Token &T, const Preprocessor &PP);
+
 /// A push (+1) or pop (-1) of one of a small, fixed set of independently
 /// tracked pragma scopes, or no event (Kind == -1).
 struct PragmaScopeEvent {

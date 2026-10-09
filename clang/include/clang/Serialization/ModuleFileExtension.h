@@ -9,6 +9,7 @@
 #ifndef LLVM_CLANG_SERIALIZATION_MODULEFILEEXTENSION_H
 #define LLVM_CLANG_SERIALIZATION_MODULEFILEEXTENSION_H
 
+#include "clang/AST/DeclID.h"
 #include "llvm/Support/ExtensibleRTTI.h"
 #include "llvm/Support/HashBuilder.h"
 #include "llvm/Support/MD5.h"
@@ -25,6 +26,7 @@ namespace clang {
 
 class ASTReader;
 class ASTWriter;
+class Decl;
 class Sema;
 
 namespace serialization {
@@ -148,6 +150,18 @@ public:
   ModuleFileExtension *getExtension() const { return Extension; }
 
   virtual ~ModuleFileExtensionReader();
+
+  /// Called for each declaration read from this reader's module file, once
+  /// its declaration contexts are set but before anything that depends on
+  /// its kind is read. Decl::getASTContext() is not usable yet.
+  virtual void readDecl(GlobalDeclID ID, Decl *D) {}
+
+  /// Called once the module file has been read, before any of its
+  /// declarations are passed to the AST consumer.
+  virtual void startTranslationUnit() {}
+
+  /// Called once Sema has been initialized from the module file.
+  virtual void initializeSema(Sema &S) {}
 };
 
 } // end namespace clang

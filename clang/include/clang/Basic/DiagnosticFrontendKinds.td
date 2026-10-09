@@ -163,8 +163,8 @@ def err_fe_invalid_multi_target_aux_invocation : Error<
 def err_fe_multi_target_aux_llvm_arg_missing : Error<
     "'-mllvm %0' of aux target '%1' must also be passed to the primary target">;
 def err_fe_multi_target_pch : Error<
-    "precompiled header '%0' cannot be used when compiling for multiple targets "
-    "at once; include the header it was built from instead">;
+    "precompiled header '%0' does not record the state of every target it was "
+    "built for">;
 def warn_fe_multi_target_lang_opt_mismatch : Warning<
     "language option '%0' differs between the primary target and aux target "
     "'%1'; the shared AST uses the primary target's value">,

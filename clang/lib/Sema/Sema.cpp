@@ -1502,6 +1502,14 @@ void Sema::ActOnEndOfTranslationUnit() {
       llvm::TimeTraceScope TimeScope("PerformPendingInstantiations");
       PerformPendingInstantiations();
     }
+
+    // A translation unit using this prefix merges only its own declarations;
+    // see ASTContext::getLocallyTaggedDecls.
+    if (LLVM_UNLIKELY(clang::MergeEquivalentVariants) &&
+        LLVM_UNLIKELY(clang::AllowTargetVariantDecls))
+      mergeEquivalentVariants(getASTContext());
+    if (getLangOpts().MultiTargetAST)
+      Context.createDualSideCallHolder();
   }
 
   DiagnoseUnterminatedPragmaAlignPack();

@@ -1021,17 +1021,21 @@ void Clang::AddPreprocessingOptions(Compilation &C, const JobAction &JA,
   }
 
   // A precompiled header holds one target's AST, but every target of an
-  // integrated HIP compilation shares one AST, so include the header as
-  // written instead.
+  // integrated HIP compilation shares one AST: of a single precompiled header,
+  // the header is included as written instead. A directory of HIP precompiled
+  // headers holds one per target, or one for several targets at once, and is
+  // only used if one of them is for this compilation, so the header is
+  // included as written as well, for when none is. In an integrated
+  // compilation only the primary target loads one; the others resume from it.
+  bool IsHIP = JA.isHostOffloading(Action::OFK_HIP) ||
+               JA.isDeviceOffloading(Action::OFK_HIP);
   bool IsIntegratedHIP =
-      Args.hasArg(options::OPT_fintegrated_hip_device_codegen) &&
-      (JA.isHostOffloading(Action::OFK_HIP) ||
-       JA.isDeviceOffloading(Action::OFK_HIP));
+      IsHIP && Args.hasArg(options::OPT_fintegrated_hip_device_codegen);
 
   bool RenderedImplicitInclude = false;
   for (const Arg *A : Args.filtered(options::OPT_clang_i_Group)) {
     if (A->getOption().matches(options::OPT_include) &&
-        D.getProbePrecompiled() && !IsIntegratedHIP) {
+        D.getProbePrecompiled()) {
       // Handling of gcc-style gch precompiled headers.
       bool IsFirstImplicitInclude = !RenderedImplicitInclude;
       RenderedImplicitInclude = true;
@@ -1051,12 +1055,22 @@ void Clang::AddPreprocessingOptions(Compilation &C, const JobAction &JA,
         FoundPCH = gchProbe(D, P.str());
       }
 
+      bool IsDirectory = false;
+      if (FoundPCH && IsHIP)
+        if (llvm::ErrorOr<llvm::vfs::Status> Status = D.getVFS().status(P))
+          IsDirectory = Status->isDirectory();
+      if (FoundPCH && IsIntegratedHIP &&
+          (!IsDirectory || JA.isDeviceOffloading(Action::OFK_HIP)))
+        FoundPCH = false;
+
       if (FoundPCH) {
         if (IsFirstImplicitInclude) {
           A->claim();
           CmdArgs.push_back("-include-pch");
           CmdArgs.push_back(Args.MakeArgString(P));
-          continue;
+          if (!IsDirectory)
+            continue;
+          CmdArgs.push_back("-fpch-optional");
         } else {
           // Ignore the PCH if not first on command line and emit warning.
           D.Diag(diag::warn_drv_pch_not_first_include) << P
@@ -5271,6 +5285,36 @@ static std::string buildIntegratedHipDeviceInvocation(
   return flattenGNUCommandLine(AuxArgv);
 }
 
+/// A HIP header is precompiled into a directory, one file per target or, by an
+/// integrated compilation, one for all of them; a compilation for any of those
+/// targets names the directory and picks its file. Returns where \p JA's file
+/// goes, or null if \p JA does not precompile a HIP header.
+static const char *hipPrecompiledHeaderPath(Compilation &C, const JobAction &JA,
+                                            const InputInfo &Input,
+                                            const ToolChain &TC) {
+  if (!isa<PrecompileJobAction>(JA) || !types::isHIP(Input.getType()))
+    return nullptr;
+  const llvm::opt::DerivedArgList &Args = C.getArgs();
+  SmallString<256> Path;
+  if (const Arg *A = Args.getLastArg(options::OPT_o))
+    Path = A->getValue();
+  else
+    Path = (Twine(Input.getBaseInput()) + ".gch").str();
+
+  std::string Name = TC.getTriple().str();
+  if (JA.isDeviceOffloading(Action::OFK_HIP)) {
+    Name += "-" + JA.getOffloadingArch().ArchName.str();
+  } else if (Args.hasArg(options::OPT_fintegrated_hip_device_codegen)) {
+    auto HIPToolChains = C.getOffloadToolChains(Action::OFK_HIP);
+    if (HIPToolChains.first != HIPToolChains.second)
+      for (const BoundArch &BA : C.getDriver().getOffloadArchs(
+               C, Args, Action::OFK_HIP, *HIPToolChains.first->second))
+        Name += "+" + BA.ArchName.str();
+  }
+  llvm::sys::path::append(Path, Name + ".pch");
+  return Args.MakeArgString(Path);
+}
+
 // Emits the -mllvm flags CodeGenAction.cpp's multi-target machinery consumes
 // to build each HIP device arch's bitcode, package them into one fatbin, and
 // embed it into this host cc1 job's module. With -fgpu-rdc the bitcode is
@@ -5298,12 +5342,17 @@ static void emitIntegratedHipDeviceCodegenFlags(const Driver &D, Compilation &C,
   if (Archs.empty())
     return;
 
+  // Precompiling a header only parses it for every target.
+  const bool Precompile = isa<PrecompileJobAction>(JA);
+
   // BackendConsumer::Initialize (CodeGenAction.cpp) only builds AuxGens
   // entries when this flag is set -- -multi-target-aux-invocation= alone only
   // affects ASTContext's target list, not whether a second CodeGenModule
   // gets driven from it.
-  CmdArgs.push_back("-mllvm");
-  CmdArgs.push_back("-multi-target-codegen");
+  if (!Precompile) {
+    CmdArgs.push_back("-mllvm");
+    CmdArgs.push_back("-multi-target-codegen");
+  }
 
   // -multi-target-codegen alone only drives per-target CodeGen; it does not
   // enable the Parser/Sema-side reconciliation pipeline that lets host and
@@ -5333,9 +5382,11 @@ static void emitIntegratedHipDeviceCodegenFlags(const Driver &D, Compilation &C,
         C.getArgsForToolChain(DeviceTC, BA, Action::OFK_HIP);
     const char *AuxBC = D.CreateTempFile(C, "multi-target-aux", "bc",
                                          /*MultipleArchs=*/true, BA.ArchName);
-    CmdArgs.push_back("-mllvm");
-    CmdArgs.push_back(Args.MakeArgString(
-        "-multi-target-aux-output=" + Twine(Variant) + ":" + AuxBC));
+    if (!Precompile) {
+      CmdArgs.push_back("-mllvm");
+      CmdArgs.push_back(Args.MakeArgString(
+          "-multi-target-aux-output=" + Twine(Variant) + ":" + AuxBC));
+    }
 
     SmallVector<const char *> DeviceLLVMArgs;
     CmdArgs.push_back(Args.MakeArgString(
@@ -5358,6 +5409,9 @@ static void emitIntegratedHipDeviceCodegenFlags(const Driver &D, Compilation &C,
       }
     }
   }
+
+  if (Precompile)
+    return;
 
   if (IsRDCMode) {
     const char *Package = D.CreateTempFile(C, "multi-target-package", "out");
@@ -8829,6 +8883,9 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
       llvm::sys::path::replace_extension(OutputFilename, "ifs");
       CmdArgs.push_back("-o");
       CmdArgs.push_back(Args.MakeArgString(OutputFilename));
+    } else if (const char *PCH = hipPrecompiledHeaderPath(C, JA, Input, TC)) {
+      CmdArgs.push_back("-o");
+      CmdArgs.push_back(PCH);
     } else {
       CmdArgs.push_back("-o");
       CmdArgs.push_back(Output.getFilename());

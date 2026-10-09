@@ -5121,9 +5121,12 @@ Driver::BuildOffloadingActions(Compilation &C, llvm::opt::DerivedArgList &Args,
         << "-fhip-emit-relocatable"
         << "--offload-device-only";
 
-  // Don't build offloading actions if we do not have a compile action. If
-  // preprocessing only ignore embedding.
-  if (!(isa<CompileJobAction>(HostAction) ||
+  // Don't build offloading actions if we do not have a compile action, or a
+  // HIP header to precompile for each target. If preprocessing only ignore
+  // embedding.
+  const bool PrecompileHIPHeader =
+      isa<PrecompileJobAction>(HostAction) && types::isHIP(Input.first);
+  if (!(isa<CompileJobAction>(HostAction) || PrecompileHIPHeader ||
         getFinalPhase(Args) == phases::Preprocess))
     return HostAction;
 
@@ -5271,6 +5274,24 @@ Driver::BuildOffloadingActions(Compilation &C, llvm::opt::DerivedArgList &Args,
 
       ++TCAndArch;
     }
+  }
+
+  // A header precompiled for each target is a result of its own for each of
+  // them, alongside the host's; see Clang::ConstructJob for where they go. An
+  // integrated compilation precompiles it for all of them at once.
+  if (PrecompileHIPHeader) {
+    if (offloadDeviceOnly())
+      return C.MakeAction<OffloadAction>(DDeps, types::TY_Nothing);
+    if (IntegratedHipDeviceCodegen) {
+      OffloadAction::HostDependence HDep(
+          *HostAction, *C.getSingleOffloadToolChain<Action::OFK_Host>(),
+          /*BA=*/{}, static_cast<unsigned>(Action::OFK_HIP));
+      return C.MakeAction<OffloadAction>(HDep);
+    }
+    OffloadAction::HostDependence HDep(
+        *HostAction, *C.getSingleOffloadToolChain<Action::OFK_Host>(),
+        /*BA=*/{}, DDeps);
+    return C.MakeAction<OffloadAction>(HDep, DDeps);
   }
 
   // HIP code in device-only non-RDC mode will bundle the output if it invoked

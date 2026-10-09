@@ -22,6 +22,7 @@ add_clang_library(clangSerialization
   ModuleFile.cpp
   ModuleFileExtension.cpp
   ModuleManager.cpp
+  MultiTargetASTExtension.cpp
   PCHContainerOperations.cpp
   ObjectFilePCHContainerReader.cpp
   TemplateArgumentHasher.cpp

@@ -34,6 +34,15 @@ uint64_t clang::hashToken(const Token &T) {
   return H;
 }
 
+uint64_t clang::hashToken(const Token &T, const Preprocessor &PP) {
+  if (!T.isLiteral() || T.getLiteralData())
+    return hashToken(T);
+  SmallString<64> Buffer;
+  StringRef Spelling = PP.getSpelling(T, Buffer);
+  return llvm::hash_combine(
+      llvm::hash_value(static_cast<unsigned>(T.getKind())), Spelling);
+}
+
 //===----------------------------------------------------------------------===//
 // Alignment
 //===----------------------------------------------------------------------===//

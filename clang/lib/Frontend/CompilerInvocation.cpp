@@ -5165,6 +5165,8 @@ bool CompilerInvocation::CreateFromArgsImpl(
                 Diags);
   if (Res.getFrontendOpts().ProgramAction == frontend::RewriteObjC)
     LangOpts.ObjCExceptions = 1;
+  LangOpts.MultiTargetAST =
+      !Res.getFrontendOpts().MultiTargetAuxInvocations.empty();
 
   for (auto Warning : Res.getDiagnosticOpts().Warnings) {
     if (Warning == "misexpect" &&

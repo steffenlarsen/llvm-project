@@ -619,6 +619,9 @@ void ASTDeclReader::VisitDecl(Decl *D) {
   }
   D->setLocation(ThisDeclLoc);
 
+  for (const auto &Ext : Loc.F->ExtensionReaders)
+    Ext->readDecl(ThisDeclID, D);
+
   if (HasAttrs) {
     AttrVec Attrs;
     Record.readAttributes(Attrs);
@@ -990,7 +993,7 @@ void ASTDeclReader::VisitFunctionDecl(FunctionDecl *FD) {
       // be initializing.
       llvm::FoldingSetNodeID ID;
       FunctionTemplateSpecializationInfo::Profile(ID, TemplArgs, CanonTemplate,
-                                                  C);
+                                                  C, FD);
       llvm::FoldingSetInsertToken InsertToken;
       FunctionTemplateDecl::Common *CommonPtr = CanonTemplate->getCommonPtr();
       FunctionTemplateSpecializationInfo *ExistingInfo =

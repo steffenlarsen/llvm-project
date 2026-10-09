@@ -42,6 +42,7 @@
 #include "clang/Serialization/ASTDeserializationListener.h"
 #include "clang/Serialization/ASTReader.h"
 #include "clang/Serialization/GlobalModuleIndex.h"
+#include "clang/Serialization/MultiTargetASTExtension.h"
 #include "clang/Support/Compiler.h"
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/SmallPtrSet.h"
@@ -868,6 +869,13 @@ class PCHFreshnessChecker : public ASTReaderListener {
 
 public:
   bool Stale = false;
+  /// The extensions the file was written with.
+  std::vector<ModuleFileExtensionMetadata> Extensions;
+
+  void readModuleFileExtension(
+      const ModuleFileExtensionMetadata &Metadata) override {
+    Extensions.push_back(Metadata);
+  }
 
   explicit PCHFreshnessChecker(FileManager &FileMgr) : FileMgr(FileMgr) {}
 
@@ -934,10 +942,21 @@ static bool isUsablePCH(CompilerInstance &CI, StringRef Path,
   PCHFreshnessChecker Checker(*Scratch);
   if (ASTReader::readASTFileControlBlock(
           Path, *Scratch, CI.getModuleCache(), CI.getPCHContainerReader(),
-          /*FindModuleFileExtensions=*/false, Checker,
+          /*FindModuleFileExtensions=*/true, Checker,
           /*ValidateDiagnosticOptions=*/false))
     return false;
-  return !Checker.Stale;
+  if (Checker.Stale)
+    return false;
+  // A multi-target file is only usable by a compilation for its targets,
+  // which the options checked above do not say.
+  for (const auto &Ext : CI.getFrontendOpts().ModuleFileExtensions)
+    if (const auto *MT = dyn_cast<MultiTargetASTExtension>(Ext.get())) {
+      if (llvm::none_of(Checker.Extensions, [&](const auto &Found) {
+            return MT->mapTargets(Found).has_value();
+          }))
+        return false;
+    }
+  return true;
 }
 
 /// Precompile \p HeaderPath into \p OutputPath, reusing \p CI's configuration
@@ -1250,37 +1269,6 @@ bool FrontendAction::BeginSourceFile(CompilerInstance &CI,
 
     FailureCleanup.release();
     return true;
-  }
-
-  // A precompiled header holds one target's AST, but every target of a
-  // multi-target compilation shares one AST.
-  if (!CI.getMultiTargetAuxInvocations().empty()) {
-    // An optional one is only an optimization, so it is simply not used.
-    auto DropOptionalPCH = [](PreprocessorOptions &PPO) {
-      if (!PPO.ImplicitPCHIsOptional || PPO.ImplicitPCHInclude.empty())
-        return false;
-      PPO.ImplicitPCHInclude.clear();
-      PPO.ImplicitPCHIsOptional = false;
-      PPO.ImplicitPCHAutoGenerateHeader.clear();
-      return true;
-    };
-    bool Dropped = DropOptionalPCH(CI.getPreprocessorOpts());
-    for (const std::shared_ptr<CompilerInvocation> &Aux :
-         CI.getMultiTargetAuxInvocations())
-      Dropped |= DropOptionalPCH(Aux->getPreprocessorOpts());
-    if (Dropped)
-      CI.getDiagnostics().Report(diag::remark_pch_skip)
-          << "compiling for multiple targets at once";
-
-    StringRef PCH = CI.getPreprocessorOpts().ImplicitPCHInclude;
-    for (const std::shared_ptr<CompilerInvocation> &Aux :
-         CI.getMultiTargetAuxInvocations())
-      if (PCH.empty())
-        PCH = Aux->getPreprocessorOpts().ImplicitPCHInclude;
-    if (!PCH.empty()) {
-      CI.getDiagnostics().Report(diag::err_fe_multi_target_pch) << PCH;
-      return false;
-    }
   }
 
   if (!CI.getPreprocessorOpts().ImplicitPCHInclude.empty()) {
@@ -1790,7 +1778,7 @@ void ASTFrontendAction::ExecuteAction() {
   static bool Recording = false;
   if (LLVM_UNLIKELY(MultiTargetRecord) && !Recording) {
     Recording = true;
-    Recs = recordTargetStreams(CI);
+    Recs = recordTargetStreams(CI, getTranslationUnitKind() == TU_Prefix);
     Recording = false;
   }
 

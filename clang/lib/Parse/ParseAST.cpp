@@ -937,7 +937,7 @@ void clang::ParseAST(Sema &S, bool PrintStats, bool SkipFunctionBodies,
         RecordedToks.clear();
         Primary.Hashes.reserve(Primary.Tokens.size());
         for (const Token &T : Primary.Tokens)
-          Primary.Hashes.push_back(clang::hashToken(T));
+          Primary.Hashes.push_back(clang::hashToken(T, PP));
         Primary.Regions.assign(Regions->regions().begin(),
                                Regions->regions().end());
         Primary.RegionKeys.reserve(Primary.Regions.size());

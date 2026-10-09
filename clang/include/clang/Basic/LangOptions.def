@@ -256,6 +256,7 @@ LANGOPT(HLSLSpvPreserveInterface, 1, 0, NotCompatible, "Preserve entry-point int
 LANGOPT(EmitLogicalPointer, 1, 0, NotCompatible, "Allow emitting structured GEP/alloca intrinsics instead of normal GEP/alloca instructions.")
 
 LANGOPT(CUDAIsDevice      , 1, 0, NotCompatible, "compiling for CUDA device")
+LANGOPT(MultiTargetAST    , 1, 0, NotCompatible, "one AST shared by several targets")
 LANGOPT(CUDAHostDeviceConstexpr, 1, 1, NotCompatible, "treating unattributed constexpr functions as __host__ __device__")
 LANGOPT(GPUDeviceApproxTranscendentals, 1, 0, NotCompatible, "using approximate transcendental functions")
 LANGOPT(GPURelocatableDeviceCode, 1, 0, NotCompatible, "generate relocatable device code")

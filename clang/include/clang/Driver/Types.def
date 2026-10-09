@@ -47,6 +47,8 @@ TYPE("cuda",                     CUDA_DEVICE,  PP_CUDA,         "cu",     phases
 TYPE("hip-cpp-output",           PP_HIP,       INVALID,         "hipi",   phases::Compile, phases::Backend, phases::Assemble, phases::Link)
 TYPE("hip",                      HIP,          PP_HIP,          "hip",    phases::Preprocess, phases::Compile, phases::Backend, phases::Assemble, phases::Link)
 TYPE("hip",                      HIP_DEVICE,   PP_HIP,          "hip",    phases::Preprocess, phases::Compile, phases::Backend, phases::Assemble, phases::Link)
+TYPE("hip-header-cpp-output",    PP_HIPHeader, INVALID,         "hipi",   phases::Precompile)
+TYPE("hip-header",               HIPHeader,    PP_HIPHeader,    "hh",     phases::Preprocess, phases::Precompile)
 TYPE("objective-c-cpp-output",   PP_ObjC,      INVALID,         "mi",     phases::Compile, phases::Backend, phases::Assemble, phases::Link)
 TYPE("objc-cpp-output",          PP_ObjC_Alias, INVALID,        "mi",     phases::Compile, phases::Backend, phases::Assemble, phases::Link)
 TYPE("objective-c",              ObjC,         PP_ObjC,         "m",      phases::Preprocess, phases::Compile, phases::Backend, phases::Assemble, phases::Link)

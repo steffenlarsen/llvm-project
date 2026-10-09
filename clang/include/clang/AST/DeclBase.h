@@ -561,6 +561,10 @@ public:
   }
   void setTargetVariantIsReparseOrigin(bool V);
 
+  /// Restores both of the above, as read from an AST file, while
+  /// Decl::getASTContext() cannot be used yet.
+  void setTargetVariantStorage(ASTContext &Ctx, unsigned Storage);
+
 private:
   // Defined out of line (DeclBase.cpp) since they need ASTContext.h.
   unsigned getStoredTargetVariant() const LLVM_READONLY;

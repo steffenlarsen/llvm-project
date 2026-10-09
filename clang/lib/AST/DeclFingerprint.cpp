@@ -190,6 +190,12 @@ public:
   bool shouldVisitTemplateInstantiations() const { return true; }
   bool shouldVisitImplicitCode() const { return false; }
 
+  /// Whether a traversal would have visited \p D: implicit declarations are
+  /// skipped, but not implicit instantiations.
+  static bool shouldCollect(const NamedDecl *D) {
+    return !D->isImplicit() || isa<ClassTemplateSpecializationDecl>(D);
+  }
+
   bool VisitNamedDecl(NamedDecl *D) {
     if (!D->getTargetVariant() || D->isRedundantTargetVariant())
       return true;
@@ -679,7 +685,29 @@ static bool isInterchangeable(ASTContext &Ctx,
 
 unsigned clang::mergeEquivalentVariants(ASTContext &Ctx) {
   llvm::StringMap<SmallVector<NamedDecl *, 2>> ByKey;
-  TaggedCollector(Ctx, ByKey).TraverseDecl(Ctx.getTranslationUnitDecl());
+  TaggedCollector Collector(Ctx, ByKey);
+  if (Ctx.getExternalSource() && Ctx.getLangOpts().MultiTargetAST) {
+    // See ASTContext::getLocallyTaggedDecls. A target may still declare here
+    // what another declared before the AST file ended, so the copies the file
+    // has of what was tagged here are merged with them.
+    llvm::DenseSet<const NamedDecl *> Imported;
+    for (const Decl *D : Ctx.getLocallyTaggedDecls()) {
+      auto *ND = dyn_cast<NamedDecl>(const_cast<Decl *>(D));
+      if (!ND || !Collector.shouldCollect(ND))
+        continue;
+      Collector.VisitNamedDecl(ND);
+      const DeclContext *DC = ND->getDeclContext()->getRedeclContext();
+      if (!ND->getDeclName() ||
+          (!DC->isTranslationUnit() && !cast<Decl>(DC)->isFromASTFile()))
+        continue;
+      for (NamedDecl *Copy : DC->lookup(ND->getDeclName()))
+        if (Copy->isFromASTFile() && Copy->getKind() == ND->getKind() &&
+            Collector.shouldCollect(Copy) && Imported.insert(Copy).second)
+          Collector.VisitNamedDecl(Copy);
+    }
+  } else {
+    Collector.TraverseDecl(Ctx.getTranslationUnitDecl());
+  }
 
   StructuralEquivalenceContext::NonEquivalentDeclSet NonEquiv;
   unsigned Count = 0;
@@ -1596,4 +1624,26 @@ bool ASTContext::isTargetInstanceReplaced(const Decl *D,
       return true;
   }
   return false;
+}
+
+FunctionDecl *ASTContext::createDualSideCallHolder() {
+  SmallVector<Stmt *, 8> Calls;
+  for (const auto &[Call, Sides] : CUDAAmbiguousCalls)
+    for (const CallExpr *Side : {Sides.HostCall, Sides.DeviceCall})
+      if (Side && Side != Call)
+        Calls.push_back(const_cast<CallExpr *>(Side));
+  if (Calls.empty())
+    return nullptr;
+  TranslationUnitDecl *TU = getTranslationUnitDecl();
+  QualType Type =
+      getFunctionType(VoidTy, {}, FunctionProtoType::ExtProtoInfo());
+  DualSideCallHolder =
+      FunctionDecl::Create(*this, TU, SourceLocation(), SourceLocation(),
+                           &Idents.get("__clang_dual_side_calls"), Type,
+                           getTrivialTypeSourceInfo(Type), SC_Static);
+  DualSideCallHolder->setImplicit();
+  DualSideCallHolder->setBody(CompoundStmt::Create(
+      *this, Calls, FPOptionsOverride(), SourceLocation(), SourceLocation()));
+  TU->addHiddenDecl(DualSideCallHolder);
+  return DualSideCallHolder;
 }

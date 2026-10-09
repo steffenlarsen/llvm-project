@@ -38,6 +38,15 @@ def note_ast_file_input_files_validation_status : Note<"earlier input file valid
     "%select{was not performed|was disabled for this kind of precompiled file|"
     "was skipped for the current build session|"
     "has covered only user files|has covered all files}0">;
+def err_multi_target_ast_file_targets : Error<
+    "precompiled file '%0' was built for the targets '%1', but this "
+    "compilation is for '%2'">, DefaultFatal;
+def note_multi_target_ast_file_targets : Note<
+    "a precompiled file serves a subset of its targets only if the subset keeps "
+    "its first device target or has a single one">;
+def err_multi_target_ast_unwritable : Error<
+    "cannot write a precompiled file for several targets: %0 cannot be "
+    "recorded">;
 
 def err_ast_file_targetopt_mismatch : Error<
     "precompiled file '%0' was compiled for the %1 '%2' but the current translation "

@@ -552,7 +552,12 @@ public:
   };
 
 private:
-  llvm::DenseMap<const CallExpr *, CUDADualSideCall> CUDAAmbiguousCalls;
+  friend class MultiTargetASTExtension;
+
+  llvm::MapVector<const CallExpr *, CUDADualSideCall> CUDAAmbiguousCalls;
+
+  /// See createDualSideCallHolder.
+  FunctionDecl *DualSideCallHolder = nullptr;
 
   /// Per-target redirects for a shared (target variant 0) caller's reference
   /// to something that got bound to one specific target fork at Sema time,
@@ -632,6 +637,25 @@ private:
   llvm::DenseMap<const ClassTemplateSpecializationDecl *, unsigned>
       SpecializationKeyVariant;
 
+  /// The target a function template specialization's identity was folded
+  /// with when its template keys specializations by the target instantiating
+  /// them (see FunctionTemplateSpecializationInfo::Profile).
+  llvm::DenseMap<const FunctionDecl *, unsigned> FunctionSpecializationVariant;
+
+  /// The target a class template partial specialization's identity was folded
+  /// with (see ClassTemplatePartialSpecializationDecl::Profile).
+  llvm::DenseMap<const Decl *, unsigned> PartialSpecializationVariant;
+
+  /// What a specialization read from an AST file folds into its identity, as
+  /// its template determined when the file was written.
+  llvm::DenseMap<const Decl *, unsigned> ImportedSpecializationIdentities;
+
+  /// The templates read from an AST file whose specializations are keyed by
+  /// the target instantiating them (see
+  /// FunctionTemplateDecl::hasTargetKeyedSpecializations), as determined when
+  /// the file was written.
+  llvm::DenseSet<const Decl *> ImportedKeyedTemplates;
+
   /// See getTargetDependence: the settled results, and the declarations
   /// under evaluation, by position on the stack, with whether each one's
   /// definition is complete.
@@ -671,6 +695,12 @@ private:
   /// AllowTargetVariantDecls. See Decl::getTargetVariant() et al.
   /// (DeclBase.cpp).
   llvm::DenseMap<const Decl *, uint8_t> DeclTargetVariantStorage;
+
+  /// The declarations tagged so far that were not read from an AST file, in
+  /// the order they were first tagged. Only kept once an AST file has been
+  /// loaded: the declarations it provides were merged when it was written,
+  /// and finding the others by traversing the AST would deserialize all of it.
+  SmallVector<const Decl *, 0> LocallyTaggedDecls;
 
   /// A mapping from non-redeclarable declarations in modules that were
   /// merged with other declarations to the canonical declaration that they were
@@ -1499,6 +1529,12 @@ public:
     CUDAAmbiguousCalls[CallE] = {HostCall, DeviceCall};
   }
 
+  /// At the end of a prefix being precompiled: gives the calls that
+  /// CUDAAmbiguousCalls records alongside the ones in the AST a declaration to
+  /// be written in, an implicit function nothing refers to whose body lists
+  /// them. Returns it, or null if there are none.
+  LLVM_ABI FunctionDecl *createDualSideCallHolder();
+
   /// Look up \p CallE's ambient-dependent dual-side resolution, if any.
   /// Returns null for the overwhelming common case (no ambiguity recorded).
   const CUDADualSideCall *getCUDADualSideCall(const CallExpr *CallE) const {
@@ -1729,6 +1765,36 @@ public:
     return It == SpecializationKeyVariant.end() ? 0 : It->second;
   }
 
+  /// See FunctionSpecializationVariant.
+  void setFunctionSpecializationVariant(const FunctionDecl *FD,
+                                        unsigned Variant) {
+    FunctionSpecializationVariant[FD] = Variant;
+  }
+  unsigned getFunctionSpecializationVariant(const FunctionDecl *FD) const {
+    auto It = FunctionSpecializationVariant.find(FD);
+    return It == FunctionSpecializationVariant.end() ? 0 : It->second;
+  }
+
+  /// See PartialSpecializationVariant.
+  void setPartialSpecializationVariant(const Decl *Partial, unsigned Variant) {
+    PartialSpecializationVariant[Partial] = Variant;
+  }
+  unsigned getPartialSpecializationVariant(const Decl *Partial) const {
+    auto It = PartialSpecializationVariant.find(Partial);
+    return It == PartialSpecializationVariant.end() ? 0 : It->second;
+  }
+
+  /// See ImportedKeyedTemplates.
+  bool isImportedKeyedTemplate(const Decl *Template) const {
+    return ImportedKeyedTemplates.contains(Template);
+  }
+
+  /// See ImportedSpecializationIdentities.
+  unsigned getImportedSpecializationIdentity(const Decl *Spec) const {
+    auto It = ImportedSpecializationIdentities.find(Spec);
+    return It == ImportedSpecializationIdentities.end() ? 0 : It->second;
+  }
+
   /// See ImplicitAuxDeviceConstants.
   void setImplicitAuxDeviceConstant(const VarDecl *VD) {
     ImplicitAuxDeviceConstants.insert(VD);
@@ -1746,8 +1812,14 @@ public:
     return It == DeclTargetVariantStorage.end() ? 0 : (It->second & 0x7);
   }
   void setDeclTargetVariant(const Decl *D, unsigned V) {
-    uint8_t &Byte = DeclTargetVariantStorage[D];
-    Byte = (Byte & ~0x7) | (V & 0x7);
+    auto [It, Inserted] = DeclTargetVariantStorage.try_emplace(D, 0);
+    if (Inserted && ExternalSource && !D->isFromASTFile())
+      LocallyTaggedDecls.push_back(D);
+    It->second = (It->second & ~0x7) | (V & 0x7);
+  }
+  /// See LocallyTaggedDecls.
+  ArrayRef<const Decl *> getLocallyTaggedDecls() const {
+    return LocallyTaggedDecls;
   }
   bool getDeclTargetVariantIsReparseOrigin(const Decl *D) const {
     auto It = DeclTargetVariantStorage.find(D);

@@ -58,7 +58,13 @@ struct MultiTargetRecordings {
 /// Each pass runs in a nested CompilerInstance whose diagnostics are buffered:
 /// the primary compilation reports for the primary target, and repeating every
 /// diagnostic once per target would say everything N times.
-LLVM_ABI MultiTargetRecordings recordTargetStreams(CompilerInstance &CI);
+///
+/// When \p CI loaded a multi-target precompiled prefix, each pass starts from
+/// its target's state at the end of the prefix instead of preprocessing the
+/// prefix again. When \p CapturePrefix is set, \p CI's input is a prefix being
+/// precompiled, and each pass's state at its end is recorded to be written.
+LLVM_ABI MultiTargetRecordings recordTargetStreams(CompilerInstance &CI,
+                                                   bool CapturePrefix);
 
 /// Align \p Recordings into shared and alternative segments.
 ///

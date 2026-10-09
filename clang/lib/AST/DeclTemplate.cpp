@@ -678,20 +678,44 @@ static void recordTargetInstanceReplacements(ASTContext &Ctx,
       Ctx.markTargetInstanceReplaced(Spec, V);
 }
 
+/// The target folded into the identity of a specialization of \p Template
+/// requested now, when \p Template keys its specializations by the target
+/// instantiating them.
+static unsigned instantiatingTargetVariant(const FunctionTemplateDecl *Template,
+                                           const ASTContext &Context) {
+  unsigned V = Context.getCurrentTargetVariant();
+  if (!V)
+    V = 1;
+  // Device code parsed under the primary's ambient reaches a device
+  // target's copy of the template through isVisibleForTarget's
+  // canonical-device fallback, and instantiates that copy's body. Once a
+  // shared forward declaration chains the copies they share one
+  // Specializations set, so key the result by the copy's own target rather
+  // than the primary's, whose own specialization it would otherwise become.
+  unsigned TemplateV = Template->getTargetVariant();
+  if (V == 1 && TemplateV > 1 && !Template->isRedundantTargetVariant())
+    V = TemplateV;
+  return V;
+}
+
 void FunctionTemplateDecl::addSpecialization(
     FunctionTemplateSpecializationInfo *Info,
     llvm::FoldingSetInsertToken InsertToken) {
   auto *Common = getCommonPtr();
   ASTContext &Ctx = getASTContext();
   unsigned Key = 0;
-  if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) &&
-      !hasTargetKeyedSpecializations()) {
-    // The instantiator may have keyed the declaration before creating it.
-    Key = Ctx.getTargetInstantiationKey(Info->getFunction());
-    if (!Key && (Key = Ctx.computeTargetInstantiationKey(this)))
-      Ctx.setTargetInstantiationKey(Info->getFunction(), Key);
-    if (!Key && !Info->isExplicitSpecialization())
-      Ctx.noteUnkeyedSpecialization(this);
+  if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls)) {
+    if (hasTargetKeyedSpecializations()) {
+      Ctx.setFunctionSpecializationVariant(
+          Info->getFunction(), instantiatingTargetVariant(this, Ctx));
+    } else {
+      // The instantiator may have keyed the declaration before creating it.
+      Key = Ctx.getTargetInstantiationKey(Info->getFunction());
+      if (!Key && (Key = Ctx.computeTargetInstantiationKey(this)))
+        Ctx.setTargetInstantiationKey(Info->getFunction(), Key);
+      if (!Key && !Info->isExplicitSpecialization())
+        Ctx.noteUnkeyedSpecialization(this);
+    }
   }
   addSpecializationImpl<FunctionTemplateDecl>(Common->Specializations, Info,
                                               InsertToken);
@@ -749,21 +773,20 @@ void FunctionTemplateSpecializationInfo::Profile(
   // Context.getCurrentTargetVariant() genuinely vary across its per-target
   // calls, so without this the first of those calls permanently caches its
   // resolution of the local variable for every other target's caller too.
+  //
+  // A specialization read from an AST file keeps the identity it was created
+  // with, which was recorded then: its template may still be being read.
+  if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) && Spec &&
+      Spec->isFromASTFile()) {
+    if (!Key)
+      Key = Context.getImportedSpecializationIdentity(Spec);
+    if (Key && Key != ASTContext::UnkeyedTarget)
+      ID.AddInteger(Key);
+    return;
+  }
   if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) && Template &&
       Template->hasTargetKeyedSpecializations()) {
-    unsigned V = Context.getCurrentTargetVariant();
-    if (!V)
-      V = 1;
-    // Device code parsed under the primary's ambient reaches a device
-    // target's copy of the template through isVisibleForTarget's
-    // canonical-device fallback, and instantiates that copy's body. Once a
-    // shared forward declaration chains the copies they share one
-    // Specializations set, so key the result by the copy's own target rather
-    // than the primary's, whose own specialization it would otherwise become.
-    unsigned TemplateV = Template->getTargetVariant();
-    if (V == 1 && TemplateV > 1 && !Template->isRedundantTargetVariant())
-      V = TemplateV;
-    ID.AddInteger(V);
+    ID.AddInteger(instantiatingTargetVariant(Template, Context));
   } else if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) && Template) {
     // See ASTContext::computeTargetInstantiationKey.
     if (!Key)
@@ -775,6 +798,9 @@ void FunctionTemplateSpecializationInfo::Profile(
 }
 
 bool FunctionTemplateDecl::hasTargetKeyedSpecializations() const {
+  // See ClassTemplateDecl::hasTargetKeyedSpecializations.
+  if (isFromASTFile())
+    return getASTContext().isImportedKeyedTemplate(this);
   if (hasTargetTaggedParameterType() || hasTargetTaggedRedeclaration())
     return true;
   // A body reference keyed by the context instead does not need the ambient
@@ -1063,6 +1089,17 @@ void ClassTemplateSpecializationDecl::Profile(
   // widened) partial specializations falls back to the primary template, and
   // without this it would get the same untargeted identity no matter which
   // arm's redecl happened to be current when first instantiated.
+  //
+  // A specialization read from an AST file keeps the identity it was created
+  // with, which was recorded then: its template may still be being read.
+  if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) && Spec &&
+      Spec->isFromASTFile()) {
+    if (!Key)
+      Key = Context.getImportedSpecializationIdentity(Spec);
+    if (Key && Key != ASTContext::UnkeyedTarget)
+      ID.AddInteger(Key);
+    return;
+  }
   if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) && Template &&
       Template->hasTargetKeyedSpecializations()) {
     unsigned V = Context.getCurrentTargetVariant();
@@ -1078,6 +1115,10 @@ void ClassTemplateSpecializationDecl::Profile(
 }
 
 bool ClassTemplateDecl::hasTargetKeyedSpecializations() const {
+  // Recorded when the file was written; the specializations it is asked for
+  // while being read must not deserialize anything.
+  if (isFromASTFile())
+    return getASTContext().isImportedKeyedTemplate(this);
   return hasTargetTaggedPartialSpecialization() ||
          hasTargetTaggedValueMember() || hasTargetTaggedPrimaryTemplate();
 }
@@ -1095,8 +1136,17 @@ ClassTemplateDecl::findPartialSpecialization(
 }
 
 void ClassTemplatePartialSpecializationDecl::Profile(
+    llvm::FoldingSetNodeID &ID) const {
+  const ASTContext &Context = getASTContext();
+  Profile(ID, getTemplateArgs().asArray(), getTemplateParameters(), Context,
+          LLVM_UNLIKELY(clang::AllowTargetVariantDecls)
+              ? Context.getPartialSpecializationVariant(this)
+              : 0);
+}
+
+void ClassTemplatePartialSpecializationDecl::Profile(
     llvm::FoldingSetNodeID &ID, ArrayRef<TemplateArgument> TemplateArgs,
-    TemplateParameterList *TPL, const ASTContext &Context) {
+    TemplateParameterList *TPL, const ASTContext &Context, unsigned Variant) {
   ID.AddInteger(TemplateArgs.size());
   for (const TemplateArgument &TemplateArg : TemplateArgs)
     TemplateArg.Profile(ID, Context);
@@ -1110,16 +1160,29 @@ void ClassTemplatePartialSpecializationDecl::Profile(
   // the second one parsed look like a redefinition of the first. Mixing the
   // target into the profile lets both coexist; shared code (current == 0)
   // resolves to the primary target's, matching how ordinary name lookup
-  // falls back for shared code (isVisibleForTarget).
+  // falls back for shared code (isVisibleForTarget). Once in the set, a
+  // partial specialization keeps the target it was added for, which the
+  // current one need not be when the set compares or rehashes it, or reads it
+  // from an AST file.
   if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls)) {
-    unsigned V = Context.getCurrentTargetVariant();
-    ID.AddInteger(V ? V : 1);
+    if (!Variant) {
+      unsigned V = Context.getCurrentTargetVariant();
+      Variant = V ? V : 1;
+    }
+    ID.AddInteger(Variant);
   }
 }
 
 void ClassTemplateDecl::AddPartialSpecialization(
     ClassTemplatePartialSpecializationDecl *D,
     llvm::FoldingSetInsertToken InsertToken) {
+  if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls)) {
+    ASTContext &Ctx = getASTContext();
+    if (!Ctx.getPartialSpecializationVariant(D)) {
+      unsigned V = Ctx.getCurrentTargetVariant();
+      Ctx.setPartialSpecializationVariant(D, V ? V : 1);
+    }
+  }
   if (InsertToken)
     getPartialSpecializations().insert(D, InsertToken);
   else {

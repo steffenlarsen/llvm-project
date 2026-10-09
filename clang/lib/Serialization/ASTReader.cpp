@@ -9097,6 +9097,10 @@ void ASTReader::PassVTableToConsumer(CXXRecordDecl *RD) {
 }
 
 void ASTReader::StartTranslationUnit(ASTConsumer *Consumer) {
+  for (ModuleFile &F : ModuleMgr)
+    for (const auto &Ext : F.ExtensionReaders)
+      Ext->startTranslationUnit();
+
   this->Consumer = Consumer;
 
   if (Consumer)
@@ -9257,6 +9261,10 @@ void ASTReader::getMemoryBufferSizes(MemoryBufferSizes &sizes) const {
 void ASTReader::InitializeSema(Sema &S) {
   SemaObj = &S;
   S.addExternalSource(this);
+
+  for (ModuleFile &F : ModuleMgr)
+    for (const auto &Ext : F.ExtensionReaders)
+      Ext->initializeSema(S);
 
   // Makes sure any declarations that were deserialized "too early"
   // still get added to the identifier's declaration chains.

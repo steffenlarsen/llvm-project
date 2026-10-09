@@ -148,10 +148,11 @@ GeneratePCHAction::CreateOutputFile(CompilerInstance &CI, StringRef InFile,
                                     std::string &OutputFile,
                                     bool SetOnlyIfDifferent) {
   // Because this is exposed via libclang we must disable RemoveFileOnSignal.
+  // A HIP header is precompiled into a directory with a file per target.
   std::unique_ptr<raw_pwrite_stream> OS = CI.createDefaultOutputFile(
       /*Binary=*/true, InFile, /*Extension=*/"", /*RemoveFileOnSignal=*/false,
-      /*CreateMissingDirectories=*/false, /*ForceUseTemporary=*/false,
-      SetOnlyIfDifferent);
+      /*CreateMissingDirectories=*/CI.getLangOpts().HIP,
+      /*ForceUseTemporary=*/false, SetOnlyIfDifferent);
   if (!OS)
     return nullptr;
 

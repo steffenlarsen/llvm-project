@@ -8,16 +8,23 @@
 
 #include "clang/Frontend/MultiTargetRecording.h"
 #include "clang/AST/ASTConsumer.h"
+#include "clang/Basic/DiagnosticFrontend.h"
 #include "clang/Basic/SourceManager.h"
 #include "clang/Frontend/CompilerInstance.h"
 #include "clang/Frontend/FrontendAction.h"
 #include "clang/Frontend/TextDiagnosticBuffer.h"
+#include "clang/Lex/HeaderSearch.h"
+#include "clang/Lex/MacroInfo.h"
 #include "clang/Lex/Preprocessor.h"
+#include "clang/Lex/PreprocessorOptions.h"
 #include "clang/Parse/Parser.h"
 #include "clang/Sema/Sema.h"
+#include "clang/Serialization/MultiTargetASTExtension.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringMap.h"
+#include "llvm/Support/FileSystem.h"
+#include "llvm/Support/Path.h"
 #include "llvm/Support/raw_ostream.h"
 
 using namespace clang;
@@ -25,6 +32,111 @@ using namespace clang;
 //===----------------------------------------------------------------------===//
 // Recording
 //===----------------------------------------------------------------------===//
+
+using PrefixState = MultiTargetASTExtension::PrefixState;
+
+/// \p MI as the definition of a -D option.
+static std::string macroDefinition(const Preprocessor &PP,
+                                   const IdentifierInfo &Name,
+                                   const MacroInfo &MI) {
+  std::string Definition = Name.getName().str();
+  if (MI.isFunctionLike()) {
+    Definition += '(';
+    llvm::ListSeparator LS(",");
+    for (const IdentifierInfo *Param : MI.params()) {
+      Definition += LS;
+      if (MI.isC99Varargs() && Param == MI.params().back()) {
+        Definition += "...";
+        continue;
+      }
+      Definition += Param->getName();
+      if (MI.isGNUVarargs() && Param == MI.params().back())
+        Definition += "...";
+    }
+    Definition += ')';
+  }
+  Definition += '=';
+  for (const Token &T : MI.tokens()) {
+    if (T.hasLeadingSpace() && &T != MI.tokens().begin())
+      Definition += ' ';
+    Definition += PP.getSpelling(T);
+  }
+  return Definition;
+}
+
+/// A path that names \p File from any working directory.
+static std::string absolutePath(FileManager &FM, FileEntryRef File) {
+  StringRef Real = File.getFileEntry().tryGetRealPathName();
+  if (!Real.empty())
+    return Real.str();
+  SmallString<256> Path(File.getName());
+  FM.makeAbsolutePath(Path);
+  return std::string(Path);
+}
+
+/// What \p PP knows at the end of its input.
+static PrefixState capturePrefixState(Preprocessor &PP) {
+  PrefixState State;
+  SmallVector<std::pair<StringRef, std::string>, 0> Macros;
+  for (const auto &Entry : PP.macros()) {
+    const IdentifierInfo *Name = Entry.first;
+    const MacroInfo *MI = PP.getMacroInfo(Name);
+    if (MI && !MI->isBuiltinMacro())
+      Macros.push_back({Name->getName(), macroDefinition(PP, *Name, *MI)});
+  }
+  llvm::sort(Macros);
+  for (auto &Macro : Macros)
+    State.Macros.push_back(std::move(Macro.second));
+
+  SourceManager &SM = PP.getSourceManager();
+  HeaderSearch &HS = PP.getHeaderSearchInfo();
+  SmallVector<std::pair<std::string, StringRef>, 0> Guards;
+  for (auto It = SM.fileinfo_begin(), E = SM.fileinfo_end(); It != E; ++It) {
+    HeaderFileInfo *HFI = HS.getExistingFileInfo(It->first)
+                              ? &HS.getFileInfo(It->first)
+                              : nullptr;
+    if (!HFI)
+      continue;
+    if (HFI->isPragmaOnce && PP.alreadyIncluded(It->first))
+      State.IncludeOnceFiles.push_back(
+          absolutePath(PP.getFileManager(), It->first));
+    if (const IdentifierInfo *Guard =
+            HFI->getControllingMacro(PP.getExternalSource()))
+      Guards.push_back(
+          {absolutePath(PP.getFileManager(), It->first), Guard->getName()});
+  }
+  llvm::sort(State.IncludeOnceFiles);
+  llvm::sort(Guards);
+  for (const auto &[Path, Guard] : Guards) {
+    State.ControllingMacros.push_back(Path);
+    State.ControllingMacros.push_back(Guard.str());
+  }
+  return State;
+}
+
+/// Rewrites a recording pass's invocation to start where \p State says its
+/// target is after \p P: its macros instead of the predefined ones, and none
+/// of the force-included headers \p P already contains.
+static void startAfterPrefix(CompilerInvocation &Invocation,
+                             const MultiTargetASTExtension::Prefix &P,
+                             const PrefixState &State) {
+  PreprocessorOptions &PPO = Invocation.getPreprocessorOpts();
+  PPO.UsePredefines = false;
+  std::vector<std::pair<std::string, bool>> Macros;
+  Macros.reserve(State.Macros.size() + PPO.Macros.size());
+  for (const std::string &Macro : State.Macros)
+    Macros.push_back({Macro, /*IsUndef=*/false});
+  // The command line's own come after, as when the prefix is loaded.
+  llvm::append_range(Macros, PPO.Macros);
+  PPO.Macros = std::move(Macros);
+  llvm::erase_if(PPO.Includes, [&](const std::string &Include) {
+    SmallString<256> Absolute(Include);
+    llvm::sys::fs::make_absolute(Absolute);
+    llvm::sys::path::remove_dots(Absolute, /*remove_dot_dot=*/true);
+    return llvm::is_contained(P.Headers, Include) ||
+           llvm::is_contained(P.Headers, Absolute.str());
+  });
+}
 
 namespace {
 
@@ -40,10 +152,15 @@ class RecordStreamAction : public ASTFrontendAction {
   TargetRecording &Out;
   /// How many tokens the stream is expected to have, if known.
   size_t ExpectedTokens;
+  /// The state at the end of a precompiled prefix to start from, if any.
+  const PrefixState *Start;
+  /// Where to record the state at the end of the input, if anywhere.
+  PrefixState *End;
 
 public:
-  RecordStreamAction(TargetRecording &Out, size_t ExpectedTokens)
-      : Out(Out), ExpectedTokens(ExpectedTokens) {}
+  RecordStreamAction(TargetRecording &Out, size_t ExpectedTokens,
+                     const PrefixState *Start, PrefixState *End)
+      : Out(Out), ExpectedTokens(ExpectedTokens), Start(Start), End(End) {}
 
   std::unique_ptr<ASTConsumer> CreateASTConsumer(CompilerInstance &,
                                                  StringRef) override {
@@ -60,6 +177,21 @@ public:
     auto *Regions = Owned.get();
     PP.addPPCallbacks(std::move(Owned));
 
+    if (Start) {
+      FileManager &FM = CI.getFileManager();
+      HeaderSearch &HS = PP.getHeaderSearchInfo();
+      for (const std::string &Path : Start->IncludeOnceFiles)
+        if (OptionalFileEntryRef File = FM.getOptionalFileRef(Path)) {
+          HS.MarkFileIncludeOnce(*File);
+          PP.markIncluded(*File);
+        }
+      const std::vector<std::string> &Guards = Start->ControllingMacros;
+      for (size_t I = 0; I + 1 < Guards.size(); I += 2)
+        if (OptionalFileEntryRef File = FM.getOptionalFileRef(Guards[I]))
+          HS.SetFileControllingMacro(*File,
+                                     PP.getIdentifierInfo(Guards[I + 1]));
+    }
+
     PP.EnterMainSourceFile();
     if (!PP.getCurrentLexer())
       return;
@@ -69,15 +201,20 @@ public:
     Out.Tokens.reserve(ExpectedTokens);
     Out.Tokens.push_back(P.getCurToken());
 
-    Token T;
-    do {
+    // The primed token is the end of the input when nothing follows a
+    // precompiled prefix, and lexing past it crashes.
+    Token T = P.getCurToken();
+    while (T.isNot(tok::eof) && T.isNot(tok::annot_repl_input_end)) {
       PP.Lex(T);
       Out.Tokens.push_back(T);
-    } while (T.isNot(tok::eof) && T.isNot(tok::annot_repl_input_end));
+    }
+
+    if (End)
+      *End = capturePrefixState(PP);
 
     Out.Hashes.reserve(Out.Tokens.size());
     for (const Token &Tok : Out.Tokens)
-      Out.Hashes.push_back(hashToken(Tok));
+      Out.Hashes.push_back(hashToken(Tok, PP));
 
     const SourceManager &SM = CI.getSourceManager();
     Out.Regions.assign(Regions->regions().begin(), Regions->regions().end());
@@ -194,8 +331,28 @@ retargetPrimaryInvocation(CompilerInstance &CI, const RecordTarget &RT) {
   return Invocation;
 }
 
-MultiTargetRecordings clang::recordTargetStreams(CompilerInstance &CI) {
+static MultiTargetASTExtension *findMultiTargetExtension(CompilerInstance &CI) {
+  for (const auto &Ext : CI.getFrontendOpts().ModuleFileExtensions)
+    if (auto *MT = dyn_cast<MultiTargetASTExtension>(Ext.get()))
+      return MT;
+  return nullptr;
+}
+
+MultiTargetRecordings clang::recordTargetStreams(CompilerInstance &CI,
+                                                 bool CapturePrefix) {
   MultiTargetRecordings Out;
+  MultiTargetASTExtension *Ext = findMultiTargetExtension(CI);
+  const MultiTargetASTExtension::Prefix *Loaded =
+      Ext ? Ext->getLoadedPrefix() : nullptr;
+  MultiTargetASTExtension::Prefix Captured;
+  // Without its targets' state, the prefix would have to be preprocessed again
+  // for each of them, and its declarations would then be made twice.
+  StringRef PCH = CI.getPreprocessorOpts().ImplicitPCHInclude;
+  if (!PCH.empty() && Ext && !Loaded &&
+      !CI.getDiagnostics().hasErrorOccurred()) {
+    CI.getDiagnostics().Report(diag::err_fe_multi_target_pch) << PCH;
+    return Out;
+  }
 
   for (const RecordTarget &RT : targetsToRecord(CI)) {
     std::shared_ptr<CompilerInvocation> Invocation;
@@ -210,6 +367,21 @@ MultiTargetRecordings clang::recordTargetStreams(CompilerInstance &CI) {
     Invocation->getFrontendOpts().ProgramAction = frontend::ParseSyntaxOnly;
     Invocation->getFrontendOpts().OutputFile.clear();
     Invocation->getFrontendOpts().MultiTargetAuxInvocations.clear();
+    // The primary alone loads a precompiled prefix, for every target.
+    PreprocessorOptions &PPO = Invocation->getPreprocessorOpts();
+    PPO.ImplicitPCHInclude.clear();
+    PPO.ImplicitPCHIsOptional = false;
+    PPO.ImplicitPCHAutoGenerateHeader.clear();
+    // Aux targets come first, in the order the precompiled prefix has them.
+    const size_t Index = Out.Targets.size();
+    const PrefixState *Start = nullptr;
+    if (Loaded && RT.Invocation && Index < Loaded->States.size()) {
+      Start = &Loaded->States[Index];
+      startAfterPrefix(*Invocation, *Loaded, *Start);
+    }
+    PrefixState *End = nullptr;
+    if (CapturePrefix && Ext && RT.Invocation)
+      End = &Captured.States.emplace_back();
 
     auto Nested = std::make_unique<CompilerInstance>(
         std::move(Invocation), CI.getPCHContainerOperations());
@@ -232,7 +404,8 @@ MultiTargetRecordings clang::recordTargetStreams(CompilerInstance &CI) {
     R.Triple = RT.Triple;
     // Every target's stream is about as long as the one recorded before it.
     RecordStreamAction Action(
-        R, Out.Targets.empty() ? 0 : Out.Targets.back().Tokens.size() * 9 / 8);
+        R, Out.Targets.empty() ? 0 : Out.Targets.back().Tokens.size() * 9 / 8,
+        Start, End);
     if (!Nested->ExecuteAction(Action) || R.Tokens.empty()) {
       llvm::errs() << "multi-target recording: could not record " << RT.Triple;
       if (Buffered->err_begin() != Buffered->err_end())
@@ -245,6 +418,15 @@ MultiTargetRecordings clang::recordTargetStreams(CompilerInstance &CI) {
     R.SM = &Nested->getSourceManager();
     Out.Targets.push_back(std::move(R));
     Out.Owners.push_back(std::move(Nested));
+  }
+
+  if (CapturePrefix && Ext && !CI.getFrontendOpts().Inputs.empty()) {
+    Captured.Headers = CI.getPreprocessorOpts().Includes;
+    SmallString<256> Input(CI.getFrontendOpts().Inputs[0].getFile());
+    CI.getFileManager().makeAbsolutePath(Input);
+    llvm::sys::path::remove_dots(Input, /*remove_dot_dot=*/true);
+    Captured.Headers.push_back(std::string(Input));
+    Ext->setPrefixToWrite(std::move(Captured));
   }
   return Out;
 }

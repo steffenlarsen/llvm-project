@@ -2432,14 +2432,14 @@ public:
 
   SourceRange getSourceRange() const override LLVM_READONLY;
 
-  void Profile(llvm::FoldingSetNodeID &ID) const {
-    Profile(ID, getTemplateArgs().asArray(), getTemplateParameters(),
-            getASTContext());
-  }
+  void Profile(llvm::FoldingSetNodeID &ID) const;
 
-  static void
-  Profile(llvm::FoldingSetNodeID &ID, ArrayRef<TemplateArgument> TemplateArgs,
-          TemplateParameterList *TPL, const ASTContext &Context);
+  /// \p Variant is the target the partial specialization belongs to (see
+  /// ASTContext::PartialSpecializationVariant), or 0 for the current one.
+  static void Profile(llvm::FoldingSetNodeID &ID,
+                      ArrayRef<TemplateArgument> TemplateArgs,
+                      TemplateParameterList *TPL, const ASTContext &Context,
+                      unsigned Variant = 0);
 
   static bool classof(const Decl *D) { return classofKind(D->getKind()); }
 

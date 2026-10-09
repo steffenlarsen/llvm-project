@@ -34,6 +34,7 @@
 #include "clang/Frontend/Utils.h"
 #include "clang/Frontend/VerifyDiagnosticConsumer.h"
 #include "clang/Lex/HeaderSearch.h"
+#include "clang/Lex/ModuleLoader.h"
 #include "clang/Lex/Preprocessor.h"
 #include "clang/Lex/PreprocessorOptions.h"
 #include "clang/Lex/TextEncoding.h"
@@ -45,6 +46,7 @@
 #include "clang/Serialization/InMemoryModuleCache.h"
 #include "clang/Serialization/ModuleCache.h"
 #include "clang/Serialization/ModuleManager.h"
+#include "clang/Serialization/MultiTargetASTExtension.h"
 #include "clang/Serialization/SerializationDiagnostic.h"
 #include "llvm/ADT/IntrusiveRefCntPtr.h"
 #include "llvm/ADT/STLExtras.h"
@@ -72,6 +74,7 @@
 #include "llvm/Support/VirtualOutputBackends.h"
 #include "llvm/Support/VirtualOutputError.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Support/xxhash.h"
 #include "llvm/TargetParser/Host.h"
 #include <optional>
 #include <time.h>
@@ -124,6 +127,8 @@ bool CompilerInstance::langOptMayDifferPerTarget(StringRef Name) {
   return llvm::StringSwitch<bool>(Name)
       // Host vs. device is what multi-target compilation is.
       .Case("CUDAIsDevice", true)
+      // Only the primary target's invocation names the others.
+      .Case("MultiTargetAST", true)
       // Only read by CodeGen.
       .Cases({"ConvergentFunctions", "SetVisibilityForExternDecls",
               "HalfNoSemanticInterposition"},
@@ -201,6 +206,31 @@ static bool parseMultiTargetAuxInvocations(
     Invocations.push_back(std::move(Aux));
   }
   return true;
+}
+
+/// A fingerprint of the macros \p Aux predefines, built in or from its command
+/// line, for compiling for \p AuxTarget alongside \p CI's target.
+static uint64_t predefinesFingerprint(CompilerInstance &CI,
+                                      const CompilerInvocation &Aux,
+                                      TargetInfo &AuxTarget) {
+  PreprocessorOptions PPOpts = Aux.getPreprocessorOpts();
+  PPOpts.Includes.clear();
+  PPOpts.MacroIncludes.clear();
+  PPOpts.ImplicitPCHInclude.clear();
+  PPOpts.ChainedIncludes.clear();
+  DiagnosticOptions DiagOpts;
+  DiagnosticsEngine Diags(DiagnosticIDs::create(), DiagOpts,
+                          new IgnoringDiagConsumer());
+  FileManager FM(CI.getFileSystemOpts(), CI.getVirtualFileSystemPtr());
+  SourceManager SM(Diags, FM);
+  LangOptions LangOpts = Aux.getLangOpts();
+  HeaderSearch HS(Aux.getHeaderSearchOpts(), SM, Diags, LangOpts, &AuxTarget);
+  TrivialModuleLoader Loader;
+  Preprocessor PP(PPOpts, Diags, LangOpts, SM, HS, Loader);
+  PP.Initialize(AuxTarget, &CI.getTarget());
+  InitializePreprocessor(PP, PPOpts, CI.getPCHContainerReader(),
+                         Aux.getFrontendOpts(), Aux.getCodeGenOpts());
+  return llvm::xxh3_64bits(PP.getPredefines());
 }
 
 bool CompilerInstance::createTarget() {
@@ -286,6 +316,29 @@ bool CompilerInstance::createTarget() {
        llvm::zip_equal(MultiTargetAuxTargets, MultiTargetAuxInvocations)) {
     TI->adjust(getDiagnostics(), Invocation->getLangOpts(), HostTarget);
     TI->setAuxTarget(&getTarget());
+  }
+
+  // A precompiled file of this compilation records every target's state, and
+  // can only be used by a compilation for the same targets. Which macros they
+  // start out with only matters when one is used or written.
+  std::vector<std::shared_ptr<ModuleFileExtension>> &Extensions =
+      getFrontendOpts().ModuleFileExtensions;
+  if (!MultiTargetAuxInvocations.empty() &&
+      llvm::none_of(Extensions, [](const auto &Ext) {
+        return isa<MultiTargetASTExtension>(Ext.get());
+      })) {
+    bool UsesPCH = !getPreprocessorOpts().ImplicitPCHInclude.empty() ||
+                   getFrontendOpts().ProgramAction == frontend::GeneratePCH;
+    std::vector<MultiTargetASTExtension::Target> Targets;
+    for (auto [TI, Aux] :
+         llvm::zip_equal(MultiTargetAuxTargets, MultiTargetAuxInvocations)) {
+      const TargetOptions &TO = Aux->getTargetOpts();
+      Targets.push_back(
+          {TO.Triple, TO.CPU, TO.FeaturesAsWritten,
+           UsesPCH ? predefinesFingerprint(*this, *Aux, *TI) : 0});
+    }
+    Extensions.push_back(
+        std::make_shared<MultiTargetASTExtension>(std::move(Targets)));
   }
 
   return true;

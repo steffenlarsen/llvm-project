@@ -578,6 +578,12 @@ bool Decl::getStoredTargetVariantIsReparseOrigin() const {
   return getASTContext().getDeclTargetVariantIsReparseOrigin(this);
 }
 
+void Decl::setTargetVariantStorage(ASTContext &Ctx, unsigned Storage) {
+  HasTargetVariantEntry = true;
+  Ctx.setDeclTargetVariant(this, Storage & 0x7);
+  Ctx.setDeclTargetVariantIsReparseOrigin(this, Storage & 0x8);
+}
+
 void Decl::setTargetVariantIsReparseOrigin(bool V) {
   HasTargetVariantEntry = true;
   getASTContext().setDeclTargetVariantIsReparseOrigin(this, V);
