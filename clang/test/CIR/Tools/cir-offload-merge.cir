@@ -59,6 +59,68 @@
 
 // SPLIT-COMPATIBLE-HIP: module @device_gfx908 attributes {cir.offload.bundle_id = "hip-amdgcn-amd-amdhsa--gfx908", cir.offload.kind = #cir.offload<device>} {
 
+// Host and device define some records under the same names. A device record
+// defined differently from the host's is renamed, as is one whose body refers
+// to a renamed record; identical records stay shared, and a struct and a union
+// of the same name are distinct records. The host keeps its names even when it
+// is not the first input.
+// RUN: cir-offload-merge -combine \
+// RUN:   -input=%t/device-records.cir \
+// RUN:   -input=%t/host-records.cir \
+// RUN:   -targets=cuda-nvptx64-nvidia-cuda--sm_80,host-x86_64-unknown-linux-gnu \
+// RUN:   -output=%t/records.cir
+// RUN: FileCheck %s --check-prefix=RECORDS --input-file=%t/records.cir
+// RUN: cir-opt %t/records.cir --verify-roundtrip -o /dev/null
+
+// RECORDS-DAG: ![[DIFF:rec_Diff]] = !cir.struct<"Diff" {data !s32i}>
+// RECORDS-DAG: ![[DEV_DIFF:rec_Diff2Edevice[a-z0-9_]*]] = !cir.struct<"Diff.device_cuda_nvptx64_nvidia_cuda__sm_80" {data !cir.double, data !s32i}>
+// RECORDS-DAG: ![[OUTER:rec_Outer]] = !cir.struct<"Outer" {data ![[DIFF]]}>
+// RECORDS-DAG: ![[DEV_OUTER:rec_Outer2Edevice[a-z0-9_]*]] = !cir.struct<"Outer.device_cuda_nvptx64_nvidia_cuda__sm_80" {data ![[DEV_DIFF]]}>
+// RECORDS-DAG: ![[SAME:rec_Same]] = !cir.struct<"Same" {data !s32i}>
+// RECORDS-DAG: ![[KIND:rec_Kind]] = !cir.struct<"Kind" {data !s32i}>
+// RECORDS-DAG: ![[DEV_KIND:rec_Kind[0-9]+]] = !cir.union<"Kind" {data !s32i, data !cir.float}>
+// RECORDS-NOT: !cir.struct<"Same.
+
+// RECORDS: module @host
+// RECORDS-NEXT: cir.global external @diff = #cir.zero : ![[DIFF]]
+// RECORDS-NEXT: cir.global external @same = #cir.zero : ![[SAME]]
+// RECORDS-NEXT: cir.global external @outer = #cir.zero : ![[OUTER]]
+// RECORDS-NEXT: cir.global external @kind = #cir.zero : ![[KIND]]
+// RECORDS: module @device_cuda_nvptx64_nvidia_cuda__sm_80
+// RECORDS-NEXT: cir.global external @diff = #cir.zero : ![[DEV_DIFF]]
+// RECORDS-NEXT: cir.global external @same = #cir.zero : ![[SAME]]
+// RECORDS-NEXT: cir.global external @outer = #cir.zero : ![[DEV_OUTER]]
+// RECORDS-NEXT: cir.global external @kind = #cir.zero : ![[DEV_KIND]]
+// RECORDS-NEXT: cir.func private @use(!cir.ptr<![[DEV_DIFF]]>)
+
+// A renamed self-referential record refers to itself under its new name, and
+// an unnamed record containing it is rebuilt around it. Device modules are
+// also checked against each other: the second device's `Arch` differs from the
+// first device's, which the host does not define.
+// RUN: cir-offload-merge -combine \
+// RUN:   -input=%t/host-graph.cir \
+// RUN:   -input=%t/device-graph-sm80.cir \
+// RUN:   -input=%t/device-graph-sm90.cir \
+// RUN:   -targets=host-x86_64-unknown-linux-gnu,cuda-nvptx64-nvidia-cuda--sm_80,cuda-nvptx64-nvidia-cuda--sm_90 \
+// RUN:   -output=%t/graph.cir
+// RUN: FileCheck %s --check-prefix=GRAPH --input-file=%t/graph.cir
+// RUN: cir-opt %t/graph.cir --verify-roundtrip -o /dev/null
+
+// GRAPH-DAG: ![[NODE:rec_Node]] = !cir.struct<"Node" {data !s32i, data !cir.ptr<!cir.struct<"Node">>}>
+// GRAPH-DAG: ![[DEV_NODE:rec_Node2Edevice[a-z0-9_]*]] = !cir.struct<"Node.device_cuda_nvptx64_nvidia_cuda__sm_80" {data !cir.double, data !cir.ptr<!cir.struct<"Node.device_cuda_nvptx64_nvidia_cuda__sm_80">>}>
+// GRAPH-DAG: ![[UNNAMED:rec_anon_struct]] = !cir.struct<{data ![[DEV_NODE]], data !s32i}>
+// GRAPH-DAG: ![[ARCH:rec_Arch]] = !cir.struct<"Arch" {data !s32i}>
+// GRAPH-DAG: ![[SM90_ARCH:rec_Arch2Edevice[a-z0-9_]*]] = !cir.struct<"Arch.device_cuda_nvptx64_nvidia_cuda__sm_90" {data !s32i, data !s32i}>
+
+// GRAPH: module @host
+// GRAPH-NEXT: cir.global external @n = #cir.zero : ![[NODE]]
+// GRAPH: module @device_cuda_nvptx64_nvidia_cuda__sm_80
+// GRAPH-NEXT: cir.global external @n = #cir.zero : ![[DEV_NODE]]
+// GRAPH-NEXT: cir.global external @u = #cir.zero : ![[UNNAMED]]
+// GRAPH-NEXT: cir.global external @a = #cir.zero : ![[ARCH]]
+// GRAPH: module @device_cuda_nvptx64_nvidia_cuda__sm_90
+// GRAPH-NEXT: cir.global external @a = #cir.zero : ![[SM90_ARCH]]
+
 // RUN: not cir-offload-merge -input=%t/host.cir -targets=host-x86_64-unknown-linux-gnu -output=%t/out.cir 2>&1 | FileCheck %s --check-prefix=ERR-NO-MODE
 // ERR-NO-MODE: error: expected exactly one of -combine or -split
 
@@ -142,6 +204,57 @@
 
 //--- host.cir
 module @old_host attributes {cir.triple = "x86_64-unknown-linux-gnu"} {
+}
+
+//--- host-records.cir
+!s32i = !cir.int<s, 32>
+!rec_Diff = !cir.struct<"Diff" {data !s32i}>
+!rec_Same = !cir.struct<"Same" {data !s32i}>
+!rec_Outer = !cir.struct<"Outer" {data !rec_Diff}>
+!rec_Kind = !cir.struct<"Kind" {data !s32i}>
+module @old_host attributes {cir.triple = "x86_64-unknown-linux-gnu"} {
+  cir.global external @diff = #cir.zero : !rec_Diff
+  cir.global external @same = #cir.zero : !rec_Same
+  cir.global external @outer = #cir.zero : !rec_Outer
+  cir.global external @kind = #cir.zero : !rec_Kind
+}
+
+//--- device-records.cir
+!s32i = !cir.int<s, 32>
+!rec_Diff = !cir.struct<"Diff" {data !cir.double, data !s32i}>
+!rec_Same = !cir.struct<"Same" {data !s32i}>
+!rec_Outer = !cir.struct<"Outer" {data !rec_Diff}>
+!rec_Kind = !cir.union<"Kind" {data !s32i, data !cir.float}>
+module @old_device attributes {cir.triple = "nvptx64-nvidia-cuda"} {
+  cir.global external @diff = #cir.zero : !rec_Diff
+  cir.global external @same = #cir.zero : !rec_Same
+  cir.global external @outer = #cir.zero : !rec_Outer
+  cir.global external @kind = #cir.zero : !rec_Kind
+  cir.func private @use(!cir.ptr<!rec_Diff>)
+}
+
+//--- host-graph.cir
+!s32i = !cir.int<s, 32>
+!rec_Node = !cir.struct<"Node" {data !s32i, data !cir.ptr<!cir.struct<"Node">>}>
+module @old_host attributes {cir.triple = "x86_64-unknown-linux-gnu"} {
+  cir.global external @n = #cir.zero : !rec_Node
+}
+
+//--- device-graph-sm80.cir
+!s32i = !cir.int<s, 32>
+!rec_Node = !cir.struct<"Node" {data !cir.double, data !cir.ptr<!cir.struct<"Node">>}>
+!rec_Arch = !cir.struct<"Arch" {data !s32i}>
+module @old_device attributes {cir.triple = "nvptx64-nvidia-cuda"} {
+  cir.global external @n = #cir.zero : !rec_Node
+  cir.global external @u = #cir.zero : !cir.struct<{data !rec_Node, data !s32i}>
+  cir.global external @a = #cir.zero : !rec_Arch
+}
+
+//--- device-graph-sm90.cir
+!s32i = !cir.int<s, 32>
+!rec_Arch = !cir.struct<"Arch" {data !s32i, data !s32i}>
+module @old_device attributes {cir.triple = "nvptx64-nvidia-cuda"} {
+  cir.global external @a = #cir.zero : !rec_Arch
 }
 
 //--- host2.cir
