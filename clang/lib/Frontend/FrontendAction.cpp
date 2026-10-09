@@ -1053,6 +1053,20 @@ bool FrontendAction::BeginSourceFile(CompilerInstance &CI,
     return true;
   }
 
+  // A precompiled header holds one target's AST, but every target of a
+  // multi-target compilation shares one AST.
+  if (!CI.getMultiTargetAuxInvocations().empty()) {
+    StringRef PCH = CI.getPreprocessorOpts().ImplicitPCHInclude;
+    for (const std::shared_ptr<CompilerInvocation> &Aux :
+         CI.getMultiTargetAuxInvocations())
+      if (PCH.empty())
+        PCH = Aux->getPreprocessorOpts().ImplicitPCHInclude;
+    if (!PCH.empty()) {
+      CI.getDiagnostics().Report(diag::err_fe_multi_target_pch) << PCH;
+      return false;
+    }
+  }
+
   if (!CI.getPreprocessorOpts().ImplicitPCHInclude.empty()) {
     FileManager &FileMgr = CI.getFileManager();
     PreprocessorOptions &PPOpts = CI.getPreprocessorOpts();

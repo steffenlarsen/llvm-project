@@ -1020,10 +1020,18 @@ void Clang::AddPreprocessingOptions(Compilation &C, const JobAction &JA,
     }
   }
 
+  // A precompiled header holds one target's AST, but every target of an
+  // integrated HIP compilation shares one AST, so include the header as
+  // written instead.
+  bool IsIntegratedHIP =
+      Args.hasArg(options::OPT_fintegrated_hip_device_codegen) &&
+      (JA.isHostOffloading(Action::OFK_HIP) ||
+       JA.isDeviceOffloading(Action::OFK_HIP));
+
   bool RenderedImplicitInclude = false;
   for (const Arg *A : Args.filtered(options::OPT_clang_i_Group)) {
     if (A->getOption().matches(options::OPT_include) &&
-        D.getProbePrecompiled()) {
+        D.getProbePrecompiled() && !IsIntegratedHIP) {
       // Handling of gcc-style gch precompiled headers.
       bool IsFirstImplicitInclude = !RenderedImplicitInclude;
       RenderedImplicitInclude = true;
