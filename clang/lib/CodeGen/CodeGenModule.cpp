@@ -4521,10 +4521,6 @@ CodeGenModule::isFunctionBlockedFromProfileInstr(llvm::Function *Fn,
 }
 
 bool CodeGenModule::MustBeEmitted(const ValueDecl *Global) {
-  // Never defer when EmitAllDecls is specified.
-  if (LangOpts.EmitAllDecls)
-    return true;
-
   const auto *VD = dyn_cast<VarDecl>(Global);
   if (VD &&
       ((CodeGenOpts.KeepPersistentStorageVariables &&
@@ -4540,7 +4536,7 @@ bool CodeGenModule::MustBeEmitted(const ValueDecl *Global) {
               getFunctionLinkage(getGlobalDeclForLinkage(FD)), FD))
         return true;
 
-  return getContext().DeclMustBeEmitted(Global);
+  return getContext().DeclMustBeCodeGenerated(Global);
 }
 
 bool CodeGenModule::MayBeEmittedEagerly(const ValueDecl *Global) {

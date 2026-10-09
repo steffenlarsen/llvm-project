@@ -13496,6 +13496,11 @@ bool ASTContext::DeclMustBeEmitted(const Decl *D) {
   return false;
 }
 
+bool ASTContext::DeclMustBeCodeGenerated(const Decl *D) {
+  // Never defer when EmitAllDecls is specified.
+  return LangOpts.EmitAllDecls || DeclMustBeEmitted(D);
+}
+
 template <typename AttrT> static bool hasImplicitAttr(const ValueDecl *D) {
   if (auto *A = D->getAttr<AttrT>())
     return A->isImplicit();

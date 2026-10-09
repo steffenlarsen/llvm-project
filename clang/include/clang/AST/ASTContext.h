@@ -3658,6 +3658,15 @@ public:
   /// it is not used.
   bool DeclMustBeEmitted(const Decl *D);
 
+  /// Determines if CodeGen emits the function or file scoped var definition
+  /// \p D even if it is not used, because DeclMustBeEmitted requires it or the
+  /// language options force all declarations to be emitted.
+  ///
+  /// Unlike DeclMustBeEmitted, this is not suitable for deciding what to
+  /// deserialize eagerly. CodeGen options can force more definitions to be
+  /// emitted.
+  bool DeclMustBeCodeGenerated(const Decl *D);
+
   /// Determines if the global variable or function \p D is emitted on the side
   /// of the CUDA/HIP compilation, i.e. host or device, that is being compiled,
   /// based on its host/device related attributes.

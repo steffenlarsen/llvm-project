@@ -7958,7 +7958,7 @@ SemaOpenMP::checkOpenMPDeclareVariantFunction(SemaOpenMP::DeclGroupPtrTy DG,
   // Check if the function was emitted already.
   const FunctionDecl *Definition;
   if (!FD->isThisDeclarationADefinition() && FD->isDefined(Definition) &&
-      (getLangOpts().EmitAllDecls || Context.DeclMustBeEmitted(Definition)))
+      Context.DeclMustBeCodeGenerated(Definition))
     Diag(SR.getBegin(), diag::warn_omp_declare_variant_after_emitted)
         << FD->getLocation();
 

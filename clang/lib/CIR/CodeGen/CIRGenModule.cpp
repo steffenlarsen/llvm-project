@@ -2873,10 +2873,6 @@ void CIRGenModule::emitTentativeDefinition(const VarDecl *d) {
 }
 
 bool CIRGenModule::mustBeEmitted(const ValueDecl *global) {
-  // Never defer when EmitAllDecls is specified.
-  if (langOpts.EmitAllDecls)
-    return true;
-
   const auto *vd = dyn_cast<VarDecl>(global);
   if (vd &&
       ((codeGenOpts.KeepPersistentStorageVariables &&
@@ -2886,7 +2882,7 @@ bool CIRGenModule::mustBeEmitted(const ValueDecl *global) {
         vd->getType().isConstQualified())))
     return true;
 
-  return getASTContext().DeclMustBeEmitted(global);
+  return getASTContext().DeclMustBeCodeGenerated(global);
 }
 
 bool CIRGenModule::mayBeEmittedEagerly(const ValueDecl *global) {
