@@ -48,15 +48,21 @@
 
 // With -save-temps every phase is a job of its own. The preprocessors are
 // built for their side, the fat binary is embedded by the host backend, and
-// the host assembler gets the host assembly alone.
+// the host assembler gets the host assembly alone. The split's outputs are
+// named apart from the CIR compiled before the merge, so both are kept.
 // RUN: %clang -### -target x86_64-unknown-linux-gnu -x hip -fclangir \
 // RUN:   --offload-arch=gfx90a -nogpuinc -nogpulib --clangir-offload-merge \
 // RUN:   -save-temps -c %s 2>&1 \
 // RUN: | FileCheck %s --check-prefix=SAVE-TEMPS
 // SAVE-TEMPS: "-cc1" "-triple" "x86_64-unknown-linux-gnu" "-aux-triple" "amdgpu-amd-amdhsa"{{.*}} "-E"
+// SAVE-TEMPS: "-cc1"{{.*}} "-emit-cir"{{.*}} "-o" "[[ST_HOST_CIR:[^"]+-host-x86_64-unknown-linux-gnu\.cir]]"
 // SAVE-TEMPS: "-cc1" "-triple" "amdgpu9.0a-amd-amdhsa"{{.*}} "-E"{{.*}} "-fcuda-is-device"
+// SAVE-TEMPS: "-cc1"{{.*}} "-emit-cir"{{.*}} "-fcuda-is-device"{{.*}} "-o" "[[ST_DEV_CIR:[^"]+-gfx90a\.cir]]"
+// SAVE-TEMPS: "{{.*}}cir-offload-merge{{(\.exe)?}}" "-combine"{{.*}} "-input=[[ST_HOST_CIR]]" "-input=[[ST_DEV_CIR]]"
+// SAVE-TEMPS: "{{.*}}cir-offload-merge{{(\.exe)?}}" "-split"{{.*}} "-output=[[ST_HOST_SPLIT:[^"]+-host-x86_64-unknown-linux-gnu-split\.cir]]" "-output=[[ST_DEV_SPLIT:[^"]+-split-gfx90a\.cir]]"
+// SAVE-TEMPS: "-cc1"{{.*}} "-emit-llvm-bc"{{.*}} "-x" "cir" "[[ST_DEV_SPLIT]]"
 // SAVE-TEMPS: "{{.*}}clang-linker-wrapper{{(\.exe)?}}"{{.*}} "-o" "[[ST_FATBIN:[^"]+\.hipfb]]"
-// SAVE-TEMPS: "-cc1" "-triple" "x86_64-unknown-linux-gnu"{{.*}} "-S"{{.*}} "-foffload-include-binary" "[[ST_FATBIN]]"{{.*}} "-o" "[[ST_HOST_ASM:[^"]+\.s]]" "-x" "cir"
+// SAVE-TEMPS: "-cc1" "-triple" "x86_64-unknown-linux-gnu"{{.*}} "-S"{{.*}} "-foffload-include-binary" "[[ST_FATBIN]]"{{.*}} "-o" "[[ST_HOST_ASM:[^"]+\.s]]" "-x" "cir" "[[ST_HOST_SPLIT]]"
 // SAVE-TEMPS: "-cc1as"{{.*}} "[[ST_HOST_ASM]]"{{$}}
 
 // Without --clangir-offload-merge the normal pipeline runs: no merge/split.

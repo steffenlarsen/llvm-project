@@ -5659,6 +5659,9 @@ InputInfoList Driver::BuildJobsForActionNoCache(
           UI.DependentOffloadKind,
           UI.DependentToolChain->getTriple().normalize(),
           /*CreatePrefixForHost=*/true);
+      // A split output is named for the same side as the CIR compiled before
+      // the merge. Mark it so that -save-temps keeps both.
+      OffloadingPrefix += "-split";
       auto CurI = InputInfo(
           SA,
           GetNamedOutputPath(C, *SA, BaseInput, UI.DependentBoundArch,
