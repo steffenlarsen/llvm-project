@@ -1320,6 +1320,22 @@ getLLVMSyncScope(std::optional<cir::SyncScopeKind> syncScope,
   return std::nullopt;
 }
 
+// CIRGen marks an AMDGPU atomic whose language makes accessing private memory
+// undefined. That only tells the backend something for a flat pointer, so, as
+// in AMDGPUTargetCodeGenInfo::setTargetAtomicMetadata, the marker is kept only
+// for one.
+static void forwardAMDGPUNoPrivateMemory(mlir::Operation *op,
+                                         mlir::Operation *llvmOp,
+                                         mlir::Value llvmPtr) {
+  llvm::StringRef name = cir::CIRDialect::getAMDGPUNoPrivateMemoryAttrName();
+  mlir::Attribute marker = op->getAttr(name);
+  if (!marker)
+    return;
+  auto ptrTy = mlir::cast<mlir::LLVM::LLVMPointerType>(llvmPtr.getType());
+  if (ptrTy.getAddressSpace() == llvm::AMDGPUAS::FLAT_ADDRESS)
+    llvmOp->setAttr(name, marker);
+}
+
 mlir::LogicalResult CIRToLLVMAtomicCmpXchgOpLowering::matchAndRewrite(
     cir::AtomicCmpXchgOp op, OpAdaptor adaptor,
     mlir::ConversionPatternRewriter &rewriter) const {
@@ -1336,6 +1352,7 @@ mlir::LogicalResult CIRToLLVMAtomicCmpXchgOpLowering::matchAndRewrite(
   cmpxchg.setAlignment(adaptor.getAlignment());
   cmpxchg.setWeak(adaptor.getWeak());
   cmpxchg.setVolatile_(adaptor.getIsVolatile());
+  forwardAMDGPUNoPrivateMemory(op, cmpxchg, adaptor.getPtr());
 
   // Check result and apply stores accordingly.
   auto old = mlir::LLVM::ExtractValueOp::create(rewriter, op.getLoc(),
@@ -1566,6 +1583,7 @@ mlir::LogicalResult CIRToLLVMAtomicFetchOpLowering::matchAndRewrite(
         cir::CIRDialect::getAMDGPUIgnoreDenormalModeAttrName()})
     if (mlir::Attribute a = op->getAttr(marker))
       rmwVal->setAttr(marker, a);
+  forwardAMDGPUNoPrivateMemory(op, rmwVal, adaptor.getPtr());
 
   // The AMDGPU raw hardware atomic builtins need metadata for the backend to
   // select the native instruction. LDS atomics are always native, so the

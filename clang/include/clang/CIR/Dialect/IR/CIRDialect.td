@@ -120,6 +120,7 @@ def CIR_Dialect : Dialect {
     static llvm::StringRef getAMDGPUSramEccAttrName() { return "cir.amdgpu_sramecc"; }
     static llvm::StringRef getAMDGPUNoFineGrainedMemoryAttrName() { return "cir.amdgpu_no_fine_grained_memory"; }
     static llvm::StringRef getAMDGPUNoRemoteMemoryAttrName() { return "cir.amdgpu_no_remote_memory"; }
+    static llvm::StringRef getAMDGPUNoPrivateMemoryAttrName() { return "cir.amdgpu_no_private_memory"; }
     static llvm::StringRef getAMDGPUIgnoreDenormalModeAttrName() { return "cir.amdgpu_ignore_denormal_mode"; }
     static llvm::StringRef getAMDGPURawAtomicAttrName() { return "cir.amdgpu_raw_atomic"; }
     static llvm::StringRef getOpenCLKernelArgMetadataAttrName() { return "cir.cl.kernel_arg_metadata"; }

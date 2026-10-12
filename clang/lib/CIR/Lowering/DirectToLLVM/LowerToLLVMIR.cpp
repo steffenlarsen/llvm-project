@@ -20,7 +20,9 @@
 #include "llvm/IR/Constant.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/GlobalVariable.h"
+#include "llvm/IR/MDBuilder.h"
 #include "llvm/IR/Metadata.h"
+#include "llvm/Support/AMDGPUAddrSpace.h"
 
 using namespace llvm;
 
@@ -70,6 +72,8 @@ public:
                attribute.getName() ==
                    cir::CIRDialect::getAMDGPUNoRemoteMemoryAttrName() ||
                attribute.getName() ==
+                   cir::CIRDialect::getAMDGPUNoPrivateMemoryAttrName() ||
+               attribute.getName() ==
                    cir::CIRDialect::getAMDGPUIgnoreDenormalModeAttrName()) {
       amendAMDGPUAtomicMetadata(instructions, attribute, moduleTranslation);
     }
@@ -83,6 +87,18 @@ private:
       llvm::ArrayRef<llvm::Instruction *> instructions,
       mlir::NamedAttribute attribute,
       mlir::LLVM::ModuleTranslation &moduleTranslation) const {
+    // An atomic that cannot access private memory says so with a range of
+    // address spaces it does not alias.
+    if (attribute.getName() ==
+        cir::CIRDialect::getAMDGPUNoPrivateMemoryAttrName()) {
+      llvm::MDBuilder mdHelper(moduleTranslation.getLLVMContext());
+      llvm::MDNode *asRange = mdHelper.createRange(
+          llvm::APInt(32, llvm::AMDGPUAS::PRIVATE_ADDRESS),
+          llvm::APInt(32, llvm::AMDGPUAS::PRIVATE_ADDRESS + 1));
+      for (llvm::Instruction *inst : instructions)
+        inst->setMetadata(llvm::LLVMContext::MD_noalias_addrspace, asRange);
+      return;
+    }
     llvm::MDNode *empty =
         llvm::MDNode::get(moduleTranslation.getLLVMContext(), {});
     // !atomic.ignore.denormal.mode is a fixed metadata kind so it has to be

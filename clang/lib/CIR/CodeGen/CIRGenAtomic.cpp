@@ -482,6 +482,9 @@ static void emitMemOrderCaseLabel(CIRGenBuilderTy &builder, mlir::Location loc,
   builder.restoreInsertionPoint(insertPoint);
 }
 
+static void setAMDGPUAtomicMetadata(CIRGenFunction &cgf, mlir::Operation *op,
+                                    const AtomicExpr *expr);
+
 static void emitAtomicCmpXchg(CIRGenFunction &cgf, AtomicExpr *e, bool isWeak,
                               Address dest, Address ptr, Address val1,
                               Address val2, uint64_t size,
@@ -504,6 +507,8 @@ static void emitAtomicCmpXchg(CIRGenFunction &cgf, AtomicExpr *e, bool isWeak,
 
   cmpxchg.setIsVolatile(e->isVolatile());
   cmpxchg.setWeak(isWeak);
+  if (cgf.cgm.getTriple().isAMDGCN())
+    setAMDGPUAtomicMetadata(cgf, cmpxchg, e);
 
   mlir::Value failed = builder.createNot(cmpxchg.getSuccess());
   cir::IfOp::create(builder, loc, failed, /*withElseRegion=*/false,
@@ -650,12 +655,16 @@ static void emitAtomicCmpXchgFailureSetCheckWeak(
 /// call for. The "no.X" metadata is emitted when the corresponding option is
 /// off, since it asserts the absence of that memory kind. The clang::atomic
 /// attribute is what turns the options on and off.
-static void setAMDGPUAtomicMetadata(CIRGenFunction &cgf, mlir::Operation *op) {
-  // TODO: AMDGPUTargetCodeGenInfo::setTargetAtomicMetadata also emits
-  // !noalias.addrspace on a flat-pointer atomic when the source atomic
-  // expression's memory is thread-private-undefined (OpenCL / old-style HIP
-  // atomics), regardless of whether it is a read-modify-write or cmpxchg.
-  assert(!cir::MissingFeatures::atomicAMDGPUNoaliasAddrspace());
+static void setAMDGPUAtomicMetadata(CIRGenFunction &cgf, mlir::Operation *op,
+                                    const AtomicExpr *expr) {
+  // OpenCL and old style HIP atomics consider atomics targeting thread private
+  // memory to be undefined. The lowering only keeps the marker for a flat
+  // pointer, as AMDGPUTargetCodeGenInfo::setTargetAtomicMetadata does.
+  if (mlir::isa<cir::AtomicFetchOp, cir::AtomicCmpXchgOp>(op) &&
+      expr->threadPrivateMemoryAtomicsAreUndefined())
+    op->setAttr(cir::CIRDialect::getAMDGPUNoPrivateMemoryAttrName(),
+                cgf.getBuilder().getUnitAttr());
+
   // TODO: AMDGPUTargetCodeGenInfo::setTargetAtomicMetadata also calls
   // CGF.AddAMDGPUAvailableVisibleMMRA on every atomic instruction; this is
   // tied to the AMDGPUAvailableVisible statement attribute, which
@@ -950,7 +959,7 @@ static void emitAtomicOp(CIRGenFunction &cgf, AtomicExpr *expr, Address dest,
     rmwOp->setAttr("fetch_first", builder.getUnitAttr());
 
   if (cgf.cgm.getTriple().isAMDGCN())
-    setAMDGPUAtomicMetadata(cgf, rmwOp);
+    setAMDGPUAtomicMetadata(cgf, rmwOp, expr);
 
   mlir::Value result = rmwOp->getResult(0);
 
