@@ -52,6 +52,7 @@
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/IR/CallingConv.h"
+#include "llvm/Support/AMDGPUAddrSpace.h"
 #include "llvm/Support/MathExtras.h"
 
 #include <algorithm>
@@ -806,7 +807,7 @@ static bool hasIndirectSlot(const FunctionClassification &fc) {
   if (fc.returnInfo.kind == ArgKind::Indirect)
     return true;
   return llvm::any_of(fc.argInfos, [](const ArgClassification &ac) {
-    return ac.kind == ArgKind::Indirect;
+    return ac.kind == ArgKind::Indirect || ac.kind == ArgKind::IndirectAliased;
   });
 }
 
@@ -856,6 +857,117 @@ struct CallConvLoweringPass
   /// defaults rather than a target's values.
   llvm::abi::X86ABICompatInfo x86AbiCompat;
 };
+
+//===----------------------------------------------------------------------===//
+// AMDGPU classifier
+//===----------------------------------------------------------------------===//
+//
+// Kernel arguments are classified as AMDGPUABIInfo::classifyKernelArgumentType
+// does in clang/lib/CodeGen/Targets/AMDGPU.cpp.  Other functions keep their
+// signatures, as no classifier for them is implemented yet.
+
+/// Whether \p ty is passed as an aggregate, as isAggregateTypeForABI decides
+/// for the AST type it was converted from.
+static bool isAggregateForABI(mlir::Type ty) {
+  return mlir::isa<cir::RecordType, cir::ArrayType, cir::ComplexType>(ty);
+}
+
+/// The non-aggregate type a record with exactly one member holding data
+/// reduces to, looking through nested such records and one-element arrays, as
+/// isSingleElementStruct computes it.  Null if there is no such member, or if
+/// it does not fill the record.  A bit-field member is not looked through,
+/// since its access unit does not record the field's declared type.
+static mlir::Type getSingleElementType(mlir::Type ty, const DataLayout &dl) {
+  auto recTy = mlir::dyn_cast<cir::RecordType>(ty);
+  if (!recTy || recTy.isIncomplete())
+    return {};
+
+  mlir::Type found;
+  for (auto [memberTy, kind] :
+       llvm::zip(recTy.getMembers(), recTy.getMemberKinds())) {
+    if (kind == cir::RecordMemberKind::Pad || memberIsEmptyRecord(memberTy))
+      continue;
+    if (kind == cir::RecordMemberKind::BitField)
+      return {};
+    // An empty member that is not an empty record, such as a zero-width
+    // bit-field, holds nothing either.
+    if (kind == cir::RecordMemberKind::Empty)
+      continue;
+    if (found)
+      return {};
+
+    mlir::Type elementTy = memberTy;
+    while (auto arrTy = mlir::dyn_cast<cir::ArrayType>(elementTy)) {
+      if (arrTy.getSize() != 1)
+        break;
+      elementTy = arrTy.getElementType();
+    }
+    found = isAggregateForABI(elementTy) ? getSingleElementType(elementTy, dl)
+                                         : elementTy;
+    if (!found)
+      return {};
+  }
+
+  // A record with padding beyond its element is not a single-element record.
+  if (found && dl.getTypeSize(found) != dl.getTypeSize(ty))
+    return {};
+  return found;
+}
+
+/// Classify argument \p ty of an AMDGPU kernel.
+static ArgClassification classifyAMDGPUKernelArg(mlir::Type ty,
+                                                 const DataLayout &dl,
+                                                 ModuleOp modOp, bool isHIP) {
+  // A single-element record is passed as its element.
+  mlir::Type elementTy = ty;
+  if (mlir::Type singleTy = getSingleElementType(ty, dl))
+    elementTy = singleTy;
+
+  // A HIP kernel's arguments come from the host, so a generic pointer among
+  // them points to global memory.
+  mlir::Type coercedTy = elementTy;
+  if (auto ptrTy = mlir::dyn_cast<cir::PointerType>(elementTy);
+      isHIP && ptrTy && !ptrTy.getAddrSpace())
+    coercedTy = cir::PointerType::get(
+        ptrTy.getPointee(),
+        cir::TargetAddressSpaceAttr::get(ty.getContext(),
+                                         llvm::AMDGPUAS::GLOBAL_ADDRESS));
+
+  // Any other aggregate is passed by reference to constant memory.  As in
+  // classic codegen, the pointers in it are not coerced.
+  if (coercedTy == elementTy && isAggregateForABI(elementTy)) {
+    auto recTy = mlir::dyn_cast<cir::RecordType>(ty);
+    llvm::Align align = recTy ? recordDeclaredAlign(modOp, recTy, dl)
+                              : llvm::Align(dl.getTypeABIAlignment(ty));
+    return ArgClassification::getIndirectAliased(
+        align, llvm::AMDGPUAS::CONSTANT_ADDRESS);
+  }
+
+  if (coercedTy == ty)
+    return ArgClassification::getDirect();
+  // Flattening would pass a coerced record as its separate fields.
+  ArgClassification ac = ArgClassification::getDirect(coercedTy, 0);
+  ac.canFlatten = false;
+  return ac;
+}
+
+/// Classify a signature returning \p returnType and taking \p argTypes on
+/// AMDGPU.  Only a kernel's arguments are classified; everything else,
+/// including arguments passed through an ellipsis, is passed as it is.
+static FunctionClassification
+classifyAMDGPUSignature(mlir::Type returnType, mlir::TypeRange argTypes,
+                        bool isKernel, const DataLayout &dl, ModuleOp modOp,
+                        bool isHIP) {
+  FunctionClassification fc;
+  fc.returnsVoid = mlir::isa<cir::VoidType>(returnType);
+  fc.returnInfo = fc.returnsVoid ? ArgClassification::getIgnore()
+                                 : ArgClassification::getDirect();
+  for (mlir::Type argTy : argTypes)
+    fc.argInfos.push_back(isKernel
+                              ? classifyAMDGPUKernelArg(argTy, dl, modOp, isHIP)
+                              : ArgClassification::getDirect());
+  return fc;
+}
 
 /// Record on \p fc whether \p returnType is CIR's void.  The x86_64 classifier
 /// answers this itself, but the other two drivers cannot: the test target is
@@ -985,6 +1097,12 @@ void CallConvLoweringPass::runOnOperation() {
     return *slot;
   };
   llvm::abi::X86AVXABILevel baseAvxLevel = x86AvxAbiLevel.getValue();
+
+  bool isAMDGPU = target == cir::CallConvTarget::AMDGPU;
+  bool isHIP = false;
+  if (auto langOpts = moduleOp->getAttrOfType<cir::LoweringLangOptionsAttr>(
+          cir::CIRDialect::getLoweringLangOptionsAttrName()))
+    isHIP = langOpts.getHip();
   auto avxLevelFor = [&](cir::FuncOp func) -> llvm::abi::X86AVXABILevel {
     if (!allowsX86TargetAttrAvx || !func)
       return baseAvxLevel;
@@ -1010,6 +1128,11 @@ void CallConvLoweringPass::runOnOperation() {
     if (isX86)
       fc = classifyX86_64Function(f, dl, *x86TypeMapper,
                                   x86TargetFor(avxLevelFor(f)), moduleOp);
+    else if (isAMDGPU)
+      fc = classifyAMDGPUSignature(fnTy.getReturnType(), fnTy.getInputs(),
+                                   f.getCallingConv() ==
+                                       cir::CallingConv::AMDGPUKernel,
+                                   dl, moduleOp, isHIP);
     else
       fc = classifyFunction(f, dl, target, classificationAttr);
     if (!fc) {
@@ -1046,11 +1169,22 @@ void CallConvLoweringPass::runOnOperation() {
       return;
     callers[callee].push_back(op);
 
-    // Only the x86_64 driver classifies per call site.  Under the other
-    // drivers the classification comes from a fixed per-function source, so
-    // such a call stays short a classification and rewriteCallSite reports it.
+    // Only the x86_64 and AMDGPU drivers classify per call site.  Under the
+    // other drivers the classification comes from a fixed per-function source,
+    // so such a call stays short a classification and rewriteCallSite reports
+    // it.
     cir::FuncType calleeTy = callee.getFunctionType();
-    if (!isX86 || call.getNumArgOperands() <= calleeTy.getNumInputs())
+    if (call.getNumArgOperands() <= calleeTy.getNumInputs())
+      return;
+    if (isAMDGPU) {
+      // A kernel is never called, so every operand is passed as it is.
+      variadicCallSites.insert(
+          {op, classifyAMDGPUSignature(
+                   calleeTy.getReturnType(), call.getArgOperands().getTypes(),
+                   /*isKernel=*/false, dl, moduleOp, isHIP)});
+      return;
+    }
+    if (!isX86)
       return;
     // A callee declared without a prototype also takes more operands than it
     // declares, and the verifier allows it.  Those extra arguments are named
@@ -1193,6 +1327,13 @@ void CallConvLoweringPass::runOnOperation() {
             *x86TypeMapper,
             x86TargetFor(avxLevelFor(c->getParentOfType<cir::FuncOp>())),
             moduleOp, [&]() { return c->emitOpError(); });
+      // A callee reached through a pointer is never a kernel, so its
+      // operands, including those passed through an ellipsis, are passed as
+      // they are.
+      if (isAMDGPU)
+        return classifyAMDGPUSignature(funcTy.getReturnType(),
+                                       c.getArgOperands().getTypes(),
+                                       /*isKernel=*/false, dl, moduleOp, isHIP);
       return withReturnVoidness(
           mlir::abi::test::classify(argTypes, funcTy.getReturnType(), dl),
           funcTy.getReturnType());

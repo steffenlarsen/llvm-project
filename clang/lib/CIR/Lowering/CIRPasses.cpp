@@ -28,6 +28,8 @@ static CallConvTarget getCallConvTarget(const llvm::Triple &triple) {
   // Windows is not supported.  UEFI shares its convention.
   if (triple.getArch() == llvm::Triple::x86_64 && !triple.isOSWindowsOrUEFI())
     return CallConvTarget::X86_64;
+  if (triple.isAMDGCN())
+    return CallConvTarget::AMDGPU;
   return CallConvTarget::None;
 }
 
@@ -75,8 +77,9 @@ getX86ABICompatInfo(const llvm::Triple &triple,
 /// Add CallConvLowering for \p targetInfo's target, if it has one.
 /// CallConvLowering rewrites signatures and call sites using the classifier,
 /// so it must run after CXXABILowering has lowered C++ ABI types to plain
-/// records the classifier can handle.  Only the x86_64 System V classifier is
-/// implemented; other targets are left unchanged.
+/// records the classifier can handle.  The x86_64 System V classifier and the
+/// AMDGPU kernel-argument classifier are implemented; other targets are left
+/// unchanged.
 static void addCallConvLoweringPass(mlir::OpPassManager &pm,
                                     const clang::TargetInfo &targetInfo,
                                     mlir::ModuleOp theModule) {
