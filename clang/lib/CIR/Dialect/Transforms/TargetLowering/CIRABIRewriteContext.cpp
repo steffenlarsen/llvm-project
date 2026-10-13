@@ -28,7 +28,8 @@ using namespace mlir::abi;
 
 // This rewrite context supports the Direct (with or without coercion),
 // Extend, Ignore, Indirect-return (sret), Indirect-argument (byval and
-// non-byval), and Expand (struct flattening) classifications.
+// non-byval), IndirectAliased-argument (byref, at the callee only), and Expand
+// (struct flattening) classifications.
 //
 // An Indirect argument is byval or not, following its classification's
 // byVal flag.  byval is a by-value parameter the ABI passes in memory rather
@@ -136,6 +137,11 @@ buildNewArgTypes(ArrayRef<mlir::Type> oldArgTypes,
     case ArgKind::Indirect:
       newArgTypes.push_back(cir::PointerType::get(origTy));
       break;
+    case ArgKind::IndirectAliased:
+      newArgTypes.push_back(cir::PointerType::get(
+          origTy, cir::TargetAddressSpaceAttr::get(origTy.getContext(),
+                                                   ac.indirectAddrSpace)));
+      break;
     }
   }
   return mlir::success();
@@ -171,6 +177,10 @@ computeNewReturnType(mlir::Type origRetTy, const ArgClassification &retInfo,
     // list); it is not part of the source-level signature, so the wire
     // return type becomes void.
     return cir::VoidType::get(ctx);
+  case ArgKind::IndirectAliased:
+    emitError() << "IndirectAliased return is not allowed (it only describes "
+                << "arguments)";
+    return nullptr;
   }
   llvm_unreachable("all ArgKind cases handled");
 }
@@ -206,7 +216,8 @@ static bool isCoercionWiderThanMemory(mlir::Type origTy, mlir::Type coercedTy,
 static bool needsArgAttrUpdate(const FunctionClassification &fc) {
   return llvm::any_of(fc.argInfos, [](const ArgClassification &ac) {
     return ac.kind == ArgKind::Ignore || ac.kind == ArgKind::Extend ||
-           ac.kind == ArgKind::Indirect || ac.kind == ArgKind::Expand ||
+           ac.kind == ArgKind::Indirect ||
+           ac.kind == ArgKind::IndirectAliased || ac.kind == ArgKind::Expand ||
            (ac.kind == ArgKind::Direct && ac.coercedType);
   });
 }
@@ -281,6 +292,17 @@ mlir::ArrayAttr updateArgAttrs(mlir::MLIRContext *ctx,
                   builder.getI64IntegerAttr(
                       dl.getTypeSize(pointeeTy).getFixedValue()));
       }
+      newArgAttrs.push_back(attrs.getDictionary(ctx));
+    } else if (ac.kind == ArgKind::IndirectAliased) {
+      // llvm.byref(T) records the pointee type, as llvm.byval does, for an
+      // object the callee only reads.
+      mlir::NamedAttrList attrs(existing);
+      attrs.set(mlir::LLVM::LLVMDialect::getAlignAttrName(),
+                builder.getI64IntegerAttr(ac.indirectAlign.value()));
+      attrs.set(mlir::LLVM::LLVMDialect::getNoUndefAttrName(),
+                builder.getUnitAttr());
+      attrs.set(mlir::LLVM::LLVMDialect::getByRefAttrName(),
+                mlir::TypeAttr::get(origArgTypes[oldIdx]));
       newArgAttrs.push_back(attrs.getDictionary(ctx));
     } else if (ac.kind == ArgKind::Direct && ac.coercedType &&
                isCoercionWiderThanMemory(origArgTypes[oldIdx], ac.coercedType,
@@ -999,16 +1021,25 @@ void insertArgCoercion(
       // operand is blockArg, and if we naively replaceAllUses it gets swapped
       // to adapted (now of the original type != the alloca's pointee type).
       blockArg.replaceAllUsesExcept(adapted, coercionOps);
-    } else if (ac.kind == ArgKind::Indirect) {
+    } else if (ac.kind == ArgKind::Indirect ||
+               ac.kind == ArgKind::IndirectAliased) {
       // byval and non-byval both lower to !cir.ptr<T>, and which it is shows
       // up only in the attrs updateArgAttrs applies.  Body lowering differs:
       // the body addresses a byval parameter through the CIRGen slot it was
       // spilled into, so that slot has to be filled from the incoming
       // pointer, while a non-byval parameter's slot is replaced by the
-      // pointer so the body works on the caller's storage in place.
-      auto ptrTy = cir::PointerType::get(blockArg.getType());
+      // pointer so the body works on the caller's storage in place.  An
+      // IndirectAliased parameter is lowered as byval is, from a pointer in
+      // its own address space, as the body may not modify the object it
+      // points to.
+      auto ptrTy = ac.kind == ArgKind::IndirectAliased
+                       ? cir::PointerType::get(
+                             blockArg.getType(),
+                             cir::TargetAddressSpaceAttr::get(
+                                 builder.getContext(), ac.indirectAddrSpace))
+                       : cir::PointerType::get(blockArg.getType());
 
-      if (!ac.byVal) {
+      if (ac.kind == ArgKind::Indirect && !ac.byVal) {
         // Without byval, drop the spill store and let the slot's uses read the
         // incoming pointer, so the body operates on the caller's storage in
         // place.  A byte-copy would be wrong for non-trivially-copyable
@@ -1719,6 +1750,14 @@ CIRABIRewriteContext::rewriteCallSite(mlir::Operation *callOp,
 
   if (!fc.needsRewrite())
     return mlir::success();
+
+  // Only kernels take IndirectAliased arguments, and device code cannot call
+  // a kernel.
+  if (llvm::any_of(fc.argInfos, [](const ArgClassification &ac) {
+        return ac.kind == ArgKind::IndirectAliased;
+      }))
+    return callOp->emitOpError() << "IndirectAliased argument at a call site "
+                                    "not yet implemented in CallConvLowering";
 
   if (mlir::isa<cir::TryCallOp>(callOp))
     return callOp->emitOpError()
