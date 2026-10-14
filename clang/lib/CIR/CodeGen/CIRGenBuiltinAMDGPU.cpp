@@ -14,6 +14,7 @@
 
 #include "mlir/IR/Value.h"
 #include "clang/Basic/TargetBuiltins.h"
+#include "llvm/ADT/StringSwitch.h"
 #include "llvm/Support/AMDGPUAddrSpace.h"
 #include "llvm/Support/ErrorHandling.h"
 
@@ -24,6 +25,38 @@ using namespace cir;
 // Emit the `amdgcn.dispatch.ptr` intrinsic, address-space-casting the
 // result to match \p e's return type when needed.
 // If \p e is null, returns the raw AS-4 pointer.
+static cir::MemOrder decodeAtomicOrder(const Expr *arg, ASTContext &ctx) {
+  Expr::EvalResult orderRes;
+  if (!arg->EvaluateAsInt(orderRes, ctx))
+    return cir::MemOrder::SequentiallyConsistent;
+  switch (orderRes.Val.getInt().getZExtValue()) {
+  case 0:
+    return cir::MemOrder::Relaxed;
+  case 1: // consume -> acquire
+  case 2:
+    return cir::MemOrder::Acquire;
+  case 3:
+    return cir::MemOrder::Release;
+  case 4:
+    return cir::MemOrder::AcquireRelease;
+  default:
+    return cir::MemOrder::SequentiallyConsistent;
+  }
+}
+
+static cir::SyncScopeKind decodeAMDGPUSyncScope(const Expr *arg) {
+  const auto *sl =
+      llvm::dyn_cast<clang::StringLiteral>(arg->IgnoreParenCasts());
+  if (!sl)
+    return cir::SyncScopeKind::System;
+  return llvm::StringSwitch<cir::SyncScopeKind>(sl->getString())
+      .Case("singlethread", cir::SyncScopeKind::SingleThread)
+      .Case("wavefront", cir::SyncScopeKind::Wavefront)
+      .Case("workgroup", cir::SyncScopeKind::Workgroup)
+      .Case("agent", cir::SyncScopeKind::Device)
+      .Default(cir::SyncScopeKind::System);
+}
+
 static mlir::Value emitAMDGPUDispatchPtr(CIRGenFunction &cgf,
                                          const CallExpr *e = nullptr) {
   CIRGenBuilderTy &builder = cgf.getBuilder();
@@ -962,9 +995,13 @@ CIRGenFunction::emitAMDGPUBuiltinExpr(unsigned builtinId,
     return mlir::Value{};
   }
   case AMDGPU::BI__builtin_amdgcn_fence: {
-    cgm.errorNYI(expr->getSourceRange(),
-                 std::string("unimplemented AMDGPU builtin call: ") +
-                     getContext().BuiltinInfo.getName(builtinId));
+    CIRGenBuilderTy &b = getBuilder();
+    cir::MemOrder mo = decodeAtomicOrder(expr->getArg(0), getContext());
+    cir::SyncScopeKind syncScope = decodeAMDGPUSyncScope(expr->getArg(1));
+    cir::SyncScopeKindAttr syncScopeAttr =
+        cir::SyncScopeKindAttr::get(b.getContext(), syncScope);
+    cir::AtomicFenceOp::create(b, getLoc(expr->getExprLoc()), mo,
+                               syncScopeAttr);
     return mlir::Value{};
   }
   case AMDGPU::BI__builtin_amdgcn_atomic_inc32:
