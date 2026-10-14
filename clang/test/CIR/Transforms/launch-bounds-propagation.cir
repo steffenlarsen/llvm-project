@@ -146,7 +146,8 @@ module attributes {cir.offload.container} {
 !u32i = !cir.int<u, 32>
 !rec_dim3 = !cir.struct<"dim3" {data !u32i, data !u32i, data !u32i}>
 
-// Constant block size on a non-NVPTX kernel → left alone.
+// Constant block size on an AMDGPU kernel without a flat work group size →
+// left alone; the pass does not invent the attribute.
 module attributes {cir.offload.container} {
     module @host attributes {cir.offload.kind = #cir.offload<host>} {
       cir.func private @__cudaPushCallConfiguration(!rec_dim3, !rec_dim3, !u32i, !cir.ptr<!s32i>) -> !s32i
@@ -184,3 +185,342 @@ module attributes {cir.offload.container} {
 // CHECK-LABEL: cir.func @kern() cc(amdgpu_kernel)
 // CHECK-NOT: maxntid
 // CHECK: cir.return
+
+// -----
+
+!s32i = !cir.int<s, 32>
+!u32i = !cir.int<u, 32>
+!rec_dim3 = !cir.struct<"dim3" {data !u32i, data !u32i, data !u32i}>
+
+// AMDGPU kernels carry cir.amdgpu-flat-work-group-size, whose maximum is a
+// promise about how many threads a block can hold. CIRGen sets it from
+// --gpu-max-threads-per-block for any kernel without __launch_bounds__, which
+// is usually far above what the program launches. The handle global HIP emits
+// for every kernel references the stub, so these launches never all count as
+// visible and the bound goes on a clone.
+
+// A single launch of a 64x2x1 block. The launch is retargeted at a clone, which
+// is narrowed from the default 1024 to 128; the original keeps its bound, since
+// the runtime can still reach it by name.
+module attributes {cir.offload.container} {
+  module @host attributes {cir.offload.kind = #cir.offload<host>} {
+    cir.func private @__cudaPushCallConfiguration(!rec_dim3, !rec_dim3, !u32i, !cir.ptr<!s32i>) -> !s32i
+    cir.func private @dim3_ctor(!cir.ptr<!rec_dim3>, !u32i, !u32i, !u32i) func_info<#cir.cxx_ctor<!rec_dim3, custom>>
+    cir.global external @kern_2d = #cir.global_view<@stub_2d> : !cir.ptr<!cir.func<()>>
+    cir.func internal private @stub_2d() attributes {cu.kernel_name = #cir.cu.kernel_name<"kern_2d">} {
+      %0 = cir.get_global @kern_2d : !cir.ptr<!cir.ptr<!cir.func<()>>>
+      cir.return
+    }
+    cir.func @launch_2d() {
+      %grid = cir.alloca "agg.tmp0" align(4) : !cir.ptr<!rec_dim3>
+      %block = cir.alloca "agg.tmp1" align(4) : !cir.ptr<!rec_dim3>
+      %one = cir.const #cir.int<1> : !u32i
+      %two = cir.const #cir.int<2> : !u32i
+      %c64 = cir.const #cir.int<64> : !u32i
+      cir.call @dim3_ctor(%grid, %one, %one, %one) : (!cir.ptr<!rec_dim3>, !u32i, !u32i, !u32i) -> ()
+      cir.call @dim3_ctor(%block, %c64, %two, %one) : (!cir.ptr<!rec_dim3>, !u32i, !u32i, !u32i) -> ()
+      %shmem = cir.const #cir.int<0> : !u32i
+      %stream = cir.const #cir.ptr<null> : !cir.ptr<!s32i>
+      %g = cir.load %grid : !cir.ptr<!rec_dim3>, !rec_dim3
+      %b = cir.load %block : !cir.ptr<!rec_dim3>, !rec_dim3
+      %r = cir.call @__cudaPushCallConfiguration(%g, %b, %shmem, %stream) : (!rec_dim3, !rec_dim3, !u32i, !cir.ptr<!s32i>) -> !s32i
+      %c = cir.cast int_to_bool %r : !s32i -> !cir.bool
+      cir.if %c {
+      } else {
+        cir.call @stub_2d() {cu.kernel_name = #cir.cu.kernel_name<"kern_2d">} : () -> ()
+      }
+      cir.return
+    }
+  }
+  module @device_0 attributes {cir.offload.kind = #cir.offload<device>} {
+    cir.func @kern_2d() cc(amdgpu_kernel) attributes {"cir.amdgpu-flat-work-group-size" = "1,1024"} {
+      cir.return
+    }
+  }
+}
+
+// CHECK:       cir.call @stub_2d.bounds() {cu.kernel_name = #cir.cu.kernel_name<"kern_2d.bounds">}
+// CHECK-LABEL: cir.func @kern_2d() cc(amdgpu_kernel)
+// CHECK-SAME:    "cir.amdgpu-flat-work-group-size" = "1,1024"
+// CHECK-LABEL: cir.func @kern_2d.bounds() cc(amdgpu_kernel)
+// CHECK-SAME:    "cir.amdgpu-flat-work-group-size" = "1,128"
+
+// -----
+
+!s32i = !cir.int<s, 32>
+!u32i = !cir.int<u, 32>
+!rec_dim3 = !cir.struct<"dim3" {data !u32i, data !u32i, data !u32i}>
+
+// Two launches with different block sizes. The bound has to cover both, so the
+// clone they are retargeted at gets the larger of the two rather than either
+// one alone.
+module attributes {cir.offload.container} {
+  module @host attributes {cir.offload.kind = #cir.offload<host>} {
+    cir.func private @__cudaPushCallConfiguration(!rec_dim3, !rec_dim3, !u32i, !cir.ptr<!s32i>) -> !s32i
+    cir.func private @dim3_ctor(!cir.ptr<!rec_dim3>, !u32i, !u32i, !u32i) func_info<#cir.cxx_ctor<!rec_dim3, custom>>
+    cir.global external @kern_two = #cir.global_view<@stub_two> : !cir.ptr<!cir.func<()>>
+    cir.func internal private @stub_two() attributes {cu.kernel_name = #cir.cu.kernel_name<"kern_two">} {
+      %0 = cir.get_global @kern_two : !cir.ptr<!cir.ptr<!cir.func<()>>>
+      cir.return
+    }
+    cir.func @launch_small() {
+      %grid = cir.alloca "agg.tmp0" align(4) : !cir.ptr<!rec_dim3>
+      %block = cir.alloca "agg.tmp1" align(4) : !cir.ptr<!rec_dim3>
+      %one = cir.const #cir.int<1> : !u32i
+      %c64 = cir.const #cir.int<64> : !u32i
+      cir.call @dim3_ctor(%grid, %one, %one, %one) : (!cir.ptr<!rec_dim3>, !u32i, !u32i, !u32i) -> ()
+      cir.call @dim3_ctor(%block, %c64, %one, %one) : (!cir.ptr<!rec_dim3>, !u32i, !u32i, !u32i) -> ()
+      %shmem = cir.const #cir.int<0> : !u32i
+      %stream = cir.const #cir.ptr<null> : !cir.ptr<!s32i>
+      %g = cir.load %grid : !cir.ptr<!rec_dim3>, !rec_dim3
+      %b = cir.load %block : !cir.ptr<!rec_dim3>, !rec_dim3
+      %r = cir.call @__cudaPushCallConfiguration(%g, %b, %shmem, %stream) : (!rec_dim3, !rec_dim3, !u32i, !cir.ptr<!s32i>) -> !s32i
+      %c = cir.cast int_to_bool %r : !s32i -> !cir.bool
+      cir.if %c {
+      } else {
+        cir.call @stub_two() {cu.kernel_name = #cir.cu.kernel_name<"kern_two">} : () -> ()
+      }
+      cir.return
+    }
+    cir.func @launch_large() {
+      %grid = cir.alloca "agg.tmp0" align(4) : !cir.ptr<!rec_dim3>
+      %block = cir.alloca "agg.tmp1" align(4) : !cir.ptr<!rec_dim3>
+      %one = cir.const #cir.int<1> : !u32i
+      %c512 = cir.const #cir.int<512> : !u32i
+      cir.call @dim3_ctor(%grid, %one, %one, %one) : (!cir.ptr<!rec_dim3>, !u32i, !u32i, !u32i) -> ()
+      cir.call @dim3_ctor(%block, %c512, %one, %one) : (!cir.ptr<!rec_dim3>, !u32i, !u32i, !u32i) -> ()
+      %shmem = cir.const #cir.int<0> : !u32i
+      %stream = cir.const #cir.ptr<null> : !cir.ptr<!s32i>
+      %g = cir.load %grid : !cir.ptr<!rec_dim3>, !rec_dim3
+      %b = cir.load %block : !cir.ptr<!rec_dim3>, !rec_dim3
+      %r = cir.call @__cudaPushCallConfiguration(%g, %b, %shmem, %stream) : (!rec_dim3, !rec_dim3, !u32i, !cir.ptr<!s32i>) -> !s32i
+      %c = cir.cast int_to_bool %r : !s32i -> !cir.bool
+      cir.if %c {
+      } else {
+        cir.call @stub_two() {cu.kernel_name = #cir.cu.kernel_name<"kern_two">} : () -> ()
+      }
+      cir.return
+    }
+  }
+  module @device_0 attributes {cir.offload.kind = #cir.offload<device>} {
+    cir.func @kern_two() cc(amdgpu_kernel) attributes {"cir.amdgpu-flat-work-group-size" = "1,1024"} {
+      cir.return
+    }
+  }
+}
+
+// CHECK-COUNT-2: cir.call @stub_two.bounds() {cu.kernel_name = #cir.cu.kernel_name<"kern_two.bounds">}
+// CHECK-LABEL:   cir.func @kern_two() cc(amdgpu_kernel)
+// CHECK-SAME:      "cir.amdgpu-flat-work-group-size" = "1,1024"
+// CHECK-LABEL:   cir.func @kern_two.bounds() cc(amdgpu_kernel)
+// CHECK-SAME:      "cir.amdgpu-flat-work-group-size" = "1,512"
+
+// -----
+
+!s32i = !cir.int<s, 32>
+!u32i = !cir.int<u, 32>
+!rec_dim3 = !cir.struct<"dim3" {data !u32i, data !u32i, data !u32i}>
+
+// One launch is constant and the other is not. A bound covering only the
+// readable launch would be a promise the other one can break, so nothing is
+// narrowed.
+module attributes {cir.offload.container} {
+  module @host attributes {cir.offload.kind = #cir.offload<host>} {
+    cir.func private @__cudaPushCallConfiguration(!rec_dim3, !rec_dim3, !u32i, !cir.ptr<!s32i>) -> !s32i
+    cir.func private @dim3_ctor(!cir.ptr<!rec_dim3>, !u32i, !u32i, !u32i) func_info<#cir.cxx_ctor<!rec_dim3, custom>>
+    cir.global external @kern_mixed = #cir.global_view<@stub_mixed> : !cir.ptr<!cir.func<()>>
+    cir.func internal private @stub_mixed() attributes {cu.kernel_name = #cir.cu.kernel_name<"kern_mixed">} {
+      %0 = cir.get_global @kern_mixed : !cir.ptr<!cir.ptr<!cir.func<()>>>
+      cir.return
+    }
+    cir.func @launch_const_mixed() {
+      %grid = cir.alloca "agg.tmp0" align(4) : !cir.ptr<!rec_dim3>
+      %block = cir.alloca "agg.tmp1" align(4) : !cir.ptr<!rec_dim3>
+      %one = cir.const #cir.int<1> : !u32i
+      %c64 = cir.const #cir.int<64> : !u32i
+      cir.call @dim3_ctor(%grid, %one, %one, %one) : (!cir.ptr<!rec_dim3>, !u32i, !u32i, !u32i) -> ()
+      cir.call @dim3_ctor(%block, %c64, %one, %one) : (!cir.ptr<!rec_dim3>, !u32i, !u32i, !u32i) -> ()
+      %shmem = cir.const #cir.int<0> : !u32i
+      %stream = cir.const #cir.ptr<null> : !cir.ptr<!s32i>
+      %g = cir.load %grid : !cir.ptr<!rec_dim3>, !rec_dim3
+      %b = cir.load %block : !cir.ptr<!rec_dim3>, !rec_dim3
+      %r = cir.call @__cudaPushCallConfiguration(%g, %b, %shmem, %stream) : (!rec_dim3, !rec_dim3, !u32i, !cir.ptr<!s32i>) -> !s32i
+      %c = cir.cast int_to_bool %r : !s32i -> !cir.bool
+      cir.if %c {
+      } else {
+        cir.call @stub_mixed() {cu.kernel_name = #cir.cu.kernel_name<"kern_mixed">} : () -> ()
+      }
+      cir.return
+    }
+    cir.func @launch_dyn_mixed(%n: !u32i) {
+      %grid = cir.alloca "agg.tmp0" align(4) : !cir.ptr<!rec_dim3>
+      %block = cir.alloca "agg.tmp1" align(4) : !cir.ptr<!rec_dim3>
+      %one = cir.const #cir.int<1> : !u32i
+      cir.call @dim3_ctor(%grid, %one, %one, %one) : (!cir.ptr<!rec_dim3>, !u32i, !u32i, !u32i) -> ()
+      cir.call @dim3_ctor(%block, %n, %one, %one) : (!cir.ptr<!rec_dim3>, !u32i, !u32i, !u32i) -> ()
+      %shmem = cir.const #cir.int<0> : !u32i
+      %stream = cir.const #cir.ptr<null> : !cir.ptr<!s32i>
+      %g = cir.load %grid : !cir.ptr<!rec_dim3>, !rec_dim3
+      %b = cir.load %block : !cir.ptr<!rec_dim3>, !rec_dim3
+      %r = cir.call @__cudaPushCallConfiguration(%g, %b, %shmem, %stream) : (!rec_dim3, !rec_dim3, !u32i, !cir.ptr<!s32i>) -> !s32i
+      %c = cir.cast int_to_bool %r : !s32i -> !cir.bool
+      cir.if %c {
+      } else {
+        cir.call @stub_mixed() {cu.kernel_name = #cir.cu.kernel_name<"kern_mixed">} : () -> ()
+      }
+      cir.return
+    }
+  }
+  module @device_0 attributes {cir.offload.kind = #cir.offload<device>} {
+    cir.func @kern_mixed() cc(amdgpu_kernel) attributes {"cir.amdgpu-flat-work-group-size" = "1,1024"} {
+      cir.return
+    }
+  }
+}
+
+// CHECK-NOT:   kern_mixed.bounds
+// CHECK-LABEL: cir.func @kern_mixed() cc(amdgpu_kernel)
+// CHECK-SAME:    "cir.amdgpu-flat-work-group-size" = "1,1024"
+
+// -----
+
+!s32i = !cir.int<s, 32>
+!u32i = !cir.int<u, 32>
+!rec_dim3 = !cir.struct<"dim3" {data !u32i, data !u32i, data !u32i}>
+
+// The kernel already promises less than the launch would justify, from an
+// explicit __launch_bounds__. Raising it would be a weaker promise, not a
+// better one, so the attribute is left as the user wrote it.
+module attributes {cir.offload.container} {
+  module @host attributes {cir.offload.kind = #cir.offload<host>} {
+    cir.func private @__cudaPushCallConfiguration(!rec_dim3, !rec_dim3, !u32i, !cir.ptr<!s32i>) -> !s32i
+    cir.func private @dim3_ctor(!cir.ptr<!rec_dim3>, !u32i, !u32i, !u32i) func_info<#cir.cxx_ctor<!rec_dim3, custom>>
+    cir.global external @kern_bounded = #cir.global_view<@stub_bounded> : !cir.ptr<!cir.func<()>>
+    cir.func internal private @stub_bounded() attributes {cu.kernel_name = #cir.cu.kernel_name<"kern_bounded">} {
+      %0 = cir.get_global @kern_bounded : !cir.ptr<!cir.ptr<!cir.func<()>>>
+      cir.return
+    }
+    cir.func @launch_bounded() {
+      %grid = cir.alloca "agg.tmp0" align(4) : !cir.ptr<!rec_dim3>
+      %block = cir.alloca "agg.tmp1" align(4) : !cir.ptr<!rec_dim3>
+      %one = cir.const #cir.int<1> : !u32i
+      %c64 = cir.const #cir.int<64> : !u32i
+      cir.call @dim3_ctor(%grid, %one, %one, %one) : (!cir.ptr<!rec_dim3>, !u32i, !u32i, !u32i) -> ()
+      cir.call @dim3_ctor(%block, %c64, %one, %one) : (!cir.ptr<!rec_dim3>, !u32i, !u32i, !u32i) -> ()
+      %shmem = cir.const #cir.int<0> : !u32i
+      %stream = cir.const #cir.ptr<null> : !cir.ptr<!s32i>
+      %g = cir.load %grid : !cir.ptr<!rec_dim3>, !rec_dim3
+      %b = cir.load %block : !cir.ptr<!rec_dim3>, !rec_dim3
+      %r = cir.call @__cudaPushCallConfiguration(%g, %b, %shmem, %stream) : (!rec_dim3, !rec_dim3, !u32i, !cir.ptr<!s32i>) -> !s32i
+      %c = cir.cast int_to_bool %r : !s32i -> !cir.bool
+      cir.if %c {
+      } else {
+        cir.call @stub_bounded() {cu.kernel_name = #cir.cu.kernel_name<"kern_bounded">} : () -> ()
+      }
+      cir.return
+    }
+  }
+  module @device_0 attributes {cir.offload.kind = #cir.offload<device>} {
+    cir.func @kern_bounded() cc(amdgpu_kernel) attributes {"cir.amdgpu-flat-work-group-size" = "32,32"} {
+      cir.return
+    }
+  }
+}
+
+// CHECK-NOT:   kern_bounded.bounds
+// CHECK-LABEL: cir.func @kern_bounded() cc(amdgpu_kernel)
+// CHECK-SAME:    "cir.amdgpu-flat-work-group-size" = "32,32"
+
+// -----
+
+!s32i = !cir.int<s, 32>
+!u32i = !cir.int<u, 32>
+!rec_dim3 = !cir.struct<"dim3" {data !u32i, data !u32i, data !u32i}>
+
+// Every launch of an AMDGPU kernel is visible -- an internal stub with no
+// handle global -- so the maximum is narrowed in place and no clone is made.
+module attributes {cir.offload.container} {
+  module @host attributes {cir.offload.kind = #cir.offload<host>} {
+    cir.func private @__cudaPushCallConfiguration(!rec_dim3, !rec_dim3, !u32i, !cir.ptr<!s32i>) -> !s32i
+    cir.func private @dim3_ctor(!cir.ptr<!rec_dim3>, !u32i, !u32i, !u32i) func_info<#cir.cxx_ctor<!rec_dim3, custom>>
+    cir.func internal private @stub_amd_visible() attributes {cu.kernel_name = #cir.cu.kernel_name<"kern_amd_visible">} {
+      cir.return
+    }
+    cir.func @launch_kern_amd_visible() {
+      %g = cir.alloca "g" align(4) : !cir.ptr<!rec_dim3>
+      %b = cir.alloca "b" align(4) : !cir.ptr<!rec_dim3>
+      %one = cir.const #cir.int<1> : !u32i
+      %bx = cir.const #cir.int<256> : !u32i
+      cir.call @dim3_ctor(%g, %one, %one, %one) : (!cir.ptr<!rec_dim3>, !u32i, !u32i, !u32i) -> ()
+      cir.call @dim3_ctor(%b, %bx, %one, %one) : (!cir.ptr<!rec_dim3>, !u32i, !u32i, !u32i) -> ()
+      %sh = cir.const #cir.int<0> : !u32i
+      %st = cir.const #cir.ptr<null> : !cir.ptr<!s32i>
+      %gv = cir.load %g : !cir.ptr<!rec_dim3>, !rec_dim3
+      %bv = cir.load %b : !cir.ptr<!rec_dim3>, !rec_dim3
+      %r = cir.call @__cudaPushCallConfiguration(%gv, %bv, %sh, %st) : (!rec_dim3, !rec_dim3, !u32i, !cir.ptr<!s32i>) -> !s32i
+      %c = cir.cast int_to_bool %r : !s32i -> !cir.bool
+      cir.if %c {
+      } else {
+        cir.call @stub_amd_visible() {cu.kernel_name = #cir.cu.kernel_name<"kern_amd_visible">} : () -> ()
+      }
+      cir.return
+    }
+  }
+  module @device_0 attributes {cir.offload.kind = #cir.offload<device>} {
+    cir.func @kern_amd_visible() cc(amdgpu_kernel) attributes {"cir.amdgpu-flat-work-group-size" = "1,1024"} {
+      cir.return
+    }
+  }
+}
+
+// CHECK-NOT:   kern_amd_visible.bounds
+// CHECK-LABEL: cir.func @kern_amd_visible() cc(amdgpu_kernel)
+// CHECK-SAME:    "cir.amdgpu-flat-work-group-size" = "1,256"
+
+// -----
+
+!s32i = !cir.int<s, 32>
+!u32i = !cir.int<u, 32>
+!rec_dim3 = !cir.struct<"dim3" {data !u32i, data !u32i, data !u32i}>
+
+// An NVPTX kernel whose stub is external, so another TU may launch it with a
+// larger block, and which has no handle global to clone it by -- the shape
+// CUDA emits. Neither in place nor on a clone is possible, so nothing changes.
+module attributes {cir.offload.container} {
+  module @host attributes {cir.offload.kind = #cir.offload<host>} {
+    cir.func private @__cudaPushCallConfiguration(!rec_dim3, !rec_dim3, !u32i, !cir.ptr<!s32i>) -> !s32i
+    cir.func private @dim3_ctor(!cir.ptr<!rec_dim3>, !u32i, !u32i, !u32i) func_info<#cir.cxx_ctor<!rec_dim3, custom>>
+    cir.func @stub_ptx_hidden() attributes {cu.kernel_name = #cir.cu.kernel_name<"kern_ptx_hidden">} {
+      cir.return
+    }
+    cir.func @launch_kern_ptx_hidden() {
+      %g = cir.alloca "g" align(4) : !cir.ptr<!rec_dim3>
+      %b = cir.alloca "b" align(4) : !cir.ptr<!rec_dim3>
+      %one = cir.const #cir.int<1> : !u32i
+      %bx = cir.const #cir.int<256> : !u32i
+      cir.call @dim3_ctor(%g, %one, %one, %one) : (!cir.ptr<!rec_dim3>, !u32i, !u32i, !u32i) -> ()
+      cir.call @dim3_ctor(%b, %bx, %one, %one) : (!cir.ptr<!rec_dim3>, !u32i, !u32i, !u32i) -> ()
+      %sh = cir.const #cir.int<0> : !u32i
+      %st = cir.const #cir.ptr<null> : !cir.ptr<!s32i>
+      %gv = cir.load %g : !cir.ptr<!rec_dim3>, !rec_dim3
+      %bv = cir.load %b : !cir.ptr<!rec_dim3>, !rec_dim3
+      %r = cir.call @__cudaPushCallConfiguration(%gv, %bv, %sh, %st) : (!rec_dim3, !rec_dim3, !u32i, !cir.ptr<!s32i>) -> !s32i
+      %c = cir.cast int_to_bool %r : !s32i -> !cir.bool
+      cir.if %c {
+      } else {
+        cir.call @stub_ptx_hidden() {cu.kernel_name = #cir.cu.kernel_name<"kern_ptx_hidden">} : () -> ()
+      }
+      cir.return
+    }
+  }
+  module @device_0 attributes {cir.offload.kind = #cir.offload<device>} {
+    cir.func @kern_ptx_hidden() cc(ptx_kernel) {
+      cir.return
+    }
+  }
+}
+
+// CHECK-NOT:   kern_ptx_hidden.bounds
+// CHECK-LABEL: cir.func @kern_ptx_hidden() cc(ptx_kernel)
+// CHECK-NOT:     maxntid
+// CHECK:         cir.return

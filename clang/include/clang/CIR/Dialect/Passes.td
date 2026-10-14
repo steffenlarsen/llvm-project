@@ -362,24 +362,34 @@ def OffloadLaunchBoundsPropagation
     : Pass<"cir-offload-launch-bounds-propagation", "mlir::ModuleOp"> {
   let summary = "Infer device kernel launch bounds from host launch sites";
   let description = [{
-    Runs over a `cir.offload.container`. When every launch of a kernel is
-    visible and uses a compile-time block size, the largest block size any of
-    them uses is recorded on the device kernel as `nvvm.maxntid`, the bound the
-    user could have written with `__launch_bounds__`.
+    Runs on an offload container module. When every launch of a kernel uses a
+    compile-time block size, the largest block size any of them uses is
+    recorded as the kernel's launch bound, the bound the user could have
+    written with `__launch_bounds__`:
 
-    The bound lets ptxas budget registers against the real block size instead of
-    the 1024-thread ceiling, and lets `NVVMIntrRange` narrow the range metadata
-    on `tid` reads.
+      * on NVPTX kernels as `nvvm.maxntid`, which lets ptxas budget registers
+        against the real block size instead of the 1024-thread ceiling, and
+        lets `NVVMIntrRange` narrow the range metadata on `tid` reads;
+      * on AMDGPU kernels as the maximum of `amdgpu-flat-work-group-size`.
+        CIRGen sets that to `--gpu-max-threads-per-block` (1024 by default)
+        for any kernel without `__launch_bounds__`, and a smaller promise lets
+        the backend give each thread more registers. The minimum is the
+        user's statement and is kept, unless it would now exceed the maximum.
 
-    Requires every launch to be visible, on the same terms as the kernel
-    argument constant propagation pass: the host stub has internal linkage and
-    every reference to it outside its own body is a recorded launch. A launch
-    this container cannot see may use a larger block, and exceeding `maxntid` is
-    a launch failure rather than a slowdown.
+    An existing bound is only ever tightened. The bound has to cover every
+    launch that reaches the kernel, since exceeding it is a launch failure
+    rather than a slowdown, so a kernel whose geometry could not be traced, or
+    whose block size is a runtime value at any site, is left alone.
 
-    An existing bound is only ever tightened. A kernel whose geometry could not
-    be traced, or whose block size is a runtime value at any site, is left
-    alone.
+    The kernel is rewritten in place when every launch of it is visible, on
+    the same terms as the kernel argument constant propagation pass: the host
+    stub has internal linkage and every reference to it outside its own body
+    is a recorded launch. Otherwise the bound is applied to a specialised
+    clone the visible launches are retargeted at, as `getSpecializationTarget`
+    decides, and the original is left to serve the rest.
+
+    The pass is anchored on a module; it acts only when the module carries the
+    `cir.offload.container` unit attribute, leaving any other module alone.
 
     Requires the launch geometry to already be constant at the call site, which
     for anything but a literal means `mem2reg` and `sccp` have run.
