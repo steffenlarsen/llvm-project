@@ -44,6 +44,7 @@ class ELFFileBase;
 class SharedFile;
 class InputSectionBase;
 class EhInputSection;
+class MergeInputSection;
 class Defined;
 class Undefined;
 class Symbol;
@@ -656,6 +657,13 @@ struct Ctx : CommonLinkerContext {
   LinkerDriver driver;
   LinkerScript *script;
   std::unique_ptr<TargetInfo> target;
+
+  // Arenas for objects created by parallel tasks, see makeThreadLocal.
+  PerThreadSpecificAlloc<InputSection> inputSectionAlloc;
+  PerThreadSpecificAlloc<EhInputSection> ehInputSectionAlloc;
+  PerThreadSpecificAlloc<MergeInputSection> mergeInputSectionAlloc;
+  // For trivially destructible data, such as relocations and local symbols.
+  llvm::parallel::PerThreadBumpPtrAllocator threadAlloc;
 
   // These variables are initialized by Writer and should not be used before
   // Writer is initialized.

@@ -1211,7 +1211,7 @@ void RISCV::finalizeSynthesizeAligns(uint64_t &dot, InputSection *sec,
   // If CREL is used, OutputSection::finalizeNonAllocCrel will convert RELA to
   // CREL.
   auto newSize = rels.size() + synthesizedAligns.size();
-  auto *relas = makeThreadLocalN<typename ELFT::Rela>(newSize);
+  auto *relas = makeThreadLocalN<typename ELFT::Rela>(ctx.threadAlloc, newSize);
   sec->size = newSize * sizeof(typename ELFT::Rela);
   sec->content_ = reinterpret_cast<uint8_t *>(relas);
   sec->type = SHT_RELA;

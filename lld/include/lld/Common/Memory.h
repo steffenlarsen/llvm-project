@@ -22,6 +22,8 @@
 #define LLD_COMMON_MEMORY_H
 
 #include "llvm/Support/Allocator.h"
+#include "llvm/Support/PerThreadBumpPtrAllocator.h"
+#include <type_traits>
 
 namespace lld {
 // A base class only used by the CommonLinkerContext to keep track of the
@@ -62,32 +64,31 @@ template <typename T, typename... U> T *make(U &&... args) {
       T(std::forward<U>(args)...);
 }
 
+// An arena of objects of type T that parallel tasks, like parallel input
+// section initialization, can allocate from without holding a lock: each thread
+// allocates from its own sub-arena. The objects are destroyed with the arena,
+// which is owned by the link rather than by the threads, so they do not depend
+// on which executor ran the tasks or on when its threads exit.
 template <typename T>
-inline llvm::SpecificBumpPtrAllocator<T> &
-getSpecificAllocSingletonThreadLocal() {
-  thread_local SpecificAlloc<T> instance;
-  return instance.alloc;
-}
+using PerThreadSpecificAlloc =
+    llvm::parallel::PerThreadAllocator<llvm::SpecificBumpPtrAllocator<T>>;
 
-// Create a new instance of T off a thread-local SpecificAlloc, used by code
-// like parallel input section initialization. The use cases assume that the
-// return value outlives the containing parallelForEach (if exists), which is
-// currently guaranteed: when parallelForEach returns, the threads allocating
-// the TLS are not destroyed.
-//
-// Note: Some ports (e.g. ELF) have lots of global states which are currently
-// infeasible to remove, and context() just adds overhead with no benefit. The
-// allocation performance is of higher importance, so we simply use thread_local
-// allocators instead of doing context indirection and pthread_getspecific.
-template <typename T, typename... U> T *makeThreadLocal(U &&...args) {
-  return new (getSpecificAllocSingletonThreadLocal<T>().Allocate())
+// Creates a new instance of T off the calling thread's sub-arena of `alloc`.
+template <typename T, typename... U>
+T *makeThreadLocal(PerThreadSpecificAlloc<T> &alloc, U &&...args) {
+  return new (alloc.getThreadLocalAllocator().Allocate())
       T(std::forward<U>(args)...);
 }
 
-template <typename T> T *makeThreadLocalN(size_t n) {
-  return new (getSpecificAllocSingletonThreadLocal<T>().Allocate(n)) T[n];
+// Creates n instances of T off the calling thread's sub-arena of `alloc`. The
+// arena never runs destructors, hence the restriction on T.
+template <typename T>
+T *makeThreadLocalN(llvm::parallel::PerThreadBumpPtrAllocator &alloc,
+                    size_t n) {
+  static_assert(std::is_trivially_destructible_v<T>,
+                "use a PerThreadSpecificAlloc<T> instead");
+  return new (alloc.Allocate<T>(n)) T[n];
 }
-
 } // namespace lld
 
 #endif

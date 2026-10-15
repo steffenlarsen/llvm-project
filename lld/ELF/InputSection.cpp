@@ -131,7 +131,7 @@ static void decompressAux(Ctx &ctx, const InputSectionBase &sec, uint8_t *out,
 
 void InputSectionBase::decompress() const {
   Ctx &ctx = getCtx();
-  uint8_t *buf = makeThreadLocalN<uint8_t>(size);
+  uint8_t *buf = makeThreadLocalN<uint8_t>(ctx.threadAlloc, size);
   invokeELFT(decompressAux, ctx, *this, buf, size);
   content_ = buf;
   compressed = false;
@@ -156,14 +156,15 @@ RelsOrRelas<ELFT> InputSectionBase::relsOrRelas(bool supportsCrel) const {
     // called for the first time, relSec is null (without --emit-relocs) or an
     // InputSection with false decodedCrel.
     if (!relSec || !cast<InputSection>(relSec)->decodedCrel) {
-      auto *sec = makeThreadLocal<InputSection>(*f, shdr, name);
+      auto *sec = makeThreadLocal(f->ctx.inputSectionAlloc, *f, shdr, name);
       f->cacheDecodedCrel(relSecIdx, sec);
       sec->type = SHT_RELA;
       sec->decodedCrel = true;
 
       RelocsCrel<ELFT::Is64Bits> entries(sec->content_);
       sec->size = entries.size() * sizeof(typename ELFT::Rela);
-      auto *relas = makeThreadLocalN<typename ELFT::Rela>(entries.size());
+      auto *relas = makeThreadLocalN<typename ELFT::Rela>(f->ctx.threadAlloc,
+                                                          entries.size());
       sec->content_ = reinterpret_cast<uint8_t *>(relas);
       for (auto [i, r] : llvm::enumerate(entries)) {
         relas[i].r_offset = r.r_offset;

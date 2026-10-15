@@ -2668,10 +2668,11 @@ static uint32_t getDebugNamesHeaderSize(uint32_t augmentationStringSize) {
 }
 
 static Expected<DebugNamesBaseSection::IndexEntry *>
-readEntry(uint64_t &offset, const DWARFDebugNames::NameIndex &ni,
+readEntry(PerThreadSpecificAlloc<DebugNamesBaseSection::IndexEntry> &alloc,
+          uint64_t &offset, const DWARFDebugNames::NameIndex &ni,
           uint64_t entriesBase, DWARFDataExtractor &namesExtractor,
           const LLDDWARFSection &namesSec) {
-  auto ie = makeThreadLocal<DebugNamesBaseSection::IndexEntry>();
+  auto ie = makeThreadLocal(alloc);
   ie->poolOffset = offset;
   Error err = Error::success();
   uint64_t ulebVal = namesExtractor.getULEB128(&offset, &err);
@@ -2789,7 +2790,8 @@ void DebugNamesBaseSection::parseDebugNames(
       while (offset < namesSec.Data.size() && namesSec.Data[offset] != 0) {
         // Read & store all entries (for the same string).
         Expected<IndexEntry *> ieOrErr =
-            readEntry(offset, ni, locs.EntriesBase, namesExtractor, namesSec);
+            readEntry(indexEntryAlloc, offset, ni, locs.EntriesBase,
+                      namesExtractor, namesSec);
         if (!ieOrErr) {
           Err(ctx) << namesSec.sec << ": " << ieOrErr.takeError();
           return;
