@@ -58,7 +58,8 @@ struct llvm::pdb::GSIHashStreamBuilder {
   // Assign public and global symbol records into hash table buckets.
   // Modifies the list of records to store the bucket index, but does not
   // change the order.
-  void finalizeBuckets(uint32_t RecordZeroOffset,
+  void finalizeBuckets(parallel::ExecutorRef Executor,
+                       uint32_t RecordZeroOffset,
                        MutableArrayRef<BulkPublic> Globals);
 };
 
@@ -157,7 +158,7 @@ static int gsiRecordCmp(StringRef S1, StringRef S2) {
 }
 
 void GSIStreamBuilder::finalizePublicBuckets() {
-  PSH->finalizeBuckets(0, Publics);
+  PSH->finalizeBuckets(Executor, 0, Publics);
 }
 
 void GSIStreamBuilder::finalizeGlobalBuckets(uint32_t RecordZeroOffset) {
@@ -180,13 +181,14 @@ void GSIStreamBuilder::finalizeGlobalBuckets(uint32_t RecordZeroOffset) {
     SymOffset += Globals[I].length();
   }
 
-  GSH->finalizeBuckets(RecordZeroOffset, Records);
+  GSH->finalizeBuckets(Executor, RecordZeroOffset, Records);
 }
 
 void GSIHashStreamBuilder::finalizeBuckets(
-    uint32_t RecordZeroOffset, MutableArrayRef<BulkPublic> Records) {
+    parallel::ExecutorRef Executor, uint32_t RecordZeroOffset,
+    MutableArrayRef<BulkPublic> Records) {
   // Hash every name in parallel.
-  parallelFor(0, Records.size(), [&](size_t I) {
+  parallelFor(Executor, 0, Records.size(), [&](size_t I) {
     Records[I].setBucketIdx(hashStringV1(Records[I].getName()) % IPHR_HASH);
   });
 
@@ -221,7 +223,7 @@ void GSIHashStreamBuilder::finalizeBuckets(
   // bucket can properly early-out when it detects the record won't be found.
   // The algorithm used here corresponds to the function
   // caseInsensitiveComparePchPchCchCch in the reference implementation.
-  parallelFor(0, IPHR_HASH, [&](size_t I) {
+  parallelFor(Executor, 0, IPHR_HASH, [&](size_t I) {
     auto B = HashRecords.begin() + BucketStarts[I];
     auto E = HashRecords.begin() + BucketCursors[I];
     if (B == E)
@@ -272,8 +274,10 @@ void GSIHashStreamBuilder::finalizeBuckets(
   }
 }
 
-GSIStreamBuilder::GSIStreamBuilder(msf::MSFBuilder &Msf)
-    : Msf(Msf), PSH(std::make_unique<GSIHashStreamBuilder>()),
+GSIStreamBuilder::GSIStreamBuilder(msf::MSFBuilder &Msf,
+                                   parallel::ExecutorRef Executor)
+    : Msf(Msf), Executor(Executor),
+      PSH(std::make_unique<GSIHashStreamBuilder>()),
       GSH(std::make_unique<GSIHashStreamBuilder>()) {}
 
 GSIStreamBuilder::~GSIStreamBuilder() = default;
@@ -329,7 +333,7 @@ void GSIStreamBuilder::addPublicSymbols(std::vector<BulkPublic> &&PublicsIn) {
   Publics = std::move(PublicsIn);
 
   // Sort the symbols by name. PDBs contain lots of symbols, so use parallelism.
-  parallelSort(Publics, [](const BulkPublic &L, const BulkPublic &R) {
+  parallelSort(Executor, Publics, [](const BulkPublic &L, const BulkPublic &R) {
     return L.getName() < R.getName();
   });
 
@@ -411,7 +415,7 @@ Error GSIStreamBuilder::commitSymbolRecordStream(
 }
 
 static std::vector<support::ulittle32_t>
-computeAddrMap(ArrayRef<BulkPublic> Publics) {
+computeAddrMap(parallel::ExecutorRef Executor, ArrayRef<BulkPublic> Publics) {
   // Build a parallel vector of indices into the Publics vector, and sort it by
   // address.
   std::vector<ulittle32_t> PubAddrMap;
@@ -430,7 +434,7 @@ computeAddrMap(ArrayRef<BulkPublic> Publics) {
     // that two names for the same location come out in a deterministic order.
     return L.getName() < R.getName();
   };
-  parallelSort(PubAddrMap, AddrCmp);
+  parallelSort(Executor, PubAddrMap, AddrCmp);
 
   // Rewrite the public symbol indices into symbol offsets.
   for (ulittle32_t &Entry : PubAddrMap)
@@ -458,7 +462,8 @@ Error GSIStreamBuilder::commitPublicsHashStream(
   if (auto EC = PSH->commit(Writer))
     return EC;
 
-  std::vector<support::ulittle32_t> PubAddrMap = computeAddrMap(Publics);
+  std::vector<support::ulittle32_t> PubAddrMap =
+      computeAddrMap(Executor, Publics);
   assert(PubAddrMap.size() == Publics.size());
   if (auto EC = Writer.writeArray(ArrayRef(PubAddrMap)))
     return EC;

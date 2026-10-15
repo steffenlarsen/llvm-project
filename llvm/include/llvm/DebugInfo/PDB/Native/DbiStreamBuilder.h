@@ -16,6 +16,7 @@
 #include "llvm/Support/Allocator.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Error.h"
+#include "llvm/Support/Parallel.h"
 
 #include "llvm/DebugInfo/CodeView/DebugFrameDataSubsection.h"
 #include "llvm/DebugInfo/PDB/Native/PDBStringTableBuilder.h"
@@ -40,7 +41,8 @@ class DbiModuleDescriptorBuilder;
 
 class DbiStreamBuilder {
 public:
-  LLVM_ABI DbiStreamBuilder(msf::MSFBuilder &Msf);
+  LLVM_ABI DbiStreamBuilder(msf::MSFBuilder &Msf,
+                            parallel::ExecutorRef Executor);
   LLVM_ABI ~DbiStreamBuilder();
 
   DbiStreamBuilder(const DbiStreamBuilder &) = delete;
@@ -106,6 +108,7 @@ private:
   Error generateFileInfoSubstream();
 
   msf::MSFBuilder &Msf;
+  parallel::ExecutorRef Executor;
   BumpPtrAllocator &Allocator;
 
   std::optional<PdbRaw_DbiVer> VerHeader;

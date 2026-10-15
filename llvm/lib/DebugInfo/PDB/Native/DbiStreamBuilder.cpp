@@ -25,10 +25,11 @@ using namespace llvm::codeview;
 using namespace llvm::msf;
 using namespace llvm::pdb;
 
-DbiStreamBuilder::DbiStreamBuilder(msf::MSFBuilder &Msf)
-    : Msf(Msf), Allocator(Msf.getAllocator()), Age(1), BuildNumber(0),
-      PdbDllVersion(0), PdbDllRbld(0), Flags(0), MachineType(PDB_Machine::x86),
-      Header(nullptr) {}
+DbiStreamBuilder::DbiStreamBuilder(msf::MSFBuilder &Msf,
+                                   parallel::ExecutorRef Executor)
+    : Msf(Msf), Executor(Executor), Allocator(Msf.getAllocator()), Age(1),
+      BuildNumber(0), PdbDllVersion(0), PdbDllRbld(0), Flags(0),
+      MachineType(PDB_Machine::x86), Header(nullptr) {}
 
 DbiStreamBuilder::~DbiStreamBuilder() = default;
 
@@ -400,7 +401,8 @@ Error DbiStreamBuilder::commit(const msf::MSFLayout &Layout,
 
   // Commit symbol streams. This is a lot of data, so do it in parallel.
   if (auto EC = parallelForEachError(
-          ModiList, [&](std::unique_ptr<DbiModuleDescriptorBuilder> &M) {
+          Executor, ModiList,
+          [&](std::unique_ptr<DbiModuleDescriptorBuilder> &M) {
             return M->commitSymbolStream(Layout, MsfBuffer);
           }))
     return EC;
