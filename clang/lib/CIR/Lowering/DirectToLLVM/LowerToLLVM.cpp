@@ -50,6 +50,7 @@
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/IR/Module.h"
+#include "llvm/Support/AMDGPUAddrSpace.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/TimeProfiler.h"
@@ -1556,6 +1557,33 @@ mlir::LogicalResult CIRToLLVMAtomicFetchOpLowering::matchAndRewrite(
   auto rmwVal = mlir::LLVM::AtomicRMWOp::create(
       rewriter, op.getLoc(), llvmBinOp, adaptor.getPtr(), adaptor.getVal(),
       llvmOrder, llvmSyncScope, /*alignment=*/0, op.getIsVolatile());
+
+  // CIRGen decides the metadata for a C++/HIP atomic from the atomic options
+  // in effect, so those markers are simply carried across.
+  for (llvm::StringRef marker :
+       {cir::CIRDialect::getAMDGPUNoFineGrainedMemoryAttrName(),
+        cir::CIRDialect::getAMDGPUNoRemoteMemoryAttrName(),
+        cir::CIRDialect::getAMDGPUIgnoreDenormalModeAttrName()})
+    if (mlir::Attribute a = op->getAttr(marker))
+      rmwVal->setAttr(marker, a);
+
+  // The AMDGPU raw hardware atomic builtins need metadata for the backend to
+  // select the native instruction. LDS atomics are always native, so the
+  // metadata is only needed for the global and flat address spaces.
+  if (op->hasAttr(cir::CIRDialect::getAMDGPURawAtomicAttrName())) {
+    auto ptrTy =
+        mlir::cast<mlir::LLVM::LLVMPointerType>(adaptor.getPtr().getType());
+    if (ptrTy.getAddressSpace() != llvm::AMDGPUAS::LOCAL_ADDRESS) {
+      mlir::UnitAttr unit = rewriter.getUnitAttr();
+      rmwVal->setAttr(cir::CIRDialect::getAMDGPUNoFineGrainedMemoryAttrName(),
+                      unit);
+      // Denormal flushing only matters for a float add.
+      if (llvmBinOp == mlir::LLVM::AtomicBinOp::fadd &&
+          mlir::isa<cir::SingleType>(op.getVal().getType()))
+        rmwVal->setAttr(cir::CIRDialect::getAMDGPUIgnoreDenormalModeAttrName(),
+                        unit);
+    }
+  }
 
   mlir::Value result = rmwVal.getResult();
   if (!op.getFetchFirst()) {
