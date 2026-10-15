@@ -20,6 +20,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <functional>
+#include <memory>
 #include <mutex>
 
 namespace llvm {
@@ -27,8 +28,8 @@ namespace llvm {
 namespace parallel {
 
 // Strategy for the default executor used by the parallel routines provided by
-// this file. It defaults to using all hardware threads and should be
-// initialized before the first use of parallel routines.
+// this file that do not take an ExecutorRef. It defaults to using all hardware
+// threads and should be initialized before the first use of those routines.
 LLVM_ABI extern ThreadPoolStrategy strategy;
 
 #if LLVM_ENABLE_THREADS
@@ -38,6 +39,8 @@ inline size_t getThreadCount() { return 1; }
 #endif
 
 namespace detail {
+class ThreadPoolExecutor;
+
 class Latch {
   std::atomic<uint32_t> Count;
   mutable std::mutex Mutex;
@@ -67,12 +70,78 @@ public:
 };
 } // namespace detail
 
+/// A pool of threads for the parallel routines in this file, owned by the
+/// caller. This lets a host share one pool between tool invocations running in
+/// the same process, each with its own concurrency limit (see ExecutorRef).
+/// Nothing may be running on the executor when it is destroyed. A strategy
+/// requesting a single thread creates no threads; the routines then run
+/// everything on the caller.
+class Executor {
+#if LLVM_ENABLE_THREADS
+  std::unique_ptr<detail::ThreadPoolExecutor> Impl;
+#endif
+  friend class ExecutorRef;
+
+public:
+  LLVM_ABI explicit Executor(ThreadPoolStrategy S = {});
+  LLVM_ABI ~Executor();
+  Executor(const Executor &) = delete;
+  Executor &operator=(const Executor &) = delete;
+
+  LLVM_ABI size_t getThreadCount() const;
+
+  /// Stops the threads without waiting for queued work, which is discarded.
+  /// Only for use at process exit.
+  LLVM_ABI void stop();
+};
+
+/// Selects the executor that a parallel routine runs on, and how many of its
+/// threads the routine may use.
+class ExecutorRef {
+  // Null when there is no executor.
+  detail::ThreadPoolExecutor *Exec = nullptr;
+  // Zero for no limit beyond the size of the pool.
+  unsigned MaxThreads = 0;
+  // False to run everything on the caller.
+  bool Parallel = false;
+
+  friend class TaskGroup;
+  ExecutorRef() = default;
+
+public:
+  /// Run on \p E, using at most \p Limit.compute_thread_count() of its threads.
+  /// A limit that requests a single thread runs everything on the caller.
+  LLVM_ABI ExecutorRef(Executor &E, ThreadPoolStrategy Limit = {});
+
+  /// Runs everything on the caller, without any executor.
+  static ExecutorRef sequential() { return ExecutorRef(); }
+
+  /// The process-wide default executor, sized by parallel::strategy, which the
+  /// routines that do not take an ExecutorRef run on.
+  LLVM_ABI static ExecutorRef getDefault();
+
+  bool isParallel() const {
+#if LLVM_ENABLE_THREADS
+    return Parallel;
+#else
+    return false;
+#endif
+  }
+
+  /// The number of threads the routines may use: the size of the pool, capped
+  /// by the limit.
+  LLVM_ABI size_t getThreadCount() const;
+};
+
 class TaskGroup {
   detail::Latch L;
+  ExecutorRef E;
   bool Parallel;
 
 public:
+  // Runs on ExecutorRef::getDefault().
   LLVM_ABI TaskGroup();
+  LLVM_ABI explicit TaskGroup(ExecutorRef E);
   LLVM_ABI ~TaskGroup();
 
   // Spawn a task, but does not wait for it to finish.
@@ -126,9 +195,9 @@ void parallel_quick_sort(RandomAccessIterator Start, RandomAccessIterator End,
 }
 
 template <class RandomAccessIterator, class Comparator>
-void parallel_sort(RandomAccessIterator Start, RandomAccessIterator End,
-                   const Comparator &Comp) {
-  TaskGroup TG;
+void parallel_sort(ExecutorRef E, RandomAccessIterator Start,
+                   RandomAccessIterator End, const Comparator &Comp) {
+  TaskGroup TG(E);
   parallel_quick_sort(Start, End, Comp, TG,
                       llvm::Log2_64(std::distance(Start, End)) + 1);
 }
@@ -141,8 +210,8 @@ enum { MaxTasksPerGroup = 1024 };
 
 template <class IterTy, class ResultTy, class ReduceFuncTy,
           class TransformFuncTy>
-ResultTy parallel_transform_reduce(IterTy Begin, IterTy End, ResultTy Init,
-                                   ReduceFuncTy Reduce,
+ResultTy parallel_transform_reduce(ExecutorRef E, IterTy Begin, IterTy End,
+                                   ResultTy Init, ReduceFuncTy Reduce,
                                    TransformFuncTy Transform) {
   // Limit the number of tasks to MaxTasksPerGroup to limit job scheduling
   // overhead on large inputs.
@@ -155,7 +224,7 @@ ResultTy parallel_transform_reduce(IterTy Begin, IterTy End, ResultTy Init,
     // Each task processes either TaskSize or TaskSize+1 inputs. Any inputs
     // remaining after dividing them equally amongst tasks are distributed as
     // one extra input over the first tasks.
-    TaskGroup TG;
+    TaskGroup TG(E);
     size_t TaskSize = NumInputs / NumTasks;
     size_t RemainingInputs = NumInputs % NumTasks;
     IterTy TBegin = Begin;
@@ -191,34 +260,36 @@ ResultTy parallel_transform_reduce(IterTy Begin, IterTy End, ResultTy Init,
 template <class RandomAccessIterator,
           class Comparator = std::less<
               typename std::iterator_traits<RandomAccessIterator>::value_type>>
-void parallelSort(RandomAccessIterator Start, RandomAccessIterator End,
+void parallelSort(parallel::ExecutorRef E, RandomAccessIterator Start,
+                  RandomAccessIterator End,
                   const Comparator &Comp = Comparator()) {
 #if LLVM_ENABLE_THREADS
-  if (parallel::strategy.ThreadsRequested != 1) {
-    parallel::detail::parallel_sort(Start, End, Comp);
+  if (E.isParallel()) {
+    parallel::detail::parallel_sort(E, Start, End, Comp);
     return;
   }
 #endif
   llvm::sort(Start, End, Comp);
 }
 
-LLVM_ABI void parallelFor(size_t Begin, size_t End,
+LLVM_ABI void parallelFor(parallel::ExecutorRef E, size_t Begin, size_t End,
                           function_ref<void(size_t)> Fn);
 
 template <class IterTy, class FuncTy>
-void parallelForEach(IterTy Begin, IterTy End, FuncTy Fn) {
-  parallelFor(0, End - Begin, [&](size_t I) { Fn(Begin[I]); });
+void parallelForEach(parallel::ExecutorRef E, IterTy Begin, IterTy End,
+                     FuncTy Fn) {
+  parallelFor(E, 0, End - Begin, [&](size_t I) { Fn(Begin[I]); });
 }
 
 template <class IterTy, class ResultTy, class ReduceFuncTy,
           class TransformFuncTy>
-ResultTy parallelTransformReduce(IterTy Begin, IterTy End, ResultTy Init,
-                                 ReduceFuncTy Reduce,
+ResultTy parallelTransformReduce(parallel::ExecutorRef E, IterTy Begin,
+                                 IterTy End, ResultTy Init, ReduceFuncTy Reduce,
                                  TransformFuncTy Transform) {
 #if LLVM_ENABLE_THREADS
-  if (parallel::strategy.ThreadsRequested != 1) {
-    return parallel::detail::parallel_transform_reduce(Begin, End, Init, Reduce,
-                                                       Transform);
+  if (E.isParallel()) {
+    return parallel::detail::parallel_transform_reduce(E, Begin, End, Init,
+                                                       Reduce, Transform);
   }
 #endif
   for (IterTy I = Begin; I != End; ++I)
@@ -227,15 +298,86 @@ ResultTy parallelTransformReduce(IterTy Begin, IterTy End, ResultTy Init,
 }
 
 // Range wrappers.
-template <class RangeTy,
-          class Comparator = std::less<decltype(*std::begin(RangeTy()))>>
+template <class RangeTy, class Comparator = std::less<std::remove_reference_t<
+                             decltype(*std::begin(std::declval<RangeTy &>()))>>>
+void parallelSort(parallel::ExecutorRef E, RangeTy &&R,
+                  const Comparator &Comp = Comparator()) {
+  parallelSort(E, std::begin(R), std::end(R), Comp);
+}
+
+template <class RangeTy, class FuncTy>
+void parallelForEach(parallel::ExecutorRef E, RangeTy &&R, FuncTy Fn) {
+  parallelForEach(E, std::begin(R), std::end(R), Fn);
+}
+
+template <class RangeTy, class ResultTy, class ReduceFuncTy,
+          class TransformFuncTy>
+ResultTy parallelTransformReduce(parallel::ExecutorRef E, RangeTy &&R,
+                                 ResultTy Init, ReduceFuncTy Reduce,
+                                 TransformFuncTy Transform) {
+  return parallelTransformReduce(E, std::begin(R), std::end(R), Init, Reduce,
+                                 Transform);
+}
+
+// Parallel for-each, but with error handling.
+template <class RangeTy, class FuncTy>
+Error parallelForEachError(parallel::ExecutorRef E, RangeTy &&R, FuncTy Fn) {
+  // The transform_reduce algorithm requires that the initial value be copyable.
+  // Error objects are uncopyable. We only need to copy initial success values,
+  // so work around this mismatch via the C API. The C API represents success
+  // values with a null pointer. The joinErrors discards null values and joins
+  // multiple errors into an ErrorList.
+  return unwrap(parallelTransformReduce(
+      E, std::begin(R), std::end(R), wrap(Error::success()),
+      [](LLVMErrorRef Lhs, LLVMErrorRef Rhs) {
+        return wrap(joinErrors(unwrap(Lhs), unwrap(Rhs)));
+      },
+      [&Fn](auto &&V) { return wrap(Fn(V)); }));
+}
+
+// Variants of the routines above that run on
+// parallel::ExecutorRef::getDefault().
+template <class RandomAccessIterator,
+          class Comparator = std::less<
+              typename std::iterator_traits<RandomAccessIterator>::value_type>>
+void parallelSort(RandomAccessIterator Start, RandomAccessIterator End,
+                  const Comparator &Comp = Comparator()) {
+  parallelSort(parallel::ExecutorRef::getDefault(), Start, End, Comp);
+}
+
+LLVM_ABI void parallelFor(size_t Begin, size_t End,
+                          function_ref<void(size_t)> Fn);
+
+template <class IterTy, class FuncTy>
+void parallelForEach(IterTy Begin, IterTy End, FuncTy Fn) {
+  parallelForEach(parallel::ExecutorRef::getDefault(), Begin, End, Fn);
+}
+
+template <class IterTy, class ResultTy, class ReduceFuncTy,
+          class TransformFuncTy>
+ResultTy parallelTransformReduce(IterTy Begin, IterTy End, ResultTy Init,
+                                 ReduceFuncTy Reduce,
+                                 TransformFuncTy Transform) {
+  return parallelTransformReduce(parallel::ExecutorRef::getDefault(), Begin,
+                                 End, Init, Reduce, Transform);
+}
+
+// The range variant of parallelSort must not take an ExecutorRef (or an
+// Executor) as its range.
+template <
+    class RangeTy,
+    class Comparator = std::less<decltype(*std::begin(RangeTy()))>,
+    std::enable_if_t<!std::is_convertible_v<RangeTy &&, parallel::ExecutorRef>,
+                     int> = 0>
 void parallelSort(RangeTy &&R, const Comparator &Comp = Comparator()) {
-  parallelSort(std::begin(R), std::end(R), Comp);
+  parallelSort(parallel::ExecutorRef::getDefault(), std::begin(R), std::end(R),
+               Comp);
 }
 
 template <class RangeTy, class FuncTy>
 void parallelForEach(RangeTy &&R, FuncTy Fn) {
-  parallelForEach(std::begin(R), std::end(R), Fn);
+  parallelForEach(parallel::ExecutorRef::getDefault(), std::begin(R),
+                  std::end(R), Fn);
 }
 
 template <class RangeTy, class ResultTy, class ReduceFuncTy,
@@ -243,24 +385,15 @@ template <class RangeTy, class ResultTy, class ReduceFuncTy,
 ResultTy parallelTransformReduce(RangeTy &&R, ResultTy Init,
                                  ReduceFuncTy Reduce,
                                  TransformFuncTy Transform) {
-  return parallelTransformReduce(std::begin(R), std::end(R), Init, Reduce,
+  return parallelTransformReduce(parallel::ExecutorRef::getDefault(),
+                                 std::begin(R), std::end(R), Init, Reduce,
                                  Transform);
 }
 
-// Parallel for-each, but with error handling.
 template <class RangeTy, class FuncTy>
 Error parallelForEachError(RangeTy &&R, FuncTy Fn) {
-  // The transform_reduce algorithm requires that the initial value be copyable.
-  // Error objects are uncopyable. We only need to copy initial success values,
-  // so work around this mismatch via the C API. The C API represents success
-  // values with a null pointer. The joinErrors discards null values and joins
-  // multiple errors into an ErrorList.
-  return unwrap(parallelTransformReduce(
-      std::begin(R), std::end(R), wrap(Error::success()),
-      [](LLVMErrorRef Lhs, LLVMErrorRef Rhs) {
-        return wrap(joinErrors(unwrap(Lhs), unwrap(Rhs)));
-      },
-      [&Fn](auto &&V) { return wrap(Fn(V)); }));
+  return parallelForEachError(parallel::ExecutorRef::getDefault(),
+                              std::forward<RangeTy>(R), Fn);
 }
 
 } // namespace llvm
