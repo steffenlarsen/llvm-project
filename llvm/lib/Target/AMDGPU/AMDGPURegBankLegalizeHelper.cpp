@@ -54,7 +54,8 @@ bool RegBankLegalizeHelper::findRuleAndApplyMapping(MachineInstr &MI) {
     return false;
   }
 
-  const RegBankLLTMapping *Mapping = RuleSet->findMappingForMI(MI, MRI, MUI);
+  const RegBankLLTMapping *Mapping =
+      RuleSet->findMappingForMI(MI, MRI, MUI, RBLRules.getFeatures());
   if (!Mapping) {
     reportGISelFailure(MF, MORE, DEBUG_TYPE,
                        "AMDGPU RegBankLegalize: none of the rules defined with "
@@ -65,14 +66,14 @@ bool RegBankLegalizeHelper::findRuleAndApplyMapping(MachineInstr &MI) {
 
   WaterfallInfo WFI;
   unsigned OpIdx = 0;
-  if (!Mapping->DstOpMapping.empty()) {
+  if (!Mapping->getDstOpMapping().empty()) {
     B.setInsertPt(*MI.getParent(), std::next(MI.getIterator()));
-    if (!applyMappingDst(MI, OpIdx, Mapping->DstOpMapping))
+    if (!applyMappingDst(MI, OpIdx, Mapping->getDstOpMapping()))
       return false;
   }
-  if (!Mapping->SrcOpMapping.empty()) {
+  if (!Mapping->getSrcOpMapping().empty()) {
     B.setInstr(MI);
-    if (!applyMappingSrc(MI, OpIdx, Mapping->SrcOpMapping, WFI))
+    if (!applyMappingSrc(MI, OpIdx, Mapping->getSrcOpMapping(), WFI))
       return false;
   }
 
@@ -2102,7 +2103,7 @@ RegBankLegalizeHelper::getRegBankFromID(RegBankLLTMappingApplyID ID) {
 
 bool RegBankLegalizeHelper::applyMappingDst(
     MachineInstr &MI, unsigned &OpIdx,
-    const SmallVectorImpl<RegBankLLTMappingApplyID> &MethodIDs) {
+    ArrayRef<RegBankLLTMappingApplyID> MethodIDs) {
   // Defs start from operand 0
   for (; OpIdx < MethodIDs.size(); ++OpIdx) {
     if (MethodIDs[OpIdx] == None)
@@ -2304,8 +2305,7 @@ bool RegBankLegalizeHelper::applyMappingDst(
 
 bool RegBankLegalizeHelper::applyMappingSrc(
     MachineInstr &MI, unsigned &OpIdx,
-    const SmallVectorImpl<RegBankLLTMappingApplyID> &MethodIDs,
-    WaterfallInfo &WFI) {
+    ArrayRef<RegBankLLTMappingApplyID> MethodIDs, WaterfallInfo &WFI) {
   for (unsigned i = 0; i < MethodIDs.size(); ++OpIdx, ++i) {
     if (MethodIDs[i] == None || MethodIDs[i] == IntrId || MethodIDs[i] == Imm)
       continue;

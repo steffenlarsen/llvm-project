@@ -10,7 +10,13 @@
 #include "AMDGPUGenSubtargetInfo.inc"
 #include "AMDGPUTargetMachine.h"
 #include "GCNSubtarget.h"
+#include "llvm/ADT/SmallString.h"
+#include "llvm/AsmParser/Parser.h"
+#include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/LegacyPassManager.h"
+#include "llvm/IR/Module.h"
 #include "llvm/MC/TargetRegistry.h"
+#include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/TargetParser/AMDGPUTargetParser.h"
 #include "gtest/gtest.h"
@@ -374,4 +380,58 @@ TEST_F(AMDGPUTestBase, TestGetNamedOperandIdx) {
           << "Opcode " << Opcode << " (" << MCII->getName(Opcode) << ')';
     }
   }
+}
+
+// Compile an MFMA kernel for CPU with GlobalISel and return the assembly.
+static std::string compileMFMAWithGlobalISel(StringRef TripleStr,
+                                             StringRef CPU) {
+  static const char IR[] = R"(
+    declare <32 x float> @llvm.amdgcn.mfma.f32.32x32x1f32(
+        float, float, <32 x float>, i32, i32, i32)
+    define amdgpu_kernel void @k(ptr addrspace(1) %out, float %a, float %b) {
+      %in = load <32 x float>, ptr addrspace(1) %out
+      %r = call <32 x float> @llvm.amdgcn.mfma.f32.32x32x1f32(
+          float %a, float %b, <32 x float> %in, i32 0, i32 0, i32 0)
+      store <32 x float> %r, ptr addrspace(1) %out
+      ret void
+    })";
+  std::unique_ptr<GCNTargetMachine> TM =
+      createAMDGPUTargetMachine(Triple(TripleStr), CPU, "");
+  if (!TM)
+    return "";
+  TM->setGlobalISel(true);
+  TM->setGlobalISelAbort(GlobalISelAbortMode::Enable);
+
+  LLVMContext Context;
+  SMDiagnostic Err;
+  std::unique_ptr<Module> M = parseAssemblyString(IR, Err, Context);
+  if (!M)
+    return "";
+  M->setTargetTriple(TM->getTargetTriple());
+  M->setDataLayout(TM->createDataLayout());
+
+  SmallString<0> Asm;
+  raw_svector_ostream OS(Asm);
+  legacy::PassManager PM;
+  if (TM->addPassesToEmitFile(PM, OS, nullptr, CodeGenFileType::AssemblyFile))
+    return "";
+  PM.run(*M);
+  return std::string(Asm);
+}
+
+// GlobalISel's register bank legalization rules depend on the subtarget, so
+// compiling for one subtarget must not change how a later compilation for
+// another subtarget of the same generation is legalized.
+TEST_F(AMDGPUTestBase, TestRegBankLegalizeRulesPerSubtarget) {
+  LLVMInitializeAMDGPUAsmPrinter();
+  // gfx908 only has the AGPR form of this MFMA, gfx90a also the VGPR form.
+  std::string GFX90A =
+      compileMFMAWithGlobalISel("amdgpu9.0a-amd-amdhsa", "gfx90a");
+  std::string GFX908 =
+      compileMFMAWithGlobalISel("amdgpu9.08-amd-amdhsa", "gfx908");
+  std::string GFX90AAgain =
+      compileMFMAWithGlobalISel("amdgpu9.0a-amd-amdhsa", "gfx90a");
+  EXPECT_NE(GFX90A.find("v_mfma_f32_32x32x1f32 v["), std::string::npos);
+  EXPECT_NE(GFX908.find("v_mfma_f32_32x32x1f32 a["), std::string::npos);
+  EXPECT_EQ(GFX90AAgain, GFX90A);
 }

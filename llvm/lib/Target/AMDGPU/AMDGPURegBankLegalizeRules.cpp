@@ -30,18 +30,6 @@ bool AMDGPU::isAnyPtr(LLT Ty, unsigned Width) {
   return Ty.isPointer() && Ty.getSizeInBits() == Width;
 }
 
-RegBankLLTMapping::RegBankLLTMapping(
-    std::initializer_list<RegBankLLTMappingApplyID> DstOpMappingList,
-    std::initializer_list<RegBankLLTMappingApplyID> SrcOpMappingList,
-    LoweringMethodID LoweringMethod)
-    : DstOpMapping(DstOpMappingList), SrcOpMapping(SrcOpMappingList),
-      LoweringMethod(LoweringMethod) {}
-
-PredicateMapping::PredicateMapping(
-    std::initializer_list<UniformityLLTOpPredicateID> OpList,
-    std::function<bool(const MachineInstr &)> TestFunc)
-    : OpUniformityAndTypes(OpList), TestFunc(TestFunc) {}
-
 bool matchUniformityAndLLT(Register Reg, UniformityLLTOpPredicateID UniID,
                            const MachineUniformityInfo &MUI,
                            const MachineRegisterInfo &MRI) {
@@ -303,7 +291,7 @@ bool PredicateMapping::match(const MachineInstr &MI,
                              const MachineUniformityInfo &MUI,
                              const MachineRegisterInfo &MRI) const {
   // Check LLT signature.
-  for (unsigned i = 0; i < OpUniformityAndTypes.size(); ++i) {
+  for (unsigned i = 0; i < NumOps; ++i) {
     const MachineOperand &MO = MI.getOperand(i);
     if (OpUniformityAndTypes[i] == _) {
       assert((!MI.getOperand(i).isReg() ||
@@ -326,11 +314,6 @@ bool PredicateMapping::match(const MachineInstr &MI,
 
   return true;
 }
-
-SetOfRulesForOpcode::SetOfRulesForOpcode() = default;
-
-SetOfRulesForOpcode::SetOfRulesForOpcode(FastRulesTypes FastTypes)
-    : FastTypes(FastTypes) {}
 
 UniformityLLTOpPredicateID LLTToId(LLT Ty) {
   if (Ty == LLT::scalar(16))
@@ -365,55 +348,8 @@ UniformityLLTOpPredicateID LLTToBId(LLT Ty) {
   return _;
 }
 
-const RegBankLLTMapping *
-SetOfRulesForOpcode::findMappingForMI(const MachineInstr &MI,
-                                      const MachineRegisterInfo &MRI,
-                                      const MachineUniformityInfo &MUI) const {
-  // Search in "Fast Rules".
-  // Note: if fast rules are enabled, RegBankLLTMapping must be added in each
-  // slot that could "match fast Predicate". If not, InvalidMapping is
-  // returned which results in failure, does not search "Slow Rules".
-  if (FastTypes != NoFastRules) {
-    Register Reg = MI.getOperand(0).getReg();
-    int Slot;
-    if (FastTypes == StandardB)
-      Slot = getFastPredicateSlot(LLTToBId(MRI.getType(Reg)));
-    else
-      Slot = getFastPredicateSlot(LLTToId(MRI.getType(Reg)));
-
-    if (Slot != -1)
-      return MUI.isUniformAtDef(Reg) ? &Uni[Slot] : &Div[Slot];
-  }
-
-  // Slow search for more complex rules.
-  for (const RegBankLegalizeRule &Rule : Rules) {
-    if (Rule.Predicate.match(MI, MUI, MRI))
-      return &Rule.OperandMapping;
-  }
-
-  return nullptr;
-}
-
-void SetOfRulesForOpcode::addRule(RegBankLegalizeRule Rule) {
-  Rules.push_back(Rule);
-}
-
-void SetOfRulesForOpcode::addFastRuleDivergent(UniformityLLTOpPredicateID Ty,
-                                               RegBankLLTMapping RuleApplyIDs) {
-  int Slot = getFastPredicateSlot(Ty);
-  assert(Slot != -1 && "Ty unsupported in this FastRulesTypes");
-  Div[Slot] = std::move(RuleApplyIDs);
-}
-
-void SetOfRulesForOpcode::addFastRuleUniform(UniformityLLTOpPredicateID Ty,
-                                             RegBankLLTMapping RuleApplyIDs) {
-  int Slot = getFastPredicateSlot(Ty);
-  assert(Slot != -1 && "Ty unsupported in this FastRulesTypes");
-  Uni[Slot] = std::move(RuleApplyIDs);
-}
-
-int SetOfRulesForOpcode::getFastPredicateSlot(
-    UniformityLLTOpPredicateID Ty) const {
+static constexpr int getFastPredicateSlot(FastRulesTypes FastTypes,
+                                          UniformityLLTOpPredicateID Ty) {
   switch (FastTypes) {
   case Standard: {
     switch (Ty) {
@@ -462,36 +398,47 @@ int SetOfRulesForOpcode::getFastPredicateSlot(
   }
 }
 
-RegBankLegalizeRules::RuleSetInitializer
-RegBankLegalizeRules::addRulesForGOpcs(std::initializer_list<unsigned> OpcList,
-                                       FastRulesTypes FastTypes) {
-  return RuleSetInitializer(OpcList, GRulesAlias, GRules, Features, FastTypes);
-}
+static constexpr RegBankLLTMapping InvalidRegBankLLTMapping({InvalidMapping},
+                                                            {InvalidMapping});
 
-RegBankLegalizeRules::RuleSetInitializer
-RegBankLegalizeRules::addRulesForIOpcs(std::initializer_list<unsigned> OpcList,
-                                       FastRulesTypes FastTypes) {
-  return RuleSetInitializer(OpcList, IRulesAlias, IRules, Features, FastTypes);
-}
-
-const SetOfRulesForOpcode *
-RegBankLegalizeRules::getRulesForOpc(MachineInstr &MI) const {
-  unsigned Opc = MI.getOpcode();
-  if (Opc == AMDGPU::G_INTRINSIC || Opc == AMDGPU::G_INTRINSIC_CONVERGENT ||
-      Opc == AMDGPU::G_INTRINSIC_W_SIDE_EFFECTS ||
-      Opc == AMDGPU::G_INTRINSIC_CONVERGENT_W_SIDE_EFFECTS) {
-    unsigned IntrID = cast<GIntrinsic>(MI).getIntrinsicID();
-    auto IRAIt = IRulesAlias.find(IntrID);
-    if (IRAIt == IRulesAlias.end())
-      return nullptr;
-    return &IRules.at(IRAIt->second);
+const RegBankLLTMapping *SetOfRulesForOpcode::findMappingForMI(
+    const MachineInstr &MI, const MachineRegisterInfo &MRI,
+    const MachineUniformityInfo &MUI, FeatureMask Features) const {
+  // Search in "Fast Rules".
+  // Note: if fast rules are enabled, RegBankLLTMapping must be added for each
+  // type that could "match fast Predicate". If not, InvalidMapping is
+  // returned which results in failure, does not search "Slow Rules".
+  if (FastTypes != NoFastRules) {
+    Register Reg = MI.getOperand(0).getReg();
+    UniformityLLTOpPredicateID Ty = FastTypes == StandardB
+                                        ? LLTToBId(MRI.getType(Reg))
+                                        : LLTToId(MRI.getType(Reg));
+    if (getFastPredicateSlot(FastTypes, Ty) != -1) {
+      RegBankLegalizeRule::KindTy Kind =
+          MUI.isUniformAtDef(Reg) ? RegBankLegalizeRule::UniformFast
+                                  : RegBankLegalizeRule::DivergentFast;
+      // A later rule for the same type replaces an earlier one.
+      const RegBankLLTMapping *Mapping = &InvalidRegBankLLTMapping;
+      for (const RegBankLegalizeRule &Rule : rules())
+        if (Rule.Kind == Kind && Rule.FastTy == Ty && Rule.Cond.holds(Features))
+          Mapping = &Rule.OperandMapping;
+      return Mapping;
+    }
   }
 
-  auto GRAIt = GRulesAlias.find(Opc);
-  if (GRAIt == GRulesAlias.end())
-    return nullptr;
-  return &GRules.at(GRAIt->second);
+  // Slow search for more complex rules.
+  for (const RegBankLegalizeRule &Rule : rules()) {
+    if (Rule.Kind == RegBankLegalizeRule::Slow && Rule.Cond.holds(Features) &&
+        Rule.Predicate.match(MI, MUI, MRI))
+      return &Rule.OperandMapping;
+  }
+
+  return nullptr;
 }
+
+//===----------------------------------------------------------------------===//
+// Rule tables
+//===----------------------------------------------------------------------===//
 
 // Predicates for rules that check more than operand types and uniformity.
 
@@ -568,75 +515,213 @@ static bool IsDataPF(const MachineInstr &MI) {
   return MI.getOperand(3).getImm() != 0;
 }
 
-// Initialize rules
-RegBankLegalizeRules::RegBankLegalizeRules(const GCNSubtarget &_ST,
-                                           MachineRegisterInfo &_MRI)
-    : ST(&_ST), MRI(&_MRI) {
+namespace {
+constexpr RegBankLegalizeRule uniRule(UniformityLLTOpPredicateID Ty,
+                                      RegBankLLTMapping Mapping,
+                                      FeatureCond Cond = {}) {
+  return {RegBankLegalizeRule::UniformFast, Ty, PredicateMapping(), Mapping,
+          Cond};
+}
+
+constexpr RegBankLegalizeRule divRule(UniformityLLTOpPredicateID Ty,
+                                      RegBankLLTMapping Mapping,
+                                      FeatureCond Cond = {}) {
+  return {RegBankLegalizeRule::DivergentFast, Ty, PredicateMapping(), Mapping,
+          Cond};
+}
+
+struct AnyRuleInit {
+  PredicateMapping Predicate;
+  RegBankLLTMapping OperandMapping;
+};
+
+constexpr RegBankLegalizeRule anyRule(AnyRuleInit Init, FeatureCond Cond = {}) {
+  return {RegBankLegalizeRule::Slow, _, Init.Predicate, Init.OperandMapping,
+          Cond};
+}
+
+template <unsigned NumOpcodes, unsigned NumRules>
+constexpr SetOfRulesForOpcode
+makeSetOfRules(bool IsIntrinsic, FastRulesTypes FastTypes,
+               const unsigned (&Opcodes)[NumOpcodes],
+               const RegBankLegalizeRule (&Rules)[NumRules]) {
+  return {IsIntrinsic, FastTypes, Opcodes, NumOpcodes, Rules, NumRules};
+}
+} // namespace
+
+// AMDGPURegBankLegalizeRules.def lists each set of rules as
+//   RULES_G(FastTypes, (Opcode, ...), Rule, ...) for G_ opcodes, or
+//   RULES_I(FastTypes, (IntrinsicID, ...), Rule, ...) for intrinsics,
+// where a Rule is Uni(...), Div(...) or Any(...). It is expanded twice: into
+// arrays of opcodes and rules for each set, then into AllRuleSets.
+#define RBL_UNPAREN(...) __VA_ARGS__
+#define RBL_FIRST_(First, ...) First
+#define RBL_FIRST(...) RBL_FIRST_(__VA_ARGS__, )
+#define RBL_CAT_(A, B) A##B
+#define RBL_CAT(A, B) RBL_CAT_(A, B)
+// Names of a set's arrays, after its first opcode.
+#define RBL_NAME(Prefix, Opcodes) RBL_CAT(Prefix, RBL_FIRST Opcodes)
+
+#define Uni(...) uniRule(__VA_ARGS__)
+#define Div(...) divRule(__VA_ARGS__)
+#define Any(...) anyRule(__VA_ARGS__)
+#define PRED(...) (+[](const MachineInstr &MI) -> bool { return __VA_ARGS__; })
+
+namespace RegBankLegalizeRuleTables {
+using namespace Intrinsic;
+
+#define RULES_G(FastTypes, Opcodes, ...)                                       \
+  constexpr unsigned RBL_NAME(Opcodes_, Opcodes)[] = {RBL_UNPAREN Opcodes};    \
+  constexpr RegBankLegalizeRule RBL_NAME(Rules_, Opcodes)[] = {__VA_ARGS__};
+#define RULES_I RULES_G
+#include "AMDGPURegBankLegalizeRules.def"
+#undef RULES_G
+#undef RULES_I
+
+constexpr SetOfRulesForOpcode AllRuleSets[] = {
+#define RULES_G(FastTypes, Opcodes, ...)                                       \
+  makeSetOfRules(false, FastTypes, RBL_NAME(Opcodes_, Opcodes),                \
+                 RBL_NAME(Rules_, Opcodes)),
+#define RULES_I(FastTypes, Opcodes, ...)                                       \
+  makeSetOfRules(true, FastTypes, RBL_NAME(Opcodes_, Opcodes),                 \
+                 RBL_NAME(Rules_, Opcodes)),
+#include "AMDGPURegBankLegalizeRules.def"
+#undef RULES_G
+#undef RULES_I
+};
+} // namespace RegBankLegalizeRuleTables
+
+#undef Uni
+#undef Div
+#undef Any
+#undef PRED
+#undef RBL_NAME
+#undef RBL_CAT
+#undef RBL_CAT_
+#undef RBL_FIRST
+#undef RBL_FIRST_
+#undef RBL_UNPAREN
+
+using RegBankLegalizeRuleTables::AllRuleSets;
+
+namespace {
+// The range of G_ opcodes or intrinsic IDs that have rules.
+struct OpcodeRange {
+  unsigned Min = ~0u;
+  unsigned Max = 0;
+};
+
+constexpr OpcodeRange getOpcodeRange(bool IsIntrinsic) {
+  OpcodeRange Range;
+  for (const SetOfRulesForOpcode &Set : AllRuleSets) {
+    if (Set.IsIntrinsic != IsIntrinsic)
+      continue;
+    for (unsigned I = 0; I != Set.NumOpcodes; ++I) {
+      Range.Min = std::min(Range.Min, Set.Opcodes[I]);
+      Range.Max = std::max(Range.Max, Set.Opcodes[I]);
+    }
+  }
+  return Range;
+}
+
+constexpr OpcodeRange GOpcodeRange = getOpcodeRange(false);
+constexpr OpcodeRange IntrinsicRange = getOpcodeRange(true);
+
+// Maps each opcode in a range to the index of its set in AllRuleSets plus one,
+// or zero if it has no rules.
+struct RuleSetIndex {
+  uint16_t GOpcodes[GOpcodeRange.Max - GOpcodeRange.Min + 1] = {};
+  uint16_t Intrinsics[IntrinsicRange.Max - IntrinsicRange.Min + 1] = {};
+  bool HasDuplicateOpcode = false;
+  bool HasInvalidFastRule = false;
+};
+
+constexpr RuleSetIndex buildRuleSetIndex() {
+  RuleSetIndex Index;
+  for (unsigned S = 0; S != std::size(AllRuleSets); ++S) {
+    const SetOfRulesForOpcode &Set = AllRuleSets[S];
+    for (unsigned I = 0; I != Set.NumOpcodes; ++I) {
+      uint16_t &Entry =
+          Set.IsIntrinsic
+              ? Index.Intrinsics[Set.Opcodes[I] - IntrinsicRange.Min]
+              : Index.GOpcodes[Set.Opcodes[I] - GOpcodeRange.Min];
+      if (Entry)
+        Index.HasDuplicateOpcode = true;
+      Entry = S + 1;
+    }
+    for (unsigned I = 0; I != Set.NumRules; ++I) {
+      const RegBankLegalizeRule &Rule = Set.Rules[I];
+      if (Rule.Kind != RegBankLegalizeRule::Slow &&
+          getFastPredicateSlot(Set.FastTypes, Rule.FastTy) == -1)
+        Index.HasInvalidFastRule = true;
+    }
+  }
+  return Index;
+}
+
+constexpr RuleSetIndex RuleSetIndexTable = buildRuleSetIndex();
+static_assert(std::size(AllRuleSets) < UINT16_MAX, "too many sets of rules");
+static_assert(!RuleSetIndexTable.HasDuplicateOpcode,
+              "an opcode has more than one set of rules");
+static_assert(!RuleSetIndexTable.HasInvalidFastRule,
+              "a Uni or Div rule has a type that its FastRulesTypes lacks");
+} // namespace
+
+RegBankLegalizeRules::RegBankLegalizeRules(const GCNSubtarget &ST) {
   FeatureMask F = 0;
-  if (ST->useVMulU64Inst())
+  if (ST.useVMulU64Inst())
     F |= featureBit(UseVMulU64Inst);
-  if (ST->hasScalarMulHiInsts())
+  if (ST.hasScalarMulHiInsts())
     F |= featureBit(HasScalarMulHiInsts);
-  if (ST->hasScalarSMulU64())
+  if (ST.hasScalarSMulU64())
     F |= featureBit(HasScalarSMulU64);
-  if (ST->hasScalarCompareEq64())
+  if (ST.hasScalarCompareEq64())
     F |= featureBit(HasScalarCompareEq64);
-  if (ST->has16BitInsts())
+  if (ST.has16BitInsts())
     F |= featureBit(Has16BitInsts);
-  if (ST->hasAtomicFlatPkAdd16Insts())
+  if (ST.hasAtomicFlatPkAdd16Insts())
     F |= featureBit(HasAtomicFlatPkAdd16Insts);
-  if (ST->hasAtomicBufferGlobalPkAddF16NoRtnInsts() ||
-      ST->hasAtomicBufferGlobalPkAddF16Insts())
+  if (ST.hasAtomicBufferGlobalPkAddF16NoRtnInsts() ||
+      ST.hasAtomicBufferGlobalPkAddF16Insts())
     F |= featureBit(HasAtomicBufferGlobalPkAddF16Insts);
-  if (ST->hasAtomicDsPkAdd16Insts())
+  if (ST.hasAtomicDsPkAdd16Insts())
     F |= featureBit(HasAtomicDsPkAdd16Insts);
-  if (ST->hasScalarDwordx3Loads())
+  if (ST.hasScalarDwordx3Loads())
     F |= featureBit(HasScalarDwordx3Loads);
-  if (ST->hasScalarSubwordLoads())
+  if (ST.hasScalarSubwordLoads())
     F |= featureBit(HasScalarSubwordLoads);
-  if (ST->useRealTrue16Insts())
+  if (ST.useRealTrue16Insts())
     F |= featureBit(UseRealTrue16Insts);
-  if (ST->hasSALUFloatInsts())
+  if (ST.hasSALUFloatInsts())
     F |= featureBit(HasSALUFloatInsts);
-  if (ST->hasPseudoScalarTrans())
+  if (ST.hasPseudoScalarTrans())
     F |= featureBit(HasPseudoScalarTrans);
-  if (ST->hasSafeSmemPrefetch())
+  if (ST.hasSafeSmemPrefetch())
     F |= featureBit(HasSafeSmemPrefetch);
-  if (ST->hasVmemPrefInsts())
+  if (ST.hasVmemPrefInsts())
     F |= featureBit(HasVmemPrefInsts);
-  if (ST->hasSALUMinimumMaximumInsts())
+  if (ST.hasSALUMinimumMaximumInsts())
     F |= featureBit(HasSALUMinimumMaximumInsts);
-  if (ST->hasGFX90AInsts())
+  if (ST.hasGFX90AInsts())
     F |= featureBit(HasGFX90AInsts);
   Features = F;
+}
 
-  using namespace Intrinsic;
-
-  // AMDGPURegBankLegalizeRules.def lists each set of rules as
-  //   RULES_G(FastTypes, (Opcode, ...), Rule, ...) for G_ opcodes, or
-  //   RULES_I(FastTypes, (IntrinsicID, ...), Rule, ...) for intrinsics,
-  // where a Rule is Uni(...), Div(...) or Any(...).
-#define RBL_UNPAREN(...) __VA_ARGS__
-#define Uni(...) (void)Rules.Uni(__VA_ARGS__)
-#define Div(...) (void)Rules.Div(__VA_ARGS__)
-#define Any(...) (void)Rules.Any(__VA_ARGS__)
-#define PRED(...) (+[](const MachineInstr &MI) -> bool { return __VA_ARGS__; })
-#define RULES_G(FastTypes, Opcodes, ...)                                       \
-  {                                                                            \
-    auto &&Rules = addRulesForGOpcs({RBL_UNPAREN Opcodes}, FastTypes);         \
-    __VA_ARGS__;                                                               \
+const SetOfRulesForOpcode *
+RegBankLegalizeRules::getRulesForOpc(MachineInstr &MI) const {
+  unsigned Opc = MI.getOpcode();
+  uint16_t Entry;
+  if (Opc == AMDGPU::G_INTRINSIC || Opc == AMDGPU::G_INTRINSIC_CONVERGENT ||
+      Opc == AMDGPU::G_INTRINSIC_W_SIDE_EFFECTS ||
+      Opc == AMDGPU::G_INTRINSIC_CONVERGENT_W_SIDE_EFFECTS) {
+    unsigned IntrID = cast<GIntrinsic>(MI).getIntrinsicID();
+    if (IntrID < IntrinsicRange.Min || IntrID > IntrinsicRange.Max)
+      return nullptr;
+    Entry = RuleSetIndexTable.Intrinsics[IntrID - IntrinsicRange.Min];
+  } else {
+    if (Opc < GOpcodeRange.Min || Opc > GOpcodeRange.Max)
+      return nullptr;
+    Entry = RuleSetIndexTable.GOpcodes[Opc - GOpcodeRange.Min];
   }
-#define RULES_I(FastTypes, Opcodes, ...)                                       \
-  {                                                                            \
-    auto &&Rules = addRulesForIOpcs({RBL_UNPAREN Opcodes}, FastTypes);         \
-    __VA_ARGS__;                                                               \
-  }
-#include "AMDGPURegBankLegalizeRules.def"
-#undef RULES_I
-#undef RULES_G
-#undef PRED
-#undef Any
-#undef Div
-#undef Uni
-#undef RBL_UNPAREN
+  return Entry ? &AllRuleSets[Entry - 1] : nullptr;
 }
