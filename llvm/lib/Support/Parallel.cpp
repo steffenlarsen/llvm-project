@@ -11,7 +11,6 @@
 #include "llvm/Config/llvm-config.h"
 #include "llvm/Support/ExponentialBackoff.h"
 #include "llvm/Support/Jobserver.h"
-#include "llvm/Support/ManagedStatic.h"
 #include "llvm/Support/Threading.h"
 
 #include <atomic>
@@ -23,8 +22,6 @@
 
 using namespace llvm;
 using namespace llvm::parallel;
-
-llvm::ThreadPoolStrategy parallel::strategy;
 
 #if LLVM_ENABLE_THREADS
 
@@ -82,13 +79,6 @@ public:
   }
 
   ~ThreadPoolExecutor() { stop(); }
-
-  struct Creator {
-    static void *call() { return new ThreadPoolExecutor(strategy); }
-  };
-  struct Deleter {
-    static void call(void *Ptr) { ((ThreadPoolExecutor *)Ptr)->stop(); }
-  };
 
   struct WorkItem {
     std::function<void()> F;
@@ -204,41 +194,6 @@ private:
 
 using parallel::detail::ThreadPoolExecutor;
 
-static ThreadPoolExecutor *getDefaultExecutor() {
-#ifdef _WIN32
-  // The ManagedStatic enables the ThreadPoolExecutor to be stopped via
-  // llvm_shutdown() on Windows. This is important to avoid various race
-  // conditions at process exit that can cause crashes or deadlocks.
-
-  static ManagedStatic<ThreadPoolExecutor, ThreadPoolExecutor::Creator,
-                       ThreadPoolExecutor::Deleter>
-      ManagedExec;
-  static std::unique_ptr<ThreadPoolExecutor> Exec(&(*ManagedExec));
-  return Exec.get();
-#else
-  // ManagedStatic is not desired on other platforms. When `Exec` is destroyed
-  // by llvm_shutdown(), worker threads will clean up and invoke TLS
-  // destructors. This can lead to race conditions if other threads attempt to
-  // access TLS objects that have already been destroyed.
-  static ThreadPoolExecutor Exec(strategy);
-  return &Exec;
-#endif
-}
-
-size_t parallel::getThreadCount() {
-  return getDefaultExecutor()->getThreadCount();
-}
-
-ExecutorRef ExecutorRef::getDefault() {
-  ExecutorRef E;
-  // A single thread runs everything on the caller, without creating the pool.
-  if (strategy.ThreadsRequested != 1) {
-    E.Exec = getDefaultExecutor();
-    E.Parallel = true;
-  }
-  return E;
-}
-
 Executor::Executor(ThreadPoolStrategy S) {
   // A single thread would only take work from the caller, which instead runs
   // it inline.
@@ -285,11 +240,7 @@ void Executor::stop() {}
 ExecutorRef::ExecutorRef(Executor &E, ThreadPoolStrategy Limit) {}
 
 size_t ExecutorRef::getThreadCount() const { return 1; }
-
-ExecutorRef ExecutorRef::getDefault() { return sequential(); }
 #endif
-
-TaskGroup::TaskGroup() : TaskGroup(ExecutorRef::getDefault()) {}
 
 TaskGroup::TaskGroup(ExecutorRef E) : E(E), Parallel(E.isParallel()) {}
 
@@ -352,9 +303,4 @@ void llvm::parallelFor(ExecutorRef E, size_t Begin, size_t End,
 
   for (; Begin != End; ++Begin)
     Fn(Begin);
-}
-
-void llvm::parallelFor(size_t Begin, size_t End,
-                       llvm::function_ref<void(size_t)> Fn) {
-  parallelFor(ExecutorRef::getDefault(), Begin, End, Fn);
 }

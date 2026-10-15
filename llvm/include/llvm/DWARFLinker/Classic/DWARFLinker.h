@@ -829,7 +829,7 @@ private:
 
     /// Where the input DWARF is verified.
     llvm::parallel::ExecutorRef Executor =
-        llvm::parallel::ExecutorRef::getDefault();
+        llvm::parallel::ExecutorRef::sequential();
 
     /// The accelerator table kinds
     SmallVector<AccelTableKind, 1> AccelTables;

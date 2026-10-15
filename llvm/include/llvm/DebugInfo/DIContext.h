@@ -225,7 +225,7 @@ struct DIDumpOptions {
   }
 
   /// Where verification runs its parallel work.
-  parallel::ExecutorRef Executor = parallel::ExecutorRef::getDefault();
+  parallel::ExecutorRef Executor = parallel::ExecutorRef::sequential();
 
   /// Return default option set for printing a single DIE without children.
   static DIDumpOptions getForSingleDIE() {

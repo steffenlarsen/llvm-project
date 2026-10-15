@@ -27,17 +27,6 @@ namespace llvm {
 
 namespace parallel {
 
-// Strategy for the default executor used by the parallel routines provided by
-// this file that do not take an ExecutorRef. It defaults to using all hardware
-// threads and should be initialized before the first use of those routines.
-LLVM_ABI extern ThreadPoolStrategy strategy;
-
-#if LLVM_ENABLE_THREADS
-LLVM_ABI size_t getThreadCount();
-#else
-inline size_t getThreadCount() { return 1; }
-#endif
-
 namespace detail {
 class ThreadPoolExecutor;
 
@@ -96,7 +85,8 @@ public:
 };
 
 /// Selects the executor that a parallel routine runs on, and how many of its
-/// threads the routine may use.
+/// threads the routine may use. There is no default executor: a routine runs
+/// in parallel only on an Executor that the caller provides.
 class ExecutorRef {
   // Null when there is no executor.
   detail::ThreadPoolExecutor *Exec = nullptr;
@@ -115,10 +105,6 @@ public:
 
   /// Runs everything on the caller, without any executor.
   static ExecutorRef sequential() { return ExecutorRef(); }
-
-  /// The process-wide default executor, sized by parallel::strategy, which the
-  /// routines that do not take an ExecutorRef run on.
-  LLVM_ABI static ExecutorRef getDefault();
 
   bool isParallel() const {
 #if LLVM_ENABLE_THREADS
@@ -139,8 +125,6 @@ class TaskGroup {
   bool Parallel;
 
 public:
-  // Runs on ExecutorRef::getDefault().
-  LLVM_ABI TaskGroup();
   LLVM_ABI explicit TaskGroup(ExecutorRef E);
   LLVM_ABI ~TaskGroup();
 
@@ -333,67 +317,6 @@ Error parallelForEachError(parallel::ExecutorRef E, RangeTy &&R, FuncTy Fn) {
         return wrap(joinErrors(unwrap(Lhs), unwrap(Rhs)));
       },
       [&Fn](auto &&V) { return wrap(Fn(V)); }));
-}
-
-// Variants of the routines above that run on
-// parallel::ExecutorRef::getDefault().
-template <class RandomAccessIterator,
-          class Comparator = std::less<
-              typename std::iterator_traits<RandomAccessIterator>::value_type>>
-void parallelSort(RandomAccessIterator Start, RandomAccessIterator End,
-                  const Comparator &Comp = Comparator()) {
-  parallelSort(parallel::ExecutorRef::getDefault(), Start, End, Comp);
-}
-
-LLVM_ABI void parallelFor(size_t Begin, size_t End,
-                          function_ref<void(size_t)> Fn);
-
-template <class IterTy, class FuncTy>
-void parallelForEach(IterTy Begin, IterTy End, FuncTy Fn) {
-  parallelForEach(parallel::ExecutorRef::getDefault(), Begin, End, Fn);
-}
-
-template <class IterTy, class ResultTy, class ReduceFuncTy,
-          class TransformFuncTy>
-ResultTy parallelTransformReduce(IterTy Begin, IterTy End, ResultTy Init,
-                                 ReduceFuncTy Reduce,
-                                 TransformFuncTy Transform) {
-  return parallelTransformReduce(parallel::ExecutorRef::getDefault(), Begin,
-                                 End, Init, Reduce, Transform);
-}
-
-// The range variant of parallelSort must not take an ExecutorRef (or an
-// Executor) as its range.
-template <
-    class RangeTy,
-    class Comparator = std::less<decltype(*std::begin(RangeTy()))>,
-    std::enable_if_t<!std::is_convertible_v<RangeTy &&, parallel::ExecutorRef>,
-                     int> = 0>
-void parallelSort(RangeTy &&R, const Comparator &Comp = Comparator()) {
-  parallelSort(parallel::ExecutorRef::getDefault(), std::begin(R), std::end(R),
-               Comp);
-}
-
-template <class RangeTy, class FuncTy>
-void parallelForEach(RangeTy &&R, FuncTy Fn) {
-  parallelForEach(parallel::ExecutorRef::getDefault(), std::begin(R),
-                  std::end(R), Fn);
-}
-
-template <class RangeTy, class ResultTy, class ReduceFuncTy,
-          class TransformFuncTy>
-ResultTy parallelTransformReduce(RangeTy &&R, ResultTy Init,
-                                 ReduceFuncTy Reduce,
-                                 TransformFuncTy Transform) {
-  return parallelTransformReduce(parallel::ExecutorRef::getDefault(),
-                                 std::begin(R), std::end(R), Init, Reduce,
-                                 Transform);
-}
-
-template <class RangeTy, class FuncTy>
-Error parallelForEachError(RangeTy &&R, FuncTy Fn) {
-  return parallelForEachError(parallel::ExecutorRef::getDefault(),
-                              std::forward<RangeTy>(R), Fn);
 }
 
 } // namespace llvm

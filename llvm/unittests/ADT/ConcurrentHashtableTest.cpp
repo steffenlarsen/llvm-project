@@ -46,7 +46,8 @@ TEST(ConcurrentHashTableTest, AddStringEntries) {
 
   // PerThreadBumpPtrAllocator should be accessed from threads created by
   // ThreadPoolExecutor. Use TaskGroup to run on ThreadPoolExecutor threads.
-  parallel::TaskGroup tg;
+  parallel::Executor Executor;
+  parallel::TaskGroup tg(Executor);
 
   tg.spawn([&]() {
     std::pair<String *, bool> res1 = HashTable.insert("1");
@@ -99,7 +100,8 @@ TEST(ConcurrentHashTableTest, AddStringMultiplueEntries) {
 
   // PerThreadBumpPtrAllocator should be accessed from threads created by
   // ThreadPoolExecutor. Use TaskGroup to run on ThreadPoolExecutor threads.
-  parallel::TaskGroup tg;
+  parallel::Executor Executor;
+  parallel::TaskGroup tg(Executor);
 
   tg.spawn([&]() {
     // Check insertion.
@@ -146,7 +148,8 @@ TEST(ConcurrentHashTableTest, AddStringMultiplueEntriesWithResize) {
 
   // PerThreadBumpPtrAllocator should be accessed from threads created by
   // ThreadPoolExecutor. Use TaskGroup to run on ThreadPoolExecutor threads.
-  parallel::TaskGroup tg;
+  parallel::Executor Executor;
+  parallel::TaskGroup tg(Executor);
 
   tg.spawn([&]() {
     // Check insertion.
@@ -190,8 +193,9 @@ TEST(ConcurrentHashTableTest, AddStringEntriesParallel) {
                                std::string, String, PerThreadBumpPtrAllocator>>
       HashTable(Allocator);
 
+  parallel::Executor Executor;
   // Check parallel insertion.
-  parallelFor(0, NumElements, [&](size_t I) {
+  parallelFor(Executor, 0, NumElements, [&](size_t I) {
     std::string StringForElement = formatv("{0}", I);
     std::pair<String *, bool> Entry = HashTable.insert(StringForElement);
     EXPECT_TRUE(Entry.second);
@@ -208,7 +212,7 @@ TEST(ConcurrentHashTableTest, AddStringEntriesParallel) {
               std::string::npos);
 
   // Check parallel insertion of duplicates.
-  parallelFor(0, NumElements, [&](size_t I) {
+  parallelFor(Executor, 0, NumElements, [&](size_t I) {
     std::string StringForElement = formatv("{0}", I);
     std::pair<String *, bool> Entry = HashTable.insert(StringForElement);
     EXPECT_FALSE(Entry.second);
@@ -230,8 +234,9 @@ TEST(ConcurrentHashTableTest, AddStringEntriesParallelWithResize) {
                                std::string, String, PerThreadBumpPtrAllocator>>
       HashTable(Allocator, 100);
 
+  parallel::Executor Executor;
   // Check parallel insertion.
-  parallelFor(0, NumElements, [&](size_t I) {
+  parallelFor(Executor, 0, NumElements, [&](size_t I) {
     std::string StringForElement = formatv("{0}", I);
     std::pair<String *, bool> Entry = HashTable.insert(StringForElement);
     EXPECT_TRUE(Entry.second);
@@ -248,7 +253,7 @@ TEST(ConcurrentHashTableTest, AddStringEntriesParallelWithResize) {
               std::string::npos);
 
   // Check parallel insertion of duplicates.
-  parallelFor(0, NumElements, [&](size_t I) {
+  parallelFor(Executor, 0, NumElements, [&](size_t I) {
     std::string StringForElement = formatv("{0}", I);
     std::pair<String *, bool> Entry = HashTable.insert(StringForElement);
     EXPECT_FALSE(Entry.second);
