@@ -35,15 +35,15 @@ struct WasmInitEntry {
 
 class SyntheticSection : public OutputSection {
 public:
-  SyntheticSection(uint32_t type, std::string name = "")
-      : OutputSection(type, name), bodyOutputStream(body) {
+  SyntheticSection(Ctx &ctx, uint32_t type, std::string name = "")
+      : OutputSection(ctx, type, name), bodyOutputStream(body) {
     if (!name.empty())
       writeStr(bodyOutputStream, name, "section name");
   }
 
   void writeTo(uint8_t *buf) override {
     assert(offset);
-    log("writing " + toString(*this));
+    ctx.e.log("writing " + toString(*this));
     memcpy(buf + offset, header.data(), header.size());
     memcpy(buf + offset + header.size(), body.data(), body.size());
   }
@@ -73,7 +73,8 @@ protected:
 // https://github.com/WebAssembly/tool-conventions/blob/main/DynamicLinking.md
 class DylinkSection : public SyntheticSection {
 public:
-  DylinkSection() : SyntheticSection(llvm::wasm::WASM_SEC_CUSTOM, "dylink.0") {}
+  DylinkSection(Ctx &ctx)
+      : SyntheticSection(ctx, llvm::wasm::WASM_SEC_CUSTOM, "dylink.0") {}
   bool isNeeded() const override;
   void writeBody() override;
 
@@ -83,7 +84,7 @@ public:
 
 class TypeSection : public SyntheticSection {
 public:
-  TypeSection() : SyntheticSection(llvm::wasm::WASM_SEC_TYPE) {}
+  TypeSection(Ctx &ctx) : SyntheticSection(ctx, llvm::wasm::WASM_SEC_TYPE) {}
 
   bool isNeeded() const override { return types.size() > 0; };
   void writeBody() override;
@@ -143,7 +144,8 @@ namespace wasm {
 
 class ImportSection : public SyntheticSection {
 public:
-  ImportSection() : SyntheticSection(llvm::wasm::WASM_SEC_IMPORT) {}
+  ImportSection(Ctx &ctx)
+      : SyntheticSection(ctx, llvm::wasm::WASM_SEC_IMPORT) {}
   bool isNeeded() const override { return getNumImports() > 0; }
   void writeBody() override;
   void addImport(Symbol *sym);
@@ -184,7 +186,8 @@ protected:
 
 class FunctionSection : public SyntheticSection {
 public:
-  FunctionSection() : SyntheticSection(llvm::wasm::WASM_SEC_FUNCTION) {}
+  FunctionSection(Ctx &ctx)
+      : SyntheticSection(ctx, llvm::wasm::WASM_SEC_FUNCTION) {}
 
   bool isNeeded() const override { return inputFunctions.size() > 0; };
   void writeBody() override;
@@ -197,7 +200,7 @@ protected:
 
 class TableSection : public SyntheticSection {
 public:
-  TableSection() : SyntheticSection(llvm::wasm::WASM_SEC_TABLE) {}
+  TableSection(Ctx &ctx) : SyntheticSection(ctx, llvm::wasm::WASM_SEC_TABLE) {}
 
   bool isNeeded() const override { return inputTables.size() > 0; };
   void assignIndexes() override;
@@ -209,7 +212,8 @@ public:
 
 class MemorySection : public SyntheticSection {
 public:
-  MemorySection() : SyntheticSection(llvm::wasm::WASM_SEC_MEMORY) {}
+  MemorySection(Ctx &ctx)
+      : SyntheticSection(ctx, llvm::wasm::WASM_SEC_MEMORY) {}
 
   bool isNeeded() const override { return !ctx.arg.memoryImport.has_value(); }
   void writeBody() override;
@@ -229,7 +233,7 @@ public:
 // have void return type to share WasmSignature with functions.)
 class TagSection : public SyntheticSection {
 public:
-  TagSection() : SyntheticSection(llvm::wasm::WASM_SEC_TAG) {}
+  TagSection(Ctx &ctx) : SyntheticSection(ctx, llvm::wasm::WASM_SEC_TAG) {}
   void writeBody() override;
   bool isNeeded() const override { return inputTags.size() > 0; }
   void addTag(InputTag *tag);
@@ -239,7 +243,8 @@ public:
 
 class GlobalSection : public SyntheticSection {
 public:
-  GlobalSection() : SyntheticSection(llvm::wasm::WASM_SEC_GLOBAL) {}
+  GlobalSection(Ctx &ctx)
+      : SyntheticSection(ctx, llvm::wasm::WASM_SEC_GLOBAL) {}
 
   static bool classof(const OutputSection *sec) {
     return sec->type == llvm::wasm::WASM_SEC_GLOBAL;
@@ -290,7 +295,8 @@ protected:
 
 class ExportSection : public SyntheticSection {
 public:
-  ExportSection() : SyntheticSection(llvm::wasm::WASM_SEC_EXPORT) {}
+  ExportSection(Ctx &ctx)
+      : SyntheticSection(ctx, llvm::wasm::WASM_SEC_EXPORT) {}
   bool isNeeded() const override { return exports.size() > 0; }
   void writeBody() override;
 
@@ -300,14 +306,14 @@ public:
 
 class StartSection : public SyntheticSection {
 public:
-  StartSection() : SyntheticSection(llvm::wasm::WASM_SEC_START) {}
+  StartSection(Ctx &ctx) : SyntheticSection(ctx, llvm::wasm::WASM_SEC_START) {}
   bool isNeeded() const override;
   void writeBody() override;
 };
 
 class ElemSection : public SyntheticSection {
 public:
-  ElemSection() : SyntheticSection(llvm::wasm::WASM_SEC_ELEM) {}
+  ElemSection(Ctx &ctx) : SyntheticSection(ctx, llvm::wasm::WASM_SEC_ELEM) {}
   bool isNeeded() const override { return indirectFunctions.size() > 0; };
   void writeBody() override;
   void addEntry(FunctionSymbol *sym);
@@ -319,7 +325,7 @@ protected:
 
 class DataCountSection : public SyntheticSection {
 public:
-  DataCountSection(ArrayRef<OutputSegment *> segments);
+  DataCountSection(Ctx &ctx, ArrayRef<OutputSegment *> segments);
   bool isNeeded() const override;
   void writeBody() override;
 
@@ -331,9 +337,9 @@ protected:
 // This is only created when relocatable output is requested.
 class LinkingSection : public SyntheticSection {
 public:
-  LinkingSection(const std::vector<WasmInitEntry> &initFunctions,
+  LinkingSection(Ctx &ctx, const std::vector<WasmInitEntry> &initFunctions,
                  const std::vector<OutputSegment *> &dataSegments)
-      : SyntheticSection(llvm::wasm::WASM_SEC_CUSTOM, "linking"),
+      : SyntheticSection(ctx, llvm::wasm::WASM_SEC_CUSTOM, "linking"),
         initFunctions(initFunctions), dataSegments(dataSegments) {}
   bool isNeeded() const override {
     return ctx.arg.relocatable || ctx.arg.emitRelocs;
@@ -351,8 +357,8 @@ protected:
 // Create the custom "name" section containing debug symbol names.
 class NameSection : public SyntheticSection {
 public:
-  NameSection(ArrayRef<OutputSegment *> segments)
-      : SyntheticSection(llvm::wasm::WASM_SEC_CUSTOM, "name"),
+  NameSection(Ctx &ctx, ArrayRef<OutputSegment *> segments)
+      : SyntheticSection(ctx, llvm::wasm::WASM_SEC_CUSTOM, "name"),
         segments(segments) {}
   bool isNeeded() const override {
     if (ctx.arg.stripAll && !ctx.arg.keepSections.contains(name))
@@ -375,8 +381,8 @@ protected:
 
 class ProducersSection : public SyntheticSection {
 public:
-  ProducersSection()
-      : SyntheticSection(llvm::wasm::WASM_SEC_CUSTOM, "producers") {}
+  ProducersSection(Ctx &ctx)
+      : SyntheticSection(ctx, llvm::wasm::WASM_SEC_CUSTOM, "producers") {}
   bool isNeeded() const override {
     if (ctx.arg.stripAll && !ctx.arg.keepSections.contains(name))
       return false;
@@ -396,8 +402,8 @@ protected:
 
 class TargetFeaturesSection : public SyntheticSection {
 public:
-  TargetFeaturesSection()
-      : SyntheticSection(llvm::wasm::WASM_SEC_CUSTOM, "target_features") {}
+  TargetFeaturesSection(Ctx &ctx)
+      : SyntheticSection(ctx, llvm::wasm::WASM_SEC_CUSTOM, "target_features") {}
   bool isNeeded() const override {
     if (ctx.arg.stripAll && !ctx.arg.keepSections.contains(name))
       return false;
@@ -410,8 +416,8 @@ public:
 
 class RelocSection : public SyntheticSection {
 public:
-  RelocSection(StringRef name, OutputSection *sec)
-      : SyntheticSection(llvm::wasm::WASM_SEC_CUSTOM, std::string(name)),
+  RelocSection(Ctx &ctx, StringRef name, OutputSection *sec)
+      : SyntheticSection(ctx, llvm::wasm::WASM_SEC_CUSTOM, std::string(name)),
         sec(sec) {}
   void writeBody() override;
   bool isNeeded() const override { return sec->getNumRelocations() > 0; };
@@ -422,7 +428,7 @@ protected:
 
 class BuildIdSection : public SyntheticSection {
 public:
-  BuildIdSection();
+  BuildIdSection(Ctx &ctx);
   void writeBody() override;
   bool isNeeded() const override {
     return ctx.arg.buildId != BuildIdKind::None;
@@ -448,30 +454,6 @@ private:
   static constexpr char buildIdSectionName[] = "build_id";
   uint8_t *hashPlaceholderPtr = nullptr;
 };
-
-// Linker generated output sections
-struct OutStruct {
-  DylinkSection *dylinkSec;
-  TypeSection *typeSec;
-  FunctionSection *functionSec;
-  ImportSection *importSec;
-  TableSection *tableSec;
-  MemorySection *memorySec;
-  GlobalSection *globalSec;
-  TagSection *tagSec;
-  ExportSection *exportSec;
-  StartSection *startSec;
-  ElemSection *elemSec;
-  DataCountSection *dataCountSec;
-  LinkingSection *linkingSec;
-  NameSection *nameSec;
-  ProducersSection *producersSec;
-  TargetFeaturesSection *targetFeaturesSec;
-  BuildIdSection *buildIdSec;
-};
-
-extern OutStruct out;
-
 } // namespace wasm
 } // namespace lld
 

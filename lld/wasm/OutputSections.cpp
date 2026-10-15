@@ -41,8 +41,8 @@ void OutputSection::createHeader(size_t bodySize) {
   debugWrite(os.tell(), "section type [" + getSectionName() + "]");
   encodeULEB128(type, os);
   writeUleb128(os, bodySize, "section size");
-  log("createHeader: " + toString(*this) + " body=" + Twine(bodySize) +
-      " total=" + Twine(getSize()));
+  ctx.e.log("createHeader: " + toString(*this) + " body=" + Twine(bodySize) +
+            " total=" + Twine(getSize()));
 }
 
 void CodeSection::finalizeContents() {
@@ -60,17 +60,17 @@ void CodeSection::finalizeContents() {
   }
 
   if (bodySize > UINT32_MAX) {
-    error("section too large to encode: " + Twine(bodySize) + " bytes");
+    ctx.e.error("section too large to encode: " + Twine(bodySize) + " bytes");
   }
 
   createHeader(bodySize);
 }
 
 void CodeSection::writeTo(uint8_t *buf) {
-  log("writing " + toString(*this) + " offset=" + Twine(offset) +
-      " size=" + Twine(getSize()));
-  log(" headersize=" + Twine(header.size()));
-  log(" codeheadersize=" + Twine(codeSectionHeader.size()));
+  ctx.e.log("writing " + toString(*this) + " offset=" + Twine(offset) +
+            " size=" + Twine(getSize()));
+  ctx.e.log(" headersize=" + Twine(header.size()));
+  ctx.e.log(" codeheadersize=" + Twine(codeSectionHeader.size()));
   buf += offset;
 
   // Write section header
@@ -142,15 +142,15 @@ void DataSection::finalizeContents() {
         } else {
           initExpr = intConst(segment->startVA, is64);
         }
-        writeInitExpr(os, initExpr);
+        writeInitExpr(ctx, os, initExpr);
       }
     }
     writeUleb128(os, segment->size, "segment size");
 
     segment->sectionOffset = bodySize;
     bodySize += segment->header.size() + segment->size;
-    log("Data segment: size=" + Twine(segment->size) + ", startVA=" +
-        Twine::utohexstr(segment->startVA) + ", name=" + segment->name);
+    ctx.e.log("Data segment: size=" + Twine(segment->size) + ", startVA=" +
+              Twine::utohexstr(segment->startVA) + ", name=" + segment->name);
 
     for (InputChunk *inputSeg : segment->inputSegments) {
       inputSeg->outputSec = this;
@@ -160,15 +160,15 @@ void DataSection::finalizeContents() {
   }
 
   if (bodySize > UINT32_MAX) {
-    error("section too large to encode: " + Twine(bodySize) + " bytes");
+    ctx.e.error("section too large to encode: " + Twine(bodySize) + " bytes");
   }
 
   createHeader(bodySize);
 }
 
 void DataSection::writeTo(uint8_t *buf) {
-  log("writing " + toString(*this) + " offset=" + Twine(offset) +
-      " size=" + Twine(getSize()) + " body=" + Twine(bodySize));
+  ctx.e.log("writing " + toString(*this) + " offset=" + Twine(offset) +
+            " size=" + Twine(getSize()) + " body=" + Twine(bodySize));
   buf += offset;
 
   // Write section header
@@ -227,7 +227,7 @@ void CustomSection::finalizeInputSections() {
 
     if (!mergedSection) {
       mergedSection =
-          make<SyntheticMergedChunk>(name, 0, WASM_SEG_FLAG_STRINGS);
+          ctx.make<SyntheticMergedChunk>(ctx, name, 0, WASM_SEG_FLAG_STRINGS);
       newSections.push_back(mergedSection);
       mergedSection->outputSec = this;
     }
@@ -256,16 +256,17 @@ void CustomSection::finalizeContents() {
   }
 
   if (payloadSize > UINT32_MAX) {
-    error("section '" + name + "' too large to encode: " + Twine(payloadSize) +
-          " bytes");
+    ctx.e.error("section '" + name +
+                "' too large to encode: " + Twine(payloadSize) + " bytes");
   }
 
   createHeader(payloadSize + nameData.size());
 }
 
 void CustomSection::writeTo(uint8_t *buf) {
-  log("writing " + toString(*this) + " offset=" + Twine(offset) +
-      " size=" + Twine(getSize()) + " chunks=" + Twine(inputSections.size()));
+  ctx.e.log("writing " + toString(*this) + " offset=" + Twine(offset) +
+            " size=" + Twine(getSize()) +
+            " chunks=" + Twine(inputSections.size()));
 
   assert(offset);
   buf += offset;

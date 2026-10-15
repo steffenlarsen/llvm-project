@@ -23,8 +23,8 @@ namespace wasm {
 // file.
 class InputElement {
 protected:
-  InputElement(StringRef name, ObjFile *f)
-      : file(f), live(!ctx.arg.gcSections), name(name) {}
+  InputElement(Ctx &ctx, StringRef name, ObjFile *f)
+      : ctx(ctx), file(f), live(!ctx.arg.gcSections), name(name) {}
 
 public:
   StringRef getName() const { return name; }
@@ -35,6 +35,7 @@ public:
     assignedIndex = index;
   }
 
+  Ctx &ctx;
   ObjFile *file;
   bool live = false;
 
@@ -58,8 +59,9 @@ inline WasmInitExpr intConst(uint64_t value, bool is64) {
 
 class InputGlobal : public InputElement {
 public:
-  InputGlobal(const WasmGlobal &g, ObjFile *f)
-      : InputElement(g.SymbolName, f), type(g.Type), initExpr(g.InitExpr) {}
+  InputGlobal(Ctx &ctx, const WasmGlobal &g, ObjFile *f)
+      : InputElement(ctx, g.SymbolName, f), type(g.Type), initExpr(g.InitExpr) {
+  }
 
   const WasmGlobalType &getType() const { return type; }
   const WasmInitExpr &getInitExpr() const { return initExpr; }
@@ -75,8 +77,8 @@ private:
 
 class InputTag : public InputElement {
 public:
-  InputTag(const WasmSignature &s, const WasmTag &t, ObjFile *f)
-      : InputElement(t.SymbolName, f), signature(s) {
+  InputTag(Ctx &ctx, const WasmSignature &s, const WasmTag &t, ObjFile *f)
+      : InputElement(ctx, t.SymbolName, f), signature(s) {
     assert(s.Kind == WasmSignature::Tag);
   }
 
@@ -85,8 +87,8 @@ public:
 
 class InputTable : public InputElement {
 public:
-  InputTable(const WasmTable &t, ObjFile *f)
-      : InputElement(t.SymbolName, f), type(t.Type) {}
+  InputTable(Ctx &ctx, const WasmTable &t, ObjFile *f)
+      : InputElement(ctx, t.SymbolName, f), type(t.Type) {}
 
   const WasmTableType &getType() const { return type; }
   void setLimits(const WasmLimits &limits) { type.Limits = limits; }

@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "WriterUtils.h"
+#include "Config.h"
 #include "lld/Common/ErrorHandler.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/Debug.h"
@@ -164,12 +165,13 @@ void writeMemArg(raw_ostream &os, uint32_t alignment, uint64_t offset) {
   writeUleb128(os, offset, "offset");
 }
 
-void writeInitExpr(raw_ostream &os, const WasmInitExpr &initExpr) {
+void writeInitExpr(Ctx &ctx, raw_ostream &os, const WasmInitExpr &initExpr) {
   assert(!initExpr.Extended);
-  writeInitExprMVP(os, initExpr.Inst);
+  writeInitExprMVP(ctx, os, initExpr.Inst);
 }
 
-void writeInitExprMVP(raw_ostream &os, const WasmInitExprMVP &initExpr) {
+void writeInitExprMVP(Ctx &ctx, raw_ostream &os,
+                      const WasmInitExprMVP &initExpr) {
   writeU8(os, initExpr.Opcode, "opcode");
   switch (initExpr.Opcode) {
   case WASM_OPCODE_I32_CONST:
@@ -191,7 +193,7 @@ void writeInitExprMVP(raw_ostream &os, const WasmInitExprMVP &initExpr) {
     writeValueType(os, ValType::EXTERNREF, "literal (externref type)");
     break;
   default:
-    fatal("unknown opcode in init expr: " + Twine(initExpr.Opcode));
+    ctx.e.fatal("unknown opcode in init expr: " + Twine(initExpr.Opcode));
   }
   writeU8(os, WASM_OPCODE_END, "opcode:end");
 }
@@ -216,12 +218,12 @@ void writeTableType(raw_ostream &os, const WasmTableType &type) {
   writeLimits(os, type.Limits);
 }
 
-void writeImport(raw_ostream &os, const WasmImport &import) {
+void writeImport(Ctx &ctx, raw_ostream &os, const WasmImport &import) {
   writeStr(os, import.Module, "import module name");
-  writeCompactImport(os, import);
+  writeCompactImport(ctx, os, import);
 }
 
-void writeCompactImport(raw_ostream &os, const WasmImport &import) {
+void writeCompactImport(Ctx &ctx, raw_ostream &os, const WasmImport &import) {
   writeStr(os, import.Field, "import field name");
   writeU8(os, import.Kind, "import kind");
   switch (import.Kind) {
@@ -242,11 +244,11 @@ void writeCompactImport(raw_ostream &os, const WasmImport &import) {
     writeTableType(os, import.Table);
     break;
   default:
-    fatal("unsupported import type: " + Twine(import.Kind));
+    ctx.e.fatal("unsupported import type: " + Twine(import.Kind));
   }
 }
 
-void writeExport(raw_ostream &os, const WasmExport &export_) {
+void writeExport(Ctx &ctx, raw_ostream &os, const WasmExport &export_) {
   writeStr(os, export_.Name, "export name");
   writeU8(os, export_.Kind, "export kind");
   switch (export_.Kind) {
@@ -266,9 +268,8 @@ void writeExport(raw_ostream &os, const WasmExport &export_) {
     writeUleb128(os, export_.Index, "table index");
     break;
   default:
-    fatal("unsupported export type: " + Twine(export_.Kind));
+    ctx.e.fatal("unsupported export type: " + Twine(export_.Kind));
   }
 }
-
 } // namespace wasm
 } // namespace lld

@@ -46,7 +46,7 @@ static void writeHeader(raw_ostream &os, int64_t vma, uint64_t lma,
 }
 
 // Returns a list of all symbols that we want to print out.
-static std::vector<Symbol *> getSymbols() {
+static std::vector<Symbol *> getSymbols(Ctx &ctx) {
   std::vector<Symbol *> v;
   for (InputFile *file : ctx.objectFiles)
     for (Symbol *b : file->getSymbols())
@@ -69,7 +69,7 @@ static SymbolMapTy getSectionSyms(ArrayRef<Symbol *> syms) {
 // Demangling symbols (which is what toString() does) is slow, so
 // we do that in batch using parallel-for.
 static DenseMap<Symbol *, std::string>
-getSymbolStrings(ArrayRef<Symbol *> syms) {
+getSymbolStrings(Ctx &ctx, ArrayRef<Symbol *> syms) {
   std::vector<std::string> str(syms.size());
   parallelFor(0, syms.size(), [&](size_t i) {
     raw_string_ostream os(str[i]);
@@ -90,7 +90,7 @@ getSymbolStrings(ArrayRef<Symbol *> syms) {
       size = DF->function->getSize();
     }
     writeHeader(os, vma, fileOffset, size);
-    os.indent(16) << toString(*syms[i]);
+    os.indent(16) << toString(ctx, *syms[i]);
   });
 
   DenseMap<Symbol *, std::string> ret;
@@ -99,7 +99,8 @@ getSymbolStrings(ArrayRef<Symbol *> syms) {
   return ret;
 }
 
-void lld::wasm::writeMapFile(ArrayRef<OutputSection *> outputSections) {
+void lld::wasm::writeMapFile(Ctx &ctx,
+                             ArrayRef<OutputSection *> outputSections) {
   if (ctx.arg.mapFile.empty())
     return;
 
@@ -107,14 +108,14 @@ void lld::wasm::writeMapFile(ArrayRef<OutputSection *> outputSections) {
   std::error_code ec;
   raw_fd_ostream os(ctx.arg.mapFile, ec, sys::fs::OF_None);
   if (ec) {
-    error("cannot open " + ctx.arg.mapFile + ": " + ec.message());
+    ctx.e.error("cannot open " + ctx.arg.mapFile + ": " + ec.message());
     return;
   }
 
   // Collect symbol info that we want to print out.
-  std::vector<Symbol *> syms = getSymbols();
+  std::vector<Symbol *> syms = getSymbols(ctx);
   SymbolMapTy sectionSyms = getSectionSyms(syms);
-  DenseMap<Symbol *, std::string> symStr = getSymbolStrings(syms);
+  DenseMap<Symbol *, std::string> symStr = getSymbolStrings(ctx, syms);
 
   // Print out the header line.
   os << "    Addr      Off     Size Out     In      Symbol\n";

@@ -26,16 +26,16 @@ using namespace llvm::wasm;
 using namespace lld::wasm;
 
 namespace lld {
-std::string toString(const wasm::Symbol &sym) {
-  return maybeDemangleSymbol(sym.getName());
+std::string toString(wasm::Ctx &ctx, const wasm::Symbol &sym) {
+  return maybeDemangleSymbol(ctx, sym.getName());
 }
 
-std::string maybeDemangleSymbol(StringRef name) {
+std::string maybeDemangleSymbol(wasm::Ctx &ctx, StringRef name) {
   // WebAssembly requires caller and callee signatures to match, so we mangle
   // `main` in the case where we need to pass it arguments.
   if (name == "__main_argc_argv")
     return "main";
-  if (wasm::ctx.arg.demangle)
+  if (ctx.arg.demangle)
     return demangle(name);
   return name.str();
 }
@@ -207,7 +207,7 @@ bool Symbol::isImported() const {
          (isUndefined() && (importName.has_value() || forceImport));
 }
 
-bool Symbol::isExported() const {
+bool Symbol::isExported(Ctx &ctx) const {
   if (!isDefined() || isShared() || isLocal())
     return false;
 
@@ -364,10 +364,10 @@ DefinedTag::DefinedTag(StringRef name, uint32_t flags, InputFile *file,
                 tag ? &tag->signature : nullptr),
       tag(tag) {}
 
-void TableSymbol::setLimits(const WasmLimits &limits) {
+void TableSymbol::setLimits(Ctx &ctx, const WasmLimits &limits) {
   if (auto *t = dyn_cast<DefinedTable>(this))
     t->table->setLimits(limits);
-  auto *newType = make<WasmTableType>(*tableType);
+  auto *newType = ctx.make<WasmTableType>(*tableType);
   newType->Limits = limits;
   tableType = newType;
 }
@@ -404,10 +404,10 @@ const OutputSectionSymbol *SectionSymbol::getOutputSectionSymbol() const {
   return section->outputSec->sectionSym;
 }
 
-void LazySymbol::extract() {
+void LazySymbol::extract(Ctx &ctx) {
   if (file->lazy) {
     file->lazy = false;
-    symtab->addFile(file, name);
+    ctx.symtab->addFile(file, name);
   }
 }
 
@@ -415,12 +415,13 @@ void LazySymbol::setWeak() {
   flags |= (flags & ~WASM_SYMBOL_BINDING_MASK) | WASM_SYMBOL_BINDING_WEAK;
 }
 
-void printTraceSymbolUndefined(StringRef name, const InputFile *file) {
-  message(toString(file) + ": reference to " + name);
+void printTraceSymbolUndefined(Ctx &ctx, StringRef name,
+                               const InputFile *file) {
+  ctx.e.message(toString(file) + ": reference to " + name, ctx.e.outs());
 }
 
 // Print out a log message for --trace-symbol.
-void printTraceSymbol(Symbol *sym) {
+void printTraceSymbol(Ctx &ctx, Symbol *sym) {
   // Undefined symbols are traced via printTraceSymbolUndefined
   if (sym->isUndefined())
     return;
@@ -431,7 +432,7 @@ void printTraceSymbol(Symbol *sym) {
   else
     s = ": definition of ";
 
-  message(toString(sym->getFile()) + s + sym->getName());
+  ctx.e.message(toString(sym->getFile()) + s + sym->getName(), ctx.e.outs());
 }
 
 const char *defaultModule = "env";

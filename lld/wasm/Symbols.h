@@ -124,7 +124,7 @@ public:
 
   WasmSymbolType getWasmType() const;
   bool isImported() const;
-  bool isExported() const;
+  bool isExported(Ctx &ctx) const;
   bool isExportedExplicit() const;
 
   // Indicates that the symbol is used in an __attribute__((used)) directive
@@ -143,7 +143,7 @@ public:
 
 protected:
   Symbol(StringRef name, Kind k, uint32_t flags, InputFile *f)
-      : name(name), file(f), symbolKind(k), referenced(!ctx.arg.gcSections),
+      : name(name), file(f), symbolKind(k), referenced(false),
         requiresGOT(false), isUsedInRegularObj(false), forceExport(false),
         forceImport(false), canInline(false), traced(false), isStub(false),
         flags(flags) {}
@@ -430,7 +430,7 @@ public:
   }
 
   const WasmTableType *getTableType() const { return tableType; }
-  void setLimits(const WasmLimits &limits);
+  void setLimits(Ctx &ctx, const WasmLimits &limits);
 
   // Get/set the table number
   uint32_t getTableNumber() const;
@@ -562,7 +562,7 @@ public:
       : Symbol(name, LazyKind, flags, file) {}
 
   static bool classof(const Symbol *s) { return s->kind() == LazyKind; }
-  void extract();
+  void extract(Ctx &ctx);
   void setWeak();
 
   // Lazy symbols can have a signature because they can replace an
@@ -598,11 +598,11 @@ union SymbolUnion {
 // UndefinedFunction on a 64-bit system.
 static_assert(sizeof(SymbolUnion) <= 120, "SymbolUnion too large");
 
-void printTraceSymbol(Symbol *sym);
-void printTraceSymbolUndefined(StringRef name, const InputFile *file);
+void printTraceSymbol(Ctx &ctx, Symbol *sym);
+void printTraceSymbolUndefined(Ctx &ctx, StringRef name, const InputFile *file);
 
 template <typename T, typename... ArgT>
-T *replaceSymbol(Symbol *s, ArgT &&...arg) {
+T *replaceSymbol(Ctx &ctx, Symbol *s, ArgT &&...arg) {
   static_assert(std::is_trivially_destructible<T>(),
                 "Symbol types must be trivially destructible");
   static_assert(sizeof(T) <= sizeof(SymbolUnion), "SymbolUnion too small");
@@ -624,18 +624,16 @@ T *replaceSymbol(Symbol *s, ArgT &&...arg) {
   // Print out a log message if --trace-symbol was specified.
   // This is for debugging.
   if (s2->traced)
-    printTraceSymbol(s2);
+    printTraceSymbol(ctx, s2);
 
   return s2;
 }
-
 } // namespace wasm
 
 // Returns a symbol name for an error message.
-std::string toString(const wasm::Symbol &sym);
+std::string toString(wasm::Ctx &ctx, const wasm::Symbol &sym);
 std::string toString(wasm::Symbol::Kind kind);
-std::string maybeDemangleSymbol(StringRef name);
-
+std::string maybeDemangleSymbol(wasm::Ctx &ctx, StringRef name);
 } // namespace lld
 
 #endif

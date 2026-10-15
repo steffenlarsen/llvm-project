@@ -233,7 +233,8 @@ void InputFunction::setTableIndex(uint32_t index) {
 
 // Write a relocation value without padding and return the number of bytes
 // witten.
-static unsigned writeCompressedReloc(uint8_t *buf, const WasmRelocation &rel,
+static unsigned writeCompressedReloc(Ctx &ctx, uint8_t *buf,
+                                     const WasmRelocation &rel,
                                      uint64_t value) {
   switch (rel.getType()) {
   case R_WASM_TYPE_INDEX_LEB:
@@ -266,13 +267,13 @@ static unsigned writeCompressedReloc(uint8_t *buf, const WasmRelocation &rel,
   case R_WASM_MEMORY_ADDR_LOCREL_I32:
   case R_WASM_MEMORY_ADDR_LOCREL_I64:
   case R_WASM_FUNCTION_INDEX_I32:
-    fatal("relocation compression not supported for " +
-          relocTypeToString(rel.Type));
+    ctx.e.fatal("relocation compression not supported for " +
+                relocTypeToString(rel.Type));
   }
   llvm_unreachable("unhandled relocation type");
 }
 
-static unsigned getRelocWidthPadded(const WasmRelocation &rel) {
+static unsigned getRelocWidthPadded(Ctx &ctx, const WasmRelocation &rel) {
   switch (rel.getType()) {
   case R_WASM_TYPE_INDEX_LEB:
   case R_WASM_FUNCTION_INDEX_LEB:
@@ -304,15 +305,16 @@ static unsigned getRelocWidthPadded(const WasmRelocation &rel) {
   case R_WASM_MEMORY_ADDR_LOCREL_I32:
   case R_WASM_MEMORY_ADDR_LOCREL_I64:
   case R_WASM_FUNCTION_INDEX_I32:
-    fatal("relocation compression not supported for " +
-          relocTypeToString(rel.Type));
+    ctx.e.fatal("relocation compression not supported for " +
+                relocTypeToString(rel.Type));
   }
   llvm_unreachable("unhandled relocation type");
 }
 
-static unsigned getRelocWidth(const WasmRelocation &rel, uint64_t value) {
+static unsigned getRelocWidth(Ctx &ctx, const WasmRelocation &rel,
+                              uint64_t value) {
   uint8_t buf[10];
-  return writeCompressedReloc(buf, rel, value);
+  return writeCompressedReloc(ctx, buf, rel, value);
 }
 
 // Relocations of type LEB and SLEB in the code section are padded to 5 bytes
@@ -346,8 +348,8 @@ void InputFunction::calculateSize() {
     LLVM_DEBUG(dbgs() << "  region: " << (rel.Offset - lastRelocEnd) << "\n");
     compressedFuncSize += rel.Offset - lastRelocEnd;
     compressedFuncSize +=
-        getRelocWidth(rel, file->calcNewValue(rel, tombstone, this));
-    lastRelocEnd = rel.Offset + getRelocWidthPadded(rel);
+        getRelocWidth(ctx, rel, file->calcNewValue(rel, tombstone, this));
+    lastRelocEnd = rel.Offset + getRelocWidthPadded(ctx, rel);
   }
   LLVM_DEBUG(dbgs() << "  final region: " << (end - lastRelocEnd) << "\n");
   compressedFuncSize += end - lastRelocEnd;
@@ -384,9 +386,9 @@ void InputFunction::writeCompressed(uint8_t *buf) const {
     LLVM_DEBUG(dbgs() << "  write chunk: " << chunkSize << "\n");
     memcpy(buf, lastRelocEnd, chunkSize);
     buf += chunkSize;
-    buf += writeCompressedReloc(buf, rel,
+    buf += writeCompressedReloc(ctx, buf, rel,
                                 file->calcNewValue(rel, tombstone, this));
-    lastRelocEnd = secStart + rel.Offset + getRelocWidthPadded(rel);
+    lastRelocEnd = secStart + rel.Offset + getRelocWidthPadded(ctx, rel);
   }
 
   unsigned chunkSize = end - lastRelocEnd;
@@ -457,8 +459,8 @@ bool InputChunk::generateRelocationCode(raw_ostream &os) const {
       continue;
 
     if (!isValidRuntimeRelocation(rel.getType())) {
-      error("invalid runtime relocation type in data section: " +
-            relocTypetoString(rel.Type));
+      ctx.e.error("invalid runtime relocation type in data section: " +
+                  relocTypetoString(rel.Type));
       continue;
     }
 
@@ -528,10 +530,10 @@ void MergeInputChunk::splitStrings(ArrayRef<uint8_t> data) {
   while (!s.empty()) {
     size_t end = s.find(0);
     if (end == StringRef::npos)
-      fatal(toString(this) + ": string is not null terminated");
+      ctx.e.fatal(toString(this) + ": string is not null terminated");
     size_t size = end + 1;
 
-    pieces.emplace_back(off, xxh3_64bits(s.substr(0, size)), true);
+    pieces.emplace_back(ctx, off, xxh3_64bits(s.substr(0, size)), true);
     s = s.substr(size);
     off += size;
   }
@@ -553,7 +555,7 @@ void MergeInputChunk::splitIntoPieces() {
 
 SectionPiece *MergeInputChunk::getSectionPiece(uint64_t offset) {
   if (this->data().size() <= offset)
-    fatal(toString(this) + ": offset is outside the section");
+    ctx.e.fatal(toString(this) + ": offset is outside the section");
 
   // If Offset is not at beginning of a section piece, it is not in the map.
   // In that case we need to  do a binary search of the original section piece

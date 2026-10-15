@@ -9,6 +9,7 @@
 #ifndef LLD_WASM_CONFIG_H
 #define LLD_WASM_CONFIG_H
 
+#include "lld/Common/CommonLinkerContext.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/StringSet.h"
@@ -19,6 +20,7 @@
 
 namespace llvm {
 enum class CodeGenOptLevel;
+class TarWriter;
 } // namespace llvm
 
 namespace lld::wasm {
@@ -40,6 +42,24 @@ class DefinedGlobal;
 class UndefinedGlobal;
 class TableSymbol;
 class InputChunk;
+class SymbolTable;
+class DylinkSection;
+class TypeSection;
+class FunctionSection;
+class ImportSection;
+class TableSection;
+class MemorySection;
+class GlobalSection;
+class TagSection;
+class ExportSection;
+class StartSection;
+class ElemSection;
+class DataCountSection;
+class LinkingSection;
+class NameSection;
+class ProducersSection;
+class TargetFeaturesSection;
+class BuildIdSection;
 
 // For --unresolved-symbols.
 enum class UnresolvedPolicy { ReportError, Warn, Ignore, ImportDynamic };
@@ -140,9 +160,39 @@ struct Config {
   bool isMultithreaded() const { return sharedMemory || cooperativeThreading; }
 };
 
-// The Ctx object hold all other (non-configuration) global state.
-struct Ctx {
-  Config arg;
+// Linker generated output sections
+struct OutStruct {
+  DylinkSection *dylinkSec;
+  TypeSection *typeSec;
+  FunctionSection *functionSec;
+  ImportSection *importSec;
+  TableSection *tableSec;
+  MemorySection *memorySec;
+  GlobalSection *globalSec;
+  TagSection *tagSec;
+  ExportSection *exportSec;
+  StartSection *startSec;
+  ElemSection *elemSec;
+  DataCountSection *dataCountSec;
+  LinkingSection *linkingSec;
+  NameSection *nameSec;
+  ProducersSection *producersSec;
+  TargetFeaturesSection *targetFeaturesSec;
+  BuildIdSection *buildIdSec;
+};
+
+// The Ctx object hold all other (non-configuration) state of a link. Each link
+// owns its Ctx, so that links can run concurrently.
+struct Ctx : CommonLinkerContext {
+  // Value-initialized, since most fields of Config have no initializer.
+  Config arg{};
+  SymbolTable *symtab = nullptr;
+  OutStruct out{};
+  std::unique_ptr<llvm::TarWriter> tar;
+
+  // Set to true once LTO is complete in order prevent further bitcode objects
+  // being added.
+  bool doneLTO = false;
 
   llvm::SmallVector<ObjFile *, 0> objectFiles;
   llvm::SmallVector<StubFile *, 0> stubFiles;
@@ -268,7 +318,7 @@ struct Ctx {
     // Function used to get TLS base in libcall thread context modules.
     UndefinedFunction *getTLSBase;
   };
-  WasmSym sym;
+  WasmSym sym{};
 
   // True if we are creating position-independent code.
   bool isPic = false;
@@ -287,13 +337,14 @@ struct Ctx {
       whyExtractRecords;
 
   Ctx();
-  void reset();
+  ~Ctx();
 };
 
-extern Ctx ctx;
+// To evaluate the second argument lazily, we use C macro. It requires a ctx in
+// scope.
+#define CHECK(E, S) lld::check2(ctx.e, (E), [&] { return toString(S); })
 
-void errorOrWarn(const llvm::Twine &msg);
-
+void errorOrWarn(Ctx &ctx, const llvm::Twine &msg);
 } // namespace lld::wasm
 
 #endif
