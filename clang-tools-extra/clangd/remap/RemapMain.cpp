@@ -279,14 +279,15 @@ int main(int Argc, const char **Argv) {
   for (const auto &M : *Mappings)
     log("  Path mapping: {0}", M);
 
-  if (NumThreads.getValue() != 0)
-    llvm::parallel::strategy = llvm::hardware_concurrency(NumThreads);
+  llvm::parallel::Executor Executor(NumThreads.getValue() != 0
+                                        ? llvm::hardware_concurrency(NumThreads)
+                                        : llvm::ThreadPoolStrategy());
 
   std::atomic<unsigned> Errors{0};
   std::atomic<unsigned> FilesRenamed{0};
   std::atomic<unsigned> FilesUnchanged{0};
 
-  llvm::parallelFor(0, AllShards.size(), [&](size_t I) {
+  llvm::parallelFor(Executor, 0, AllShards.size(), [&](size_t I) {
     const std::string &ShardPath = AllShards[I];
 
     auto Buf = llvm::MemoryBuffer::getFile(ShardPath);
