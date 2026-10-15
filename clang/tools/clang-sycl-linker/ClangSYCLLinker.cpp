@@ -933,8 +933,10 @@ static Error aotCompileSplitModules(SmallVectorImpl<SplitModule> &SplitModules,
     AOTFiles[I] = std::string(TempFiles.back());
   }
 
+  parallel::Executor Executor;
   if (Error Err = parallelForEachError(
-          llvm::seq<size_t>(0, SplitModules.size()), [&](size_t I) -> Error {
+          Executor, llvm::seq<size_t>(0, SplitModules.size()),
+          [&](size_t I) -> Error {
             return runAOTCompile(SplitModules[I].ModuleFilePath, AOTFiles[I],
                                  Args);
           }))
