@@ -22,7 +22,8 @@ TEST(StringPoolTest, TestStringPool) {
   // StringPool uses PerThreadBumpPtrAllocator which should be accessed from
   // threads created by ThreadPoolExecutor. Use TaskGroup to run on
   // ThreadPoolExecutor threads.
-  parallel::TaskGroup tg;
+  parallel::Executor Executor;
+  parallel::TaskGroup tg(Executor);
 
   tg.spawn([&]() {
     std::pair<StringEntry *, bool> Entry = Strings.insert("test");
@@ -46,15 +47,16 @@ TEST(StringPoolTest, TestStringPool) {
 TEST(StringPoolTest, TestStringPoolParallel) {
   StringPool Strings;
 
+  parallel::Executor Executor;
   // Add data.
-  parallelFor(0, 1000, [&](size_t Idx) {
+  parallelFor(Executor, 0, 1000, [&](size_t Idx) {
     std::pair<StringEntry *, bool> Entry = Strings.insert(std::to_string(Idx));
     EXPECT_TRUE(Entry.second);
     EXPECT_TRUE(Entry.first->getKey() == std::to_string(Idx));
   });
 
   // Check data.
-  parallelFor(0, 1000, [&](size_t Idx) {
+  parallelFor(Executor, 0, 1000, [&](size_t Idx) {
     std::pair<StringEntry *, bool> Entry = Strings.insert(std::to_string(Idx));
     EXPECT_FALSE(Entry.second);
     EXPECT_TRUE(Entry.first->getKey() == std::to_string(Idx));

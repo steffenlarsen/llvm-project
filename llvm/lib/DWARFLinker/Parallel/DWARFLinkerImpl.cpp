@@ -84,6 +84,13 @@ Error DWARFLinkerImpl::link() {
   if (Error Err = validateAndUpdateOptions())
     return Err;
 
+  if (GlobalData.getOptions().Threads == 1) {
+    GlobalData.Executor = llvm::parallel::ExecutorRef::sequential();
+  } else {
+    assert(Executor && "setExecutor() must be called before link()");
+    GlobalData.Executor = *Executor;
+  }
+
   dwarf::FormParams GlobalFormat = {GlobalData.getOptions().TargetDWARFVersion,
                                     0, dwarf::DwarfFormat::DWARF32};
   llvm::endianness GlobalEndianness = llvm::endianness::native;
@@ -166,23 +173,12 @@ Error DWARFLinkerImpl::link() {
   CommonSections.setOutputFormat(GlobalFormat, GlobalEndianness);
 
   if (!GlobalData.Options.NoODR && Language.has_value()) {
-    llvm::parallel::TaskGroup TGroup;
+    llvm::parallel::TaskGroup TGroup(GlobalData.getExecutor());
     TGroup.spawn([&]() {
       ArtificialTypeUnit = std::make_unique<TypeUnit>(
           GlobalData, UniqueUnitID++, Language, GlobalFormat, GlobalEndianness);
     });
   }
-
-  // Set this process-global once. link() runs per architecture and dsymutil
-  // may run those links concurrently, so assigning it from each would be a
-  // data race; the thread count is the same for every architecture, so the
-  // first assignment suffices. Size the executor from that thread count rather
-  // than the per-architecture CU count, which is moot once it is shared.
-  static llvm::once_flag ParallelStrategyFlag;
-  llvm::call_once(ParallelStrategyFlag, [&] {
-    llvm::parallel::strategy =
-        hardware_concurrency(GlobalData.getOptions().Threads);
-  });
 
   // Link object files.
   if (GlobalData.getOptions().Threads == 1) {
@@ -228,7 +224,7 @@ Error DWARFLinkerImpl::link() {
       if (Context->FrameScan)
         Context->registerCIEs(CIEs);
 
-    llvm::parallel::TaskGroup TGroup;
+    llvm::parallel::TaskGroup TGroup(GlobalData.getExecutor());
     for (std::unique_ptr<LinkContext> &Context : ObjectContexts) {
       if (!Context->FrameScan)
         continue;
@@ -264,6 +260,7 @@ void DWARFLinkerImpl::verifyInput(const DWARFFile &File) {
   std::string Buffer;
   raw_string_ostream OS(Buffer);
   DIDumpOptions DumpOpts;
+  DumpOpts.Executor = GlobalData.getExecutor();
   if (!File.Dwarf->verify(OS, DumpOpts.noImplicitRecursion())) {
     if (GlobalData.getOptions().InputVerificationHandler)
       GlobalData.getOptions().InputVerificationHandler(File, OS.str());
@@ -496,13 +493,16 @@ Error DWARFLinkerImpl::LinkContext::link(TypeUnit *ArtificialTypeUnit) {
   InputDWARFFile.Dwarf->getDebugMacro();
 
   // Link modules compile units first.
-  parallelForEach(ModulesCompileUnits, [&](std::unique_ptr<CompileUnit> &Mod) {
-    // A module unit describes DIEs which no address reaches, so nothing marks
-    // it inter-connected and the inter-connected loops below, which iterate
-    // CompileUnits alone, would never advance it.
-    assert(!Mod->isInterconnectedCU() && "module unit is inter-connected");
-    linkSingleCompileUnit(*Mod, ArtificialTypeUnit);
-  });
+  parallelForEach(GlobalData.getExecutor(), ModulesCompileUnits,
+                  [&](std::unique_ptr<CompileUnit> &Mod) {
+                    // A module unit describes DIEs which no address reaches, so
+                    // nothing marks it inter-connected and the inter-connected
+                    // loops below, which iterate CompileUnits alone, would
+                    // never advance it.
+                    assert(!Mod->isInterconnectedCU() &&
+                           "module unit is inter-connected");
+                    linkSingleCompileUnit(*Mod, ArtificialTypeUnit);
+                  });
 
   // Check for live relocations. If there is no any live relocation then we
   // can skip entire object file.
@@ -544,9 +544,10 @@ Error DWARFLinkerImpl::LinkContext::link(TypeUnit *ArtificialTypeUnit) {
 
   // Link self-sufficient compile units and discover inter-connected compile
   // units.
-  parallelForEach(CompileUnits, [&](std::unique_ptr<CompileUnit> &CU) {
-    linkSingleCompileUnit(*CU, ArtificialTypeUnit);
-  });
+  parallelForEach(GlobalData.getExecutor(), CompileUnits,
+                  [&](std::unique_ptr<CompileUnit> &CU) {
+                    linkSingleCompileUnit(*CU, ArtificialTypeUnit);
+                  });
 
   // Link all inter-connected units.
   if (HasNewInterconnectedCUs) {
@@ -556,19 +557,22 @@ Error DWARFLinkerImpl::LinkContext::link(TypeUnit *ArtificialTypeUnit) {
           HasNewInterconnectedCUs = false;
 
           // Load inter-connected units.
-          parallelForEach(CompileUnits, [&](std::unique_ptr<CompileUnit> &CU) {
-            if (CU->isInterconnectedCU()) {
-              CU->maybeResetToLoadedStage();
-              linkSingleCompileUnit(*CU, ArtificialTypeUnit,
-                                    CompileUnit::Stage::Loaded);
-            }
-          });
+          parallelForEach(GlobalData.getExecutor(), CompileUnits,
+                          [&](std::unique_ptr<CompileUnit> &CU) {
+                            if (CU->isInterconnectedCU()) {
+                              CU->maybeResetToLoadedStage();
+                              linkSingleCompileUnit(*CU, ArtificialTypeUnit,
+                                                    CompileUnit::Stage::Loaded);
+                            }
+                          });
 
           // Do liveness analysis for inter-connected units.
-          parallelForEach(CompileUnits, [&](std::unique_ptr<CompileUnit> &CU) {
-            linkSingleCompileUnit(*CU, ArtificialTypeUnit,
-                                  CompileUnit::Stage::LivenessAnalysisDone);
-          });
+          parallelForEach(GlobalData.getExecutor(), CompileUnits,
+                          [&](std::unique_ptr<CompileUnit> &CU) {
+                            linkSingleCompileUnit(
+                                *CU, ArtificialTypeUnit,
+                                CompileUnit::Stage::LivenessAnalysisDone);
+                          });
 
           return HasNewInterconnectedCUs.load();
         }))
@@ -577,43 +581,52 @@ Error DWARFLinkerImpl::LinkContext::link(TypeUnit *ArtificialTypeUnit) {
     // Update dependencies.
     if (Error Err = finiteLoop([&]() -> Expected<bool> {
           HasNewGlobalDependency = false;
-          parallelForEach(CompileUnits, [&](std::unique_ptr<CompileUnit> &CU) {
-            linkSingleCompileUnit(
-                *CU, ArtificialTypeUnit,
-                CompileUnit::Stage::UpdateDependenciesCompleteness);
-          });
+          parallelForEach(
+              GlobalData.getExecutor(), CompileUnits,
+              [&](std::unique_ptr<CompileUnit> &CU) {
+                linkSingleCompileUnit(
+                    *CU, ArtificialTypeUnit,
+                    CompileUnit::Stage::UpdateDependenciesCompleteness);
+              });
           return HasNewGlobalDependency.load();
         }))
       return Err;
-    parallelForEach(CompileUnits, [&](std::unique_ptr<CompileUnit> &CU) {
-      if (CU->isInterconnectedCU() &&
-          CU->getStage() == CompileUnit::Stage::LivenessAnalysisDone)
-        CU->setStage(CompileUnit::Stage::UpdateDependenciesCompleteness);
-    });
+    parallelForEach(
+        GlobalData.getExecutor(), CompileUnits,
+        [&](std::unique_ptr<CompileUnit> &CU) {
+          if (CU->isInterconnectedCU() &&
+              CU->getStage() == CompileUnit::Stage::LivenessAnalysisDone)
+            CU->setStage(CompileUnit::Stage::UpdateDependenciesCompleteness);
+        });
 
     // Assign type names.
-    parallelForEach(CompileUnits, [&](std::unique_ptr<CompileUnit> &CU) {
-      linkSingleCompileUnit(*CU, ArtificialTypeUnit,
-                            CompileUnit::Stage::TypeNamesAssigned);
-    });
+    parallelForEach(GlobalData.getExecutor(), CompileUnits,
+                    [&](std::unique_ptr<CompileUnit> &CU) {
+                      linkSingleCompileUnit(
+                          *CU, ArtificialTypeUnit,
+                          CompileUnit::Stage::TypeNamesAssigned);
+                    });
 
     // Clone inter-connected units.
-    parallelForEach(CompileUnits, [&](std::unique_ptr<CompileUnit> &CU) {
-      linkSingleCompileUnit(*CU, ArtificialTypeUnit,
-                            CompileUnit::Stage::Cloned);
-    });
+    parallelForEach(GlobalData.getExecutor(), CompileUnits,
+                    [&](std::unique_ptr<CompileUnit> &CU) {
+                      linkSingleCompileUnit(*CU, ArtificialTypeUnit,
+                                            CompileUnit::Stage::Cloned);
+                    });
 
     // Update patches for inter-connected units.
-    parallelForEach(CompileUnits, [&](std::unique_ptr<CompileUnit> &CU) {
-      linkSingleCompileUnit(*CU, ArtificialTypeUnit,
-                            CompileUnit::Stage::PatchesUpdated);
-    });
+    parallelForEach(GlobalData.getExecutor(), CompileUnits,
+                    [&](std::unique_ptr<CompileUnit> &CU) {
+                      linkSingleCompileUnit(*CU, ArtificialTypeUnit,
+                                            CompileUnit::Stage::PatchesUpdated);
+                    });
 
     // Release data.
-    parallelForEach(CompileUnits, [&](std::unique_ptr<CompileUnit> &CU) {
-      linkSingleCompileUnit(*CU, ArtificialTypeUnit,
-                            CompileUnit::Stage::Cleaned);
-    });
+    parallelForEach(GlobalData.getExecutor(), CompileUnits,
+                    [&](std::unique_ptr<CompileUnit> &CU) {
+                      linkSingleCompileUnit(*CU, ArtificialTypeUnit,
+                                            CompileUnit::Stage::Cleaned);
+                    });
   }
 
   if (GlobalData.getOptions().UpdateIndexTablesOnly) {
@@ -1065,7 +1078,7 @@ void DWARFLinkerImpl::printStatistic() {
 }
 
 void DWARFLinkerImpl::assignOffsets() {
-  llvm::parallel::TaskGroup TGroup;
+  llvm::parallel::TaskGroup TGroup(GlobalData.getExecutor());
   TGroup.spawn([&]() { assignOffsetsToStrings(); });
   TGroup.spawn([&]() { assignOffsetsToSections(); });
 }
@@ -1245,7 +1258,7 @@ void DWARFLinkerImpl::patchOffsetsAndSizes() {
 }
 
 void DWARFLinkerImpl::emitCommonSectionsAndWriteCompileUnitsToTheOutput() {
-  llvm::parallel::TaskGroup TG;
+  llvm::parallel::TaskGroup TG(GlobalData.getExecutor());
 
   // Create section descriptors ahead if they are not exist at the moment.
   // SectionDescriptors container is not thread safe. Thus we should be sure

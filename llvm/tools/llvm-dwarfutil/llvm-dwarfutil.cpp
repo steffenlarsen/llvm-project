@@ -23,6 +23,7 @@
 #include "llvm/Support/FileUtilities.h"
 #include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/InitLLVM.h"
+#include "llvm/Support/Parallel.h"
 #include "llvm/Support/PrettyStackTrace.h"
 #include "llvm/Support/Process.h"
 #include "llvm/Support/Signals.h"
@@ -191,7 +192,9 @@ static Error verifyOutput(const Options &Opts) {
     if (ObjectFile *Obj = static_cast<ObjectFile *>(BinOrErr->getBinary())) {
       verbose("Verifying DWARF...", Opts.Verbose);
       std::unique_ptr<DWARFContext> DICtx = DWARFContext::create(*Obj);
+      parallel::Executor Executor(hardware_concurrency(Opts.NumThreads));
       DIDumpOptions DumpOpts;
+      DumpOpts.Executor = Executor;
       if (!DICtx->verify(Opts.Verbose ? outs() : nulls(),
                          DumpOpts.noImplicitRecursion()))
         return createFileError(FileName,

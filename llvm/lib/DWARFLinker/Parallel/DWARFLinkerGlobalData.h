@@ -97,6 +97,9 @@ public:
   /// Returns linking options.
   const DWARFLinkerOptions &getOptions() const { return Options; }
 
+  /// Returns where the parallel work of the link runs.
+  llvm::parallel::ExecutorRef getExecutor() const { return Executor; }
+
   /// Set warning handler.
   void setWarningHandler(MessageHandlerTy Handler) { WarningHandler = Handler; }
 
@@ -149,6 +152,8 @@ protected:
   StringPool Strings;
   ModulePool Modules;
   DWARFLinkerOptions Options;
+  llvm::parallel::ExecutorRef Executor =
+      llvm::parallel::ExecutorRef::sequential();
   MessageHandlerTy WarningHandler;
   MessageHandlerTy ErrorHandler;
 

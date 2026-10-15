@@ -585,6 +585,7 @@ static bool verifyOutput(StringRef OutputFile, StringRef Arch,
     raw_string_ostream OS(Buffer);
 
     DIDumpOptions DumpOpts;
+    DumpOpts.Executor = Options.LinkOpts.Executor;
     bool success = DICtx->verify(OS, DumpOpts.noImplicitRecursion());
     if (!success) {
       std::lock_guard<std::mutex> Guard(Mutex);
@@ -861,6 +862,10 @@ int dsymutil_main(int argc, char **argv, const llvm::ToolContext &) {
     // thread) so the per-architecture link output is emitted in order.
     DefaultThreadPool ThreadPool(hardware_concurrency(
         Options.LinkOpts.Statistics ? 1 : Options.LinkOpts.Threads));
+    // Shared by the links of all architectures.
+    llvm::parallel::Executor Executor(
+        hardware_concurrency(Options.LinkOpts.Threads));
+    Options.LinkOpts.Executor = Executor;
 
     // If there is more than one link to execute, we need to generate
     // temporary files.

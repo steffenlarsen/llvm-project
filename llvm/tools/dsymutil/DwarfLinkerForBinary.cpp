@@ -750,6 +750,7 @@ bool DwarfLinkerForBinary::linkImpl(
   GeneralLinker->setPrependPath(Options.PrependPath);
   GeneralLinker->setKeepFunctionForStatic(Options.KeepFunctionForStatic);
   GeneralLinker->setThreadPool(ThreadPool);
+  GeneralLinker->setExecutor(Options.Executor);
   GeneralLinker->setInputVerificationHandler(
       [&](const DWARFFile &File, llvm::StringRef Output) {
         std::lock_guard<std::mutex> Guard(ErrorHandlerMutex);

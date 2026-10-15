@@ -12,6 +12,7 @@
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/Remarks/RemarkFormat.h"
+#include "llvm/Support/Parallel.h"
 #include "llvm/Support/VirtualFileSystem.h"
 #include "llvm/Support/WithColor.h"
 
@@ -72,6 +73,9 @@ struct LinkOptions {
 
   /// Number of threads.
   unsigned Threads = 1;
+
+  /// Where the DWARF linker and the verifier run their parallel work.
+  parallel::ExecutorRef Executor = parallel::ExecutorRef::sequential();
 
   // Output file type.
   dwarf_linker::DWARFLinkerBase::OutputFileType FileType =

@@ -44,7 +44,7 @@ void TypeUnit::createDIETree(BumpPtrAllocator &Allocator) {
 
   // TaskGroup is created here as internal code has calls to
   // PerThreadBumpPtrAllocator which should be called from the task group task.
-  llvm::parallel::TaskGroup TG;
+  llvm::parallel::TaskGroup TG(GlobalData.getExecutor());
   TG.spawn([&]() {
     SectionDescriptor &DebugInfoSection =
         getOrCreateSectionDescriptor(DebugSectionKind::DebugInfo);
@@ -134,7 +134,7 @@ void TypeUnit::prepareDataForTreeCreation() {
   // Type unit data created parallelly. So the order of data is not
   // deterministic. Sort data here to produce deterministic output.
 
-  llvm::parallel::TaskGroup TG;
+  llvm::parallel::TaskGroup TG(GlobalData.getExecutor());
 
   TG.spawn([&]() {
     // Sort types to have a deterministic output.
@@ -369,7 +369,8 @@ Error TypeUnit::finishCloningAndEmit(const Triple &TargetTriple) {
   Tasks.push_back([&]() -> Error { return emitAbbreviations(); });
 
   if (auto Err = parallelForEachError(
-          Tasks, [&](std::function<Error(void)> F) { return F(); }))
+          GlobalData.getExecutor(), Tasks,
+          [&](std::function<Error(void)> F) { return F(); }))
     return Err;
 
   return Error::success();
