@@ -21,7 +21,9 @@
 
 #include "lld/Common/ErrorHandler.h"
 #include "lld/Common/Memory.h"
+#include "llvm/Support/Parallel.h"
 #include "llvm/Support/StringSaver.h"
+#include <memory>
 
 namespace llvm {
 class raw_ostream;
@@ -35,6 +37,15 @@ public:
   virtual ~CommonLinkerContext();
 
   static void destroy();
+
+  // Returns where this link runs its parallel work: `host`, limited to `limit`
+  // threads, or else a new pool of that size owned by this link.
+  llvm::parallel::ExecutorRef createExecutor(llvm::parallel::Executor *host,
+                                             llvm::ThreadPoolStrategy limit);
+
+  // The pool created by createExecutor(), if any. Declared first so that it is
+  // destroyed last, once nothing else of the link can still use it.
+  std::unique_ptr<llvm::parallel::Executor> ownedExecutor;
 
   llvm::BumpPtrAllocator bAlloc;
   llvm::StringSaver saver{bAlloc};

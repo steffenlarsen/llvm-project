@@ -19,6 +19,7 @@
 #include "Writer.h"
 #include "lld/Common/CommonLinkerContext.h"
 #include "lld/Common/Timer.h"
+#include "llvm/Support/Parallel.h"
 
 namespace lld::coff {
 
@@ -117,6 +118,13 @@ public:
   std::optional<PDBStats> pdbStats;
 
   Configuration config;
+
+  // The executor passed to lldMain(), if any.
+  llvm::parallel::Executor *hostExecutor = nullptr;
+  // Where this link runs its parallel work: the host executor, or else a pool
+  // owned by this link, limited by /threads:. Sequential until then.
+  llvm::parallel::ExecutorRef executor =
+      llvm::parallel::ExecutorRef::sequential();
 
   DynamicRelocsChunk *dynamicRelocs = nullptr;
 };

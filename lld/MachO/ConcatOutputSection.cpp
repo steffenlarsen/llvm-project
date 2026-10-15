@@ -367,7 +367,7 @@ void TextOutputSection::finalize() {
 }
 
 void ConcatOutputSection::writeTo(uint8_t *buf) const {
-  parallelForEach(inputs, [buf](ConcatInputSection *isec) {
+  parallelForEach(config->executor, inputs, [buf](ConcatInputSection *isec) {
     isec->writeTo(buf + isec->outSecOff);
   });
 }
@@ -375,10 +375,10 @@ void ConcatOutputSection::writeTo(uint8_t *buf) const {
 void TextOutputSection::writeTo(uint8_t *buf) const {
   // Inputs and thunks all write to their own range of the output buffer, so
   // there is no need to interleave the two sorted vectors here.
-  parallelForEach(inputs, [buf](ConcatInputSection *isec) {
+  parallelForEach(config->executor, inputs, [buf](ConcatInputSection *isec) {
     isec->writeTo(buf + isec->outSecOff);
   });
-  parallelForEach(thunks, [buf](ConcatInputSection *thunk) {
+  parallelForEach(config->executor, thunks, [buf](ConcatInputSection *thunk) {
     thunk->writeTo(buf + thunk->outSecOff);
   });
 }

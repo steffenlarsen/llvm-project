@@ -484,6 +484,9 @@ void macho::reportPendingDuplicateSymbols() {
       error(message + duplicate.src2.second);
     }
   }
+  // The symbols die with this link. Do not report them again from the next
+  // link in the same process.
+  dupSymDiags.clear();
 }
 
 // Check whether the definition name def is a mangled function name that matches

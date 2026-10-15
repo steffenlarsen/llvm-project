@@ -2651,7 +2651,7 @@ void Writer::writeSections() {
       memset(secBuf + prevEnd, 0xCC, rawSize - prevEnd);
     }
 
-    parallelForEach(sec->chunks, [&](Chunk *c) {
+    parallelForEach(ctx.executor, sec->chunks, [&](Chunk *c) {
       uint8_t *buf = secBuf + c->getRVA() - sec->getRVA();
       c->writeTo(buf);
 
@@ -2735,7 +2735,8 @@ void Writer::sortExceptionTable(ChunkRange &exceptionTable) {
                << " is not a multiple of " << sizeof(T);
   }
 
-  parallelSort(MutableArrayRef<T>(reinterpret_cast<T *>(begin),
+  parallelSort(ctx.executor,
+               MutableArrayRef<T>(reinterpret_cast<T *>(begin),
                                   reinterpret_cast<T *>(end)),
                [](const T &a, const T &b) { return a.begin < b.begin; });
 }

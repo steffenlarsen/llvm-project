@@ -40,8 +40,9 @@ using namespace lld;
 // actually counts.
 //
 // This function spawns a background thread to remove the file.
-// The calling thread returns almost immediately.
-void lld::unlinkAsync(StringRef path) {
+// The calling thread returns almost immediately. Without \p threadsEnabled
+// this does nothing, except on Windows.
+void lld::unlinkAsync(StringRef path, bool threadsEnabled) {
   if (!sys::fs::exists(path) || !sys::fs::is_regular_file(path))
     return;
 
@@ -76,7 +77,7 @@ void lld::unlinkAsync(StringRef path) {
   }
   sys::fs::remove(path);
 #else
-  if (parallel::strategy.ThreadsRequested == 1)
+  if (!threadsEnabled)
     return;
 
   // We cannot just remove path from a different thread because we are now going

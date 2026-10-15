@@ -1076,9 +1076,9 @@ void TypeMerger::mergeTypesWithGHash() {
   {
     llvm::TimeTraceScope timeScope("Load GHASHes");
     ScopedTimer t1(ctx.loadGHashTimer);
-    parallelForEach(dependencySources,
+    parallelForEach(ctx.executor, dependencySources,
                     [&](TpiSource *source) { source->loadGHashes(); });
-    parallelForEach(objectSources,
+    parallelForEach(ctx.executor, objectSources,
                     [&](TpiSource *source) { source->loadGHashes(); });
   }
 
@@ -1108,7 +1108,7 @@ void TypeMerger::mergeTypesWithGHash() {
   // position. Because the table does not rehash, the position will not change
   // under insertion. After insertion is done, the value of the cell can be read
   // to retrieve the final PDB type index.
-  parallelFor(0, ctx.tpiSourceList.size(), [&](size_t tpiSrcIdx) {
+  parallelFor(ctx.executor, 0, ctx.tpiSourceList.size(), [&](size_t tpiSrcIdx) {
     TpiSource *source = ctx.tpiSourceList[tpiSrcIdx];
     source->indexMapStorage.resize(source->ghashes.size());
     for (uint32_t i = 0, e = source->ghashes.size(); i < e; i++) {
@@ -1141,7 +1141,7 @@ void TypeMerger::mergeTypesWithGHash() {
     if (!cell.isEmpty())
       entries.push_back(cell);
   }
-  parallelSort(entries, std::less<GHashCell>());
+  parallelSort(ctx.executor, entries, std::less<GHashCell>());
   Log(ctx) << formatv(
       "ghash table load factor: {0:p} (size {1} / capacity {2})\n",
       tableSize ? double(entries.size()) / tableSize : 0, entries.size(),
@@ -1179,7 +1179,7 @@ void TypeMerger::mergeTypesWithGHash() {
   // In parallel, remap all types.
   for (TpiSource *source : dependencySources)
     source->remapTpiWithGHashes(&ghashState);
-  parallelForEach(objectSources, [&](TpiSource *source) {
+  parallelForEach(ctx.executor, objectSources, [&](TpiSource *source) {
     source->remapTpiWithGHashes(&ghashState);
   });
 

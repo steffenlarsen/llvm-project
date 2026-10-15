@@ -94,10 +94,17 @@ void lld::exitLld(int val) {
 
   // Dealloc/destroy ManagedStatic variables before calling _exit().
   // In an LTO build, allows us to get the output of -time-passes.
-  // Ensures that the thread pool for the parallel algorithms is stopped to
-  // avoid intermittent crashes on Windows when exiting.
-  if (!CrashRecoveryContext::GetCurrent())
+  if (!CrashRecoveryContext::GetCurrent()) {
+#ifdef _WIN32
+    // Stop the link's own thread pool for the parallel algorithms to avoid
+    // intermittent crashes on Windows when exiting. A host's executor is the
+    // host's to stop. Elsewhere, stopping would run the threads' TLS
+    // destructors while other threads may still use them.
+    if (hasContext() && context().ownedExecutor)
+      context().ownedExecutor->stop();
+#endif
     llvm_shutdown();
+  }
 
   if (hasContext())
     lld::errorHandler().flushStreams();

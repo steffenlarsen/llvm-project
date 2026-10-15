@@ -93,7 +93,7 @@ static SymbolMapTy getSectionSyms(Ctx &ctx, ArrayRef<Defined *> syms) {
 static DenseMap<Symbol *, std::string>
 getSymbolStrings(Ctx &ctx, ArrayRef<Defined *> syms) {
   auto strs = std::make_unique<std::string[]>(syms.size());
-  parallelFor(0, syms.size(), [&](size_t i) {
+  parallelFor(ctx.executor, 0, syms.size(), [&](size_t i) {
     raw_string_ostream os(strs[i]);
     OutputSection *osec = syms[i]->getOutputSection();
     uint64_t vma = syms[i]->getVA(ctx);

@@ -116,7 +116,7 @@ static MapInfo gatherMapInfo() {
   // cstrings are not stored in sorted order in their OutputSections, so we sort
   // them here.
   for (auto &liveCStrings : info.liveCStringsForSection)
-    parallelSort(liveCStrings.second, llvm::less_first());
+    parallelSort(config->executor, liveCStrings.second, llvm::less_first());
   return info;
 }
 

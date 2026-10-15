@@ -20,6 +20,7 @@
 #include "llvm/BinaryFormat/MachO.h"
 #include "llvm/Support/CachePruning.h"
 #include "llvm/Support/GlobPattern.h"
+#include "llvm/Support/Parallel.h"
 #include "llvm/Support/VersionTuple.h"
 #include "llvm/TextAPI/Architecture.h"
 #include "llvm/TextAPI/Platform.h"
@@ -189,6 +190,12 @@ struct Configuration {
   bool errorForArchMismatch = false;
   bool ignoreAutoLink = false;
   int readWorkers = 0;
+  // The executor passed to lldMain(), if any.
+  llvm::parallel::Executor *hostExecutor = nullptr;
+  // Where this link runs its parallel work: the host executor, or else a pool
+  // owned by this link, limited by --threads=. Sequential until then.
+  llvm::parallel::ExecutorRef executor =
+      llvm::parallel::ExecutorRef::sequential();
   // ld64 allows invalid auto link options as long as the link succeeds. LLD
   // does not, but there are cases in the wild where the invalid linker options
   // exist. This allows users to ignore the specific invalid options in the case

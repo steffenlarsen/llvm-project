@@ -15,7 +15,7 @@
 #include <system_error>
 
 namespace lld {
-void unlinkAsync(StringRef path);
+void unlinkAsync(StringRef path, bool threadsEnabled);
 std::error_code tryCreateFile(StringRef path);
 std::unique_ptr<llvm::raw_fd_ostream> openFile(StringRef file);
 std::unique_ptr<llvm::raw_fd_ostream> openLTOOutputFile(StringRef file);

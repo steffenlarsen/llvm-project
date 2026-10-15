@@ -1196,7 +1196,7 @@ void ObjFile::parseDeferredRelocations() {
 
 void macho::parseDeferredRelocations() {
   TimeTraceScope timeScope("Parse relocations");
-  parallelForEach(inputFiles, [](InputFile *file) {
+  parallelForEach(config->executor, inputFiles, [](InputFile *file) {
     if (auto *objFile = dyn_cast<ObjFile>(file))
       objFile->parseDeferredRelocations();
   });

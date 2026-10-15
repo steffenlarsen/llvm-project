@@ -284,10 +284,11 @@ void lld::coff::wrapSymbols(SymbolTable &symtab) {
   }
 
   // Update pointers in input files.
-  parallelForEach(symtab.ctx.objFileInstances, [&](ObjFile *file) {
-    MutableArrayRef<Symbol *> syms = file->getMutableSymbols();
-    for (auto &sym : syms)
-      if (Symbol *s = map.lookup(sym))
-        sym = s;
-  });
+  parallelForEach(symtab.ctx.executor, symtab.ctx.objFileInstances,
+                  [&](ObjFile *file) {
+                    MutableArrayRef<Symbol *> syms = file->getMutableSymbols();
+                    for (auto &sym : syms)
+                      if (Symbol *s = map.lookup(sym))
+                        sym = s;
+                  });
 }
