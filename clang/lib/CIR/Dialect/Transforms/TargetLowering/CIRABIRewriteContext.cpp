@@ -316,6 +316,18 @@ static uint64_t coercionByteSize(mlir::Type ty, const mlir::DataLayout &dl) {
   return dl.getTypeSize(ty);
 }
 
+/// A pointer to \p pointee in the target's alloca address space, which every
+/// temporary this pass allocates has to live in.
+static cir::PointerType getAllocaPtrTy(mlir::Type pointee,
+                                       const mlir::DataLayout &dl) {
+  mlir::ptr::MemorySpaceAttrInterface addrSpace;
+  if (auto asAttr = mlir::dyn_cast_if_present<mlir::IntegerAttr>(
+          dl.getAllocaMemorySpace()))
+    addrSpace = cir::TargetAddressSpaceAttr::get(pointee.getContext(),
+                                                 asAttr.getUInt());
+  return cir::PointerType::get(pointee, addrSpace);
+}
+
 /// Coerce \p src into a temporary memory slot typed for \p dstTy at the
 /// current builder insertion point, and return the destination-typed pointer
 /// to that slot without loading the value back out.  This is the shared
@@ -376,9 +388,10 @@ mlir::Value emitCoercionToMemory(mlir::OpBuilder &builder, mlir::Location loc,
   assert((offset == 0 || offset % dl.getTypeABIAlignment(coercedTy) == 0) &&
          "a direct offset must be aligned for the coerced access");
 
-  auto slotPtrTy = cir::PointerType::get(slotTy);
-  auto srcPtrTy = cir::PointerType::get(srcTy);
-  auto dstPtrTy = cir::PointerType::get(dstTy);
+  cir::PointerType slotPtrTy = getAllocaPtrTy(slotTy, dl);
+  mlir::ptr::MemorySpaceAttrInterface slotAddrSpace = slotPtrTy.getAddrSpace();
+  auto srcPtrTy = cir::PointerType::get(srcTy, slotAddrSpace);
+  auto dstPtrTy = cir::PointerType::get(dstTy, slotAddrSpace);
 
   cir::AllocaOp alloca;
   {
@@ -401,7 +414,7 @@ mlir::Value emitCoercionToMemory(mlir::OpBuilder &builder, mlir::Location loc,
     if (offset != 0) {
       auto u8Ty =
           cir::IntType::get(builder.getContext(), 8, /*isSigned=*/false);
-      auto u8PtrTy = cir::PointerType::get(u8Ty);
+      auto u8PtrTy = cir::PointerType::get(u8Ty, slotAddrSpace);
       auto u8Base = cir::CastOp::create(builder, loc, u8PtrTy,
                                         cir::CastKind::bitcast, alloca);
       createdOps.insert(u8Base);
@@ -697,7 +710,9 @@ void insertArgCoercion(
           entry.insertArgument(blockArgIdx + f, fieldTy, loc);
         if (!destAlloca)
           continue;
-        mlir::Type fieldPtrTy = cir::PointerType::get(fieldTy);
+        mlir::Type fieldPtrTy = cir::PointerType::get(
+            fieldTy,
+            mlir::cast<cir::PointerType>(destAlloca.getType()).getAddrSpace());
         auto fieldPtr = cir::GetMemberOp::create(builder, loc, fieldPtrTy,
                                                  destAlloca, /*name=*/"",
                                                  /*index=*/f);
@@ -730,14 +745,15 @@ void insertArgCoercion(
 
       // setInsertionPointToStart: see comment in the Expand arm above.
       builder.setInsertionPointToStart(&entry);
-      auto flatPtrTy = cir::PointerType::get(flatTy);
+      cir::PointerType flatPtrTy = getAllocaPtrTy(flatTy, dl);
       uint64_t flatAlign = dl.getTypeABIAlignment(flatTy);
       auto flatSlot = cir::AllocaOp::create(
           builder, loc, flatPtrTy, builder.getStringAttr("coerce"),
           builder.getI64IntegerAttr(flatAlign));
       SmallPtrSet<Operation *, 8> flattenOps = {flatSlot};
       for (auto [f, fieldTy] : llvm::enumerate(flatTy.getMembers())) {
-        Type fieldPtrTy = cir::PointerType::get(fieldTy);
+        Type fieldPtrTy =
+            cir::PointerType::get(fieldTy, flatPtrTy.getAddrSpace());
         auto fieldPtr = cir::GetMemberOp::create(builder, loc, fieldPtrTy,
                                                  flatSlot, /*name=*/"",
                                                  /*index=*/f);
@@ -1543,8 +1559,10 @@ CIRABIRewriteContext::rewriteCallSite(mlir::Operation *callOp,
         mlir::Value coercedPtr =
             emitCoercionToMemory(builder, call.getLoc(), flatTy, arg, slotBlock,
                                  dl, coercionOps, /*offset=*/0);
+        auto coercedPtrTy = mlir::cast<cir::PointerType>(coercedPtr.getType());
         for (auto [f, fieldTy] : llvm::enumerate(flatTy.getMembers())) {
-          mlir::Type fieldPtrTy = cir::PointerType::get(fieldTy);
+          mlir::Type fieldPtrTy =
+              cir::PointerType::get(fieldTy, coercedPtrTy.getAddrSpace());
           auto fieldPtr =
               cir::GetMemberOp::create(builder, call.getLoc(), fieldPtrTy,
                                        coercedPtr, /*name=*/"", /*index=*/f);
