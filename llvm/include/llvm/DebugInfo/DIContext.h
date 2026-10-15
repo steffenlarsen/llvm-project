@@ -17,6 +17,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/BinaryFormat/Dwarf.h"
 #include "llvm/Object/ObjectFile.h"
+#include "llvm/Support/Parallel.h"
 #include "llvm/Support/WithColor.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cassert>
@@ -222,6 +223,9 @@ struct DIDumpOptions {
   StringRef getNameForDWARFAddressSpace(uint64_t AS) const {
     return dwarf::AddressSpaceString(AS, TT);
   }
+
+  /// Where verification runs its parallel work.
+  parallel::ExecutorRef Executor = parallel::ExecutorRef::getDefault();
 
   /// Return default option set for printing a single DIE without children.
   static DIDumpOptions getForSingleDIE() {

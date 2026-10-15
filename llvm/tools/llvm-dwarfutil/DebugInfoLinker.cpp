@@ -479,7 +479,8 @@ Error linkDebugInfoImpl(object::ObjectFile &File, const Options &Options,
 Error linkDebugInfo(object::ObjectFile &File, const Options &Options,
                     raw_pwrite_stream &OutStream) {
   if (Options.UseDWARFLinkerParallel)
-    return linkDebugInfoImpl<parallel::DWARFLinker>(File, Options, OutStream);
+    return linkDebugInfoImpl<dwarf_linker::parallel::DWARFLinker>(File, Options,
+                                                                  OutStream);
   else
     return linkDebugInfoImpl<classic::DWARFLinker>(File, Options, OutStream);
 }
