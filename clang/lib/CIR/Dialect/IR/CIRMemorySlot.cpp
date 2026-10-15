@@ -43,6 +43,19 @@ static bool hasUnresolvedGotos(Operation *scope) {
       .wasInterrupted();
 }
 
+/// Returns true if \p type is a record the C++ ABI passes and returns in
+/// memory, such as one with a non-trivial copy constructor.  The record layouts
+/// of the module enclosing \p op say which records those are.
+static bool isRecordPassedInMemory(Operation *op, Type type) {
+  auto recordTy = dyn_cast<cir::RecordType>(type);
+  if (!recordTy)
+    return false;
+  cir::RecordLayoutAttr layout = cir::tryGetRecordLayout(
+      op->getParentOfType<ModuleOp>(), recordTy.getName());
+  return layout &&
+         layout.getArgPassingKind() != cir::ArgPassingKind::CanPassInRegs;
+}
+
 llvm::SmallVector<MemorySlot> cir::AllocaOp::getPromotableSlots() {
   // Promotion computes reaching definitions from the CFG, which misses the
   // edges of unresolved gotos, so a load after a cir.label would be given the
@@ -50,6 +63,13 @@ llvm::SmallVector<MemorySlot> cir::AllocaOp::getPromotableSlots() {
   // gotos are lowered.
   if (hasUnresolvedGotos(
           getOperation()->getParentWithTrait<OpTrait::IsIsolatedFromAbove>()))
+    return {};
+  // Calling-convention lowering finds the storage of a record passed in memory
+  // through the slots CIRGen allocates for it: a non-byval argument is handed
+  // the temporary it was built in, and a returned record is built in the
+  // caller's return slot. Promoting such a slot leaves a value with no storage
+  // for the lowering to name, so keep it in memory.
+  if (isRecordPassedInMemory(getOperation(), getAllocaType()))
     return {};
   return {MemorySlot{getResult(), getAllocaType()}};
 }

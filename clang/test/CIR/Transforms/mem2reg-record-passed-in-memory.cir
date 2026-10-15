@@ -1,0 +1,100 @@
+// RUN: cir-opt %s -mem2reg -o - | FileCheck %s
+// RUN: cir-opt %s -mem2reg -cir-call-conv-lowering=target=x86_64 -o - \
+// RUN:   | FileCheck %s --check-prefix=LOWERED
+
+// A record the C++ ABI passes in memory keeps its stack slots through mem2reg,
+// since calling-convention lowering names the storage of such a record through
+// them. Pipelines that run mem2reg before that lowering, as the offload merge
+// does, would otherwise leave it a value with no storage to name.
+
+!s64i = !cir.int<s, 64>
+!rec_InMemory = !cir.struct<"InMemory" {data !s64i}>
+!rec_InRegs = !cir.struct<"InRegs" {data !s64i}>
+!rec_NoLayout = !cir.struct<"NoLayout" {data !s64i}>
+
+module attributes {
+  cir.triple = "x86_64-unknown-linux-gnu",
+  cir.record_layouts = {
+    InMemory = #cir.record_layout<arg_passing_kind = cannot_pass_in_regs,
+                                  has_trivial_dtor = true, record_align = 8>,
+    InRegs = #cir.record_layout<arg_passing_kind = can_pass_in_regs,
+                                has_trivial_dtor = true, record_align = 8>
+  },
+  dlti.dl_spec = #dlti.dl_spec<
+    #dlti.dl_entry<i64, dense<64>: vector<2xi64>>>
+} {
+  cir.func private @make() -> !rec_InMemory
+  cir.func private @take(!rec_InMemory)
+
+  // The temporary an argument is built in. The call building it gets the slot
+  // as its return slot and the call taking it gets the same slot, as classic
+  // codegen passes `agg.tmp`.
+
+  // CHECK-LABEL: cir.func @argument_temporary
+  // CHECK:         %[[TMP:.*]] = cir.alloca "agg.tmp"
+  // CHECK:         %[[MADE:.*]] = cir.call @make()
+  // CHECK:         cir.store %[[MADE]], %[[TMP]]
+  // CHECK:         %[[ARG:.*]] = cir.load %[[TMP]]
+  // CHECK:         cir.call @take(%[[ARG]])
+
+  // LOWERED-LABEL: cir.func @argument_temporary()
+  // LOWERED:         %[[TMP:.*]] = cir.alloca "agg.tmp"
+  // LOWERED-NEXT:    cir.call @make(%[[TMP]])
+  // LOWERED-NEXT:    cir.call @take(%[[TMP]])
+  // LOWERED-NEXT:    cir.return
+  cir.func @argument_temporary() {
+    %0 = cir.alloca "agg.tmp" align(8) : !cir.ptr<!rec_InMemory>
+    %1 = cir.call @make() : () -> !rec_InMemory
+    cir.store %1, %0 : !rec_InMemory, !cir.ptr<!rec_InMemory>
+    %2 = cir.load %0 : !cir.ptr<!rec_InMemory>, !rec_InMemory
+    cir.call @take(%2) : (!rec_InMemory) -> ()
+    cir.return
+  }
+
+  // Returning a parameter. The return slot is rewired to the caller's, which
+  // only works on `__retval`: promoted, the return would read the parameter's
+  // own slot instead, which the incoming pointer replaces.
+
+  // CHECK-LABEL: cir.func @return_parameter
+  // CHECK:         %[[PARAM:.*]] = cir.alloca "p"
+  // CHECK:         %[[RETVAL:.*]] = cir.alloca "__retval"
+  // CHECK:         cir.copy %[[PARAM]] to %[[RETVAL]]
+  // CHECK:         %[[RET:.*]] = cir.load %[[RETVAL]]
+  // CHECK:         cir.return %[[RET]]
+
+  // LOWERED-LABEL: cir.func @return_parameter(
+  // LOWERED-SAME:      %[[SRET:[^:]*]]: !cir.ptr<!rec_InMemory> {{{.*}}llvm.sret = !rec_InMemory
+  // LOWERED-SAME:      %[[PARAM:[^:]*]]: !cir.ptr<!rec_InMemory> {
+  // LOWERED-NEXT:    cir.copy %[[PARAM]] to %[[SRET]]
+  // LOWERED-NEXT:    cir.return
+  cir.func @return_parameter(%arg0: !rec_InMemory) -> !rec_InMemory {
+    %0 = cir.alloca "p" align(8) init : !cir.ptr<!rec_InMemory>
+    %1 = cir.alloca "__retval" align(8) : !cir.ptr<!rec_InMemory>
+    cir.store %arg0, %0 : !rec_InMemory, !cir.ptr<!rec_InMemory>
+    cir.copy %0 to %1 : !cir.ptr<!rec_InMemory>
+    %2 = cir.load %1 : !cir.ptr<!rec_InMemory>, !rec_InMemory
+    cir.return %2 : !rec_InMemory
+  }
+
+  // A record passed in registers, or one without a layout, still promotes.
+
+  // CHECK-LABEL: cir.func @promotes_in_regs
+  // CHECK-NOT:     cir.alloca
+  // CHECK:         cir.return %arg0 : !rec_InRegs
+  cir.func @promotes_in_regs(%arg0: !rec_InRegs) -> !rec_InRegs {
+    %0 = cir.alloca "s" align(8) : !cir.ptr<!rec_InRegs>
+    cir.store %arg0, %0 : !rec_InRegs, !cir.ptr<!rec_InRegs>
+    %1 = cir.load %0 : !cir.ptr<!rec_InRegs>, !rec_InRegs
+    cir.return %1 : !rec_InRegs
+  }
+
+  // CHECK-LABEL: cir.func @promotes_without_layout
+  // CHECK-NOT:     cir.alloca
+  // CHECK:         cir.return %arg0 : !rec_NoLayout
+  cir.func @promotes_without_layout(%arg0: !rec_NoLayout) -> !rec_NoLayout {
+    %0 = cir.alloca "s" align(8) : !cir.ptr<!rec_NoLayout>
+    cir.store %arg0, %0 : !rec_NoLayout, !cir.ptr<!rec_NoLayout>
+    %1 = cir.load %0 : !cir.ptr<!rec_NoLayout>, !rec_NoLayout
+    cir.return %1 : !rec_NoLayout
+  }
+}
