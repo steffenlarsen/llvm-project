@@ -12,7 +12,7 @@
 #include <cstdint>
 
 namespace lld::macho {
-
+struct Ctx;
 class OutputSection;
 class InputSection;
 class Symbol;
@@ -24,17 +24,13 @@ public:
   virtual void writeTo(uint8_t *buf) const = 0;
 };
 
-template <class LP> void writeResult();
-void resetWriter();
+template <class LP> void writeResult(Ctx &ctx);
 
-void createSyntheticSections();
+void createSyntheticSections(Ctx &ctx);
 
 // Add bindings for symbols that need weak or non-lazy bindings.
-void addNonLazyBindingEntries(const Symbol *, const InputSection *,
+void addNonLazyBindingEntries(Ctx &ctx, const Symbol *, const InputSection *,
                               uint64_t offset, int64_t addend = 0);
-
-extern OutputSection *firstTLVDataSection;
-
 } // namespace lld::macho
 
 #endif

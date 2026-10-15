@@ -19,12 +19,14 @@ using SectionPair = std::pair<const InputSection *, const InputSection *>;
 
 class PriorityBuilder {
 public:
+  explicit PriorityBuilder(Ctx &ctx) : ctx(ctx) {}
+
   // Reads every input section's call graph profile, and combines them into
   // callGraphProfile. If an order file is present, any edges where one or both
   // of the vertices are specified in the order file are discarded.
   void extractCallGraphProfile();
 
-  // Reads the order file at `path` into config->priorities.
+  // Reads the order file at `path` into ctx.arg.priorities.
   //
   // An order file has one entry per line, in the following format:
   //
@@ -77,6 +79,8 @@ public:
   llvm::DenseMap<const InputSection *, int> buildInputSectionPriorities();
 
 private:
+  Ctx &ctx;
+
   // The symbol with the smallest priority should be ordered first in the output
   // section (modulo input section contiguity constraints).
   struct SymbolPriorityEntry {
@@ -97,8 +101,6 @@ private:
   llvm::DenseMap<uint32_t, SymbolPriorityEntry> cStringPriorities;
   llvm::MapVector<SectionPair, uint64_t> callGraphProfile;
 };
-
-extern PriorityBuilder priorityBuilder;
 } // namespace lld::macho
 
 #endif

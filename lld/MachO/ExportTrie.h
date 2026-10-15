@@ -15,12 +15,13 @@
 #include <vector>
 
 namespace lld::macho {
-
+struct Ctx;
 struct TrieNode;
 class Symbol;
 
 class TrieBuilder {
 public:
+  explicit TrieBuilder(Ctx &ctx) : ctx(ctx) {}
   ~TrieBuilder();
   void setImageBase(uint64_t addr) { imageBase = addr; }
   void addSymbol(const Symbol &sym) { exported.push_back(&sym); }
@@ -33,6 +34,7 @@ private:
   void sortAndBuild(llvm::MutableArrayRef<const Symbol *> vec, TrieNode *node,
                     size_t lastPos, size_t pos);
 
+  Ctx &ctx;
   uint64_t imageBase = 0;
   std::vector<const Symbol *> exported;
   std::vector<TrieNode *> nodes;
@@ -41,9 +43,8 @@ private:
 using TrieEntryCallback =
     llvm::function_ref<void(const llvm::Twine & /*name*/, uint64_t /*flags*/)>;
 
-void parseTrie(const std::string &fileName, const uint8_t *buf, size_t size,
-               const TrieEntryCallback &);
-
+void parseTrie(Ctx &ctx, const std::string &fileName, const uint8_t *buf,
+               size_t size, const TrieEntryCallback &);
 } // namespace lld::macho
 
 #endif

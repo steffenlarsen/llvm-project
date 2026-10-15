@@ -60,8 +60,8 @@ struct ExportInfo {
   uint64_t address;
   uint64_t ordinal = 0;
   uint8_t flags = 0;
-  ExportInfo(const Symbol &sym, uint64_t imageBase)
-      : address(sym.getVA() - imageBase) {
+  ExportInfo(Ctx &ctx, const Symbol &sym, uint64_t imageBase)
+      : address(sym.getVA(ctx) - imageBase) {
     using namespace llvm::MachO;
     if (sym.isWeakDef())
       flags |= EXPORT_SYMBOL_FLAGS_WEAK_DEFINITION;
@@ -256,7 +256,7 @@ tailcall:
 
   if (isTerminal) {
     assert(j - i == 1); // no duplicate symbols
-    node->info = ExportInfo(*pivotSymbol, imageBase);
+    node->info = ExportInfo(ctx, *pivotSymbol, imageBase);
   } else {
     // This is the tail-call-optimized version of the following:
     // sortAndBuild(vec.slice(i, j - i), node, lastPos, pos + 1);
@@ -297,9 +297,10 @@ namespace {
 // Parse a serialized trie and invoke a callback for each entry.
 class TrieParser {
 public:
-  TrieParser(const std::string &fileName, const uint8_t *buf, size_t size,
-             const TrieEntryCallback &callback)
-      : fileName(fileName), start(buf), end(start + size), callback(callback) {}
+  TrieParser(Ctx &ctx, const std::string &fileName, const uint8_t *buf,
+             size_t size, const TrieEntryCallback &callback)
+      : ctx(ctx), fileName(fileName), start(buf), end(start + size),
+        callback(callback) {}
 
   void parse(const uint8_t *buf, const Twine &cumulativeString,
              DenseSet<size_t> &visited);
@@ -309,6 +310,7 @@ public:
     parse(start, "", visited);
   }
 
+  Ctx &ctx;
   const std::string fileName;
   const uint8_t *start;
   const uint8_t *end;
@@ -320,7 +322,8 @@ public:
 void TrieParser::parse(const uint8_t *buf, const Twine &cumulativeString,
                        DenseSet<size_t> &visited) {
   if (buf >= end)
-    fatal(fileName + ": export trie node offset points outside export section");
+    ctx.e.fatal(fileName +
+                ": export trie node offset points outside export section");
 
   size_t currentOffset = buf - start;
   visited.insert(currentOffset);
@@ -343,17 +346,17 @@ void TrieParser::parse(const uint8_t *buf, const Twine &cumulativeString,
     offset = decodeULEB128(buf, &ulebSize);
     buf += ulebSize;
     if (visited.find(offset) != visited.end())
-      fatal(fileName + ": export trie child node infinite loop");
+      ctx.e.fatal(fileName + ": export trie child node infinite loop");
     parse(start + offset, cumulativeString + substring, visited);
   }
 
   visited.erase(currentOffset);
 }
 
-void macho::parseTrie(const std::string &fileName, const uint8_t *buf,
+void macho::parseTrie(Ctx &ctx, const std::string &fileName, const uint8_t *buf,
                       size_t size, const TrieEntryCallback &callback) {
   if (size == 0)
     return;
 
-  TrieParser(fileName, buf, size, callback).parse();
+  TrieParser(ctx, fileName, buf, size, callback).parse();
 }

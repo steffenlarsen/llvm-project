@@ -24,7 +24,7 @@ using namespace lld::macho;
 namespace {
 
 struct X86_64 : TargetInfo {
-  X86_64();
+  X86_64(Ctx &ctx);
 
   int64_t getEmbeddedAddend(MemoryBufferRef, uint64_t offset,
                             const relocation_info) const override;
@@ -112,16 +112,16 @@ void X86_64::relocateOne(uint8_t *loc, const Relocation &r, uint64_t value,
   switch (r.length) {
   case 0:
     if (r.type == X86_64_RELOC_UNSIGNED)
-      checkUInt(loc, r, value, 8);
+      checkUInt(ctx, loc, r, value, 8);
     else
-      checkInt(loc, r, value, 8);
+      checkInt(ctx, loc, r, value, 8);
     *loc = value;
     break;
   case 2:
     if (r.type == X86_64_RELOC_UNSIGNED)
-      checkUInt(loc, r, value, 32);
+      checkUInt(ctx, loc, r, value, 32);
     else
-      checkInt(loc, r, value, 32);
+      checkInt(ctx, loc, r, value, 32);
     write32le(loc, value);
     break;
   case 3:
@@ -141,10 +141,11 @@ void X86_64::relocateOne(uint8_t *loc, const Relocation &r, uint64_t value,
 // bufAddr:  The virtual address corresponding to buf[0].
 // bufOff:   The offset within buf of the next instruction.
 // destAddr: The destination address that the current instruction references.
-static void writeRipRelative(SymbolDiagnostic d, uint8_t *buf, uint64_t bufAddr,
-                             uint64_t bufOff, uint64_t destAddr) {
+static void writeRipRelative(Ctx &ctx, SymbolDiagnostic d, uint8_t *buf,
+                             uint64_t bufAddr, uint64_t bufOff,
+                             uint64_t destAddr) {
   uint64_t rip = bufAddr + bufOff;
-  checkInt(buf, d, destAddr - rip, 32);
+  checkInt(ctx, buf, d, destAddr - rip, 32);
   // For the instructions we care about, the RIP-relative address is always
   // stored in the last 4 bytes of the instruction.
   write32le(buf + bufOff - 4, destAddr - rip);
@@ -157,8 +158,8 @@ static constexpr uint8_t stub[] = {
 void X86_64::writeStub(uint8_t *buf, const Symbol &sym,
                        uint64_t pointerVA) const {
   memcpy(buf, stub, 2); // just copy the two nonzero bytes
-  uint64_t stubAddr = in.stubs->addr + sym.stubsIndex * sizeof(stub);
-  writeRipRelative({&sym, "stub"}, buf, stubAddr, sizeof(stub), pointerVA);
+  uint64_t stubAddr = ctx.in.stubs->addr + sym.stubsIndex * sizeof(stub);
+  writeRipRelative(ctx, {&sym, "stub"}, buf, stubAddr, sizeof(stub), pointerVA);
 }
 
 static constexpr uint8_t stubHelperHeader[] = {
@@ -171,11 +172,11 @@ static constexpr uint8_t stubHelperHeader[] = {
 void X86_64::writeStubHelperHeader(uint8_t *buf) const {
   memcpy(buf, stubHelperHeader, sizeof(stubHelperHeader));
   SymbolDiagnostic d = {nullptr, "stub helper header"};
-  writeRipRelative(d, buf, in.stubHelper->addr, 7,
-                   in.imageLoaderCache->getVA());
-  writeRipRelative(d, buf, in.stubHelper->addr, 0xf,
-                   in.got->addr +
-                       in.stubHelper->stubBinder->gotIndex * LP64::wordSize);
+  writeRipRelative(ctx, d, buf, ctx.in.stubHelper->addr, 7,
+                   ctx.in.imageLoaderCache->getVA());
+  writeRipRelative(ctx, d, buf, ctx.in.stubHelper->addr, 0xf,
+                   ctx.in.got->addr + ctx.in.stubHelper->stubBinder->gotIndex *
+                                          LP64::wordSize);
 }
 
 static constexpr uint8_t stubHelperEntry[] = {
@@ -187,8 +188,8 @@ void X86_64::writeStubHelperEntry(uint8_t *buf, const Symbol &sym,
                                   uint64_t entryAddr) const {
   memcpy(buf, stubHelperEntry, sizeof(stubHelperEntry));
   write32le(buf + 1, sym.lazyBindOffset);
-  writeRipRelative({&sym, "stub helper"}, buf, entryAddr,
-                   sizeof(stubHelperEntry), in.stubHelper->addr);
+  writeRipRelative(ctx, {&sym, "stub helper"}, buf, entryAddr,
+                   sizeof(stubHelperEntry), ctx.in.stubHelper->addr);
 }
 
 static constexpr uint8_t objcStubsFastCode[] = {
@@ -199,26 +200,26 @@ static constexpr uint8_t objcStubsFastCode[] = {
 void X86_64::writeObjCMsgSendStub(uint8_t *buf, Symbol *sym, uint64_t stubsAddr,
                                   uint64_t &stubOffset, uint64_t selrefVA,
                                   Symbol *objcMsgSend) const {
-  uint64_t objcMsgSendAddr = in.got->addr;
+  uint64_t objcMsgSendAddr = ctx.in.got->addr;
   uint64_t objcMsgSendIndex = objcMsgSend->gotIndex;
 
   memcpy(buf, objcStubsFastCode, sizeof(objcStubsFastCode));
   SymbolDiagnostic d = {sym, sym->getName()};
   uint64_t stubAddr = stubsAddr + stubOffset;
-  writeRipRelative(d, buf, stubAddr, 7, selrefVA);
-  writeRipRelative(d, buf, stubAddr, 0xd,
+  writeRipRelative(ctx, d, buf, stubAddr, 7, selrefVA);
+  writeRipRelative(ctx, d, buf, stubAddr, 0xd,
                    objcMsgSendAddr + objcMsgSendIndex * LP64::wordSize);
-  stubOffset += target->objcStubsFastSize;
+  stubOffset += ctx.target->objcStubsFastSize;
 }
 
 void X86_64::relaxGotLoad(uint8_t *loc, uint8_t type) const {
   // Convert MOVQ to LEAQ
   if (loc[-2] != 0x8b)
-    error(getRelocAttrs(type).name + " reloc requires MOVQ instruction");
+    ctx.e.error(getRelocAttrs(type).name + " reloc requires MOVQ instruction");
   loc[-2] = 0x8d;
 }
 
-X86_64::X86_64() : TargetInfo(LP64()) {
+X86_64::X86_64(Ctx &ctx) : TargetInfo(ctx, LP64()) {
   cpuType = CPU_TYPE_X86_64;
   cpuSubtype = CPU_SUBTYPE_X86_64_ALL;
 
@@ -236,16 +237,15 @@ X86_64::X86_64() : TargetInfo(LP64()) {
   relocAttrs = {relocAttrsArray.data(), relocAttrsArray.size()};
 }
 
-TargetInfo *macho::createX86_64TargetInfo() {
-  static X86_64 t;
-  return &t;
+std::unique_ptr<TargetInfo> macho::createX86_64TargetInfo(Ctx &ctx) {
+  return std::make_unique<X86_64>(ctx);
 }
 
 void X86_64::handleDtraceReloc(const Symbol *sym, const Relocation &r,
                                uint8_t *loc) const {
   assert(r.type == X86_64_RELOC_BRANCH);
 
-  if (config->outputType == MH_OBJECT)
+  if (ctx.arg.outputType == MH_OBJECT)
     return;
 
   if (sym->getName().starts_with("___dtrace_probe")) {
@@ -257,6 +257,6 @@ void X86_64::handleDtraceReloc(const Symbol *sym, const Relocation &r,
     loc[-1] = 0x33;
     write32le(loc, 0x909090C0);
   } else {
-    error("Unrecognized dtrace symbol prefix: " + toString(*sym));
+    ctx.e.error("Unrecognized dtrace symbol prefix: " + toString(ctx, *sym));
   }
 }

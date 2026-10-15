@@ -66,12 +66,9 @@ private:
   std::vector<OutputSection *> sections;
 };
 
-extern std::vector<OutputSegment *> outputSegments;
+void sortOutputSegments(Ctx &ctx);
 
-void sortOutputSegments();
-void resetOutputSegments();
-
-OutputSegment *getOrCreateOutputSegment(StringRef name);
+OutputSegment *getOrCreateOutputSegment(Ctx &ctx, StringRef name);
 
 } // namespace lld::macho
 

@@ -33,7 +33,6 @@ add_lld_library(lldMachO
   SymbolTable.cpp
   Symbols.cpp
   SyntheticSections.cpp
-  Target.cpp
   UnwindInfoSection.cpp
   Writer.cpp
 

@@ -51,7 +51,6 @@ static_library("MachO") {
     "SymbolTable.cpp",
     "Symbols.cpp",
     "SyntheticSections.cpp",
-    "Target.cpp",
     "UnwindInfoSection.cpp",
     "Writer.cpp",
   ]

@@ -40,7 +40,8 @@ public:
     TextKind,
   };
 
-  OutputSection(Kind kind, StringRef name) : name(name), sectionKind(kind) {}
+  OutputSection(Ctx &ctx, Kind kind, StringRef name)
+      : ctx(ctx), name(name), sectionKind(kind) {}
   virtual ~OutputSection() = default;
   Kind kind() const { return sectionKind; }
 
@@ -77,6 +78,7 @@ public:
   // Handle section$start$ and section$end$ symbols.
   void assignAddressesToStartEndSymbols();
 
+  Ctx &ctx;
   StringRef name;
   llvm::TinyPtrVector<Defined *> sectionStartSymbols;
   llvm::TinyPtrVector<Defined *> sectionEndSymbols;

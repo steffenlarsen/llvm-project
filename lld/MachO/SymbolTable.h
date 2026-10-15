@@ -14,6 +14,8 @@
 #include "lld/Common/LLVM.h"
 #include "llvm/ADT/CachedHashString.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/MapVector.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/Object/Archive.h"
 
 namespace lld::macho {
@@ -28,6 +30,28 @@ class Symbol;
 class Defined;
 class Undefined;
 
+struct DuplicateSymbolDiag {
+  // Pair containing source location and source file
+  const std::pair<std::string, std::string> src1;
+  const std::pair<std::string, std::string> src2;
+  const Symbol *sym;
+
+  DuplicateSymbolDiag(const std::pair<std::string, std::string> src1,
+                      const std::pair<std::string, std::string> src2,
+                      const Symbol *sym)
+      : src1(src1), src2(src2), sym(sym) {}
+};
+
+struct UndefinedDiag {
+  struct SectionAndOffset {
+    const InputSection *isec;
+    uint64_t offset;
+  };
+
+  std::vector<SectionAndOffset> codeReferences;
+  std::vector<std::string> otherReferences;
+};
+
 /*
  * Note that the SymbolTable handles name collisions by calling
  * replaceSymbol(), which does an in-place update of the Symbol via `placement
@@ -36,6 +60,8 @@ class Undefined;
  */
 class SymbolTable {
 public:
+  SymbolTable(Ctx &ctx) : ctx(ctx) {}
+
   Defined *addDefined(StringRef name, InputFile *, InputSection *,
                       uint64_t value, uint64_t size, bool isWeakDef,
                       bool isPrivateExtern, bool isReferencedDynamically,
@@ -65,22 +91,25 @@ public:
   Symbol *find(llvm::CachedHashStringRef name);
   Symbol *find(StringRef name) { return find(llvm::CachedHashStringRef(name)); }
 
+  // Diagnostics collected during symbol resolution, emitted by
+  // reportPendingDuplicateSymbols() and reportPendingUndefinedSymbols().
+  llvm::SmallVector<DuplicateSymbolDiag> dupSymDiags;
+  llvm::MapVector<const Undefined *, UndefinedDiag> undefs;
+
 private:
+  Ctx &ctx;
   std::pair<Symbol *, bool> insert(StringRef name, const InputFile *);
   llvm::DenseMap<llvm::CachedHashStringRef, int> symMap;
   std::vector<Symbol *> symVector;
 };
 
-void reportPendingUndefinedSymbols();
-void reportPendingDuplicateSymbols();
+void reportPendingUndefinedSymbols(Ctx &ctx);
+void reportPendingDuplicateSymbols(Ctx &ctx);
 
 // Call reportPendingUndefinedSymbols() to emit diagnostics.
-void treatUndefinedSymbol(const Undefined &, StringRef source);
-void treatUndefinedSymbol(const Undefined &, const InputSection *,
+void treatUndefinedSymbol(Ctx &ctx, const Undefined &, StringRef source);
+void treatUndefinedSymbol(Ctx &ctx, const Undefined &, const InputSection *,
                           uint64_t offset);
-
-extern std::unique_ptr<SymbolTable> symtab;
-
 } // namespace lld::macho
 
 #endif

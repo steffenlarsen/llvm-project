@@ -59,7 +59,8 @@ StringRef Relocation::getReferentString() const {
 bool macho::validateSymbolRelocation(const Symbol *sym,
                                      const InputSection *isec,
                                      const Relocation &r) {
-  const RelocAttrs &relocAttrs = target->getRelocAttrs(r.type);
+  Ctx &ctx = isec->getCtx();
+  const RelocAttrs &relocAttrs = ctx.target->getRelocAttrs(r.type);
   bool valid = true;
   auto message = [&](const Twine &diagnostic) {
     valid = false;
@@ -92,12 +93,12 @@ bool macho::validateSymbolRelocation(const Symbol *sym,
 
   if (tlvKindIsKnown) {
     if (isTlvReloc && !sym->isTlv())
-      error(message(Twine("requires that symbol ") + sym->getName() +
-                    " be thread-local"));
+      ctx.e.error(message(Twine("requires that symbol ") + sym->getName() +
+                          " be thread-local"));
     else if (isImportedTlv && !permitsTlvDescriptor)
-      error(message(Twine("cannot reference imported thread-local symbol ") +
-                    sym->getName() +
-                    "; its TLV descriptor has no address at link time"));
+      ctx.e.error(message(
+          Twine("cannot reference imported thread-local symbol ") +
+          sym->getName() + "; its TLV descriptor has no address at link time"));
   }
 
   return valid;
@@ -116,8 +117,8 @@ bool macho::validateSymbolRelocation(const Symbol *sym,
 // This is implemented as a slow linear search through OutputSegments,
 // OutputSections, and finally the InputSections themselves. However, this
 // function should be called only on error paths, so some overhead is fine.
-InputSection *macho::offsetToInputSection(uint64_t *off) {
-  for (OutputSegment *seg : outputSegments) {
+InputSection *macho::offsetToInputSection(Ctx &ctx, uint64_t *off) {
+  for (OutputSegment *seg : ctx.outputSegments) {
     if (*off < seg->fileOff || *off >= seg->fileOff + seg->fileSize)
       continue;
 
@@ -146,27 +147,29 @@ InputSection *macho::offsetToInputSection(uint64_t *off) {
   return nullptr;
 }
 
-void macho::reportRangeError(void *loc, const Relocation &r, const Twine &v,
-                             uint8_t bits, int64_t min, uint64_t max) {
+void macho::reportRangeError(Ctx &ctx, void *loc, const Relocation &r,
+                             const Twine &v, uint8_t bits, int64_t min,
+                             uint64_t max) {
   std::string hint;
-  uint64_t off = reinterpret_cast<const uint8_t *>(loc) - in.bufferStart;
-  const InputSection *isec = offsetToInputSection(&off);
+  uint64_t off = reinterpret_cast<const uint8_t *>(loc) - ctx.in.bufferStart;
+  const InputSection *isec = offsetToInputSection(ctx, &off);
   std::string locStr = isec ? isec->getLocation(off) : "(invalid location)";
   if (auto *sym = r.referent.dyn_cast<Symbol *>())
-    hint = "; references " + toString(*sym);
-  error(locStr + ": relocation " + target->getRelocAttrs(r.type).name +
-        " is out of range: " + v + " is not in [" + Twine(min) + ", " +
-        Twine(max) + "]" + hint);
+    hint = "; references " + toString(ctx, *sym);
+  ctx.e.error(locStr + ": relocation " +
+              ctx.target->getRelocAttrs(r.type).name + " is out of range: " +
+              v + " is not in [" + Twine(min) + ", " + Twine(max) + "]" + hint);
 }
 
-void macho::reportRangeError(void *loc, SymbolDiagnostic d, const Twine &v,
-                             uint8_t bits, int64_t min, uint64_t max) {
+void macho::reportRangeError(Ctx &ctx, void *loc, SymbolDiagnostic d,
+                             const Twine &v, uint8_t bits, int64_t min,
+                             uint64_t max) {
   // FIXME: should we use `loc` somehow to provide a better error message?
   std::string hint;
   if (d.symbol)
-    hint = "; references " + toString(*d.symbol);
-  error(d.reason + " is out of range: " + v + " is not in [" + Twine(min) +
-        ", " + Twine(max) + "]" + hint);
+    hint = "; references " + toString(ctx, *d.symbol);
+  ctx.e.error(d.reason + " is out of range: " + v + " is not in [" +
+              Twine(min) + ", " + Twine(max) + "]" + hint);
 }
 
 const RelocAttrs macho::invalidRelocAttrs{"INVALID", RelocAttrBits::_0};

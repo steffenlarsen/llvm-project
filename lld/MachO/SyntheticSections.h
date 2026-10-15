@@ -38,7 +38,7 @@ class UnwindInfoSection;
 
 class SyntheticSection : public OutputSection {
 public:
-  SyntheticSection(const char *segname, const char *name);
+  SyntheticSection(Ctx &ctx, const char *segname, const char *name);
   virtual ~SyntheticSection() = default;
 
   static bool classof(const OutputSection *sec) {
@@ -54,9 +54,9 @@ public:
 // All sections in __LINKEDIT should inherit from this.
 class LinkEditSection : public SyntheticSection {
 public:
-  LinkEditSection(const char *segname, const char *name)
-      : SyntheticSection(segname, name) {
-    align = target->wordSize;
+  LinkEditSection(Ctx &ctx, const char *segname, const char *name)
+      : SyntheticSection(ctx, segname, name) {
+    align = ctx.target->wordSize;
   }
 
   // Implementations of this method can assume that the regular (non-__LINKEDIT)
@@ -82,7 +82,7 @@ public:
 // The header of the Mach-O file, which must have a file offset of zero.
 class MachHeaderSection final : public SyntheticSection {
 public:
-  MachHeaderSection();
+  MachHeaderSection(Ctx &ctx);
   bool isHidden() const override { return true; }
   uint64_t getSize() const override;
   void writeTo(uint8_t *buf) const override;
@@ -98,10 +98,10 @@ protected:
 // __PAGEZERO segment, which is used to catch null pointer dereferences.
 class PageZeroSection final : public SyntheticSection {
 public:
-  PageZeroSection();
+  PageZeroSection(Ctx &ctx);
   bool isHidden() const override { return true; }
-  bool isNeeded() const override { return target->pageZeroSize != 0; }
-  uint64_t getSize() const override { return target->pageZeroSize; }
+  bool isNeeded() const override { return ctx.target->pageZeroSize != 0; }
+  uint64_t getSize() const override { return ctx.target->pageZeroSize; }
   uint64_t getFileSize() const override { return 0; }
   void writeTo(uint8_t *buf) const override {}
 };
@@ -110,16 +110,16 @@ public:
 // dylib symbols, including TLV descriptors.
 class GotSection final : public SyntheticSection {
 public:
-  GotSection();
+  GotSection(Ctx &ctx);
   const llvm::SetVector<const Symbol *> &getEntries() const { return entries; }
   bool isNeeded() const override { return !entries.empty(); }
   uint64_t getSize() const override {
-    return entries.size() * target->wordSize;
+    return entries.size() * ctx.target->wordSize;
   }
   void writeTo(uint8_t *buf) const override;
   void addEntry(Symbol *sym);
   uint64_t getVA(uint32_t gotIndex) const {
-    return addr + gotIndex * target->wordSize;
+    return addr + gotIndex * ctx.target->wordSize;
   }
 
 private:
@@ -140,14 +140,14 @@ struct Location {
 // dyld has to rebase these addresses by adding an offset to them.
 class RebaseSection final : public LinkEditSection {
 public:
-  RebaseSection();
+  RebaseSection(Ctx &ctx);
   void finalizeContents() override;
   uint64_t getRawSize() const override { return contents.size(); }
   bool isNeeded() const override { return !locations.empty(); }
   void writeTo(uint8_t *buf) const override;
 
   void addEntry(const InputSection *isec, uint64_t offset) {
-    if (config->isPic)
+    if (ctx.arg.isPic)
       locations.emplace_back(isec, offset);
   }
 
@@ -169,7 +169,7 @@ using BindingsMap = llvm::DenseMap<Sym, std::vector<BindingEntry>>;
 // Stores bind opcodes for telling dyld which symbols to load non-lazily.
 class BindingSection final : public LinkEditSection {
 public:
-  BindingSection();
+  BindingSection(Ctx &ctx);
   void finalizeContents() override;
   uint64_t getRawSize() const override { return contents.size(); }
   bool isNeeded() const override { return !bindingsMap.empty(); }
@@ -197,7 +197,7 @@ private:
 //   symbols by name, but do not specify which dylib to load them from.
 class WeakBindingSection final : public LinkEditSection {
 public:
-  WeakBindingSection();
+  WeakBindingSection(Ctx &ctx);
   void finalizeContents() override;
   uint64_t getRawSize() const override { return contents.size(); }
   bool isNeeded() const override {
@@ -264,7 +264,7 @@ private:
 
 class StubsSection final : public SyntheticSection {
 public:
-  StubsSection();
+  StubsSection(Ctx &ctx);
   uint64_t getSize() const override;
   bool isNeeded() const override { return !entries.empty(); }
   void finalize() override;
@@ -274,11 +274,11 @@ public:
   // LazyPointerSection.
   void addEntry(Symbol *);
   uint64_t getVA(uint32_t stubsIndex) const {
-    assert(isFinal || target->usesThunks());
+    assert(isFinal || ctx.target->usesThunks());
     // ConcatOutputSection::finalize() can seek the address of a
     // stub before its address is assigned. Before __stubs is
     // finalized, return a contrived out-of-range address.
-    return isFinal ? addr + stubsIndex * target->stubSize
+    return isFinal ? addr + stubsIndex * ctx.target->stubSize
                    : TargetInfo::outOfRangeVA;
   }
 
@@ -290,7 +290,7 @@ private:
 
 class StubHelperSection final : public SyntheticSection {
 public:
-  StubHelperSection();
+  StubHelperSection(Ctx &ctx);
   uint64_t getSize() const override;
   bool isNeeded() const override;
   void writeTo(uint8_t *buf) const override;
@@ -303,15 +303,10 @@ public:
 
 class ObjCSelRefsHelper {
 public:
-  static void initialize();
-  static void cleanup();
+  static void initialize(Ctx &ctx);
 
-  static ConcatInputSection *getSelRef(StringRef methname);
-  static ConcatInputSection *makeSelRef(StringRef methname);
-
-private:
-  static llvm::DenseMap<llvm::CachedHashStringRef, ConcatInputSection *>
-      methnameToSelref;
+  static ConcatInputSection *getSelRef(Ctx &ctx, StringRef methname);
+  static ConcatInputSection *makeSelRef(Ctx &ctx, StringRef methname);
 };
 
 // Objective-C stubs are hoisted objc_msgSend calls per selector called in the
@@ -322,7 +317,7 @@ private:
 // actual stub contents are mirrored from ld64.
 class ObjCStubsSection final : public SyntheticSection {
 public:
-  ObjCStubsSection();
+  ObjCStubsSection(Ctx &ctx);
   void addEntry(Symbol *sym);
   uint64_t getSize() const override;
   bool isNeeded() const override { return !symbols.empty(); }
@@ -350,18 +345,18 @@ private:
 // particular, this happens when branch relocations target weak symbols.
 class LazyPointerSection final : public SyntheticSection {
 public:
-  LazyPointerSection();
+  LazyPointerSection(Ctx &ctx);
   uint64_t getSize() const override;
   bool isNeeded() const override;
   void writeTo(uint8_t *buf) const override;
   uint64_t getVA(uint32_t index) const {
-    return addr + (index << target->p2WordSize);
+    return addr + (index << ctx.target->p2WordSize);
   }
 };
 
 class LazyBindingSection final : public LinkEditSection {
 public:
-  LazyBindingSection();
+  LazyBindingSection(Ctx &ctx);
   void finalizeContents() override;
   uint64_t getRawSize() const override { return contents.size(); }
   bool isNeeded() const override { return !entries.empty(); }
@@ -382,7 +377,7 @@ private:
 // Stores a trie that describes the set of exported symbols.
 class ExportSection final : public LinkEditSection {
 public:
-  ExportSection();
+  ExportSection(Ctx &ctx);
   void finalizeContents() override;
   uint64_t getRawSize() const override { return size; }
   bool isNeeded() const override { return size; }
@@ -400,7 +395,7 @@ private:
 // and stop them from being disassembled as instructions.
 class DataInCodeSection final : public LinkEditSection {
 public:
-  DataInCodeSection();
+  DataInCodeSection(Ctx &ctx);
   void finalizeContents() override;
   uint64_t getRawSize() const override {
     return sizeof(llvm::MachO::data_in_code_entry) * entries.size();
@@ -414,7 +409,7 @@ private:
 // Stores ULEB128 delta encoded addresses of functions.
 class FunctionStartsSection final : public LinkEditSection {
 public:
-  FunctionStartsSection();
+  FunctionStartsSection(Ctx &ctx);
   void finalizeContents() override;
   uint64_t getRawSize() const override { return contents.size(); }
   void writeTo(uint8_t *buf) const override;
@@ -426,7 +421,7 @@ private:
 // Stores the strings referenced by the symbol table.
 class StringTableSection final : public LinkEditSection {
 public:
-  StringTableSection();
+  StringTableSection(Ctx &ctx);
   // Returns the start offset of the added string.
   uint32_t addString(StringRef);
   uint64_t getRawSize() const override { return size; }
@@ -482,7 +477,7 @@ private:
   void emitStabs();
 
 protected:
-  SymtabSection(StringTableSection &);
+  SymtabSection(Ctx &ctx, StringTableSection &);
 
   StringTableSection &stringTableSection;
   // STABS symbols are always local symbols, but we represent them with special
@@ -493,7 +488,8 @@ protected:
   std::vector<SymtabEntry> undefinedSymbols;
 };
 
-template <class LP> SymtabSection *makeSymtabSection(StringTableSection &);
+template <class LP>
+SymtabSection *makeSymtabSection(Ctx &ctx, StringTableSection &);
 
 // The indirect symbol table is a list of 32-bit integers that serve as indices
 // into the (actual) symbol table. The indirect symbol table is a
@@ -507,7 +503,7 @@ template <class LP> SymtabSection *makeSymtabSection(StringTableSection &);
 // function stubs).
 class IndirectSymtabSection final : public LinkEditSection {
 public:
-  IndirectSymtabSection();
+  IndirectSymtabSection(Ctx &ctx);
   void finalizeContents() override;
   uint32_t getNumSymbols() const;
   uint64_t getRawSize() const override {
@@ -534,7 +530,7 @@ public:
   uint32_t allHeadersSize = 0;
   StringRef fileName;
 
-  CodeSignatureSection();
+  CodeSignatureSection(Ctx &ctx);
   uint64_t getRawSize() const override;
   bool isNeeded() const override { return true; }
   void writeTo(uint8_t *buf) const override;
@@ -544,7 +540,7 @@ public:
 
 class CStringSection : public SyntheticSection {
 public:
-  CStringSection(const char *name);
+  CStringSection(Ctx &ctx, const char *name);
   void addInput(CStringInputSection *);
   uint64_t getSize() const override { return size; }
   virtual void finalizeContents();
@@ -559,7 +555,8 @@ private:
 
 class DeduplicatedCStringSection final : public CStringSection {
 public:
-  DeduplicatedCStringSection(const char *name) : CStringSection(name){};
+  DeduplicatedCStringSection(Ctx &ctx, const char *name)
+      : CStringSection(ctx, name) {};
   uint64_t getSize() const override { return size; }
   void finalizeContents() override;
   void writeTo(uint8_t *buf) const override;
@@ -581,7 +578,7 @@ public:
   // sure it's exact -- that way we can construct it via `mmap`.
   static_assert(sizeof(UInt128) == 16);
 
-  WordLiteralSection();
+  WordLiteralSection(Ctx &ctx);
   void addInput(WordLiteralInputSection *);
   void finalizeContents();
   void writeTo(uint8_t *buf) const override;
@@ -621,7 +618,7 @@ private:
 
 class ObjCImageInfoSection final : public SyntheticSection {
 public:
-  ObjCImageInfoSection();
+  ObjCImageInfoSection(Ctx &ctx);
   bool isNeeded() const override { return !files.empty(); }
   uint64_t getSize() const override { return 8; }
   void addFile(const InputFile *file) {
@@ -653,7 +650,7 @@ private:
 // via __cxa_atexit from an autogenerated initializer function (see D121736).
 class InitOffsetsSection final : public SyntheticSection {
 public:
-  InitOffsetsSection();
+  InitOffsetsSection(Ctx &ctx);
   bool isNeeded() const override { return !sections.empty(); }
   uint64_t getSize() const override;
   void writeTo(uint8_t *buf) const override;
@@ -670,7 +667,7 @@ private:
 // relative method lists if the -objc_relative_method_lists option is enabled.
 class ObjCMethListSection final : public SyntheticSection {
 public:
-  ObjCMethListSection();
+  ObjCMethListSection(Ctx &ctx);
 
   static bool isMethodList(const ConcatInputSection *isec);
   void addInput(ConcatInputSection *isec) { inputs.push_back(isec); }
@@ -764,7 +761,7 @@ private:
 //      fixups are linked together in Writer::buildFixupChains().
 class ChainedFixupsSection final : public LinkEditSection {
 public:
-  ChainedFixupsSection();
+  ChainedFixupsSection(Ctx &ctx);
   void finalizeContents() override;
   uint64_t getRawSize() const override { return size; }
   bool isNeeded() const override;
@@ -802,7 +799,7 @@ private:
     llvm::SmallVector<std::pair<uint16_t, uint16_t>> pageStarts;
 
     size_t getSize() const;
-    size_t writeTo(uint8_t *buf) const;
+    size_t writeTo(Ctx &ctx, uint8_t *buf) const;
   };
   llvm::SmallVector<SegmentInfo, 4> fixupSegments;
 
@@ -816,61 +813,14 @@ private:
   llvm::MachO::ChainedImportFormat importFormat;
 };
 
-void writeChainedRebase(uint8_t *buf, uint64_t targetVA);
-void writeChainedFixup(uint8_t *buf, const Symbol *sym, int64_t addend);
+void writeChainedRebase(Ctx &ctx, uint8_t *buf, uint64_t targetVA);
+void writeChainedFixup(Ctx &ctx, uint8_t *buf, const Symbol *sym,
+                       int64_t addend);
 
-struct InStruct {
-  const uint8_t *bufferStart = nullptr;
-  MachHeaderSection *header = nullptr;
-  /// The list of cstring sections. Note that this includes \p cStringSection
-  /// and \p objcMethnameSection already.
-  llvm::SmallVector<CStringSection *> cStringSections;
-  CStringSection *cStringSection = nullptr;
-  DeduplicatedCStringSection *objcMethnameSection = nullptr;
-  WordLiteralSection *wordLiteralSection = nullptr;
-  RebaseSection *rebase = nullptr;
-  BindingSection *binding = nullptr;
-  WeakBindingSection *weakBinding = nullptr;
-  LazyBindingSection *lazyBinding = nullptr;
-  ExportSection *exports = nullptr;
-  GotSection *got = nullptr;
-  LazyPointerSection *lazyPointers = nullptr;
-  StubsSection *stubs = nullptr;
-  StubHelperSection *stubHelper = nullptr;
-  ObjCStubsSection *objcStubs = nullptr;
-  UnwindInfoSection *unwindInfo = nullptr;
-  ObjCImageInfoSection *objCImageInfo = nullptr;
-  ConcatInputSection *imageLoaderCache = nullptr;
-  InitOffsetsSection *initOffsets = nullptr;
-  ObjCMethListSection *objcMethList = nullptr;
-  ChainedFixupsSection *chainedFixups = nullptr;
+CStringSection *getOrCreateCStringSection(Ctx &ctx, StringRef name,
+                                          bool forceDedupStrings = false);
 
-  CStringSection *getOrCreateCStringSection(StringRef name,
-                                            bool forceDedupStrings = false) {
-    auto [it, didEmplace] =
-        cStringSectionMap.try_emplace(name, cStringSections.size());
-    if (!didEmplace)
-      return cStringSections[it->getValue()];
-
-    std::string &nameData = *make<std::string>(name);
-    CStringSection *sec;
-    if (config->dedupStrings || forceDedupStrings)
-      sec = make<DeduplicatedCStringSection>(nameData.c_str());
-    else
-      sec = make<CStringSection>(nameData.c_str());
-    cStringSections.push_back(sec);
-    return sec;
-  }
-
-private:
-  llvm::StringMap<unsigned> cStringSectionMap;
-};
-
-extern InStruct in;
-extern std::vector<SyntheticSection *> syntheticSections;
-
-void createSyntheticSymbols();
-
+void createSyntheticSymbols(Ctx &ctx);
 } // namespace lld::macho
 
 #endif

@@ -24,7 +24,7 @@ using namespace lld::macho;
 namespace {
 
 struct ARM64 : ARM64Common {
-  ARM64();
+  ARM64(Ctx &ctx);
   void writeStub(uint8_t *buf, const Symbol &, uint64_t) const override;
   void writeStubHelperHeader(uint8_t *buf) const override;
   void writeStubHelperEntry(uint8_t *buf, const Symbol &,
@@ -77,7 +77,7 @@ static constexpr uint32_t stubCode[] = {
 
 void ARM64::writeStub(uint8_t *buf8, const Symbol &sym,
                       uint64_t pointerVA) const {
-  ::writeStub(buf8, stubCode, sym, pointerVA);
+  ::writeStub(ctx, buf8, stubCode, sym, pointerVA);
 }
 
 static constexpr uint32_t stubHelperHeaderCode[] = {
@@ -90,7 +90,7 @@ static constexpr uint32_t stubHelperHeaderCode[] = {
 };
 
 void ARM64::writeStubHelperHeader(uint8_t *buf8) const {
-  ::writeStubHelperHeader<LP64>(buf8, stubHelperHeaderCode);
+  ::writeStubHelperHeader<LP64>(ctx, buf8, stubHelperHeaderCode);
 }
 
 static constexpr uint32_t stubHelperEntryCode[] = {
@@ -101,7 +101,7 @@ static constexpr uint32_t stubHelperEntryCode[] = {
 
 void ARM64::writeStubHelperEntry(uint8_t *buf8, const Symbol &sym,
                                  uint64_t entryVA) const {
-  ::writeStubHelperEntry(buf8, stubHelperEntryCode, sym, entryVA);
+  ::writeStubHelperEntry(ctx, buf8, stubHelperEntryCode, sym, entryVA);
 }
 
 static constexpr uint32_t objcStubsFastCode[] = {
@@ -128,26 +128,26 @@ void ARM64::writeObjCMsgSendStub(uint8_t *buf, Symbol *sym, uint64_t stubsAddr,
   uint64_t objcStubSize;
   uint64_t objcMsgSendIndex;
 
-  if (config->objcStubsMode == ObjCStubsMode::fast) {
-    objcStubSize = target->objcStubsFastSize;
-    objcMsgSendAddr = in.got->addr;
+  if (ctx.arg.objcStubsMode == ObjCStubsMode::fast) {
+    objcStubSize = ctx.target->objcStubsFastSize;
+    objcMsgSendAddr = ctx.in.got->addr;
     objcMsgSendIndex = objcMsgSend->gotIndex;
-    ::writeObjCMsgSendFastStub<LP64>(buf, objcStubsFastCode, sym, stubsAddr,
-                                     stubOffset, selrefVA, objcMsgSendAddr,
-                                     objcMsgSendIndex);
+    ::writeObjCMsgSendFastStub<LP64>(ctx, buf, objcStubsFastCode, sym,
+                                     stubsAddr, stubOffset, selrefVA,
+                                     objcMsgSendAddr, objcMsgSendIndex);
   } else {
-    assert(config->objcStubsMode == ObjCStubsMode::small);
-    objcStubSize = target->objcStubsSmallSize;
+    assert(ctx.arg.objcStubsMode == ObjCStubsMode::small);
+    objcStubSize = ctx.target->objcStubsSmallSize;
     if (auto *d = dyn_cast<Defined>(objcMsgSend)) {
-      objcMsgSendAddr = d->getVA();
+      objcMsgSendAddr = d->getVA(ctx);
       objcMsgSendIndex = 0;
     } else {
-      objcMsgSendAddr = in.stubs->addr;
+      objcMsgSendAddr = ctx.in.stubs->addr;
       objcMsgSendIndex = objcMsgSend->stubsIndex;
     }
-    ::writeObjCMsgSendSmallStub<LP64>(buf, objcStubsSmallCode, sym, stubsAddr,
-                                      stubOffset, selrefVA, objcMsgSendAddr,
-                                      objcMsgSendIndex);
+    ::writeObjCMsgSendSmallStub<LP64>(ctx, buf, objcStubsSmallCode, sym,
+                                      stubsAddr, stubOffset, selrefVA,
+                                      objcMsgSendAddr, objcMsgSendIndex);
   }
   stubOffset += objcStubSize;
 }
@@ -204,7 +204,7 @@ Symbol *ARM64::getThunkBranchTarget(InputSection *thunk) const {
 
 uint32_t ARM64::getICFSafeThunkSize() const { return sizeof(icfSafeThunkCode); }
 
-ARM64::ARM64() : ARM64Common(LP64()) {
+ARM64::ARM64(Ctx &ctx) : ARM64Common(ctx, LP64()) {
   cpuType = CPU_TYPE_ARM64;
   cpuSubtype = CPU_SUBTYPE_ARM64_ALL;
 
@@ -232,7 +232,6 @@ ARM64::ARM64() : ARM64Common(LP64()) {
   relocAttrs = {relocAttrsArray.data(), relocAttrsArray.size()};
 }
 
-TargetInfo *macho::createARM64TargetInfo() {
-  static ARM64 t;
-  return &t;
+std::unique_ptr<TargetInfo> macho::createARM64TargetInfo(Ctx &ctx) {
+  return std::make_unique<ARM64>(ctx);
 }
