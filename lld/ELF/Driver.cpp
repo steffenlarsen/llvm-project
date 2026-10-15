@@ -54,6 +54,7 @@
 #include "llvm/Remarks/HotnessThresholdParser.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compression.h"
+#include "llvm/Support/CrashRecoveryContext.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/GlobPattern.h"
 #include "llvm/Support/LEB128.h"
@@ -128,8 +129,10 @@ namespace lld {
 namespace elf {
 bool link(ArrayRef<const char *> args, llvm::raw_ostream &stdoutOS,
           llvm::raw_ostream &stderrOS, bool exitEarly, bool disableOutput) {
-  // This driver-specific context will be freed later by unsafeLldMain().
-  auto *context = new Ctx;
+  auto context = std::make_unique<Ctx>();
+  // If fatal() unwinds the link, the CrashRecoveryContext in lldMain() skips
+  // our destructors, so it deletes the context instead.
+  llvm::CrashRecoveryContextCleanupRegistrar<Ctx> contextCleanup(context.get());
   Ctx &ctx = *context;
   LinkerScript script(ctx);
   ctx.e.initialize(stdoutOS, stderrOS, exitEarly, disableOutput);
@@ -137,7 +140,12 @@ bool link(ArrayRef<const char *> args, llvm::raw_ostream &stdoutOS,
 
   ctx.driver.linkerMain(args);
 
-  return errCount(ctx) == 0;
+  int ret = errCount(ctx) != 0;
+  // Exit here rather than in unsafeLldMain(), which cannot reach this context,
+  // so that the destructors are skipped.
+  if (exitEarly)
+    exitLld(ctx.e, ret);
+  return ret == 0;
 }
 } // namespace elf
 } // namespace lld

@@ -15,43 +15,16 @@
 using namespace llvm;
 using namespace lld;
 
-// Reference to the current LLD instance. This is a temporary situation, until
-// we pass this context everywhere by reference, or we make it a thread_local,
-// as in https://reviews.llvm.org/D108850?id=370678 where each thread can be
-// associated with a LLD instance. Only then will LLD be free of global
-// state.
-static CommonLinkerContext *lctx;
-
 CommonLinkerContext::CommonLinkerContext() {
-  // A nested context, e.g. the dynamic debugging link, does not install itself.
-  if (lctx)
-    return;
-
-  lctx = this;
   // Fire off the static initializations in CGF's constructor.
   codegen::RegisterCodeGenFlags CGF;
 }
 
 CommonLinkerContext::~CommonLinkerContext() {
-  assert(lctx);
   // Explicitly call the destructors since we created the objects with placement
   // new in SpecificAlloc::create().
   for (auto &it : instances)
     it.second->~SpecificAllocBase();
-
-  if (lctx == this)
-    lctx = nullptr;
 }
 
-CommonLinkerContext &lld::commonContext() {
-  assert(lctx);
-  return *lctx;
-}
-
-bool lld::hasContext() { return lctx != nullptr; }
-
-void CommonLinkerContext::destroy() {
-  if (lctx == nullptr)
-    return;
-  delete lctx;
-}
+void CommonLinkerContext::destroy() {}

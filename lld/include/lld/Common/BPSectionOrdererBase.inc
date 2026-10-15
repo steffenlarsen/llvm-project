@@ -70,19 +70,6 @@ template <class D> struct BPOrderer {
                     const DenseMap<CachedHashStringRef, std::set<unsigned>>
                         &rootSymbolToSectionIdxs)
       -> llvm::DenseMap<const Section *, int>;
-  auto computeOrder(llvm::StringRef profilePath,
-                    llvm::ArrayRef<BPCompressionSortSpec> compressionSortSpecs,
-                    bool forFunctionCompression, bool forDataCompression,
-                    bool compressionSortStartupFunctions, bool verbose,
-                    llvm::ArrayRef<Section *> sections,
-                    const DenseMap<CachedHashStringRef, std::set<unsigned>>
-                        &rootSymbolToSectionIdxs)
-      -> llvm::DenseMap<const Section *, int> {
-    return computeOrder(errorHandler(), profilePath, compressionSortSpecs,
-                        forFunctionCompression, forDataCompression,
-                        compressionSortStartupFunctions, verbose, sections,
-                        rootSymbolToSectionIdxs);
-  }
 
   std::optional<StringRef> static getResolvedLinkageName(StringRef name) {
     return {};

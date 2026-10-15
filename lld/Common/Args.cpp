@@ -46,19 +46,9 @@ int64_t lld::args::getInteger(ErrorHandler &eh, opt::InputArgList &args,
   return ::getInteger(eh, args, key, Default, 10);
 }
 
-int64_t lld::args::getInteger(opt::InputArgList &args, unsigned key,
-                              int64_t Default) {
-  return getInteger(errorHandler(), args, key, Default);
-}
-
 int64_t lld::args::getHex(ErrorHandler &eh, opt::InputArgList &args,
                           unsigned key, int64_t Default) {
   return ::getInteger(eh, args, key, Default, 16);
-}
-
-int64_t lld::args::getHex(opt::InputArgList &args, unsigned key,
-                          int64_t Default) {
-  return getHex(errorHandler(), args, key, Default);
 }
 
 SmallVector<StringRef, 0> lld::args::getStrings(opt::InputArgList &args,
@@ -81,11 +71,6 @@ uint64_t lld::args::getZOptionValue(ErrorHandler &eh, opt::InputArgList &args,
     }
   }
   return defaultValue;
-}
-
-uint64_t lld::args::getZOptionValue(opt::InputArgList &args, int id,
-                                    StringRef key, uint64_t defaultValue) {
-  return getZOptionValue(errorHandler(), args, id, key, defaultValue);
 }
 
 std::vector<StringRef> lld::args::getLines(MemoryBufferRef mb) {

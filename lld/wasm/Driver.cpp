@@ -108,8 +108,10 @@ static bool hasZOption(opt::InputArgList &args, StringRef key) {
 
 bool link(ArrayRef<const char *> args, llvm::raw_ostream &stdoutOS,
           llvm::raw_ostream &stderrOS, bool exitEarly, bool disableOutput) {
-  // This driver-specific context will be freed later by unsafeLldMain().
-  auto *context = new Ctx;
+  // If fatal() unwinds the link, the context is leaked on purpose: tasks that
+  // the link spawned on the parallel executor may still be using it. lldMain()
+  // then reports that lld cannot run again.
+  auto context = std::make_unique<Ctx>();
   Ctx &ctx = *context;
 
   ctx.e.initialize(stdoutOS, stderrOS, exitEarly, disableOutput);
@@ -122,7 +124,11 @@ bool link(ArrayRef<const char *> args, llvm::raw_ostream &stdoutOS,
   initLLVM();
   LinkerDriver(ctx).linkerMain(args);
 
-  return ctx.e.errorCount == 0;
+  bool ret = ctx.e.errorCount == 0;
+  // Exit before the context is destroyed, so that its destructors are skipped.
+  if (exitEarly)
+    exitLld(ctx.e, !ret);
+  return ret;
 }
 
 #define OPTTABLE_CODE

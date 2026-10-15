@@ -86,8 +86,10 @@ namespace lld::coff {
 
 bool link(ArrayRef<const char *> args, llvm::raw_ostream &stdoutOS,
           llvm::raw_ostream &stderrOS, bool exitEarly, bool disableOutput) {
-  // This driver-specific context will be freed later by unsafeLldMain().
-  auto *ctx = new COFFLinkerContext;
+  // If fatal() unwinds the link, the context is leaked on purpose: tasks that
+  // the link spawned on the parallel executor may still be using it. lldMain()
+  // then reports that lld cannot run again.
+  auto ctx = std::make_unique<COFFLinkerContext>();
 
   ctx->e.initialize(stdoutOS, stderrOS, exitEarly, disableOutput);
   ctx->e.logName = args::getFilenameWithoutExe(args[0]);
@@ -96,7 +98,11 @@ bool link(ArrayRef<const char *> args, llvm::raw_ostream &stdoutOS,
 
   ctx->driver.linkerMain(args);
 
-  return errCount(*ctx) == 0;
+  bool ret = errCount(*ctx) == 0;
+  // Exit before the context is destroyed, so that its destructors are skipped.
+  if (exitEarly)
+    exitLld(ctx->e, !ret);
+  return ret;
 }
 
 // Parse options of the form "old;new".

@@ -38,9 +38,6 @@ SingleStringMatcher::SingleStringMatcher(ErrorHandler &eh, StringRef Pattern)
   }
 }
 
-SingleStringMatcher::SingleStringMatcher(StringRef Pattern)
-    : SingleStringMatcher(errorHandler(), Pattern) {}
-
 bool SingleStringMatcher::match(StringRef s) const {
   return ExactMatch ? (ExactPattern == s) : GlobPatternMatcher.match(s);
 }
@@ -68,10 +65,6 @@ SmallVector<uint8_t, 0> lld::parseHex(ErrorHandler &eh, StringRef s) {
   return hex;
 }
 
-SmallVector<uint8_t, 0> lld::parseHex(StringRef s) {
-  return parseHex(errorHandler(), s);
-}
-
 // Returns true if S is valid as a C language identifier.
 bool lld::isValidCIdentifier(StringRef s) {
   return !s.empty() && !isDigit(s[0]) &&
@@ -85,8 +78,4 @@ void lld::saveBuffer(ErrorHandler &eh, StringRef buffer, const Twine &path) {
   if (ec)
     eh.error("cannot create " + path + ": " + ec.message());
   os << buffer;
-}
-
-void lld::saveBuffer(StringRef buffer, const Twine &path) {
-  saveBuffer(errorHandler(), buffer, path);
 }

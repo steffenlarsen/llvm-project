@@ -6,7 +6,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "lld/Common/CommonLinkerContext.h"
 #include "lld/Common/Driver.h"
 #include "lld/Common/ErrorHandler.h"
 #include "lld/Common/Memory.h"
@@ -163,13 +162,14 @@ int unsafeLldMain(llvm::ArrayRef<const char *> args,
   int r = !d(argsV, stdoutOS, stderrOS, exitEarly, inTestOutputDisabled);
   // At this point 'r' is either 1 for error, and 0 for no error.
 
-  // Call exit() if we can to avoid calling destructors.
-  if (exitEarly)
+  // Each driver owns its context, and exits before destroying it if it can.
+  // Exit here for the drivers that return anyway, e.g. MinGW when it has
+  // nothing to link. Their context is gone, so flush its streams here.
+  if (exitEarly) {
+    stdoutOS.flush();
+    stderrOS.flush();
     exitLld(r);
-
-  // Delete the global context and clear the global context pointer, so that it
-  // cannot be accessed anymore.
-  CommonLinkerContext::destroy();
+  }
 
   return r;
 }
@@ -191,12 +191,7 @@ Result lld::lldMain(llvm::ArrayRef<const char *> args,
       return {crc.RetCode, /*canRunAgain=*/false};
   }
 
-  // Cleanup memory and reset everything back in pristine condition. This path
-  // is only taken when LLD is in test, or when it is used as a library.
-  llvm::CrashRecoveryContext crc;
-  if (!crc.RunSafely([&]() { CommonLinkerContext::destroy(); })) {
-    // The memory is corrupted beyond any possible recovery.
-    return {r, /*canRunAgain=*/false};
-  }
+  // The driver has already deleted its context, inside the crash recovery
+  // above, so memory is back in pristine condition.
   return {r, /*canRunAgain=*/true};
 }

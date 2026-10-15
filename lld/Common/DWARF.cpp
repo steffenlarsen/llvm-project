@@ -66,9 +66,6 @@ DWARFCache::DWARFCache(ErrorHandler &eh, std::unique_ptr<llvm::DWARFContext> d)
   }
 }
 
-DWARFCache::DWARFCache(std::unique_ptr<llvm::DWARFContext> d)
-    : DWARFCache(errorHandler(), std::move(d)) {}
-
 // Returns the pair of file name and line number describing location of data
 // object (variable, array, etc) definition.
 std::optional<std::pair<std::string, unsigned>>

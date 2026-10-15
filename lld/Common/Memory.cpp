@@ -23,9 +23,3 @@ lld::SpecificAllocBase::getOrCreate(CommonLinkerContext &ctx, void *tag,
   }
   return instance;
 }
-
-SpecificAllocBase *
-lld::SpecificAllocBase::getOrCreate(void *tag, size_t size, size_t align,
-                                    SpecificAllocBase *(&creator)(void *)) {
-  return getOrCreate(context(), tag, size, align, creator);
-}

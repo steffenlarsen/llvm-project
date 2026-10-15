@@ -48,8 +48,6 @@ void Timer::print(ErrorHandler &eh) {
   print(eh, 0, millis(), false);
 }
 
-void Timer::print() { print(errorHandler()); }
-
 double Timer::millis() const {
   return std::chrono::duration_cast<std::chrono::duration<double, std::milli>>(
              std::chrono::nanoseconds(total))

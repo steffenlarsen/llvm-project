@@ -44,7 +44,6 @@ public:
   void addToTotal(std::chrono::nanoseconds time) { total += time.count(); }
   // Prints the timings of this timer and its children to eh.outs().
   void print(ErrorHandler &eh);
-  void print();
 
   double millis() const;
 

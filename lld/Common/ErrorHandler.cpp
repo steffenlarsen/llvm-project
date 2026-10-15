@@ -49,25 +49,6 @@ void ErrorHandler::flushStreams() {
   errs().flush();
 }
 
-ErrorHandler &lld::errorHandler() { return context().e; }
-
-void lld::error(const Twine &msg) { errorHandler().error(msg); }
-void lld::error(const Twine &msg, ErrorTag tag, ArrayRef<StringRef> args) {
-  errorHandler().error(msg, tag, args);
-}
-void lld::fatal(const Twine &msg) { errorHandler().fatal(msg); }
-void lld::log(const Twine &msg) { errorHandler().log(msg); }
-void lld::message(const Twine &msg, llvm::raw_ostream &s) {
-  errorHandler().message(msg, s);
-}
-void lld::warn(const Twine &msg) { errorHandler().warn(msg); }
-uint64_t lld::errorCount() { return errorHandler().errorCount; }
-
-raw_ostream &lld::outs() {
-  ErrorHandler &e = errorHandler();
-  return e.outs();
-}
-
 raw_ostream &ErrorHandler::outs() {
   if (disableOutput)
     return llvm::nulls();
@@ -106,9 +87,7 @@ raw_ostream &ErrorHandler::errs() {
   llvm::sys::Process::Exit(val, /*NoCleanup=*/true);
 }
 
-void lld::exitLld(int val) {
-  exitLldImpl(hasContext() ? &errorHandler() : nullptr, val);
-}
+void lld::exitLld(int val) { exitLldImpl(nullptr, val); }
 
 void lld::exitLld(ErrorHandler &e, int val) { exitLldImpl(&e, val); }
 
@@ -136,15 +115,6 @@ void lld::handleDiagnostic(ErrorHandler &eh, const DiagnosticInfo &di) {
     eh.message(s, eh.outs());
     break;
   }
-}
-
-void lld::diagnosticHandler(const DiagnosticInfo &di) {
-  handleDiagnostic(errorHandler(), di);
-}
-
-void lld::checkError(Error e) {
-  handleAllErrors(std::move(e),
-                  [&](ErrorInfoBase &eib) { error(eib.message()); });
 }
 
 void lld::checkError(ErrorHandler &eh, Error e) {
@@ -290,7 +260,7 @@ void ErrorHandler::error(const Twine &msg) {
   }
 
   if (exit)
-    exitLld(1);
+    exitLldImpl(this, 1);
 }
 
 void ErrorHandler::error(const Twine &msg, ErrorTag tag,
@@ -340,7 +310,7 @@ void ErrorHandler::error(const Twine &msg, ErrorTag tag,
 
 void ErrorHandler::fatal(const Twine &msg) {
   error(msg);
-  exitLld(1);
+  exitLldImpl(this, 1);
 }
 
 SyncStream::~SyncStream() {

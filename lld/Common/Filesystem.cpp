@@ -157,11 +157,3 @@ std::unique_ptr<raw_fd_ostream> lld::openLTOOutputFile(ErrorHandler &eh,
     return fs;
   return openFile(eh, file);
 }
-
-std::unique_ptr<raw_fd_ostream> lld::openFile(StringRef file) {
-  return openFile(errorHandler(), file);
-}
-
-std::unique_ptr<raw_fd_ostream> lld::openLTOOutputFile(StringRef file) {
-  return openLTOOutputFile(errorHandler(), file);
-}

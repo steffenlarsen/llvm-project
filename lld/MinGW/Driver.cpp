@@ -39,6 +39,7 @@
 #include "llvm/Option/ArgList.h"
 #include "llvm/Option/Option.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CrashRecoveryContext.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Path.h"
 #include "llvm/TargetParser/Host.h"
@@ -164,8 +165,11 @@ namespace mingw {
 // then call coff::link.
 bool link(ArrayRef<const char *> argsArr, llvm::raw_ostream &stdoutOS,
           llvm::raw_ostream &stderrOS, bool exitEarly, bool disableOutput) {
-  // This driver-specific context will be freed later by unsafeLldMain().
-  auto *context = new CommonLinkerContext;
+  auto context = std::make_unique<CommonLinkerContext>();
+  // If fatal() unwinds the link, the CrashRecoveryContext in lldMain() skips
+  // our destructors, so it deletes the context instead.
+  llvm::CrashRecoveryContextCleanupRegistrar<CommonLinkerContext>
+      contextCleanup(context.get());
   CommonLinkerContext &ctx = *context;
   ctx.e.initialize(stdoutOS, stderrOS, exitEarly, disableOutput);
 
@@ -619,8 +623,9 @@ bool link(ArrayRef<const char *> argsArr, llvm::raw_ostream &stdoutOS,
   // the right prefix.
   vec[0] = argsArr[0];
 
-  // The context will be re-created in the COFF driver.
-  lld::CommonLinkerContext::destroy();
+  // The COFF driver creates and installs its own context.
+  contextCleanup.unregister();
+  context.reset();
 
   return coff::link(vec, stdoutOS, stderrOS, exitEarly, disableOutput);
 }
