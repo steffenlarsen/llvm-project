@@ -533,9 +533,10 @@ union SymbolUnion {
   alignas(LazySymbol) char e[sizeof(LazySymbol)];
 };
 
-template <typename... T> Defined *makeDefined(T &&...args) {
-  auto *sym = getSpecificAllocSingleton<SymbolUnion>().Allocate();
-  auto &s = *new (reinterpret_cast<Defined *>(sym)) Defined(std::forward<T>(args)...);
+template <typename... T> Defined *makeDefined(Ctx &ctx, T &&...args) {
+  auto *sym = getSpecificAllocSingleton<SymbolUnion>(ctx).Allocate();
+  auto &s = *new (reinterpret_cast<Defined *>(sym))
+                Defined(ctx, std::forward<T>(args)...);
   return &s;
 }
 

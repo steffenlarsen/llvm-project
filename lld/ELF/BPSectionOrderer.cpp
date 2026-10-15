@@ -95,7 +95,7 @@ DenseMap<const InputSectionBase *, int> elf::runBalancedPartitioning(
   for (ELFFileBase *file : ctx.objectFiles)
     for (Symbol *sym : file->getLocalSymbols())
       addSection(*sym);
-  return orderer.computeOrder(profilePath, compressionSortSpecs,
+  return orderer.computeOrder(ctx.e, profilePath, compressionSortSpecs,
                               forFunctionCompression, forDataCompression,
                               compressionSortStartupFunctions, verbose,
                               sections, rootSymbolToSectionIdxs);

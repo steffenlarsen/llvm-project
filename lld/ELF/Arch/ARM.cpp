@@ -1320,7 +1320,7 @@ template <class ELFT> void ObjFile<ELFT>::importCmseSymbols() {
 
   for (size_t i = firstGlobal, end = eSyms.size(); i != end; ++i) {
     const Elf_Sym &eSym = eSyms[i];
-    Defined *sym = reinterpret_cast<Defined *>(make<SymbolUnion>());
+    Defined *sym = reinterpret_cast<Defined *>(ctx.make<SymbolUnion>());
 
     // Initialize symbol fields.
     memset(static_cast<void *>(sym), 0, sizeof(Symbol));

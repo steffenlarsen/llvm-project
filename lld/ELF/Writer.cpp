@@ -1481,13 +1481,13 @@ static void randomizeSectionPadding(Ctx &ctx) {
         SmallVector<InputSection *, 0> tmp;
         if (os->ptLoad != curPtLoad) {
           tmp.push_back(
-              make<PaddingSection>(ctx, g() % ctx.arg.maxPageSize, os));
+              ctx.make<PaddingSection>(ctx, g() % ctx.arg.maxPageSize, os));
           curPtLoad = os->ptLoad;
         }
         for (InputSection *isec : isd->sections) {
           // Probability of inserting padding is 1 in 16.
           if (g() % 16 == 0)
-            tmp.push_back(make<PaddingSection>(ctx, isec->addralign, os));
+            tmp.push_back(ctx.make<PaddingSection>(ctx, isec->addralign, os));
           tmp.push_back(isec);
         }
         isd->sections = std::move(tmp);
@@ -1929,7 +1929,7 @@ template <class ELFT> void Writer<ELFT>::finalizeSections() {
     // debugging. Report references to undefined symbols and ensure that
     // references to shared symbols have PLT/GOT entries as appropriate.
     if (ctx.hasDynDbg) {
-      InputSection *unknownSec = make<InputSection>(
+      InputSection *unknownSec = ctx.make<InputSection>(
           ctx.internalFile, dynDbgSecName, 0, 0, 0, 0, ArrayRef<uint8_t>());
       for (Symbol *sym : ctx.symtab->getSymbols()) {
         if (!sym->isDynDbgRef)

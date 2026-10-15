@@ -1014,7 +1014,7 @@ void LoongArch::finalizeSynthesizeAligns(uint64_t &dot, InputSection *sec,
   auto *f = cast<ObjFile<ELFT>>(baseSec->file);
   auto shdr = f->template getELFShdrs<ELFT>()[baseSec->relSecIdx];
   // Create a copy of InputSection.
-  sec = make<InputSection>(*f, shdr, baseSec->name);
+  sec = ctx.make<InputSection>(*f, shdr, baseSec->name);
   auto *baseRelSec = cast<InputSection>(f->getSections()[baseSec->relSecIdx]);
   *sec = *baseRelSec;
   baseSec = nullptr;

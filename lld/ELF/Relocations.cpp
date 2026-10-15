@@ -197,7 +197,7 @@ template <class ELFT> static bool isReadOnly(SharedSymbol &ss) {
   // Determine if the symbol is read-only by scanning the DSO's program headers.
   const auto &file = cast<SharedFile>(*ss.file);
   for (const Elf_Phdr &phdr :
-       check(file.template getObj<ELFT>().program_headers()))
+       check(file.ctx.e, file.template getObj<ELFT>().program_headers()))
     if ((phdr.p_type == ELF::PT_LOAD || phdr.p_type == ELF::PT_GNU_RELRO) &&
         !(phdr.p_flags & ELF::PF_W) && ss.value >= phdr.p_vaddr &&
         ss.value < phdr.p_vaddr + phdr.p_memsz)
@@ -221,7 +221,7 @@ static SmallPtrSet<SharedSymbol *, 4> getSymbolsAt(Ctx &ctx, SharedSymbol &ss) {
     if (s.st_shndx == SHN_UNDEF || s.st_shndx == SHN_ABS ||
         s.getType() == STT_TLS || s.st_value != ss.value)
       continue;
-    StringRef name = check(s.getName(file.getStringTable()));
+    StringRef name = check(ctx.e, s.getName(file.getStringTable()));
     Symbol *sym = ctx.symtab->find(name);
     if (auto *alias = dyn_cast_or_null<SharedSymbol>(sym))
       ret.insert(alias);
@@ -305,15 +305,15 @@ template <class ELFT> static void addCopyRelSymbol(Ctx &ctx, SharedSymbol &ss) {
   // See if this symbol is in a read-only segment. If so, preserve the symbol's
   // memory protection by reserving space in the .bss.rel.ro section.
   bool isRO = isReadOnly<ELFT>(ss);
-  BssSection *sec = make<BssSection>(ctx, isRO ? ".bss.rel.ro" : ".bss",
-                                     symSize, ss.alignment);
+  BssSection *sec = ctx.make<BssSection>(ctx, isRO ? ".bss.rel.ro" : ".bss",
+                                         symSize, ss.alignment);
   OutputSection *osec = (isRO ? ctx.in.bssRelRo : ctx.in.bss)->getParent();
 
   // At this point, sectionBases has been migrated to sections. Append sec to
   // sections.
   if (osec->commands.empty() ||
       !isa<InputSectionDescription>(osec->commands.back()))
-    osec->commands.push_back(make<InputSectionDescription>(""));
+    osec->commands.push_back(ctx.make<InputSectionDescription>(ctx, ""));
   auto *isd = cast<InputSectionDescription>(osec->commands.back());
   isd->sections.push_back(sec);
   osec->commitSection(sec);
@@ -1764,7 +1764,7 @@ void ThunkCreator::createInitialThunkSections(
 ThunkSection *ThunkCreator::addThunkSection(OutputSection *os,
                                             InputSectionDescription *isd,
                                             uint64_t off, bool isPrefix) {
-  auto *ts = make<ThunkSection>(ctx, os, off);
+  auto *ts = ctx.make<ThunkSection>(ctx, os, off);
   ts->partition = os->partition;
   if ((ctx.arg.fixCortexA53Errata843419 || ctx.arg.fixCortexA8) &&
       !isd->sections.empty() && !isPrefix) {

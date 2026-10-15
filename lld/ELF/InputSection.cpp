@@ -49,7 +49,7 @@ static ArrayRef<uint8_t> getSectionContents(ObjFile<ELFT> &file,
                                             const typename ELFT::Shdr &hdr) {
   if (hdr.sh_type == SHT_NOBITS)
     return ArrayRef<uint8_t>(nullptr, hdr.sh_size);
-  return check(file.getObj().getSectionContents(hdr));
+  return check(file.ctx.e, file.getObj().getSectionContents(hdr));
 }
 
 InputSectionBase::InputSectionBase(InputFile *file, StringRef name,

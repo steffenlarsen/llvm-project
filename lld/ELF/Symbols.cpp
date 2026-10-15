@@ -255,7 +255,7 @@ void Symbol::parseSymbolVersion(Ctx &ctx) {
     auto matches = [&](ArrayRef<SymbolVersion> pats) {
       for (const SymbolVersion &pat : pats) {
         StringRef name = pat.isExternCpp ? StringRef(demangled) : base;
-        if (pat.hasWildcard ? SingleStringMatcher(pat.name).match(name)
+        if (pat.hasWildcard ? SingleStringMatcher(ctx.e, pat.name).match(name)
                             : pat.name == name)
           return true;
       }
