@@ -12,13 +12,12 @@
 using namespace llvm;
 
 namespace lld {
-
-DWARFCache::DWARFCache(std::unique_ptr<llvm::DWARFContext> d)
+DWARFCache::DWARFCache(ErrorHandler &eh, std::unique_ptr<llvm::DWARFContext> d)
     : dwarf(std::move(d)) {
   for (std::unique_ptr<DWARFUnit> &cu : dwarf->compile_units()) {
-    auto report = [](Error err) {
+    auto report = [&](Error err) {
       handleAllErrors(std::move(err),
-                      [](ErrorInfoBase &info) { warn(info.message()); });
+                      [&](ErrorInfoBase &info) { eh.warn(info.message()); });
     };
     Expected<const DWARFDebugLine::LineTable *> expectedLT =
         dwarf->getLineTableForUnit(cu.get(), report);
@@ -66,6 +65,9 @@ DWARFCache::DWARFCache(std::unique_ptr<llvm::DWARFContext> d)
     }
   }
 }
+
+DWARFCache::DWARFCache(std::unique_ptr<llvm::DWARFContext> d)
+    : DWARFCache(errorHandler(), std::move(d)) {}
 
 // Returns the pair of file name and line number describing location of data
 // object (variable, array, etc) definition.

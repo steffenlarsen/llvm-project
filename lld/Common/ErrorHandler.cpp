@@ -80,13 +80,11 @@ raw_ostream &ErrorHandler::errs() {
   return stderrOS ? *stderrOS : llvm::errs();
 }
 
-void lld::exitLld(int val) {
-  if (hasContext()) {
-    ErrorHandler &e = errorHandler();
-    // Delete any temporary file, while keeping the memory mapping open.
-    if (e.outputBuffer)
-      e.outputBuffer->discard();
-  }
+// e is the handler of the link that is exiting, if any.
+[[noreturn]] static void exitLldImpl(ErrorHandler *e, int val) {
+  // Delete any temporary file, while keeping the memory mapping open.
+  if (e && e->outputBuffer)
+    e->outputBuffer->discard();
 
   // Re-throw a possible signal or exception once/if it was caught by
   // safeLldMain().
@@ -99,8 +97,8 @@ void lld::exitLld(int val) {
   if (!CrashRecoveryContext::GetCurrent())
     llvm_shutdown();
 
-  if (hasContext())
-    lld::errorHandler().flushStreams();
+  if (e)
+    e->flushStreams();
 
   // When running inside safeLldMain(), restore the control flow back to the
   // CrashRecoveryContext. Otherwise simply use _exit(), meanning no cleanup,
@@ -108,7 +106,13 @@ void lld::exitLld(int val) {
   llvm::sys::Process::Exit(val, /*NoCleanup=*/true);
 }
 
-void lld::diagnosticHandler(const DiagnosticInfo &di) {
+void lld::exitLld(int val) {
+  exitLldImpl(hasContext() ? &errorHandler() : nullptr, val);
+}
+
+void lld::exitLld(ErrorHandler &e, int val) { exitLldImpl(&e, val); }
+
+void lld::handleDiagnostic(ErrorHandler &eh, const DiagnosticInfo &di) {
   SmallString<128> s;
   raw_svector_ostream os(s);
   DiagnosticPrinterRawOStream dp(os);
@@ -122,16 +126,20 @@ void lld::diagnosticHandler(const DiagnosticInfo &di) {
   di.print(dp);
   switch (di.getSeverity()) {
   case DS_Error:
-    error(s);
+    eh.error(s);
     break;
   case DS_Warning:
-    warn(s);
+    eh.warn(s);
     break;
   case DS_Remark:
   case DS_Note:
-    message(s);
+    eh.message(s, eh.outs());
     break;
   }
+}
+
+void lld::diagnosticHandler(const DiagnosticInfo &di) {
+  handleDiagnostic(errorHandler(), di);
 }
 
 void lld::checkError(Error e) {

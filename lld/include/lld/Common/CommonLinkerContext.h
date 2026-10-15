@@ -36,6 +36,13 @@ public:
 
   static void destroy();
 
+  // Creates new instances of T off a (almost) contiguous arena/object pool
+  // owned by this context. The instances are destroyed with the context.
+  template <typename T, typename... U> T *make(U &&...args) {
+    return new (getSpecificAllocSingleton<T>(*this).Allocate())
+        T(std::forward<U>(args)...);
+  }
+
   llvm::BumpPtrAllocator bAlloc;
   llvm::StringSaver saver{bAlloc};
   llvm::UniqueStringSaver uniqueSaver{bAlloc};

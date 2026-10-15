@@ -171,8 +171,12 @@ public:
 };
 
 [[noreturn]] void exitLld(int val);
+// Exits from inside a link, discarding its output and flushing its streams.
+[[noreturn]] void exitLld(ErrorHandler &e, int val);
 
 void diagnosticHandler(const llvm::DiagnosticInfo &di);
+// Reports an LLVM diagnostic to eh.
+void handleDiagnostic(ErrorHandler &eh, const llvm::DiagnosticInfo &di);
 void checkError(Error e);
 void checkError(ErrorHandler &eh, Error e);
 
@@ -208,6 +212,41 @@ template <class T>
 T check2(Expected<T> e, llvm::function_ref<std::string()> prefix) {
   if (!e)
     fatal(prefix() + ": " + toString(e.takeError()));
+  return std::move(*e);
+}
+
+template <class T> T check(ErrorHandler &eh, ErrorOr<T> e) {
+  if (auto ec = e.getError())
+    eh.fatal(ec.message());
+  return std::move(*e);
+}
+
+template <class T> T check(ErrorHandler &eh, Expected<T> e) {
+  if (!e)
+    eh.fatal(llvm::toString(e.takeError()));
+  return std::move(*e);
+}
+
+// Don't move from Expected wrappers around references.
+template <class T> T &check(ErrorHandler &eh, Expected<T &> e) {
+  if (!e)
+    eh.fatal(llvm::toString(e.takeError()));
+  return *e;
+}
+
+template <class T>
+T check2(ErrorHandler &eh, ErrorOr<T> e,
+         llvm::function_ref<std::string()> prefix) {
+  if (auto ec = e.getError())
+    eh.fatal(prefix() + ": " + ec.message());
+  return std::move(*e);
+}
+
+template <class T>
+T check2(ErrorHandler &eh, Expected<T> e,
+         llvm::function_ref<std::string()> prefix) {
+  if (!e)
+    eh.fatal(prefix() + ": " + toString(e.takeError()));
   return std::move(*e);
 }
 

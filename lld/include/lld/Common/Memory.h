@@ -24,10 +24,16 @@
 #include "llvm/Support/Allocator.h"
 
 namespace lld {
+class CommonLinkerContext;
+
 // A base class only used by the CommonLinkerContext to keep track of the
 // SpecificAlloc<> instances.
 struct SpecificAllocBase {
   virtual ~SpecificAllocBase() = default;
+  static SpecificAllocBase *getOrCreate(CommonLinkerContext &ctx, void *tag,
+                                        size_t size, size_t align,
+                                        SpecificAllocBase *(&creator)(void *));
+  // Uses the global context.
   static SpecificAllocBase *getOrCreate(void *tag, size_t size, size_t align,
                                         SpecificAllocBase *(&creator)(void *));
 };
@@ -45,8 +51,19 @@ template <class T> struct SpecificAlloc : public SpecificAllocBase {
 // CommonLinkerContext::instances. Its value does not matter.
 template <class T> int SpecificAlloc<T>::tag = 0;
 
-// Creates the arena on-demand on the first call; or returns it, if it was
-// already created.
+// Creates the arena in ctx on-demand on the first call; or returns it, if it
+// was already created.
+template <typename T>
+inline llvm::SpecificBumpPtrAllocator<T> &
+getSpecificAllocSingleton(CommonLinkerContext &ctx) {
+  SpecificAllocBase *instance = SpecificAllocBase::getOrCreate(
+      ctx, &SpecificAlloc<T>::tag, sizeof(SpecificAlloc<T>),
+      alignof(SpecificAlloc<T>), SpecificAlloc<T>::create);
+  return ((SpecificAlloc<T> *)instance)->alloc;
+}
+
+// Creates the arena in the global context on-demand on the first call; or
+// returns it, if it was already created.
 template <typename T>
 inline llvm::SpecificBumpPtrAllocator<T> &getSpecificAllocSingleton() {
   SpecificAllocBase *instance = SpecificAllocBase::getOrCreate(
