@@ -1,0 +1,21 @@
+// RUN: cir-opt %s -symbol-dce -o - | FileCheck %s
+
+// A global constructor or destructor is named by the module's constructor and
+// destructor lists, which are not symbol references, so symbol DCE -- and the
+// inliner, which drops callables the same way -- must keep it although nothing
+// else refers to it. A private function with no use at all still goes.
+module attributes {cir.global_ctors = [#cir.global_ctor<"ctor", 65535>],
+                   cir.global_dtors = [#cir.global_dtor<"dtor", 65535>]} {
+  // CHECK: cir.func internal private @ctor()
+  cir.func internal private @ctor() {
+    cir.return
+  }
+  // CHECK: cir.func internal private @dtor()
+  cir.func internal private @dtor() {
+    cir.return
+  }
+  // CHECK-NOT: @unused
+  cir.func internal private @unused() {
+    cir.return
+  }
+}

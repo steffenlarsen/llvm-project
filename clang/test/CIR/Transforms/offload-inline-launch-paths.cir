@@ -1,0 +1,194 @@
+// The pass runs on each module of the container, as the merge tool runs it.
+// RUN: cir-opt %s -pass-pipeline="builtin.module(builtin.module(cir-offload-inline-launch-paths))" \
+// RUN:   | FileCheck %s
+// RUN: cir-opt %s \
+// RUN:   -pass-pipeline="builtin.module(builtin.module(cir-offload-inline-launch-paths,cir-resolve-indirect-calls),test-print-kernel-bindings)" \
+// RUN:   -o /dev/null 2>&1 | FileCheck %s --check-prefix=TABLE
+// RUN: cir-opt %s \
+// RUN:   -pass-pipeline="builtin.module(builtin.module(cir-offload-inline-launch-paths{index-paths=false}))" \
+// RUN:   | FileCheck %s --check-prefix=NOINDEX
+
+!s32i = !cir.int<s, 32>
+!u32i = !cir.int<u, 32>
+!u64i = !cir.int<u, 64>
+!rec_dim3 = !cir.struct<"dim3" {data !u32i, data !u32i, data !u32i}>
+!fn = !cir.func<(!s32i)>
+
+// A launch layered behind dispatch functions, the way Kokkos builds the
+// geometry in one function and launches in another: `run` builds a const dim3
+// and hands it by reference to `dispatch`, which passes it on to `invoke`,
+// where the launch is. The calls on the way to the launch are inlined, so the
+// launch ends up next to the geometry; a call that leads to no launch stays.
+module attributes {cir.offload.container} {
+  module @host attributes {cir.offload.kind = #cir.offload<host>,
+                           cir.global_ctors = [#cir.global_ctor<"init", 65535>]} {
+    cir.func private @__cudaPushCallConfiguration(!rec_dim3, !rec_dim3, !u32i, !cir.ptr<!s32i>) -> !s32i
+    cir.func private @dim3_ctor(!cir.ptr<!rec_dim3>, !u32i, !u32i, !u32i) func_info<#cir.cxx_ctor<!rec_dim3, custom>>
+    cir.func private @check_bounds(!cir.ptr<!rec_dim3>)
+    cir.func internal private @stub(%arg0: !s32i) attributes {cu.kernel_name = #cir.cu.kernel_name<"kern">} {
+      cir.return
+    }
+    cir.func internal private @invoke(%grid: !cir.ptr<!rec_dim3>, %block: !cir.ptr<!rec_dim3>, %v: !s32i) {
+      %sh = cir.const #cir.int<0> : !u32i
+      %st = cir.const #cir.ptr<null> : !cir.ptr<!s32i>
+      %g = cir.load %grid : !cir.ptr<!rec_dim3>, !rec_dim3
+      %b = cir.load %block : !cir.ptr<!rec_dim3>, !rec_dim3
+      %r = cir.call @__cudaPushCallConfiguration(%g, %b, %sh, %st) : (!rec_dim3, !rec_dim3, !u32i, !cir.ptr<!s32i>) -> !s32i
+      %c = cir.cast int_to_bool %r : !s32i -> !cir.bool
+      cir.if %c {
+      } else {
+        cir.call @stub(%v) : (!s32i) -> ()
+      }
+      cir.return
+    }
+    cir.func internal private @dispatch(%grid: !cir.ptr<!rec_dim3>, %block: !cir.ptr<!rec_dim3>, %v: !s32i) {
+      cir.call @check_bounds(%block) : (!cir.ptr<!rec_dim3>) -> ()
+      cir.call @invoke(%grid, %block, %v) : (!cir.ptr<!rec_dim3>, !cir.ptr<!rec_dim3>, !s32i) -> ()
+      cir.return
+    }
+    cir.func internal private @unrelated(%v: !s32i) -> !s32i {
+      cir.return %v : !s32i
+    }
+    cir.func @run(%n: !u32i, %v: !s32i) -> !s32i {
+      %grid = cir.alloca "grid" align(4) init const : !cir.ptr<!rec_dim3>
+      %block = cir.alloca "block" align(4) init const : !cir.ptr<!rec_dim3>
+      %one = cir.const #cir.int<1> : !u32i
+      %c256 = cir.const #cir.int<256> : !u32i
+      cir.call @dim3_ctor(%grid, %n, %one, %one) : (!cir.ptr<!rec_dim3>, !u32i, !u32i, !u32i) -> ()
+      cir.call @dim3_ctor(%block, %c256, %one, %one) : (!cir.ptr<!rec_dim3>, !u32i, !u32i, !u32i) -> ()
+      cir.call @dispatch(%grid, %block, %v) : (!cir.ptr<!rec_dim3>, !cir.ptr<!rec_dim3>, !s32i) -> ()
+      %u = cir.call @unrelated(%v) : (!s32i) -> !s32i
+      cir.return %u : !s32i
+    }
+
+    // A launch helper handed the kernel to launch: its launch names no kernel
+    // until it is inlined where the pointer is known.
+    cir.func internal private @launch_with(%k: !cir.ptr<!fn>, %g: !rec_dim3, %b: !rec_dim3, %v: !s32i) {
+      %sh = cir.const #cir.int<0> : !u32i
+      %st = cir.const #cir.ptr<null> : !cir.ptr<!s32i>
+      %r = cir.call @__cudaPushCallConfiguration(%g, %b, %sh, %st) : (!rec_dim3, !rec_dim3, !u32i, !cir.ptr<!s32i>) -> !s32i
+      %c = cir.cast int_to_bool %r : !s32i -> !cir.bool
+      cir.if %c {
+      } else {
+        cir.call %k(%v) : (!cir.ptr<!fn>, !s32i) -> ()
+      }
+      cir.return
+    }
+    cir.func @run_pointer(%g: !rec_dim3, %b: !rec_dim3, %v: !s32i) {
+      %k = cir.get_global @stub : !cir.ptr<!fn>
+      cir.call @launch_with(%k, %g, %b, %v) : (!cir.ptr<!fn>, !rec_dim3, !rec_dim3, !s32i) -> ()
+      cir.return
+    }
+
+    // Template instantiations on the way to a launch. Once inlined, the copies
+    // nothing calls any more go, unless they share a COMDAT group, or are
+    // external, or a constructor list names them.
+    cir.func linkonce_odr @odr_invoke(%g: !rec_dim3, %b: !rec_dim3, %v: !s32i) {
+      %sh = cir.const #cir.int<0> : !u32i
+      %st = cir.const #cir.ptr<null> : !cir.ptr<!s32i>
+      %r = cir.call @__cudaPushCallConfiguration(%g, %b, %sh, %st) : (!rec_dim3, !rec_dim3, !u32i, !cir.ptr<!s32i>) -> !s32i
+      %c = cir.cast int_to_bool %r : !s32i -> !cir.bool
+      cir.if %c {
+      } else {
+        cir.call @stub(%v) : (!s32i) -> ()
+      }
+      cir.return
+    }
+    cir.func linkonce_odr @odr_dispatch(%g: !rec_dim3, %b: !rec_dim3, %v: !s32i) {
+      cir.call @odr_invoke(%g, %b, %v) : (!rec_dim3, !rec_dim3, !s32i) -> ()
+      cir.return
+    }
+    cir.func comdat("group") linkonce_odr @grouped_dispatch(%g: !rec_dim3, %b: !rec_dim3, %v: !s32i) {
+      cir.call @odr_invoke(%g, %b, %v) : (!rec_dim3, !rec_dim3, !s32i) -> ()
+      cir.return
+    }
+    cir.func @external_dispatch(%g: !rec_dim3, %b: !rec_dim3, %v: !s32i) {
+      cir.call @odr_invoke(%g, %b, %v) : (!rec_dim3, !rec_dim3, !s32i) -> ()
+      cir.return
+    }
+    cir.func internal @init() {
+      %g = cir.const #cir.const_record<{#cir.int<1> : !u32i, #cir.int<1> : !u32i, #cir.int<1> : !u32i}> : !rec_dim3
+      %v = cir.const #cir.int<0> : !s32i
+      cir.call @odr_dispatch(%g, %g, %v) : (!rec_dim3, !rec_dim3, !s32i) -> ()
+      cir.return
+    }
+    cir.func @run_odr(%g: !rec_dim3, %b: !rec_dim3, %v: !s32i) {
+      cir.call @odr_dispatch(%g, %b, %v) : (!rec_dim3, !rec_dim3, !s32i) -> ()
+      cir.call @grouped_dispatch(%g, %b, %v) : (!rec_dim3, !rec_dim3, !s32i) -> ()
+      cir.call @external_dispatch(%g, %b, %v) : (!rec_dim3, !rec_dim3, !s32i) -> ()
+      cir.return
+    }
+  }
+  module @device_0 attributes {cir.offload.kind = #cir.offload<device>} {
+    cir.func @kern(%arg0: !s32i) cc(ptx_kernel) {
+      cir.return
+    }
+
+    // On the device, the work a kernel delegates: `run_body` reads a launch
+    // index, so it is inlined into the kernel, and `get_end`, a trivial
+    // accessor it calls, follows it. The index read stays a call; so does
+    // `log_value`, which reads no index.
+    cir.func private @__ockl_get_local_id(!u32i) -> !u64i
+    cir.func linkonce_odr @_ZN25__hip_builtin_threadIdx_t7__get_xEv() -> !u32i {
+      %d = cir.const #cir.int<0> : !u32i
+      %0 = cir.call @__ockl_get_local_id(%d) : (!u32i) -> !u64i
+      %1 = cir.cast integral %0 : !u64i -> !u32i
+      cir.return %1 : !u32i
+    }
+    cir.func private @log_value(!s32i)
+    cir.func linkonce_odr @get_end(%p: !cir.ptr<!s32i>) -> !s32i {
+      %v = cir.load %p : !cir.ptr<!s32i>, !s32i
+      cir.return %v : !s32i
+    }
+    cir.func linkonce_odr @run_body(%p: !cir.ptr<!s32i>) {
+      %t = cir.call @_ZN25__hip_builtin_threadIdx_t7__get_xEv() : () -> !u32i
+      %i = cir.cast integral %t : !u32i -> !s32i
+      %n = cir.call @get_end(%p) : (!cir.ptr<!s32i>) -> !s32i
+      %c = cir.cmp lt %i, %n : !s32i
+      cir.if %c {
+        cir.call @log_value(%i) : (!s32i) -> ()
+      }
+      cir.return
+    }
+    cir.func @work_kern(%p: !cir.ptr<!s32i>) cc(amdgpu_kernel) {
+      cir.call @run_body(%p) : (!cir.ptr<!s32i>) -> ()
+      cir.return
+    }
+  }
+}
+
+// CHECK-LABEL: cir.func @run(
+// CHECK-NOT:     cir.call @dispatch
+// CHECK-NOT:     cir.call @invoke
+// CHECK:         cir.call @check_bounds(
+// CHECK:         cir.call @__cudaPushCallConfiguration(
+// CHECK:         cir.call @stub(
+// CHECK:         cir.call @unrelated(
+
+// The block is passed to check_bounds by reference, but it is const, so that
+// cannot change it; the grid depends on %n.
+// TABLE: launch in @run : 1 args, grid dynamic, block const, stream default
+
+// CHECK-LABEL: cir.func @run_pointer(
+// CHECK-NOT:     cir.call @launch_with
+// CHECK:         cir.call %{{.*}}(%arg2)
+
+// TABLE: launch in @run_pointer : 1 args, grid untraced, block untraced, stream default
+
+// CHECK-NOT:   cir.func {{.*}}@odr_invoke(
+// CHECK-NOT:   cir.func {{.*}}@odr_dispatch(
+// CHECK:       cir.func comdat("group") linkonce_odr @grouped_dispatch(
+// CHECK:       cir.func @external_dispatch(
+// CHECK:       cir.func internal @init(
+// CHECK-NOT:     cir.call @odr_dispatch
+// CHECK:       cir.func @run_odr(
+// CHECK-NOT:     cir.call @{{.*}}_dispatch
+
+// CHECK-LABEL: cir.func @work_kern(
+// CHECK-NOT:     cir.call
+// CHECK:         cir.call @_ZN25__hip_builtin_threadIdx_t7__get_xEv()
+// CHECK-NOT:     cir.call
+// CHECK:         cir.call @log_value(
+
+// NOINDEX-LABEL: cir.func @work_kern(
+// NOINDEX:         cir.call @run_body(

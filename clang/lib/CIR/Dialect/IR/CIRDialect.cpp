@@ -3081,11 +3081,28 @@ void cir::FuncOp::setVisibility(mlir::SymbolTable::Visibility visibility) {
   mlir::OpTrait::SymbolVisibility<cir::FuncOp>::setVisibility(visibility);
 }
 
+// Besides a private function, a definition the linker may drop when nothing
+// uses it -- an inline function or a template instantiation, say -- may be
+// dropped here too. A COMDAT group is kept or dropped as a whole, so a function
+// sharing one with others stays, and a kernel is used by the runtime, which
+// finds it by name.
+static bool isDroppableWhenUnused(cir::FuncOp fn) {
+  if (fn.isDeclaration() || !cir::isDiscardableIfUnused(fn.getLinkage()))
+    return false;
+  std::optional<llvm::StringRef> group = fn.getComdat();
+  if (group && !group->empty() && *group != fn.getSymName())
+    return false;
+  cir::CallingConv cc = fn.getCallingConv();
+  return cc != cir::CallingConv::AMDGPUKernel &&
+         cc != cir::CallingConv::PTXKernel &&
+         cc != cir::CallingConv::SpirKernel;
+}
+
 // A global constructor or destructor is called by name from the module's
 // constructor and destructor lists, which are not symbol references, so a
 // function on one is used even with no symbol use in sight.
 bool cir::FuncOp::canDiscardOnUseEmpty() {
-  if (!isPrivate())
+  if (!isPrivate() && !isDroppableWhenUnused(*this))
     return false;
   if (getGlobalCtorPriority() || getGlobalDtorPriority())
     return false;

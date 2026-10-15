@@ -543,6 +543,10 @@ cir::getLaunchedKernel(mlir::Operation *op,
       cir::CUDAKernelNameAttr::getMnemonic());
 }
 
+bool cir::isCallUnderLaunchConfiguration(cir::CallOp call) {
+  return call.isIndirect() && tracePushConfiguration(call);
+}
+
 bool cir::hasUseOutsideSelf(cir::FuncOp fn, mlir::Operation *scope) {
   auto uses = mlir::SymbolTable::getSymbolUses(fn, scope);
   if (!uses)

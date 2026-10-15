@@ -106,6 +106,13 @@ struct KernelBinding {
 cir::CUDAKernelNameAttr getLaunchedKernel(mlir::Operation *op,
                                           mlir::SymbolTableCollection &symbols);
 
+// Whether `call` is an indirect call made once a launch configuration has been
+// pushed: the call a `<<<>>>` makes through a kernel pointer that is not known
+// here, or a call evaluating one of its arguments. It is not a launch site, but
+// once the pointer is known -- by inlining the function it comes from -- the
+// former can be made into one.
+bool isCallUnderLaunchConfiguration(cir::CallOp call);
+
 // Whether any reference to `fn` within `scope` lives outside `fn`'s own body. A
 // device stub hands its own address to cudaLaunchKernel, so it always
 // references itself; that self-reference is not a use. Conservatively true when

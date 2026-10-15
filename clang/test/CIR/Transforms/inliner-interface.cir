@@ -1,0 +1,79 @@
+// RUN: cir-opt %s -inline='default-pipeline=' -o - | FileCheck %s
+
+!s32i = !cir.int<s, 32>
+!fn = !cir.func<(!s32i)>
+
+module {
+  cir.func private @get_flag() -> !cir.bool
+  cir.func private @sink(!s32i)
+
+  // A single block ending in its only return is inlined, and its alloca moves
+  // to the caller's entry block.
+  cir.func internal private @simple(%arg0: !s32i) -> !s32i {
+    %0 = cir.alloca "x" align(4) : !cir.ptr<!s32i>
+    cir.store %arg0, %0 : !s32i, !cir.ptr<!s32i>
+    %1 = cir.load %0 : !cir.ptr<!s32i>, !s32i
+    cir.return %1 : !s32i
+  }
+  // CHECK-LABEL: cir.func @calls_simple(
+  // CHECK-NEXT:    cir.alloca "x"
+  // CHECK-NEXT:    cir.alloca "y"
+  // CHECK-NOT:     cir.call @simple
+  // CHECK:         cir.call @sink(
+  cir.func @calls_simple(%arg0: !s32i) {
+    %0 = cir.alloca "y" align(4) : !cir.ptr<!s32i>
+    %c = cir.call @get_flag() : () -> !cir.bool
+    cir.if %c {
+      %1 = cir.call @simple(%arg0) : (!s32i) -> !s32i
+      cir.call @sink(%1) : (!s32i) -> ()
+    }
+    cir.return
+  }
+
+  // A return nested in a structured region would return from the caller once
+  // inlined, so the call stays.
+  cir.func internal private @early_return(%arg0: !s32i) -> !s32i {
+    %c = cir.call @get_flag() : () -> !cir.bool
+    cir.if %c {
+      cir.return %arg0 : !s32i
+    }
+    %0 = cir.const #cir.int<0> : !s32i
+    cir.return %0 : !s32i
+  }
+  // CHECK-LABEL: cir.func @calls_early_return(
+  // CHECK:         cir.call @early_return(
+  cir.func @calls_early_return(%arg0: !s32i) -> !s32i {
+    %0 = cir.call @early_return(%arg0) : (!s32i) -> !s32i
+    cir.return %0 : !s32i
+  }
+
+  // A function marked no_inline stays a call.
+  cir.func no_inline internal private @not_inlined(%arg0: !s32i) -> !s32i {
+    cir.return %arg0 : !s32i
+  }
+  // CHECK-LABEL: cir.func @calls_no_inline(
+  // CHECK:         cir.call @not_inlined(
+  cir.func @calls_no_inline(%arg0: !s32i) -> !s32i {
+    %0 = cir.call @not_inlined(%arg0) : (!s32i) -> !s32i
+    cir.return %0 : !s32i
+  }
+
+  // A device stub is a launch, and a call to it has to stay one.
+  cir.func internal private @stub(%arg0: !s32i) attributes {cu.kernel_name = #cir.cu.kernel_name<"kern">} {
+    cir.return
+  }
+  // CHECK-LABEL: cir.func @calls_stub(
+  // CHECK:         cir.call @stub(
+  cir.func @calls_stub(%arg0: !s32i) {
+    cir.call @stub(%arg0) : (!s32i) -> ()
+    cir.return
+  }
+
+  // An indirect call has no symbol callee; the call graph has to cope with it.
+  // CHECK-LABEL: cir.func @calls_indirect(
+  // CHECK:         cir.call %arg0(%arg1)
+  cir.func @calls_indirect(%arg0: !cir.ptr<!fn>, %arg1: !s32i) {
+    cir.call %arg0(%arg1) : (!cir.ptr<!fn>, !s32i) -> ()
+    cir.return
+  }
+}

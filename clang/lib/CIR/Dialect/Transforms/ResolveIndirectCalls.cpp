@@ -13,7 +13,8 @@
 //   * bitcasts between pointer types;
 //   * `cir.get_global @sym` and `cir.const #cir.global_view<@sym>`;
 //   * a load through a pointer to a constant global whose initializer is the
-//     address of a symbol, which is what a HIP kernel handle is;
+//     address of a symbol, which is what a HIP kernel handle is, or from a
+//     constant index into a constant array of such addresses;
 //   * a direct call to a function every return of which yields the address of
 //     the same symbol, the shape of an accessor that hands out a function
 //     pointer.
@@ -89,17 +90,39 @@ mlir::Operation *SymbolResolver::resolveGlobalView(mlir::Operation *from,
 }
 
 // A pointer loaded from a constant global initialized with the address of a
-// symbol -- a HIP kernel handle holding its stub, say -- is that address.
+// symbol -- a HIP kernel handle holding its stub, say -- is that address. So is
+// one loaded from a constant index into a constant array of addresses, a table
+// of kernels.
 mlir::Operation *SymbolResolver::resolveLoaded(cir::LoadOp load,
                                                unsigned depth) {
   if (load.getIsVolatile())
     return nullptr;
-  auto global = mlir::dyn_cast_or_null<cir::GlobalOp>(
-      resolveAddress(load.getAddr(), depth));
+  mlir::Value addr = stripBitcasts(load.getAddr());
+  std::optional<uint64_t> index;
+  if (auto element = addr.getDefiningOp<cir::GetElementOp>()) {
+    auto constant = element.getIndex().getDefiningOp<cir::ConstantOp>();
+    auto value = constant ? mlir::dyn_cast<cir::IntAttr>(constant.getValue())
+                          : cir::IntAttr();
+    if (!value || value.getValue().isNegative())
+      return nullptr;
+    index = value.getUInt();
+    addr = element.getBase();
+  }
+  auto global =
+      mlir::dyn_cast_or_null<cir::GlobalOp>(resolveAddress(addr, depth));
   if (!global || !global.getConstant() || global.isDeclaration() ||
       cir::isInterposableLinkage(global.getLinkage()))
     return nullptr;
-  return resolveGlobalView(global, global.getInitialValueAttr());
+  mlir::Attribute init = global.getInitialValueAttr();
+  if (index) {
+    auto array = mlir::dyn_cast_or_null<cir::ConstArrayAttr>(init);
+    auto elements =
+        array ? mlir::dyn_cast<mlir::ArrayAttr>(array.getElts()) : nullptr;
+    if (!elements || *index >= elements.size())
+      return nullptr;
+    init = elements[*index];
+  }
+  return resolveGlobalView(global, init);
 }
 
 // The symbol every return of `fn` yields the address of.

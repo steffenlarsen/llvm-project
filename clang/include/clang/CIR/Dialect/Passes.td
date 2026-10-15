@@ -626,12 +626,20 @@ def OffloadInlineLaunchPaths
     Programming models layer a launch behind dispatch functions, so the launch
     geometry and arguments reach the launch site as parameters. This inlines a
     call when its callee, possibly through further calls, reaches a launch, so
-    that the launch site sits next to the values it uses. Other calls are left
-    alone, which bounds the growth to the dispatch chains.
+    that the launch site sits next to the values it uses. On the device side a
+    call is inlined when its callee reaches a read of a launch index, and a
+    trivial accessor when it is called from such a path, so that a kernel's
+    index arithmetic, guards and loop bounds sit in the kernel. The index reads
+    stay calls. Other calls are left alone, which bounds the growth to these
+    paths.
 
     What may be inlined is the CIR inliner interface's decision. Runs on any
     module; one without launches is left unchanged.
   }];
+  let options = [
+    Option<"indexPaths", "index-paths", "bool", /*default=*/"true",
+           "Also inline the calls that lead to a read of a launch index">
+  ];
   let constructor = "mlir::createOffloadInlineLaunchPathsPass()";
   let dependentDialects = ["cir::CIRDialect"];
 }

@@ -92,6 +92,11 @@ llvm::cl::opt<bool> DisableCirInlineLaunchPaths(
     "disable-cir-inline-launch-paths",
     llvm::cl::desc("Disable inlining the calls that lead to a launch"),
     llvm::cl::cat(CIROffloadMergeCategory));
+llvm::cl::opt<bool> DisableCirInlineIndexPaths(
+    "disable-cir-inline-index-paths",
+    llvm::cl::desc("Disable inlining the calls that lead to a read of a "
+                   "launch index"),
+    llvm::cl::cat(CIROffloadMergeCategory));
 llvm::cl::opt<bool> DisableCirInferLaunchBounds(
     "disable-cir-infer-launch-bounds",
     llvm::cl::desc("Disable launch-bound inference from host launch sites"),
@@ -701,9 +706,14 @@ int runOffloadOptPasses(mlir::ModuleOp module) {
   // as parameters until the dispatch chain is inlined; the values then need
   // promoting and propagating again.
   if (!DisableCirInlineLaunchPaths) {
-    modulePM.addPass(mlir::createOffloadInlineLaunchPathsPass());
+    modulePM.addPass(
+        mlir::createOffloadInlineLaunchPathsPass(!DisableCirInlineIndexPaths));
     modulePM.addPass(mlir::createMem2Reg());
     modulePM.addPass(mlir::createSCCPPass());
+    // Inlining a launch helper into its callers is what makes a kernel
+    // pointer it was handed known.
+    if (!DisableCirResolveIndirectCalls)
+      modulePM.addPass(mlir::createResolveIndirectCallsPass());
   }
 
   // Container passes run on the container itself; the nested modules carry no

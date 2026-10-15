@@ -55,6 +55,7 @@ std::unique_ptr<Pass> createOffloadPropagateBlockShapePass();
 std::unique_ptr<Pass> createOffloadEliminateCoveredGuardsPass();
 std::unique_ptr<Pass> createOffloadDeadArgEliminationPass();
 std::unique_ptr<Pass> createOffloadInlineLaunchPathsPass();
+std::unique_ptr<Pass> createOffloadInlineLaunchPathsPass(bool indexPaths);
 std::unique_ptr<Pass> createGotoSolverPass();
 std::unique_ptr<Pass> createIdiomRecognizerPass();
 std::unique_ptr<Pass> createLibOptPass();

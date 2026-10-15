@@ -95,6 +95,40 @@ module {
     cir.return
   }
 
+  // A constant table of addresses, read at a constant index.
+  cir.global constant internal @table = #cir.const_array<[#cir.global_view<@other> : !cir.ptr<!fn>, #cir.global_view<@target> : !cir.ptr<!fn>]> : !cir.array<!cir.ptr<!fn> x 2>
+  // CHECK-LABEL: cir.func @table_entry(
+  // CHECK:         cir.call @target(%arg0) : (!s32i) -> ()
+  cir.func @table_entry(%arg0: !s32i) {
+    %0 = cir.get_global @table : !cir.ptr<!cir.array<!cir.ptr<!fn> x 2>>
+    %1 = cir.const #cir.int<1> : !s64i
+    %2 = cir.get_element %0[%1 : !s64i] : !cir.ptr<!cir.array<!cir.ptr<!fn> x 2>> -> !cir.ptr<!cir.ptr<!fn>>
+    %3 = cir.load %2 : !cir.ptr<!cir.ptr<!fn>>, !cir.ptr<!fn>
+    cir.call %3(%arg0) : (!cir.ptr<!fn>, !s32i) -> ()
+    cir.return
+  }
+
+  // An index only known at run time, or one past the table, picks nothing.
+  // CHECK-LABEL: cir.func @table_runtime_index(
+  // CHECK:         cir.call %{{.*}}(%arg0) : (!cir.ptr<!cir.func<(!s32i)>>, !s32i) -> ()
+  cir.func @table_runtime_index(%arg0: !s32i, %arg1: !s64i) {
+    %0 = cir.get_global @table : !cir.ptr<!cir.array<!cir.ptr<!fn> x 2>>
+    %1 = cir.get_element %0[%arg1 : !s64i] : !cir.ptr<!cir.array<!cir.ptr<!fn> x 2>> -> !cir.ptr<!cir.ptr<!fn>>
+    %2 = cir.load %1 : !cir.ptr<!cir.ptr<!fn>>, !cir.ptr<!fn>
+    cir.call %2(%arg0) : (!cir.ptr<!fn>, !s32i) -> ()
+    cir.return
+  }
+  // CHECK-LABEL: cir.func @table_out_of_range(
+  // CHECK:         cir.call %{{.*}}(%arg0) : (!cir.ptr<!cir.func<(!s32i)>>, !s32i) -> ()
+  cir.func @table_out_of_range(%arg0: !s32i) {
+    %0 = cir.get_global @table : !cir.ptr<!cir.array<!cir.ptr<!fn> x 2>>
+    %1 = cir.const #cir.int<2> : !s64i
+    %2 = cir.get_element %0[%1 : !s64i] : !cir.ptr<!cir.array<!cir.ptr<!fn> x 2>> -> !cir.ptr<!cir.ptr<!fn>>
+    %3 = cir.load %2 : !cir.ptr<!cir.ptr<!fn>>, !cir.ptr<!fn>
+    cir.call %3(%arg0) : (!cir.ptr<!fn>, !s32i) -> ()
+    cir.return
+  }
+
   // The call's type is not the callee's, so it is left to the backend.
   // CHECK-LABEL: cir.func @type_mismatch(
   // CHECK:         cir.call %{{.*}}(%arg0) : (!cir.ptr<!cir.func<(!s64i)>>, !s64i) -> ()
