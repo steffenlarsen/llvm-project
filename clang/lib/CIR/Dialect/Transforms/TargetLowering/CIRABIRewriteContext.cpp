@@ -853,31 +853,38 @@ void insertSRetStores(mlir::FunctionOpInterface funcOp, mlir::Type origRetTy,
 
   cir::AllocaOp retAlloca = nullptr;
   for (cir::ReturnOp retOp : returnOps) {
-    // Every cir.return in an sret function must carry the loaded return
-    // value -- a bare return would mean the sret slot was never written.
+    // Every cir.return in an sret function must carry the return value -- a
+    // bare return would mean the sret slot was never written.
     assert(!retOp.getInput().empty() &&
            "cir.return in sret function must have an operand");
+    mlir::Value retVal = retOp.getInput()[0];
+    auto retLoad = retVal.getDefiningOp<cir::LoadOp>();
 
-    cir::LoadOp retLoad =
-        mlir::cast<cir::LoadOp>(retOp.getInput()[0].getDefiningOp());
-
-    // Rewire the shared `__retval` alloca to the sret pointer once.
-    // replaceAllUsesWith updates every load of the alloca (including those
-    // feeding the other cir.return ops) to read from sretPtr instead, so
-    // all returns are covered by this single rewiring.  Only then is the
-    // now-unused alloca safe to erase.
-    if (!retAlloca) {
-      retAlloca = mlir::cast<cir::AllocaOp>(retLoad.getAddr().getDefiningOp());
-      retAlloca.getResult().replaceAllUsesWith(sretPtr);
-      retAlloca->erase();
+    // CIRGen returns a load of its shared `__retval` alloca. Rewire that
+    // alloca to the sret pointer once: replaceAllUsesWith updates every load
+    // of it (including those feeding the other cir.return ops) to read from
+    // sretPtr instead, so the value is built in the sret slot directly. Only
+    // then is the now-unused alloca safe to erase.
+    if (!retAlloca && retLoad) {
+      if (auto slot = retLoad.getAddr().getDefiningOp<cir::AllocaOp>()) {
+        retAlloca = slot;
+        retAlloca.getResult().replaceAllUsesWith(sretPtr);
+        retAlloca->erase();
+      }
     }
 
-    // The sret slot now holds the return value directly; replace the
-    // value-carrying return with a void return (no operand).
+    // A value that is not already in the sret slot -- one an earlier pass
+    // promoted out of `__retval`, say -- is stored there, as classic codegen
+    // does.
     builder.setInsertionPoint(retOp);
+    if (!retLoad || retLoad.getAddr() != sretPtr)
+      cir::StoreOp::create(builder, retOp.getLoc(), retVal, sretPtr);
+
+    // The sret slot now holds the return value; replace the value-carrying
+    // return with a void return (no operand).
     cir::ReturnOp::create(builder, retOp.getLoc());
     retOp->erase();
-    if (retLoad.use_empty())
+    if (retLoad && retLoad.use_empty())
       retLoad->erase();
   }
 }

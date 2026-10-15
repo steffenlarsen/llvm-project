@@ -33,6 +33,25 @@
 // Host module: CIR -> object, embedding the device fat binary.
 // MERGE: "-cc1"{{.*}} "-emit-obj"{{.*}} "-foffload-include-binary" "[[DEV_FATBIN]]"{{.*}} "-x" "cir" "[[HOST_SPLIT]]"
 
+// The merge rewrites calls as the source wrote them, so both CIR compiles
+// leave calling-convention lowering to the compiles that resume from the split
+// modules, and only they.
+// RUN: %clang -### -target x86_64-unknown-linux-gnu -x hip -fclangir \
+// RUN:   --offload-arch=gfx90a -nogpuinc -nogpulib \
+// RUN:   --clangir-offload-merge -c %s 2>&1 \
+// RUN: | FileCheck %s --check-prefix=CCDEFER
+// CCDEFER: "-cc1"{{.*}} "-emit-cir" "-fno-clangir-call-conv-lowering"
+// CCDEFER: "-cc1"{{.*}} "-emit-cir" "-fno-clangir-call-conv-lowering"
+// CCDEFER-NOT: "-fno-clangir-call-conv-lowering"
+
+// CIR requested by the user is not merged, and keeps the lowering.
+// RUN: %clang -### -target x86_64-unknown-linux-gnu -x hip -fclangir \
+// RUN:   --offload-arch=gfx90a -nogpuinc -nogpulib \
+// RUN:   --clangir-offload-merge -emit-cir -c %s 2>&1 \
+// RUN: | FileCheck %s --check-prefix=USER-CIR
+// USER-CIR: "-cc1"{{.*}} "-emit-cir"
+// USER-CIR-NOT: "-fno-clangir-call-conv-lowering"
+
 // RUN: %clang -### -target x86_64-unknown-linux-gnu -x hip -fclangir \
 // RUN:   --offload-arch=gfx90a --offload-arch=gfx942 \
 // RUN:   -nogpuinc -nogpulib --clangir-offload-merge -c %s 2>&1 \

@@ -42,6 +42,7 @@ createCallConvLoweringPass(cir::CallConvTarget target,
                            bool allowsX86TargetAttrAvx,
                            const llvm::abi::X86ABICompatInfo &x86AbiCompat);
 std::unique_ptr<Pass> createHoistAllocasPass();
+std::unique_ptr<Pass> createResolveIndirectCallsPass();
 std::unique_ptr<Pass> createLoweringPreparePass();
 std::unique_ptr<Pass> createLoweringPreparePass(clang::ASTContext *astCtx);
 std::unique_ptr<Pass> createCUDARegisterModulePass();
@@ -53,6 +54,7 @@ std::unique_ptr<Pass> createOffloadPropagatePointerFactsPass();
 std::unique_ptr<Pass> createOffloadPropagateBlockShapePass();
 std::unique_ptr<Pass> createOffloadEliminateCoveredGuardsPass();
 std::unique_ptr<Pass> createOffloadDeadArgEliminationPass();
+std::unique_ptr<Pass> createOffloadInlineLaunchPathsPass();
 std::unique_ptr<Pass> createGotoSolverPass();
 std::unique_ptr<Pass> createIdiomRecognizerPass();
 std::unique_ptr<Pass> createLibOptPass();

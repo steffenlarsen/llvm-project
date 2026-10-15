@@ -1,9 +1,9 @@
 // Tests for the offload EliminateCoveredGuards pass.
 //
-// A kernel launched with gridDim = ceil(n/d) carries a tail guard for the last,
-// partially populated block. When n % d == 0 that block is full and the guard
-// can never fire, so a copy with the guard folded away is dispatched to behind
-// a runtime divisibility test.
+// A kernel carries a tail guard -- `if (index >= n) return;` -- for the threads
+// of a partially populated last block. The largest index is computed in the
+// launch dimensions, and each launch dispatches to a copy with the guard folded
+// away when, for its own grid and block size, that largest index is below n.
 
 // RUN: cir-opt %s -split-input-file \
 // RUN:   -pass-pipeline="builtin.module(cir-offload-eliminate-covered-guards)" \
@@ -71,11 +71,24 @@ module attributes {cir.offload.container} {
 }
 
 
-// The launch now picks between the two copies on n % 256.
+// The launch picks between the two copies on (G-1)*B + (B-1) < n, the largest
+// index for its grid G and block B -- with G = ceil(n/256) and B = 256 that is
+// n % 256 == 0 -- and on that index fitting the int it is converted to.
 // CHECK-LABEL: cir.func @launch_basic
-// CHECK:         %[[REM:.*]] = cir.rem %arg1, %{{.*}} : !s32i
-// CHECK:         %[[EQ:.*]] = cir.cmp eq %[[REM]], %{{.*}} : !s32i
-// CHECK:         cir.if %[[EQ]] {
+// CHECK:         %[[G:.*]] = cir.cast integral %[[GRID:.*]] : !u32i -> !s64i
+// CHECK:         %[[B:.*]] = cir.cast integral %[[BLOCK:.*]] : !u32i -> !s64i
+// CHECK:         %[[ONE:.*]] = cir.const #cir.int<1> : !s64i
+// CHECK:         %[[BM:.*]] = cir.sub %[[G]], %[[ONE]] : !s64i
+// CHECK:         %[[TM:.*]] = cir.sub %[[B]], %[[ONE]] : !s64i
+// CHECK:         %[[N:.*]] = cir.cast integral %arg1 : !s32i -> !s64i
+// CHECK:         %[[PROD:.*]] = cir.mul %[[BM]], %[[B]] : !s64i
+// CHECK:         %[[MAX:.*]] = cir.add %[[PROD]], %[[TM]] : !s64i
+// CHECK:         %[[BELOW:.*]] = cir.cmp lt %[[MAX]], %[[N]] : !s64i
+// CHECK:         %[[INTMAX:.*]] = cir.const #cir.int<2147483647> : !s64i
+// CHECK:         %[[FITS:.*]] = cir.cmp le %[[MAX]], %[[INTMAX]] : !s64i
+// CHECK:         %[[PREMISE:.*]] = cir.ternary(%[[BELOW]], true {
+// CHECK-NEXT:      cir.yield %[[FITS]]
+// CHECK:         cir.if %[[PREMISE]] {
 // CHECK:           cir.call @stub_basic.guards({{.*}}) {cu.kernel_name = #cir.cu.kernel_name<"kern_basic.guards">}
 // CHECK:         } else {
 // CHECK:           cir.call @stub_basic({{.*}}) {cu.kernel_name = #cir.cu.kernel_name<"kern_basic">}
@@ -96,9 +109,10 @@ module attributes {cir.offload.container} {
 !u32i = !cir.int<u, 32>
 !rec_dim3 = !cir.struct<"dim3" {data !u32i, data !u32i, data !u32i}>
 
-// The grid covers n in steps of 64 but each block runs 256 threads, so
-// max(index) = 64*(n/64 - 1) + 255 = n + 191, which overshoots. The guard is
-// live and nothing is cloned.
+// The grid covers n in steps of 64 but each block runs 256 threads, so the
+// largest index overshoots n for every n > 0. The guard is checked rather than
+// derived, so the copy is still made, but the launch only reaches it when its
+// premise holds -- for this launch, never with any thread to run.
 module attributes {cir.offload.container} {
   module @host attributes {cir.offload.kind = #cir.offload<host>} {
     cir.global external @kern_over = #cir.global_view<@stub_over> : !cir.ptr<!cir.func<(!cir.ptr<!s32i>, !s32i)>>
@@ -155,10 +169,11 @@ module attributes {cir.offload.container} {
 
 
 // CHECK-LABEL: cir.func @launch_over
-// CHECK-NOT:     cir.rem
+// CHECK:         cir.cmp lt
+// CHECK:           cir.call @stub_over.guards(
+// CHECK:           cir.call @stub_over(
 // CHECK-LABEL: cir.func @kern_over(
 // CHECK:         cir.cmp ge
-// CHECK-NOT:   cir.func @kern_over.guards
 
 // -----
 
@@ -228,8 +243,9 @@ module attributes {cir.offload.container} {
 !u32i = !cir.int<u, 32>
 !rec_dim3 = !cir.struct<"dim3" {data !u32i, data !u32i, data !u32i}>
 
-// The grid extent is a constant unrelated to any kernel argument, so there is
-// no relation to test at run time and the pass does not fire.
+// The grid is a constant unrelated to any kernel argument. The premise does not
+// need a relation between the two: the largest index is a constant, and the
+// guard is dead exactly when n exceeds it.
 module attributes {cir.offload.container} {
   module @host attributes {cir.offload.kind = #cir.offload<host>} {
     cir.global external @kern_unrel = #cir.global_view<@stub_unrel> : !cir.ptr<!cir.func<(!cir.ptr<!s32i>, !s32i)>>
@@ -281,9 +297,14 @@ module attributes {cir.offload.container} {
 }
 
 
+// CHECK-LABEL: cir.func @launch_unrel
+// CHECK:         cir.cmp lt
+// CHECK:           cir.call @stub_unrel.guards(
 // CHECK-LABEL: cir.func @kern_unrel(
 // CHECK:         cir.cmp ge
-// CHECK-NOT:   cir.func @kern_unrel.guards
+// CHECK-LABEL: cir.func @kern_unrel.guards(
+// CHECK-NOT:     cir.cmp ge
+// CHECK:         cir.const #false
 
 // -----
 
@@ -422,3 +443,409 @@ module attributes {cir.offload.container} {
 // CHECK-LABEL: cir.func @kern_scaled.guards(
 // CHECK-NOT:     cir.cmp ge
 // CHECK:         %[[F:.*]] = cir.const #false
+
+// -----
+
+!s32i = !cir.int<s, 32>
+!u32i = !cir.int<u, 32>
+!rec_dim3 = !cir.struct<"dim3" {data !u32i, data !u32i, data !u32i}>
+
+// rocHPCG's grid, (n-1)/256 + 1. The premise does not care how the grid was
+// computed: the largest index is evaluated with the launch's own grid.
+module attributes {cir.offload.container} {
+  module @host attributes {cir.offload.kind = #cir.offload<host>} {
+    cir.global external @kern_hpcg = #cir.global_view<@stub_hpcg> : !cir.ptr<!cir.func<(!cir.ptr<!s32i>, !s32i)>>
+    cir.func private @__cudaPushCallConfiguration(!rec_dim3, !rec_dim3, !u32i, !cir.ptr<!s32i>) -> !s32i
+    cir.func private @dim3_ctor(!cir.ptr<!rec_dim3>, !u32i, !u32i, !u32i) func_info<#cir.cxx_ctor<!rec_dim3, custom>>
+    cir.func internal private @stub_hpcg(%a0: !cir.ptr<!s32i>, %a1: !s32i) attributes {cu.kernel_name = #cir.cu.kernel_name<"kern_hpcg">} {
+      %h = cir.get_global @kern_hpcg : !cir.ptr<!cir.ptr<!cir.func<(!cir.ptr<!s32i>, !s32i)>>>
+      cir.return
+    }
+    cir.func @launch_hpcg(%p: !cir.ptr<!s32i>, %n: !s32i) {
+      %grid = cir.alloca "agg.tmp0" align(4) : !cir.ptr<!rec_dim3>
+      %block = cir.alloca "agg.tmp1" align(4) : !cir.ptr<!rec_dim3>
+      %one = cir.const #cir.int<1> : !u32i
+      %bs = cir.const #cir.int<256> : !u32i
+      %nu = cir.cast integral %n : !s32i -> !u32i
+      %c1 = cir.const #cir.int<1> : !u32i
+      %dv = cir.const #cir.int<256> : !u32i
+      %nm1 = cir.sub %nu, %c1 : !u32i
+      %q = cir.div %nm1, %dv : !u32i
+      %blocks = cir.add %q, %c1 : !u32i
+      cir.call @dim3_ctor(%grid, %blocks, %one, %one) : (!cir.ptr<!rec_dim3>, !u32i, !u32i, !u32i) -> ()
+      cir.call @dim3_ctor(%block, %bs, %one, %one) : (!cir.ptr<!rec_dim3>, !u32i, !u32i, !u32i) -> ()
+      %shmem = cir.const #cir.int<0> : !u32i
+      %stream = cir.const #cir.ptr<null> : !cir.ptr<!s32i>
+      %g = cir.load %grid : !cir.ptr<!rec_dim3>, !rec_dim3
+      %b = cir.load %block : !cir.ptr<!rec_dim3>, !rec_dim3
+      %r = cir.call @__cudaPushCallConfiguration(%g, %b, %shmem, %stream) : (!rec_dim3, !rec_dim3, !u32i, !cir.ptr<!s32i>) -> !s32i
+      %c = cir.cast int_to_bool %r : !s32i -> !cir.bool
+      cir.if %c {
+      } else {
+        cir.call @stub_hpcg(%p, %n) {cu.kernel_name = #cir.cu.kernel_name<"kern_hpcg">} : (!cir.ptr<!s32i>, !s32i) -> ()
+      }
+      cir.return
+    }
+  }
+  module @device_0 attributes {cir.offload.kind = #cir.offload<device>} {
+    cir.func private @_ZN24__hip_builtin_blockIdx_t7__get_xEv() -> !u32i
+    cir.func private @_ZN24__hip_builtin_blockDim_t7__get_xEv() -> !u32i
+    cir.func private @_ZN25__hip_builtin_threadIdx_t7__get_xEv() -> !u32i
+    cir.func @kern_hpcg(%arg0: !cir.ptr<!s32i>, %arg1: !s32i) cc(ptx_kernel) {
+      %bid = cir.call @_ZN24__hip_builtin_blockIdx_t7__get_xEv() : () -> !u32i
+      %bdim = cir.call @_ZN24__hip_builtin_blockDim_t7__get_xEv() : () -> !u32i
+      %tid = cir.call @_ZN25__hip_builtin_threadIdx_t7__get_xEv() : () -> !u32i
+      %mul = cir.mul %bid, %bdim : !u32i
+      %idxu = cir.add %mul, %tid : !u32i
+      %idx = cir.cast integral %idxu : !u32i -> !s32i
+      %g = cir.cmp ge %idx, %arg1 : !s32i
+      cir.if %g {
+        cir.return
+      }
+      cir.return
+    }
+  }
+}
+
+// CHECK-LABEL: cir.func @launch_hpcg
+// CHECK:         %[[G:.*]] = cir.cast integral %[[BLOCKS:.*]] : !u32i -> !s64i
+// CHECK:         cir.cmp lt
+// CHECK:           cir.call @stub_hpcg.guards(
+// CHECK:           cir.call @stub_hpcg(
+// CHECK-LABEL: cir.func @kern_hpcg.guards(
+// CHECK-NOT:     cir.cmp ge
+// CHECK:         cir.const #false
+
+// -----
+
+!s32i = !cir.int<s, 32>
+!u32i = !cir.int<u, 32>
+!rec_dim3 = !cir.struct<"dim3" {data !u32i, data !u32i, data !u32i}>
+
+// Three launches of one kernel. Each tests the premise with its own grid and
+// block size against the one guard-free copy; the third's grid comes from a
+// pointer it is handed, so it cannot test it and keeps the original.
+module attributes {cir.offload.container} {
+  module @host attributes {cir.offload.kind = #cir.offload<host>} {
+    cir.global external @kern_two = #cir.global_view<@stub_two> : !cir.ptr<!cir.func<(!cir.ptr<!s32i>, !s32i)>>
+    cir.func private @__cudaPushCallConfiguration(!rec_dim3, !rec_dim3, !u32i, !cir.ptr<!s32i>) -> !s32i
+    cir.func private @dim3_ctor(!cir.ptr<!rec_dim3>, !u32i, !u32i, !u32i) func_info<#cir.cxx_ctor<!rec_dim3, custom>>
+    cir.func internal private @stub_two(%a0: !cir.ptr<!s32i>, %a1: !s32i) attributes {cu.kernel_name = #cir.cu.kernel_name<"kern_two">} {
+      %h = cir.get_global @kern_two : !cir.ptr<!cir.ptr<!cir.func<(!cir.ptr<!s32i>, !s32i)>>>
+      cir.return
+    }
+    cir.func @launch_two_a(%p: !cir.ptr<!s32i>, %n: !s32i) {
+      %grid = cir.alloca "agg.tmp0" align(4) : !cir.ptr<!rec_dim3>
+      %block = cir.alloca "agg.tmp1" align(4) : !cir.ptr<!rec_dim3>
+      %one = cir.const #cir.int<1> : !u32i
+      %bs = cir.const #cir.int<256> : !u32i
+      %nu = cir.cast integral %n : !s32i -> !u32i
+      %dm1 = cir.const #cir.int<255> : !u32i
+      %dv = cir.const #cir.int<256> : !u32i
+      %sum = cir.add %nu, %dm1 : !u32i
+      %blocks = cir.div %sum, %dv : !u32i
+      cir.call @dim3_ctor(%grid, %blocks, %one, %one) : (!cir.ptr<!rec_dim3>, !u32i, !u32i, !u32i) -> ()
+      cir.call @dim3_ctor(%block, %bs, %one, %one) : (!cir.ptr<!rec_dim3>, !u32i, !u32i, !u32i) -> ()
+      %shmem = cir.const #cir.int<0> : !u32i
+      %stream = cir.const #cir.ptr<null> : !cir.ptr<!s32i>
+      %g = cir.load %grid : !cir.ptr<!rec_dim3>, !rec_dim3
+      %b = cir.load %block : !cir.ptr<!rec_dim3>, !rec_dim3
+      %r = cir.call @__cudaPushCallConfiguration(%g, %b, %shmem, %stream) : (!rec_dim3, !rec_dim3, !u32i, !cir.ptr<!s32i>) -> !s32i
+      %c = cir.cast int_to_bool %r : !s32i -> !cir.bool
+      cir.if %c {
+      } else {
+        cir.call @stub_two(%p, %n) {cu.kernel_name = #cir.cu.kernel_name<"kern_two">} : (!cir.ptr<!s32i>, !s32i) -> ()
+      }
+      cir.return
+    }
+    cir.func @launch_two_b(%p: !cir.ptr<!s32i>, %n: !s32i) {
+      %grid = cir.alloca "agg.tmp0" align(4) : !cir.ptr<!rec_dim3>
+      %block = cir.alloca "agg.tmp1" align(4) : !cir.ptr<!rec_dim3>
+      %one = cir.const #cir.int<1> : !u32i
+      %bs = cir.const #cir.int<128> : !u32i
+      %nu = cir.cast integral %n : !s32i -> !u32i
+      %dm1 = cir.const #cir.int<127> : !u32i
+      %dv = cir.const #cir.int<128> : !u32i
+      %sum = cir.add %nu, %dm1 : !u32i
+      %blocks = cir.div %sum, %dv : !u32i
+      cir.call @dim3_ctor(%grid, %blocks, %one, %one) : (!cir.ptr<!rec_dim3>, !u32i, !u32i, !u32i) -> ()
+      cir.call @dim3_ctor(%block, %bs, %one, %one) : (!cir.ptr<!rec_dim3>, !u32i, !u32i, !u32i) -> ()
+      %shmem = cir.const #cir.int<0> : !u32i
+      %stream = cir.const #cir.ptr<null> : !cir.ptr<!s32i>
+      %g = cir.load %grid : !cir.ptr<!rec_dim3>, !rec_dim3
+      %b = cir.load %block : !cir.ptr<!rec_dim3>, !rec_dim3
+      %r = cir.call @__cudaPushCallConfiguration(%g, %b, %shmem, %stream) : (!rec_dim3, !rec_dim3, !u32i, !cir.ptr<!s32i>) -> !s32i
+      %c = cir.cast int_to_bool %r : !s32i -> !cir.bool
+      cir.if %c {
+      } else {
+        cir.call @stub_two(%p, %n) {cu.kernel_name = #cir.cu.kernel_name<"kern_two">} : (!cir.ptr<!s32i>, !s32i) -> ()
+      }
+      cir.return
+    }
+    cir.func @launch_two_c(%p: !cir.ptr<!s32i>, %n: !s32i, %gp: !cir.ptr<!rec_dim3>) {
+      %grid = cir.alloca "agg.tmp0" align(4) : !cir.ptr<!rec_dim3>
+      %block = cir.alloca "agg.tmp1" align(4) : !cir.ptr<!rec_dim3>
+      %one = cir.const #cir.int<1> : !u32i
+      %bs = cir.const #cir.int<64> : !u32i
+      cir.copy %gp to %grid : !cir.ptr<!rec_dim3>
+      cir.call @dim3_ctor(%block, %bs, %one, %one) : (!cir.ptr<!rec_dim3>, !u32i, !u32i, !u32i) -> ()
+      %shmem = cir.const #cir.int<0> : !u32i
+      %stream = cir.const #cir.ptr<null> : !cir.ptr<!s32i>
+      %g = cir.load %grid : !cir.ptr<!rec_dim3>, !rec_dim3
+      %b = cir.load %block : !cir.ptr<!rec_dim3>, !rec_dim3
+      %r = cir.call @__cudaPushCallConfiguration(%g, %b, %shmem, %stream) : (!rec_dim3, !rec_dim3, !u32i, !cir.ptr<!s32i>) -> !s32i
+      %c = cir.cast int_to_bool %r : !s32i -> !cir.bool
+      cir.if %c {
+      } else {
+        cir.call @stub_two(%p, %n) {cu.kernel_name = #cir.cu.kernel_name<"kern_two">} : (!cir.ptr<!s32i>, !s32i) -> ()
+      }
+      cir.return
+    }
+  }
+  module @device_0 attributes {cir.offload.kind = #cir.offload<device>} {
+    cir.func private @_ZN24__hip_builtin_blockIdx_t7__get_xEv() -> !u32i
+    cir.func private @_ZN24__hip_builtin_blockDim_t7__get_xEv() -> !u32i
+    cir.func private @_ZN25__hip_builtin_threadIdx_t7__get_xEv() -> !u32i
+    cir.func @kern_two(%arg0: !cir.ptr<!s32i>, %arg1: !s32i) cc(ptx_kernel) {
+      %bid = cir.call @_ZN24__hip_builtin_blockIdx_t7__get_xEv() : () -> !u32i
+      %bdim = cir.call @_ZN24__hip_builtin_blockDim_t7__get_xEv() : () -> !u32i
+      %tid = cir.call @_ZN25__hip_builtin_threadIdx_t7__get_xEv() : () -> !u32i
+      %mul = cir.mul %bid, %bdim : !u32i
+      %idxu = cir.add %mul, %tid : !u32i
+      %idx = cir.cast integral %idxu : !u32i -> !s32i
+      %g = cir.cmp ge %idx, %arg1 : !s32i
+      cir.if %g {
+        cir.return
+      }
+      cir.return
+    }
+  }
+}
+
+// CHECK-LABEL: cir.func @launch_two_a
+// CHECK:         %[[B:.*]] = cir.const #cir.int<256> : !u32i
+// CHECK:         cir.cast integral %[[B]] : !u32i -> !s64i
+// CHECK:           cir.call @stub_two.guards(
+// CHECK-LABEL: cir.func @launch_two_b
+// CHECK:         %[[B:.*]] = cir.const #cir.int<128> : !u32i
+// CHECK:         cir.cast integral %[[B]] : !u32i -> !s64i
+// CHECK:           cir.call @stub_two.guards(
+// CHECK-LABEL: cir.func @launch_two_c
+// CHECK-NOT:     stub_two.guards
+// CHECK:         cir.call @stub_two(
+// CHECK-NOT:     stub_two.guards
+// CHECK:         cir.return
+
+// -----
+
+!s32i = !cir.int<s, 32>
+!u32i = !cir.int<u, 32>
+!rec_dim3 = !cir.struct<"dim3" {data !u32i, data !u32i, data !u32i}>
+
+// The index is one less than the thread's position, so the first thread's is
+// -1. As an unsigned value that wraps to the largest one, so a bound would be
+// wrong; the guard is left alone and nothing is cloned.
+module attributes {cir.offload.container} {
+  module @host attributes {cir.offload.kind = #cir.offload<host>} {
+    cir.global external @kern_neg = #cir.global_view<@stub_neg> : !cir.ptr<!cir.func<(!cir.ptr<!s32i>, !s32i)>>
+    cir.func private @__cudaPushCallConfiguration(!rec_dim3, !rec_dim3, !u32i, !cir.ptr<!s32i>) -> !s32i
+    cir.func private @dim3_ctor(!cir.ptr<!rec_dim3>, !u32i, !u32i, !u32i) func_info<#cir.cxx_ctor<!rec_dim3, custom>>
+    cir.func internal private @stub_neg(%a0: !cir.ptr<!s32i>, %a1: !s32i) attributes {cu.kernel_name = #cir.cu.kernel_name<"kern_neg">} {
+      %h = cir.get_global @kern_neg : !cir.ptr<!cir.ptr<!cir.func<(!cir.ptr<!s32i>, !s32i)>>>
+      cir.return
+    }
+    cir.func @launch_neg(%p: !cir.ptr<!s32i>, %n: !s32i) {
+      %grid = cir.alloca "agg.tmp0" align(4) : !cir.ptr<!rec_dim3>
+      %block = cir.alloca "agg.tmp1" align(4) : !cir.ptr<!rec_dim3>
+      %one = cir.const #cir.int<1> : !u32i
+      %bs = cir.const #cir.int<256> : !u32i
+      %nu = cir.cast integral %n : !s32i -> !u32i
+      %dm1 = cir.const #cir.int<255> : !u32i
+      %dv = cir.const #cir.int<256> : !u32i
+      %sum = cir.add %nu, %dm1 : !u32i
+      %blocks = cir.div %sum, %dv : !u32i
+      cir.call @dim3_ctor(%grid, %blocks, %one, %one) : (!cir.ptr<!rec_dim3>, !u32i, !u32i, !u32i) -> ()
+      cir.call @dim3_ctor(%block, %bs, %one, %one) : (!cir.ptr<!rec_dim3>, !u32i, !u32i, !u32i) -> ()
+      %shmem = cir.const #cir.int<0> : !u32i
+      %stream = cir.const #cir.ptr<null> : !cir.ptr<!s32i>
+      %g = cir.load %grid : !cir.ptr<!rec_dim3>, !rec_dim3
+      %b = cir.load %block : !cir.ptr<!rec_dim3>, !rec_dim3
+      %r = cir.call @__cudaPushCallConfiguration(%g, %b, %shmem, %stream) : (!rec_dim3, !rec_dim3, !u32i, !cir.ptr<!s32i>) -> !s32i
+      %c = cir.cast int_to_bool %r : !s32i -> !cir.bool
+      cir.if %c {
+      } else {
+        cir.call @stub_neg(%p, %n) {cu.kernel_name = #cir.cu.kernel_name<"kern_neg">} : (!cir.ptr<!s32i>, !s32i) -> ()
+      }
+      cir.return
+    }
+  }
+  module @device_0 attributes {cir.offload.kind = #cir.offload<device>} {
+    cir.func private @_ZN24__hip_builtin_blockIdx_t7__get_xEv() -> !u32i
+    cir.func private @_ZN24__hip_builtin_blockDim_t7__get_xEv() -> !u32i
+    cir.func private @_ZN25__hip_builtin_threadIdx_t7__get_xEv() -> !u32i
+    cir.func @kern_neg(%arg0: !cir.ptr<!s32i>, %arg1: !s32i) cc(ptx_kernel) {
+      %bid = cir.call @_ZN24__hip_builtin_blockIdx_t7__get_xEv() : () -> !u32i
+      %bdim = cir.call @_ZN24__hip_builtin_blockDim_t7__get_xEv() : () -> !u32i
+      %tid = cir.call @_ZN25__hip_builtin_threadIdx_t7__get_xEv() : () -> !u32i
+      %mul = cir.mul %bid, %bdim : !u32i
+      %idxu = cir.add %mul, %tid : !u32i
+      %idx = cir.cast integral %idxu : !u32i -> !s32i
+      %m1 = cir.const #cir.int<-1> : !s32i
+      %idxm1 = cir.add %idx, %m1 : !s32i
+      %g = cir.cmp ge %idxm1, %arg1 : !s32i
+      cir.if %g {
+        cir.return
+      }
+      cir.return
+    }
+  }
+}
+
+// CHECK-LABEL: cir.func @launch_neg
+// CHECK-NOT:     stub_neg.guards
+// CHECK-LABEL: cir.func @kern_neg(
+// CHECK:         cir.cmp ge
+// CHECK-NOT:   cir.func @kern_neg.guards
+// CHECK:       }
+
+// -----
+
+!s32i = !cir.int<s, 32>
+!u32i = !cir.int<u, 32>
+!rec_dim3 = !cir.struct<"dim3" {data !u32i, data !u32i, data !u32i}>
+
+// The extent is n/2, which the host recomputes from the launch's own n with the
+// kernel's own arithmetic, rounding included.
+module attributes {cir.offload.container} {
+  module @host attributes {cir.offload.kind = #cir.offload<host>} {
+    cir.global external @kern_half = #cir.global_view<@stub_half> : !cir.ptr<!cir.func<(!cir.ptr<!s32i>, !s32i)>>
+    cir.func private @__cudaPushCallConfiguration(!rec_dim3, !rec_dim3, !u32i, !cir.ptr<!s32i>) -> !s32i
+    cir.func private @dim3_ctor(!cir.ptr<!rec_dim3>, !u32i, !u32i, !u32i) func_info<#cir.cxx_ctor<!rec_dim3, custom>>
+    cir.func internal private @stub_half(%a0: !cir.ptr<!s32i>, %a1: !s32i) attributes {cu.kernel_name = #cir.cu.kernel_name<"kern_half">} {
+      %h = cir.get_global @kern_half : !cir.ptr<!cir.ptr<!cir.func<(!cir.ptr<!s32i>, !s32i)>>>
+      cir.return
+    }
+    cir.func @launch_half(%p: !cir.ptr<!s32i>, %n: !s32i) {
+      %grid = cir.alloca "agg.tmp0" align(4) : !cir.ptr<!rec_dim3>
+      %block = cir.alloca "agg.tmp1" align(4) : !cir.ptr<!rec_dim3>
+      %one = cir.const #cir.int<1> : !u32i
+      %bs = cir.const #cir.int<256> : !u32i
+      %nu = cir.cast integral %n : !s32i -> !u32i
+      %dm1 = cir.const #cir.int<255> : !u32i
+      %dv = cir.const #cir.int<256> : !u32i
+      %sum = cir.add %nu, %dm1 : !u32i
+      %blocks = cir.div %sum, %dv : !u32i
+      cir.call @dim3_ctor(%grid, %blocks, %one, %one) : (!cir.ptr<!rec_dim3>, !u32i, !u32i, !u32i) -> ()
+      cir.call @dim3_ctor(%block, %bs, %one, %one) : (!cir.ptr<!rec_dim3>, !u32i, !u32i, !u32i) -> ()
+      %shmem = cir.const #cir.int<0> : !u32i
+      %stream = cir.const #cir.ptr<null> : !cir.ptr<!s32i>
+      %g = cir.load %grid : !cir.ptr<!rec_dim3>, !rec_dim3
+      %b = cir.load %block : !cir.ptr<!rec_dim3>, !rec_dim3
+      %r = cir.call @__cudaPushCallConfiguration(%g, %b, %shmem, %stream) : (!rec_dim3, !rec_dim3, !u32i, !cir.ptr<!s32i>) -> !s32i
+      %c = cir.cast int_to_bool %r : !s32i -> !cir.bool
+      cir.if %c {
+      } else {
+        cir.call @stub_half(%p, %n) {cu.kernel_name = #cir.cu.kernel_name<"kern_half">} : (!cir.ptr<!s32i>, !s32i) -> ()
+      }
+      cir.return
+    }
+  }
+  module @device_0 attributes {cir.offload.kind = #cir.offload<device>} {
+    cir.func private @_ZN24__hip_builtin_blockIdx_t7__get_xEv() -> !u32i
+    cir.func private @_ZN24__hip_builtin_blockDim_t7__get_xEv() -> !u32i
+    cir.func private @_ZN25__hip_builtin_threadIdx_t7__get_xEv() -> !u32i
+    cir.func @kern_half(%arg0: !cir.ptr<!s32i>, %arg1: !s32i) cc(ptx_kernel) {
+      %bid = cir.call @_ZN24__hip_builtin_blockIdx_t7__get_xEv() : () -> !u32i
+      %bdim = cir.call @_ZN24__hip_builtin_blockDim_t7__get_xEv() : () -> !u32i
+      %tid = cir.call @_ZN25__hip_builtin_threadIdx_t7__get_xEv() : () -> !u32i
+      %mul = cir.mul %bid, %bdim : !u32i
+      %idxu = cir.add %mul, %tid : !u32i
+      %idx = cir.cast integral %idxu : !u32i -> !s32i
+      %two = cir.const #cir.int<2> : !s32i
+      %e = cir.div %arg1, %two : !s32i
+      %g = cir.cmp ge %idx, %e : !s32i
+      cir.if %g {
+        cir.return
+      }
+      cir.return
+    }
+  }
+}
+
+// CHECK-LABEL: cir.func @launch_half
+// CHECK:         %[[TWO:.*]] = cir.const #cir.int<2> : !s32i
+// CHECK:         %[[E:.*]] = cir.div %arg1, %[[TWO]] : !s32i
+// CHECK:         %[[E64:.*]] = cir.cast integral %[[E]] : !s32i -> !s64i
+// CHECK:         cir.cmp lt %{{.*}}, %[[E64]] : !s64i
+// CHECK:           cir.call @stub_half.guards(
+
+// -----
+
+!s32i = !cir.int<s, 32>
+!u32i = !cir.int<u, 32>
+!rec_dim3 = !cir.struct<"dim3" {data !u32i, data !u32i, data !u32i}>
+
+// The extent is n/m. Recomputing it on the host would divide by m even for a
+// launch whose kernel never reaches the guard, so it is not recomputed and
+// nothing is cloned.
+module attributes {cir.offload.container} {
+  module @host attributes {cir.offload.kind = #cir.offload<host>} {
+    cir.global external @kern_ratio = #cir.global_view<@stub_ratio> : !cir.ptr<!cir.func<(!cir.ptr<!s32i>, !s32i, !s32i)>>
+    cir.func private @__cudaPushCallConfiguration(!rec_dim3, !rec_dim3, !u32i, !cir.ptr<!s32i>) -> !s32i
+    cir.func private @dim3_ctor(!cir.ptr<!rec_dim3>, !u32i, !u32i, !u32i) func_info<#cir.cxx_ctor<!rec_dim3, custom>>
+    cir.func internal private @stub_ratio(%a0: !cir.ptr<!s32i>, %a1: !s32i, %a2: !s32i) attributes {cu.kernel_name = #cir.cu.kernel_name<"kern_ratio">} {
+      %h = cir.get_global @kern_ratio : !cir.ptr<!cir.ptr<!cir.func<(!cir.ptr<!s32i>, !s32i, !s32i)>>>
+      cir.return
+    }
+    cir.func @launch_ratio(%p: !cir.ptr<!s32i>, %n: !s32i, %m: !s32i) {
+      %grid = cir.alloca "agg.tmp0" align(4) : !cir.ptr<!rec_dim3>
+      %block = cir.alloca "agg.tmp1" align(4) : !cir.ptr<!rec_dim3>
+      %one = cir.const #cir.int<1> : !u32i
+      %bs = cir.const #cir.int<256> : !u32i
+      %nu = cir.cast integral %n : !s32i -> !u32i
+      %dm1 = cir.const #cir.int<255> : !u32i
+      %dv = cir.const #cir.int<256> : !u32i
+      %sum = cir.add %nu, %dm1 : !u32i
+      %blocks = cir.div %sum, %dv : !u32i
+      cir.call @dim3_ctor(%grid, %blocks, %one, %one) : (!cir.ptr<!rec_dim3>, !u32i, !u32i, !u32i) -> ()
+      cir.call @dim3_ctor(%block, %bs, %one, %one) : (!cir.ptr<!rec_dim3>, !u32i, !u32i, !u32i) -> ()
+      %shmem = cir.const #cir.int<0> : !u32i
+      %stream = cir.const #cir.ptr<null> : !cir.ptr<!s32i>
+      %g = cir.load %grid : !cir.ptr<!rec_dim3>, !rec_dim3
+      %b = cir.load %block : !cir.ptr<!rec_dim3>, !rec_dim3
+      %r = cir.call @__cudaPushCallConfiguration(%g, %b, %shmem, %stream) : (!rec_dim3, !rec_dim3, !u32i, !cir.ptr<!s32i>) -> !s32i
+      %c = cir.cast int_to_bool %r : !s32i -> !cir.bool
+      cir.if %c {
+      } else {
+        cir.call @stub_ratio(%p, %n, %m) {cu.kernel_name = #cir.cu.kernel_name<"kern_ratio">} : (!cir.ptr<!s32i>, !s32i, !s32i) -> ()
+      }
+      cir.return
+    }
+  }
+  module @device_0 attributes {cir.offload.kind = #cir.offload<device>} {
+    cir.func private @_ZN24__hip_builtin_blockIdx_t7__get_xEv() -> !u32i
+    cir.func private @_ZN24__hip_builtin_blockDim_t7__get_xEv() -> !u32i
+    cir.func private @_ZN25__hip_builtin_threadIdx_t7__get_xEv() -> !u32i
+    cir.func @kern_ratio(%arg0: !cir.ptr<!s32i>, %arg1: !s32i, %arg2: !s32i) cc(ptx_kernel) {
+      %bid = cir.call @_ZN24__hip_builtin_blockIdx_t7__get_xEv() : () -> !u32i
+      %bdim = cir.call @_ZN24__hip_builtin_blockDim_t7__get_xEv() : () -> !u32i
+      %tid = cir.call @_ZN25__hip_builtin_threadIdx_t7__get_xEv() : () -> !u32i
+      %mul = cir.mul %bid, %bdim : !u32i
+      %idxu = cir.add %mul, %tid : !u32i
+      %idx = cir.cast integral %idxu : !u32i -> !s32i
+      %e = cir.div %arg1, %arg2 : !s32i
+      %g = cir.cmp ge %idx, %e : !s32i
+      cir.if %g {
+        cir.return
+      }
+      cir.return
+    }
+  }
+}
+
+// CHECK-LABEL: cir.func @launch_ratio
+// CHECK-NOT:     stub_ratio.guards
+// CHECK-LABEL: cir.func @kern_ratio(
+// CHECK:         cir.cmp ge
+// CHECK-NOT:   cir.func @kern_ratio.guards
+// CHECK:       }

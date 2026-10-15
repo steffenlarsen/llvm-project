@@ -502,6 +502,17 @@ void CIRGenAction::ExecuteAction() {
     }
   }
 
+  // The offload merge reasons about calls as the source wrote them, so the CIR
+  // it consumes is emitted without calling-convention lowering, which the
+  // module records as deferred to here.
+  if (MLIRMod->getOperation()->hasAttr(
+          cir::CIRDialect::getCallConvLoweringDeferredAttrName()) &&
+      mlir::failed(
+          cir::runCallConvLowering(*MLIRMod, *MLIRCtx, CI.getTarget()))) {
+    reportError(CI, "failed to lower calling conventions");
+    return;
+  }
+
   std::string mlirSaveTempsOutFile;
   if (!CI.getCodeGenOpts().SaveTempsFilePrefix.empty()) {
     SmallString<128> stem(CI.getCodeGenOpts().SaveTempsFilePrefix);

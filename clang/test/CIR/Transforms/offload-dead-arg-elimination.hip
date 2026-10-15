@@ -7,6 +7,7 @@
 // which is the whole basis for the rewrite being safe.
 
 // RUN: %clang_cc1 -triple x86_64-unknown-linux-gnu -aux-triple amdgcn-amd-amdhsa \
+// RUN:   -fno-clangir-call-conv-lowering \
 // RUN:   -target-sdk-version=9.2 -fhip-new-launch-api -x hip -I %S/../../CodeGenCUDA/Inputs \
 // RUN:   -emit-cir %s -o %t-host.cir
 // RUN: %clang_cc1 -triple amdgcn-amd-amdhsa -target-cpu gfx900 -target-sdk-version=9.2 \
@@ -48,16 +49,17 @@ void host(int *p, int u) { k<<<1, 64>>>(p, u); }
 
 // A dead argument ahead of one that carries a parameter attribute. `arg_attrs`
 // is positional, so dropping the operand without dropping its attribute would
-// rebind `zeroext` from the bool to whatever followed it -- a call the LLVM
-// verifier rejects, and the reason this shape is tested rather than assumed.
-__global__ void attrs(int unused, bool flag, int *out) {
+// move `noalias` from the pointer onto the bool after it.
+__global__ void attrs(int unused, int *__restrict__ out, bool flag) {
   if (flag)
     use(out);
 }
 
-// ATTRS-LABEL: cir.func{{.*}} @_Z20__device_stub__attrsibPi.{{[a-z]+}}(%arg0: !cir.bool {llvm.noundef, llvm.zeroext}, %arg1: !cir.ptr<!s32i> {llvm.noundef})
+// ATTRS-LABEL: cir.func{{.*}} @_Z20__device_stub__attrsiPib.{{[a-z]+}}(%arg0: !cir.ptr<!s32i> {llvm.noalias, llvm.noundef}, %arg1: !cir.bool {llvm.noundef})
 
+// The call loses the operand and its attribute entry with it; before ABI
+// lowering a call carries nothing that tells the remaining operands apart.
 // ATTRS-LABEL: cir.func{{.*}} @_Z10host_attrsPib
-// ATTRS:         cir.call @_Z20__device_stub__attrsibPi.{{[a-z]+}}({{.*}}) {{.*}} : (!cir.bool {llvm.noundef, llvm.zeroext}, !cir.ptr<!s32i> {llvm.noundef})
+// ATTRS:         cir.call @_Z20__device_stub__attrsiPib.{{[a-z]+}}(%{{[a-z0-9]+}}, %{{[a-z0-9]+}}) {{.*}} : (!cir.ptr<!s32i> {llvm.noundef}, !cir.bool {llvm.noundef}) -> ()
 
-void host_attrs(int *p, bool f) { attrs<<<1, 64>>>(7, f, p); }
+void host_attrs(int *p, bool f) { attrs<<<1, 64>>>(7, p, f); }

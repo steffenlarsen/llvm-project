@@ -3066,6 +3066,46 @@ ParseResult cir::FuncOp::parse(OpAsmParser &parser, OperationState &state) {
 // This function corresponds to `llvm::GlobalValue::isDeclaration` and should
 // have a similar implementation. We don't currently ifuncs or materializable
 // functions, but those should be handled here as they are implemented.
+// Declaring the symbol interface to override canDiscardOnUseEmpty declares its
+// remaining methods on the op too, hiding the SymbolName and SymbolVisibility
+// traits that otherwise provide them; defer to those.
+mlir::StringAttr cir::FuncOp::getNameAttr() {
+  return mlir::OpTrait::SymbolName<cir::FuncOp>::getNameAttr();
+}
+
+mlir::SymbolTable::Visibility cir::FuncOp::getVisibility() {
+  return mlir::OpTrait::SymbolVisibility<cir::FuncOp>::getVisibility();
+}
+
+void cir::FuncOp::setVisibility(mlir::SymbolTable::Visibility visibility) {
+  mlir::OpTrait::SymbolVisibility<cir::FuncOp>::setVisibility(visibility);
+}
+
+// A global constructor or destructor is called by name from the module's
+// constructor and destructor lists, which are not symbol references, so a
+// function on one is used even with no symbol use in sight.
+bool cir::FuncOp::canDiscardOnUseEmpty() {
+  if (!isPrivate())
+    return false;
+  if (getGlobalCtorPriority() || getGlobalDtorPriority())
+    return false;
+  auto module = (*this)->getParentOfType<mlir::ModuleOp>();
+  if (!module)
+    return true;
+  auto onList = [&](llvm::StringRef listName) {
+    auto list = module->getAttrOfType<mlir::ArrayAttr>(listName);
+    return list && llvm::any_of(list, [&](mlir::Attribute entry) {
+             if (auto ctor = mlir::dyn_cast<cir::GlobalCtorAttr>(entry))
+               return ctor.getName() == getSymNameAttr();
+             if (auto dtor = mlir::dyn_cast<cir::GlobalDtorAttr>(entry))
+               return dtor.getName() == getSymNameAttr();
+             return false;
+           });
+  };
+  return !onList(cir::CIRDialect::getGlobalCtorsAttrName()) &&
+         !onList(cir::CIRDialect::getGlobalDtorsAttrName());
+}
+
 bool cir::FuncOp::isDeclaration() {
   assert(!cir::MissingFeatures::supportIFuncAttr());
 

@@ -250,3 +250,156 @@ module attributes {cir.offload.container} {
 // CHECK-NEXT: host-stub @stub_coerced
 // CHECK-NEXT: device @device_0 : @kern_coerced
 // CHECK-NEXT: launch in @launch_coerced : 1 args, grid const, block const, stream default
+
+// -----
+
+!s32i = !cir.int<s, 32>
+
+// A call to a stub launches its kernel whether or not the call is tagged:
+// a launch through a kernel pointer that has been made direct carries no tag.
+// A tag naming another kernel still wins, so that call launches nothing here.
+module attributes {cir.offload.container} {
+  module @host attributes {cir.offload.kind = #cir.offload<host>} {
+    cir.func internal private @stub_untagged(%arg0: !s32i) attributes {cu.kernel_name = #cir.cu.kernel_name<"kern_untagged">} {
+      cir.return
+    }
+    cir.func @launch_untagged(%arg0: !s32i) {
+      cir.call @stub_untagged(%arg0) : (!s32i) -> ()
+      cir.call @stub_untagged(%arg0) {cu.kernel_name = #cir.cu.kernel_name<"somewhere_else">} : (!s32i) -> ()
+      cir.return
+    }
+  }
+  module @device_0 attributes {cir.offload.kind = #cir.offload<device>} {
+    cir.func @kern_untagged(%arg0: !s32i) cc(ptx_kernel) {
+      cir.return
+    }
+  }
+}
+
+// CHECK: KernelBindingTable
+// CHECK-NEXT: size 1 empty false
+// CHECK-NEXT: kernel kern_untagged
+// CHECK-NEXT: host-stub @stub_untagged
+// CHECK-NEXT: device @device_0 : @kern_untagged
+// CHECK-NEXT: launch in @launch_untagged : 1 args, <no geometry>
+// CHECK-NOT:  launch in
+
+// -----
+
+!s32i = !cir.int<s, 32>
+!u32i = !cir.int<u, 32>
+!rec_dim3 = !cir.struct<"dim3" {data !u32i, data !u32i, data !u32i}>
+
+// Geometry built in named dim3 locals and copied into the launch temporaries in
+// a nested scope -- `dim3 blocks(...); k<<<blocks, threads>>>()` inside an `if`.
+// The constructors are not in the load's block, but they dominate it, and each
+// slot has exactly one write. A slot written twice, a copy whose source is
+// constructed only after it, or a copy made after the read leaves that
+// dimension untraced.
+module attributes {cir.offload.container} {
+  module @host attributes {cir.offload.kind = #cir.offload<host>} {
+    cir.func private @__cudaPushCallConfiguration(!rec_dim3, !rec_dim3, !u32i, !cir.ptr<!s32i>) -> !s32i
+    cir.func private @dim3_ctor(!cir.ptr<!rec_dim3>, !u32i, !u32i, !u32i) func_info<#cir.cxx_ctor<!rec_dim3, custom>>
+    cir.func internal private @stub_named() attributes {cu.kernel_name = #cir.cu.kernel_name<"kern_named">} {
+      cir.return
+    }
+    cir.func @launch_named(%n: !u32i, %flag: !cir.bool) {
+      %blocks = cir.alloca "blocks" align(4) : !cir.ptr<!rec_dim3>
+      %threads = cir.alloca "threads" align(4) : !cir.ptr<!rec_dim3>
+      %grid = cir.alloca "agg.tmp0" align(4) : !cir.ptr<!rec_dim3>
+      %block = cir.alloca "agg.tmp1" align(4) : !cir.ptr<!rec_dim3>
+      %one = cir.const #cir.int<1> : !u32i
+      %c256 = cir.const #cir.int<256> : !u32i
+      cir.call @dim3_ctor(%blocks, %n, %one, %one) : (!cir.ptr<!rec_dim3>, !u32i, !u32i, !u32i) -> ()
+      cir.call @dim3_ctor(%threads, %c256, %one, %one) : (!cir.ptr<!rec_dim3>, !u32i, !u32i, !u32i) -> ()
+      cir.if %flag {
+        cir.copy %blocks to %grid : !cir.ptr<!rec_dim3>
+        cir.copy %threads to %block : !cir.ptr<!rec_dim3>
+        %sh = cir.const #cir.int<0> : !u32i
+        %st = cir.const #cir.ptr<null> : !cir.ptr<!s32i>
+        %gv = cir.load %grid : !cir.ptr<!rec_dim3>, !rec_dim3
+        %bv = cir.load %block : !cir.ptr<!rec_dim3>, !rec_dim3
+        %r = cir.call @__cudaPushCallConfiguration(%gv, %bv, %sh, %st) : (!rec_dim3, !rec_dim3, !u32i, !cir.ptr<!s32i>) -> !s32i
+        %c = cir.cast int_to_bool %r : !s32i -> !cir.bool
+        cir.if %c {
+        } else {
+          cir.call @stub_named() {cu.kernel_name = #cir.cu.kernel_name<"kern_named">} : () -> ()
+        }
+      }
+      cir.return
+    }
+    cir.func @launch_twice(%n: !u32i) {
+      %grid = cir.alloca "agg.tmp0" align(4) : !cir.ptr<!rec_dim3>
+      %block = cir.alloca "agg.tmp1" align(4) : !cir.ptr<!rec_dim3>
+      %one = cir.const #cir.int<1> : !u32i
+      cir.call @dim3_ctor(%grid, %one, %one, %one) : (!cir.ptr<!rec_dim3>, !u32i, !u32i, !u32i) -> ()
+      %gx = cir.get_member %grid[0] {name = "x"} : !cir.ptr<!rec_dim3> -> !cir.ptr<!u32i>
+      cir.store %n, %gx : !u32i, !cir.ptr<!u32i>
+      cir.call @dim3_ctor(%block, %one, %one, %one) : (!cir.ptr<!rec_dim3>, !u32i, !u32i, !u32i) -> ()
+      %sh = cir.const #cir.int<0> : !u32i
+      %st = cir.const #cir.ptr<null> : !cir.ptr<!s32i>
+      %gv = cir.load %grid : !cir.ptr<!rec_dim3>, !rec_dim3
+      %bv = cir.load %block : !cir.ptr<!rec_dim3>, !rec_dim3
+      %r = cir.call @__cudaPushCallConfiguration(%gv, %bv, %sh, %st) : (!rec_dim3, !rec_dim3, !u32i, !cir.ptr<!s32i>) -> !s32i
+      %c = cir.cast int_to_bool %r : !s32i -> !cir.bool
+      cir.if %c {
+      } else {
+        cir.call @stub_named() {cu.kernel_name = #cir.cu.kernel_name<"kern_named">} : () -> ()
+      }
+      cir.return
+    }
+    cir.func @launch_late() {
+      %src = cir.alloca "blocks" align(4) : !cir.ptr<!rec_dim3>
+      %grid = cir.alloca "agg.tmp0" align(4) : !cir.ptr<!rec_dim3>
+      %block = cir.alloca "agg.tmp1" align(4) : !cir.ptr<!rec_dim3>
+      %one = cir.const #cir.int<1> : !u32i
+      cir.copy %src to %grid : !cir.ptr<!rec_dim3>
+      cir.call @dim3_ctor(%src, %one, %one, %one) : (!cir.ptr<!rec_dim3>, !u32i, !u32i, !u32i) -> ()
+      cir.call @dim3_ctor(%block, %one, %one, %one) : (!cir.ptr<!rec_dim3>, !u32i, !u32i, !u32i) -> ()
+      %sh = cir.const #cir.int<0> : !u32i
+      %st = cir.const #cir.ptr<null> : !cir.ptr<!s32i>
+      %gv = cir.load %grid : !cir.ptr<!rec_dim3>, !rec_dim3
+      %bv = cir.load %block : !cir.ptr<!rec_dim3>, !rec_dim3
+      %r = cir.call @__cudaPushCallConfiguration(%gv, %bv, %sh, %st) : (!rec_dim3, !rec_dim3, !u32i, !cir.ptr<!s32i>) -> !s32i
+      %c = cir.cast int_to_bool %r : !s32i -> !cir.bool
+      cir.if %c {
+      } else {
+        cir.call @stub_named() {cu.kernel_name = #cir.cu.kernel_name<"kern_named">} : () -> ()
+      }
+      cir.return
+    }
+    cir.func @launch_copy_after(%n: !u32i) {
+      %src = cir.alloca "blocks" align(4) : !cir.ptr<!rec_dim3>
+      %grid = cir.alloca "agg.tmp0" align(4) : !cir.ptr<!rec_dim3>
+      %block = cir.alloca "agg.tmp1" align(4) : !cir.ptr<!rec_dim3>
+      %one = cir.const #cir.int<1> : !u32i
+      cir.call @dim3_ctor(%src, %n, %one, %one) : (!cir.ptr<!rec_dim3>, !u32i, !u32i, !u32i) -> ()
+      cir.call @dim3_ctor(%block, %one, %one, %one) : (!cir.ptr<!rec_dim3>, !u32i, !u32i, !u32i) -> ()
+      %sh = cir.const #cir.int<0> : !u32i
+      %st = cir.const #cir.ptr<null> : !cir.ptr<!s32i>
+      %gv = cir.load %grid : !cir.ptr<!rec_dim3>, !rec_dim3
+      cir.copy %src to %grid : !cir.ptr<!rec_dim3>
+      %bv = cir.load %block : !cir.ptr<!rec_dim3>, !rec_dim3
+      %r = cir.call @__cudaPushCallConfiguration(%gv, %bv, %sh, %st) : (!rec_dim3, !rec_dim3, !u32i, !cir.ptr<!s32i>) -> !s32i
+      %c = cir.cast int_to_bool %r : !s32i -> !cir.bool
+      cir.if %c {
+      } else {
+        cir.call @stub_named() {cu.kernel_name = #cir.cu.kernel_name<"kern_named">} : () -> ()
+      }
+      cir.return
+    }
+  }
+  module @device_0 attributes {cir.offload.kind = #cir.offload<device>} {
+    cir.func @kern_named() cc(ptx_kernel) {
+      cir.return
+    }
+  }
+}
+
+// CHECK: kernel kern_named
+// CHECK-NEXT: host-stub @stub_named
+// CHECK-NEXT: device @device_0 : @kern_named
+// CHECK-NEXT: launch in @launch_named : 0 args, grid dynamic, block const, stream default
+// CHECK-NEXT: launch in @launch_twice : 0 args, grid untraced, block const, stream default
+// CHECK-NEXT: launch in @launch_late : 0 args, grid untraced, block const, stream default
+// CHECK-NEXT: launch in @launch_copy_after : 0 args, grid untraced, block const, stream default

@@ -19,7 +19,8 @@
 
 namespace clang {
 class ASTContext;
-}
+class TargetInfo;
+} // namespace clang
 
 namespace mlir {
 class MLIRContext;
@@ -35,6 +36,12 @@ runCIRToCIRPasses(mlir::ModuleOp theModule, mlir::MLIRContext &mlirCtx,
                   bool enableIdiomRecognizer, bool enableCIRSimplify,
                   bool enableLibOpt, llvm::StringRef libOptOptions,
                   bool enableCallConvLowering);
+
+// Run the calling-convention lowering a module's emission deferred, for
+// `targetInfo`'s target. A no-op for targets without one.
+mlir::LogicalResult runCallConvLowering(mlir::ModuleOp theModule,
+                                        mlir::MLIRContext &mlirCtx,
+                                        const clang::TargetInfo &targetInfo);
 
 } // namespace cir
 

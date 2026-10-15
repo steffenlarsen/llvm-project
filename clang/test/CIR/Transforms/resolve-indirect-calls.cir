@@ -1,0 +1,107 @@
+// RUN: cir-opt %s -cir-resolve-indirect-calls -o - | FileCheck %s
+
+!s32i = !cir.int<s, 32>
+!s64i = !cir.int<s, 64>
+!fn = !cir.func<(!s32i)>
+
+module {
+  cir.func private @target(!s32i)
+  cir.func private @other(!s32i)
+  cir.func private @get_flag() -> !cir.bool
+
+  // The address of a function, called through a bitcast round trip. The
+  // call's attributes come along.
+  // CHECK-LABEL: cir.func @direct(
+  // CHECK:         cir.call @target(%arg0) {uniform_work_group_size} : (!s32i) -> ()
+  cir.func @direct(%arg0: !s32i) {
+    %0 = cir.get_global @target : !cir.ptr<!fn>
+    %1 = cir.cast bitcast %0 : !cir.ptr<!fn> -> !cir.ptr<!cir.void>
+    %2 = cir.cast bitcast %1 : !cir.ptr<!cir.void> -> !cir.ptr<!fn>
+    cir.call %2(%arg0) {uniform_work_group_size} : (!cir.ptr<!fn>, !s32i) -> ()
+    cir.return
+  }
+
+  // An accessor that hands out a function pointer.
+  cir.func internal private @accessor() -> !cir.ptr<!fn> {
+    %0 = cir.get_global @target : !cir.ptr<!fn>
+    cir.return %0 : !cir.ptr<!fn>
+  }
+  // CHECK-LABEL: cir.func @through_accessor(
+  // CHECK:         cir.call @target(%arg0) : (!s32i) -> ()
+  cir.func @through_accessor(%arg0: !s32i) {
+    %0 = cir.call @accessor() : () -> !cir.ptr<!fn>
+    cir.call %0(%arg0) : (!cir.ptr<!fn>, !s32i) -> ()
+    cir.return
+  }
+
+  // A constant global holding a function's address, handed out by an
+  // accessor and loaded through: a HIP kernel handle, and how a launch
+  // through a kernel pointer reaches the stub.
+  cir.global constant external @handle = #cir.global_view<@target> : !cir.ptr<!fn>
+  cir.func internal private @handle_accessor() -> !cir.ptr<!fn> {
+    %0 = cir.get_global @handle : !cir.ptr<!cir.ptr<!fn>>
+    %1 = cir.cast bitcast %0 : !cir.ptr<!cir.ptr<!fn>> -> !cir.ptr<!fn>
+    cir.return %1 : !cir.ptr<!fn>
+  }
+  // CHECK-LABEL: cir.func @through_handle(
+  // CHECK:         cir.call @target(%arg0) : (!s32i) -> ()
+  cir.func @through_handle(%arg0: !s32i) {
+    %0 = cir.call @handle_accessor() : () -> !cir.ptr<!fn>
+    %1 = cir.cast bitcast %0 : !cir.ptr<!fn> -> !cir.ptr<!cir.ptr<!fn>>
+    %2 = cir.load %1 : !cir.ptr<!cir.ptr<!fn>>, !cir.ptr<!fn>
+    cir.call %2(%arg0) : (!cir.ptr<!fn>, !s32i) -> ()
+    cir.return
+  }
+
+  // A global that is not constant may hold anything by the time it is read.
+  cir.global external @mutable_handle = #cir.global_view<@target> : !cir.ptr<!fn>
+  // CHECK-LABEL: cir.func @mutable_global(
+  // CHECK:         cir.call %{{.*}}(%arg0) : (!cir.ptr<!cir.func<(!s32i)>>, !s32i) -> ()
+  cir.func @mutable_global(%arg0: !s32i) {
+    %0 = cir.get_global @mutable_handle : !cir.ptr<!cir.ptr<!fn>>
+    %1 = cir.load %0 : !cir.ptr<!cir.ptr<!fn>>, !cir.ptr<!fn>
+    cir.call %1(%arg0) : (!cir.ptr<!fn>, !s32i) -> ()
+    cir.return
+  }
+
+  // The accessor seen here may not be the one that is linked.
+  cir.func linkonce @interposable_accessor() -> !cir.ptr<!fn> {
+    %0 = cir.get_global @target : !cir.ptr<!fn>
+    cir.return %0 : !cir.ptr<!fn>
+  }
+  // CHECK-LABEL: cir.func @interposable(
+  // CHECK:         cir.call %{{.*}}(%arg0) : (!cir.ptr<!cir.func<(!s32i)>>, !s32i) -> ()
+  cir.func @interposable(%arg0: !s32i) {
+    %0 = cir.call @interposable_accessor() : () -> !cir.ptr<!fn>
+    cir.call %0(%arg0) : (!cir.ptr<!fn>, !s32i) -> ()
+    cir.return
+  }
+
+  // An accessor whose returns disagree.
+  cir.func internal private @either() -> !cir.ptr<!fn> {
+    %c = cir.call @get_flag() : () -> !cir.bool
+    cir.if %c {
+      %0 = cir.get_global @target : !cir.ptr<!fn>
+      cir.return %0 : !cir.ptr<!fn>
+    }
+    %1 = cir.get_global @other : !cir.ptr<!fn>
+    cir.return %1 : !cir.ptr<!fn>
+  }
+  // CHECK-LABEL: cir.func @ambiguous(
+  // CHECK:         cir.call %{{.*}}(%arg0) : (!cir.ptr<!cir.func<(!s32i)>>, !s32i) -> ()
+  cir.func @ambiguous(%arg0: !s32i) {
+    %0 = cir.call @either() : () -> !cir.ptr<!fn>
+    cir.call %0(%arg0) : (!cir.ptr<!fn>, !s32i) -> ()
+    cir.return
+  }
+
+  // The call's type is not the callee's, so it is left to the backend.
+  // CHECK-LABEL: cir.func @type_mismatch(
+  // CHECK:         cir.call %{{.*}}(%arg0) : (!cir.ptr<!cir.func<(!s64i)>>, !s64i) -> ()
+  cir.func @type_mismatch(%arg0: !s64i) {
+    %0 = cir.get_global @target : !cir.ptr<!fn>
+    %1 = cir.cast bitcast %0 : !cir.ptr<!fn> -> !cir.ptr<!cir.func<(!s64i)>>
+    cir.call %1(%arg0) : (!cir.ptr<!cir.func<(!s64i)>>, !s64i) -> ()
+    cir.return
+  }
+}

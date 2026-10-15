@@ -98,7 +98,13 @@ struct KernelBinding {
 // This is what the table records as a launch site, and what a pass must accept
 // when checking that it can see every launch of a stub: the two answers come
 // from here so they cannot drift apart.
-cir::CUDAKernelNameAttr getLaunchedKernel(mlir::Operation *op);
+//
+// A launch is a call to a host stub. CIRGen tags the calls a `<<<>>>` emits
+// with the kernel they launch; a call the tag is missing from, because it was
+// made direct after the fact, launches whatever kernel its callee is the stub
+// of.
+cir::CUDAKernelNameAttr getLaunchedKernel(mlir::Operation *op,
+                                          mlir::SymbolTableCollection &symbols);
 
 // Whether any reference to `fn` within `scope` lives outside `fn`'s own body. A
 // device stub hands its own address to cudaLaunchKernel, so it always

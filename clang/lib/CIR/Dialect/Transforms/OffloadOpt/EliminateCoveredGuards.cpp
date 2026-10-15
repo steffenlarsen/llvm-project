@@ -6,32 +6,37 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// A kernel that covers `n` elements in blocks of `d` is launched with
-// `gridDim = ceil(n/d)` and carries tail guards -- `if (index >= n) return;` --
-// for the final, partially populated block. When `n % d == 0` that block is
-// full and every guard is dead, which is why libraries hand-write a fast
-// variant: ggml's `dequantize_block_q8_0_f16<need_check=false>` is exactly
-// this, and it is worth ~6% of prompt processing.
+// A kernel that covers `n` elements carries tail guards -- `if (index >= n)
+// return;` -- for the threads of the last, partially populated block. When the
+// launch has no such threads every guard is dead, which is why libraries
+// hand-write a fast variant: ggml's `dequantize_block_q8_0_f16<need_check=
+// false>` is exactly this, and it is worth ~6% of prompt processing.
 //
-// The fact needed to remove the guard is `d*blockIdx.x + rest < n`, which
-// relates two runtime unknowns. LLVM cannot use it: its value analyses are
-// per-value interval domains, so an `llvm.assume`, a dominating branch and a
-// slack-variable rewrite were all measured to change nothing. The information
-// has to be *acted on*, not described -- so this pass does the proof itself.
+// The fact needed to remove a guard relates the launch geometry to a runtime
+// extent. LLVM cannot use it: its value analyses are per-value interval
+// domains, so an `llvm.assume`, a dominating branch and a slack-variable
+// rewrite were all measured to change nothing. The information has to be
+// *acted on*, not described -- so this pass does it itself, in two halves:
+//
+//   * On the device, the largest value a guard's index can take is computed
+//     symbolically in the launch dimensions -- the largest block id, the
+//     largest thread id and the block size -- without knowing any of them.
+//   * At each launch, the host evaluates that bound with the launch's actual
+//     grid and block, recomputes the guard's extent from the launch's own
+//     arguments, and dispatches to a copy of the kernel with the guard folded
+//     away when the bound is below the extent.
+//
+// The premise is checked rather than derived, so it does not matter how the
+// grid was computed: `ceil(n/d)`, `(n-1)/d+1`, or clamped to the device limit.
+// With `gridDim = ceil(n/d)` and `blockDim = d` it is exactly `n % d == 0`.
 //
 // It runs before CIRFlattenCFG, where `cir.for` is still structured (giving
-// exact induction variable bounds) and the launch is still visible (giving the
-// grid relation and the block size).
-//
-// On success it specialises a clone of the kernel, folds the proven
-// comparisons away in the copy, and dispatches to it behind `n % d == 0`. The
-// original keeps its guards, so the fast copy is only ever entered where the
-// premises hold.
+// exact induction variable bounds) and the launch geometry is still traceable.
 //
 //===----------------------------------------------------------------------===//
 
 #include "mlir/IR/Builders.h"
-#include "mlir/IR/Matchers.h"
+#include "mlir/IR/IRMapping.h"
 #include "mlir/IR/SymbolTable.h"
 #include "clang/CIR/Dialect/IR/CIRDialect.h"
 #include "clang/CIR/Dialect/IR/CIROpsEnums.h"
@@ -43,7 +48,9 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Debug.h"
 
-#include <string>
+#include <limits>
+#include <map>
+#include <vector>
 
 #define DEBUG_TYPE "cir-offload-eliminate-covered-guards"
 
@@ -60,56 +67,181 @@ namespace {
 // passes use for their clones.
 static constexpr llvm::StringRef kCoveredSuffix = ".guards";
 
-/// A comparison the launch shape proves constant, and what it folds to.
-struct DeadGuard {
-  cir::CmpOp cmp;
-  bool foldTo;
+// Largest coefficient a bound may carry. With the launch dimensions within the
+// hardware's limits (a grid of at most 2^31 blocks of at most 1024 threads),
+// every term of a bound then fits comfortably in 64 bits on the host.
+static constexpr int64_t kMaxCoeff = 1 << 20;
+
+//===----------------------------------------------------------------------===//
+// Symbolic bounds in the launch dimensions
+//===----------------------------------------------------------------------===//
+
+// The launch quantities a bound is written in.
+enum LaunchSym : unsigned {
+  BlockIdMax,  // gridDim.x - 1, the largest blockIdx.x
+  ThreadIdMax, // blockDim.x - 1, the largest threadIdx.x
+  BlockDimX,   // blockDim.x
 };
 
-/// The extent a guard is written against, as a rational multiple of the
-/// kernel argument the grid covers: `num/den * arg`.
-///
-/// A guard does not have to compare against the argument itself.  ggml's
-/// dequantize loop bounds a *byte* offset, so both sides carry a factor of
-/// `sizeof(block_q8_0)/QK8_0` and the extent reaches CIR as `(k*34)/32`.
-struct ArgScale {
-  int64_t num = 1;
-  int64_t den = 1;
+// A polynomial in the launch symbols with integer coefficients, of degree at
+// most two -- enough for `blockIdx.x * blockDim.x + threadIdx.x`. A monomial
+// is the sorted list of the symbols it multiplies; the empty one is the
+// constant term.
+struct Poly {
+  std::map<std::vector<unsigned>, int64_t> terms;
+
+  static Poly constant(int64_t c) {
+    Poly p;
+    if (c)
+      p.terms[{}] = c;
+    return p;
+  }
+  static Poly symbol(LaunchSym s) {
+    Poly p;
+    p.terms[{s}] = 1;
+    return p;
+  }
+
+  int64_t constantTerm() const {
+    auto it = terms.find({});
+    return it == terms.end() ? 0 : it->second;
+  }
+  bool hasSymbol() const {
+    return llvm::any_of(terms, [](const auto &t) { return !t.first.empty(); });
+  }
+  // Whether every coefficient, the constant term included, is non-negative.
+  bool nonNegative() const {
+    return llvm::all_of(terms, [](const auto &t) { return t.second >= 0; });
+  }
+  // Whether the polynomial is non-decreasing in every symbol, so that its
+  // largest value is taken where every symbol is largest.
+  bool monotone() const {
+    return llvm::all_of(
+        terms, [](const auto &t) { return t.first.empty() || t.second >= 0; });
+  }
+  bool operator==(const Poly &o) const { return terms == o.terms; }
+  bool operator<(const Poly &o) const { return terms < o.terms; }
 };
 
-/// Largest scale factor worth following; keeps `num * divisor` well inside
-/// int64 no matter how the expression nests.
-static constexpr int64_t kMaxScale = 1 << 20;
-
-/// Upper bound of an expression, as `blockIdTerm * (n/d) + constant`.
-///
-/// The block id has to be carried symbolically because its bound is `n/d - 1`,
-/// which is not an integer until it is combined with the `d*blockIdx` factor
-/// the guard is written against.  Everything else must reduce to a constant.
-struct MaxBound {
-  /// Coefficient of `blockIdx.x`; the bound contributed is coeff * (n/d - 1).
-  int64_t blockIdCoeff = 0;
-  /// Everything that bounds to a constant.
-  int64_t constant = 0;
-  /// Narrowest integer width any step of the expression was computed in.
-  ///
-  /// `d*blockIdx.x` is frequently evaluated in 32 bits and only then widened
-  /// (`CUDA_Q8_0_NE_ALIGN*blockIdx.x` assigned to an int64_t), so the product
-  /// can wrap before the comparison ever sees it.  Rather than argue about
-  /// whether that is reachable, the width is recorded and the host guard is
-  /// extended to exclude it.
-  unsigned minWidth = 64;
-};
-
-static unsigned widthOf(Type ty) {
-  if (auto intTy = mlir::dyn_cast<cir::IntType>(ty))
-    return intTy.getWidth();
-  return 64;
+static std::optional<Poly> add(const Poly &a, const Poly &b) {
+  Poly r = a;
+  for (const auto &[mono, coeff] : b.terms) {
+    int64_t sum = r.terms[mono] + coeff;
+    if (sum > kMaxCoeff || sum < -kMaxCoeff)
+      return std::nullopt;
+    if (sum)
+      r.terms[mono] = sum;
+    else
+      r.terms.erase(mono);
+  }
+  return r;
 }
 
-static MaxBound joinWidth(MaxBound b, Type ty) {
-  b.minWidth = std::min(b.minWidth, widthOf(ty));
+// The product, as long as it stays of degree two. Only non-negative factors
+// are multiplied: then the product of two largest values is the largest
+// product, which is what makes the result a bound.
+static std::optional<Poly> mul(const Poly &a, const Poly &b) {
+  if (!a.nonNegative() || !b.nonNegative())
+    return std::nullopt;
+  Poly r;
+  for (const auto &[ma, ca] : a.terms) {
+    for (const auto &[mb, cb] : b.terms) {
+      std::vector<unsigned> mono = ma;
+      mono.insert(mono.end(), mb.begin(), mb.end());
+      if (mono.size() > 2)
+        return std::nullopt;
+      llvm::sort(mono);
+      int64_t prod = ca * cb;
+      if (ca && prod / ca != cb)
+        return std::nullopt;
+      int64_t sum = r.terms[mono] + prod;
+      if (sum > kMaxCoeff)
+        return std::nullopt;
+      r.terms[mono] = sum;
+    }
+  }
+  return r;
+}
+
+// Integer division floors, and a floored bound would be *smaller* than the
+// true one, which would license deleting a guard that can still fire. So every
+// coefficient has to divide exactly.
+static std::optional<Poly> divExact(const Poly &a, int64_t c) {
+  if (c <= 0 || !a.nonNegative())
+    return std::nullopt;
+  Poly r;
+  for (const auto &[mono, coeff] : a.terms) {
+    if (coeff % c)
+      return std::nullopt;
+    r.terms[mono] = coeff / c;
+  }
+  return r;
+}
+
+// The largest value of type `ty`, or nullopt for a non-integer type.
+static std::optional<int64_t> typeMax(Type ty) {
+  auto intTy = mlir::dyn_cast<cir::IntType>(ty);
+  if (!intTy)
+    return std::nullopt;
+  unsigned bits = intTy.getWidth() - (intTy.isSigned() ? 1 : 0);
+  if (bits >= 63)
+    return std::numeric_limits<int64_t>::max();
+  return (int64_t(1) << bits) - 1;
+}
+
+// The largest value an index can take, and what keeps it exact: every value
+// it was computed through, paired with the largest value that value's type
+// holds. The host checks them all, so a launch for which any step would wrap
+// never reaches the copy.
+struct IndexBound {
+  Poly max;
+  llvm::SmallVector<std::pair<Poly, int64_t>> limits;
+};
+
+// Record that `b`, computed in type `ty`, must not exceed what `ty` holds.
+static std::optional<IndexBound> within(IndexBound b, Type ty) {
+  std::optional<int64_t> limit = typeMax(ty);
+  if (!limit)
+    return std::nullopt;
+  if (b.max.hasSymbol())
+    b.limits.emplace_back(b.max, *limit);
+  else if (b.max.constantTerm() > *limit)
+    return std::nullopt;
   return b;
+}
+
+// Whether `a >= b` for every value of the symbols, which with every symbol
+// non-negative holds when it holds coefficient by coefficient.
+static bool dominates(const Poly &a, const Poly &b) {
+  return llvm::all_of(b.terms,
+                      [&](const auto &t) {
+                        auto it = a.terms.find(t.first);
+                        return (it == a.terms.end() ? 0 : it->second) >=
+                               t.second;
+                      }) &&
+         llvm::all_of(a.terms, [&](const auto &t) {
+           return b.terms.count(t.first) || t.second >= 0;
+         });
+}
+
+// Whether `p <= limit` for any launch at all: the symbols come from 32-bit
+// grid and block dimensions, so none exceeds 2^32 - 1.
+static bool alwaysWithin(const Poly &p, int64_t limit) {
+  const __int128 symbolMax = (__int128(1) << 32) - 1;
+  __int128 max = 0;
+  for (const auto &[mono, coeff] : p.terms) {
+    __int128 term = coeff;
+    for (size_t i = 0; i < mono.size(); ++i)
+      term *= symbolMax;
+    max += term > 0 ? term : 0;
+  }
+  return max <= limit;
+}
+
+static IndexBound merge(IndexBound a, const IndexBound &b, Poly max) {
+  a.limits.append(b.limits.begin(), b.limits.end());
+  a.max = std::move(max);
+  return a;
 }
 
 /// Find the slot behind an address, looking through the address-space casts
@@ -121,7 +253,8 @@ static cir::AllocaOp findSlot(Value addr) {
   return addr.getDefiningOp<cir::AllocaOp>();
 }
 
-/// Users of a slot, reached through those same casts.
+/// Users of a slot, reached through those same casts. Lifetime markers are
+/// left out: they neither write the slot nor let it escape.
 static void collectSlotUsers(cir::AllocaOp slot,
                              SmallVectorImpl<Operation *> &out) {
   SmallVector<Value, 4> worklist{slot.getResult()};
@@ -132,6 +265,8 @@ static void collectSlotUsers(cir::AllocaOp slot,
         worklist.push_back(cast.getResult());
         continue;
       }
+      if (isa<cir::LifetimeStartOp, cir::LifetimeEndOp>(user))
+        continue;
       out.push_back(user);
     }
   }
@@ -176,30 +311,6 @@ static std::optional<int64_t> tryConstThroughSlot(Value v) {
   if (!only)
     return std::nullopt;
   return cir::tryResolveToConstant(only.getValue());
-}
-
-/// Resolve \p v to a constant, additionally recognising `blockDim.x`.
-///
-/// The launch pins the block size and the pass has already checked that every
-/// launch site of this kernel agrees on it, so `blockDim.x` is as good as a
-/// literal here.  It has to be, because the common way to write the stride is
-/// `blockDim.x*blockIdx.x` rather than a spelled-out constant -- ggml uses the
-/// literal form in `dequantize_block_q8_0_f16` but the `blockDim.x` form in
-/// `quantize_q8_1`, and a literal-only test sees only the first.
-static std::optional<int64_t> tryConstWithLaunchFacts(Value v,
-                                                      int64_t blockDimX) {
-  if (std::optional<int64_t> c = tryConstThroughSlot(v))
-    return c;
-
-  Value cur = v;
-  while (auto cast = cur.getDefiningOp<cir::CastOp>())
-    cur = cast.getOperand();
-  if (std::optional<cir::DeviceIndex> index = cir::matchDeviceIndex(cur))
-    if (index->kind == cir::DeviceIndexKind::BlockDim && index->dim == 0 &&
-        blockDimX > 0)
-      return blockDimX;
-
-  return std::nullopt;
 }
 
 /// Largest value a structured `cir.for` induction variable reaches.
@@ -261,47 +372,45 @@ static std::optional<int64_t> maxOfForInductionVar(cir::ForOp forOp,
   return *init + ((last - *init) / *step) * *step;
 }
 
-/// Compute an upper bound for \p v, or nullopt when anything is unrecognised.
+/// Compute the largest value \p v can take, or nullopt when anything is
+/// unrecognised.
 ///
 /// Deliberately conservative: every construct not explicitly handled bails,
-/// because an over-estimate that is too small would license deleting a live
-/// guard.
-static std::optional<MaxBound> computeMax(Value v, int64_t blockDimX,
-                                          unsigned depth = 0) {
+/// because a bound that is too small would license deleting a live guard. Only
+/// the x dimension is modelled; the launch geometry is traced per dimension,
+/// but a guard over y or z is not something this bounds.
+static std::optional<IndexBound> computeBound(Value v, unsigned depth = 0) {
   if (depth > 12)
     return std::nullopt;
 
-  if (std::optional<int64_t> c = cir::tryResolveToConstant(v))
-    return MaxBound{0, *c};
+  if (std::optional<int64_t> c = tryConstThroughSlot(v))
+    return IndexBound{Poly::constant(*c), {}};
 
   Operation *def = v.getDefiningOp();
   if (!def)
     return std::nullopt;
 
   if (std::optional<cir::DeviceIndex> index = cir::matchDeviceIndex(def)) {
-    // Only the x dimension is modelled: the grid relation this pass works from
-    // is one-dimensional, so a y or z read is not something it can bound.
     if (index->dim != 0)
       return std::nullopt;
-    Type ty = v.getType();
     switch (index->kind) {
     case cir::DeviceIndexKind::BlockId:
-      return joinWidth(MaxBound{1, 0}, ty);
+      return within(IndexBound{Poly::symbol(BlockIdMax), {}}, v.getType());
     case cir::DeviceIndexKind::ThreadId:
-      if (blockDimX <= 0)
-        return std::nullopt;
-      return joinWidth(MaxBound{0, blockDimX - 1}, ty);
+      return within(IndexBound{Poly::symbol(ThreadIdMax), {}}, v.getType());
     case cir::DeviceIndexKind::BlockDim:
-      if (blockDimX <= 0)
-        return std::nullopt;
-      return joinWidth(MaxBound{0, blockDimX}, ty);
+      return within(IndexBound{Poly::symbol(BlockDimX), {}}, v.getType());
     case cir::DeviceIndexKind::GridDim:
       return std::nullopt;
     }
   }
 
-  if (isa<cir::CastOp>(def) && def->getNumOperands() == 1)
-    return computeMax(def->getOperand(0), blockDimX, depth + 1);
+  if (auto cast = dyn_cast<cir::CastOp>(def)) {
+    if (cast.getKind() != cir::CastKind::integral)
+      return std::nullopt;
+    std::optional<IndexBound> o = computeBound(cast.getSrc(), depth + 1);
+    return o ? within(*o, cast.getType()) : std::nullopt;
+  }
 
   // A local or a loop induction variable, read back out of its slot.
   if (auto load = dyn_cast<cir::LoadOp>(def)) {
@@ -314,7 +423,7 @@ static std::optional<MaxBound> computeMax(Value v, int64_t blockDimX,
          parent = parent->getParentOp()) {
       if (auto forOp = dyn_cast<cir::ForOp>(parent)) {
         if (std::optional<int64_t> m = maxOfForInductionVar(forOp, slot))
-          return MaxBound{0, *m};
+          return IndexBound{Poly::constant(*m), {}};
       }
     }
 
@@ -334,368 +443,318 @@ static std::optional<MaxBound> computeMax(Value v, int64_t blockDimX,
     }
     if (!only)
       return std::nullopt;
-    return computeMax(only.getValue(), blockDimX, depth + 1);
+    return computeBound(only.getValue(), depth + 1);
   }
 
-  if (auto add = dyn_cast<cir::AddOp>(def)) {
-    auto l = computeMax(add.getLhs(), blockDimX, depth + 1);
-    auto r = computeMax(add.getRhs(), blockDimX, depth + 1);
-    if (!l || !r)
+  auto binary = [&](Value lhs, Value rhs,
+                    auto combine) -> std::optional<IndexBound> {
+    std::optional<IndexBound> l = computeBound(lhs, depth + 1);
+    std::optional<IndexBound> r =
+        l ? computeBound(rhs, depth + 1) : std::nullopt;
+    if (!r)
       return std::nullopt;
-    MaxBound sum{l->blockIdCoeff + r->blockIdCoeff, l->constant + r->constant,
-                 std::min(l->minWidth, r->minWidth)};
-    return joinWidth(sum, add.getType());
-  }
+    std::optional<Poly> max = combine(l->max, r->max);
+    if (!max)
+      return std::nullopt;
+    return within(merge(*l, *r, *max), v.getType());
+  };
 
-  if (auto mul = dyn_cast<cir::MulOp>(def)) {
-    // One side has to be a constant, otherwise the product of two bounds is
-    // not a bound this representation can hold.
-    auto lc = tryConstWithLaunchFacts(mul.getLhs(), blockDimX);
-    auto rc = tryConstWithLaunchFacts(mul.getRhs(), blockDimX);
-    Value other;
-    int64_t factor = 0;
-    if (lc && *lc > 0) {
-      factor = *lc;
-      other = mul.getRhs();
-    } else if (rc && *rc > 0) {
-      factor = *rc;
-      other = mul.getLhs();
-    } else {
+  if (auto addOp = dyn_cast<cir::AddOp>(def))
+    return binary(addOp.getLhs(), addOp.getRhs(), add);
+  if (auto mulOp = dyn_cast<cir::MulOp>(def))
+    return binary(mulOp.getLhs(), mulOp.getRhs(), mul);
+  if (auto divOp = dyn_cast<cir::DivOp>(def)) {
+    std::optional<int64_t> c = tryConstThroughSlot(divOp.getRhs());
+    if (!c)
       return std::nullopt;
-    }
-    auto o = computeMax(other, blockDimX, depth + 1);
-    if (!o)
+    std::optional<IndexBound> o = computeBound(divOp.getLhs(), depth + 1);
+    std::optional<Poly> max = o ? divExact(o->max, *c) : std::nullopt;
+    if (!max)
       return std::nullopt;
-    MaxBound prod{o->blockIdCoeff * factor, o->constant * factor, o->minWidth};
-    return joinWidth(prod, mul.getType());
-  }
-
-  if (auto div = dyn_cast<cir::DivOp>(def)) {
-    std::optional<int64_t> c = tryConstWithLaunchFacts(div.getRhs(), blockDimX);
-    if (!c || *c <= 0)
-      return std::nullopt;
-    auto o = computeMax(div.getLhs(), blockDimX, depth + 1);
-    if (!o)
-      return std::nullopt;
-    // Both terms have to divide exactly.  Integer division floors, and a
-    // floored bound is *smaller* than the true one, which would license
-    // deleting a guard that can still fire.  Rounding up is not expressible
-    // in this representation, so anything inexact bails.
-    if (o->blockIdCoeff % *c != 0 || o->constant % *c != 0)
-      return std::nullopt;
-    MaxBound quot{o->blockIdCoeff / *c, o->constant / *c, o->minWidth};
-    return joinWidth(quot, div.getType());
+    o->max = *max;
+    return within(*o, divOp.getType());
   }
 
   LLVM_DEBUG(llvm::dbgs() << "GUARDDBG     unhandled: "
                           << def->getName().getStringRef() << "\n");
   return std::nullopt;
 }
-// Does `v` read kernel argument `argIdx` (through the usual spill)?
-static bool tracesToArg(Value v, cir::FuncOp kernel, unsigned argIdx) {
-  cir::ValueTraceResult t = cir::traceValueOrigin(v);
-  if (auto arg = dyn_cast_or_null<BlockArgument>(t.terminal))
-    return arg.getOwner() == &kernel.getBody().front() &&
-           arg.getArgNumber() == argIdx;
-  // traceValueOrigin stops at the spill slot, or gives up on a load through
-  // the address-space cast every device-side local carries; either way, check
-  // the slot's single store.
-  cir::AllocaOp slot;
-  if (t.terminal) {
-    slot = findSlot(t.terminal);
-  } else {
-    Value cur = v;
-    while (auto cast = cur.getDefiningOp<cir::CastOp>())
-      cur = cast.getOperand();
-    if (auto load = cur.getDefiningOp<cir::LoadOp>())
-      slot = findSlot(load.getAddr());
-  }
-  if (slot) {
-    cir::StoreOp only;
-    SmallVector<Operation *, 8> slotUsers;
-    collectSlotUsers(slot, slotUsers);
-    for (Operation *user : slotUsers) {
-      if (auto store = dyn_cast<cir::StoreOp>(user)) {
-        if (only)
-          return false;
-        only = store;
-      }
+
+//===----------------------------------------------------------------------===//
+// Extents the host can recompute
+//===----------------------------------------------------------------------===//
+
+// The kernel argument `v` is, read directly or back out of the slot CIRGen
+// spilled it into, or null.
+static BlockArgument asKernelArg(Value v, cir::FuncOp kernel) {
+  auto isArg = [&](Value x) -> BlockArgument {
+    auto arg = dyn_cast<BlockArgument>(x);
+    return arg && arg.getOwner() == &kernel.getBody().front() ? arg
+                                                              : BlockArgument();
+  };
+  if (BlockArgument arg = isArg(v))
+    return arg;
+  auto load = v.getDefiningOp<cir::LoadOp>();
+  cir::AllocaOp slot = load ? findSlot(load.getAddr()) : cir::AllocaOp();
+  if (!slot)
+    return {};
+  cir::StoreOp only;
+  SmallVector<Operation *, 8> slotUsers;
+  collectSlotUsers(slot, slotUsers);
+  for (Operation *user : slotUsers) {
+    if (auto store = dyn_cast<cir::StoreOp>(user)) {
+      if (only)
+        return {};
+      only = store;
+      continue;
     }
-    if (!only)
-      return false;
-    if (auto arg = dyn_cast<BlockArgument>(only.getValue()))
-      return arg.getOwner() == &kernel.getBody().front() &&
-             arg.getArgNumber() == argIdx;
+    if (!isa<cir::LoadOp>(user))
+      return {};
+  }
+  return only ? isArg(only.getValue()) : BlockArgument();
+}
+
+// The operations the host may redo to recompute an extent: integer casts and
+// arithmetic, dividing only by a positive constant so that recomputing cannot
+// fault where the kernel would not have.
+static bool isRecomputable(Operation *op) {
+  if (auto cast = dyn_cast<cir::CastOp>(op))
+    return cast.getKind() == cir::CastKind::integral;
+  if (isa<cir::AddOp, cir::SubOp, cir::MulOp>(op))
+    return true;
+  if (isa<cir::DivOp, cir::RemOp>(op)) {
+    std::optional<int64_t> c = cir::tryResolveToConstant(op->getOperand(1));
+    return c && *c > 0;
   }
   return false;
 }
 
-// Is `v` a rational multiple of kernel argument `argIdx`?
-//
-// `tracesToArg` stops at arithmetic, so constant multiplies and divides are
-// peeled here and everything below them is left to it.
-static std::optional<ArgScale> matchScaledArg(Value v, cir::FuncOp kernel,
-                                              unsigned argIdx,
-                                              unsigned depth = 0) {
-  if (depth > 8)
-    return std::nullopt;
-  if (tracesToArg(v, kernel, argIdx))
-    return ArgScale{};
-
+// Whether `v` is computed from the kernel's arguments and constants alone, by
+// operations the host can redo.
+static bool isArgExpr(Value v, cir::FuncOp kernel, unsigned depth = 0) {
+  if (depth > 8 || !mlir::isa<cir::IntType>(v.getType()))
+    return false;
+  if (asKernelArg(v, kernel))
+    return true;
   Operation *def = v.getDefiningOp();
   if (!def)
-    return std::nullopt;
-
-  if (isa<cir::CastOp>(def) && def->getNumOperands() == 1)
-    return matchScaledArg(def->getOperand(0), kernel, argIdx, depth + 1);
-
-  auto scaled = [&](Value inner, int64_t factor,
-                    bool isDivisor) -> std::optional<ArgScale> {
-    std::optional<ArgScale> s =
-        matchScaledArg(inner, kernel, argIdx, depth + 1);
-    if (!s)
-      return std::nullopt;
-    (isDivisor ? s->den : s->num) *= factor;
-    if (s->num > kMaxScale || s->den > kMaxScale)
-      return std::nullopt;
-    return s;
-  };
-
-  if (auto mul = dyn_cast<cir::MulOp>(def)) {
-    if (std::optional<int64_t> c = cir::tryResolveToConstant(mul.getRhs()))
-      if (*c > 0)
-        return scaled(mul.getLhs(), *c, /*isDivisor=*/false);
-    if (std::optional<int64_t> c = cir::tryResolveToConstant(mul.getLhs()))
-      if (*c > 0)
-        return scaled(mul.getRhs(), *c, /*isDivisor=*/false);
-    return std::nullopt;
-  }
-
-  if (auto div = dyn_cast<cir::DivOp>(def)) {
-    if (std::optional<int64_t> c = cir::tryResolveToConstant(div.getRhs()))
-      if (*c > 0)
-        return scaled(div.getLhs(), *c, /*isDivisor=*/true);
-  }
-
-  return std::nullopt;
+    return false;
+  if (auto constant = dyn_cast<cir::ConstantOp>(def))
+    return mlir::isa<cir::IntAttr>(constant.getValue());
+  if (!isRecomputable(def))
+    return false;
+  return llvm::all_of(def->getOperands(), [&](Value operand) {
+    return isArgExpr(operand, kernel, depth + 1);
+  });
 }
 
-// Find guards this launch shape proves dead. Returns the narrowest arithmetic
-// width across them.
-static unsigned proveGuards(cir::FuncOp kernel, unsigned argIdx, int64_t d,
-                            int64_t blockDimX,
-                            SmallVectorImpl<DeadGuard> &out) {
-  unsigned minWidth = 64;
+// Whether `recompute` succeeds for `v` with these launch arguments: every
+// argument it reads is passed with the kernel parameter's own type.
+static bool canRecompute(Value v, cir::FuncOp kernel, mlir::ValueRange args) {
+  if (BlockArgument arg = asKernelArg(v, kernel))
+    return arg.getArgNumber() < args.size() &&
+           args[arg.getArgNumber()].getType() == v.getType();
+  Operation *def = v.getDefiningOp();
+  return def && llvm::all_of(def->getOperands(), [&](Value operand) {
+           return canRecompute(operand, kernel, args);
+         });
+}
+
+// Redo `v`'s computation before `builder`'s insertion point with the launch's
+// arguments in place of the kernel's. The copies carry no overflow flags: the
+// host evaluates the extent even for a launch that runs no thread, where the
+// kernel would not, so a wrap there must not be undefined.
+static Value recompute(Value v, cir::FuncOp kernel, mlir::ValueRange args,
+                       OpBuilder &builder) {
+  if (BlockArgument arg = asKernelArg(v, kernel)) {
+    Value launched = args[arg.getArgNumber()];
+    return launched.getType() == v.getType() ? launched : Value();
+  }
+  Operation *def = v.getDefiningOp();
+  IRMapping map;
+  for (Value operand : def->getOperands()) {
+    Value copy = recompute(operand, kernel, args, builder);
+    if (!copy)
+      return {};
+    map.map(operand, copy);
+  }
+  Operation *copy = builder.clone(*def, map);
+  if (auto addOp = dyn_cast<cir::AddOp>(copy)) {
+    addOp.setNoSignedWrap(false);
+    addOp.setNoUnsignedWrap(false);
+  } else if (auto subOp = dyn_cast<cir::SubOp>(copy)) {
+    subOp.setNoSignedWrap(false);
+    subOp.setNoUnsignedWrap(false);
+  }
+  return copy->getResult(0);
+}
+
+//===----------------------------------------------------------------------===//
+// Guards
+//===----------------------------------------------------------------------===//
+
+/// A comparison of an index against an extent that is constant whenever the
+/// index stays below the extent: what it folds to, and which premise does it.
+struct Guard {
+  // The device kernel the guard is in; its extent is written in its arguments.
+  cir::FuncOp kernel;
+  cir::CmpOp cmp;
+  bool foldTo;
+  // The premise is `bound.max < extent`, or `<=` when not strict.
+  bool strict;
+  Value extent;
+  IndexBound bound;
+};
+
+// Find the guards of `kernel` whose index is bounded in the launch dimensions
+// and whose extent the host can recompute.
+static void findGuards(cir::FuncOp kernel, SmallVectorImpl<Guard> &out) {
   kernel.walk([&](cir::CmpOp cmp) {
     cir::CmpOpKind kind = cmp.getKind();
     if (kind != cir::CmpOpKind::ge && kind != cir::CmpOpKind::gt &&
         kind != cir::CmpOpKind::lt && kind != cir::CmpOpKind::le)
       return;
 
-    // Which side is the covered extent, and at what scale?
-    Value indexSide;
-    bool extentOnRhs;
-    std::optional<ArgScale> scale;
-    if ((scale = matchScaledArg(cmp.getRhs(), kernel, argIdx))) {
-      indexSide = cmp.getLhs();
-      extentOnRhs = true;
-    } else if ((scale = matchScaledArg(cmp.getLhs(), kernel, argIdx))) {
-      indexSide = cmp.getRhs();
-      extentOnRhs = false;
-    } else {
+    for (bool indexOnLhs : {true, false}) {
+      Value index = indexOnLhs ? cmp.getLhs() : cmp.getRhs();
+      Value extent = indexOnLhs ? cmp.getRhs() : cmp.getLhs();
+      if (!isArgExpr(extent, kernel))
+        continue;
+      std::optional<IndexBound> bound = computeBound(index);
+      // The index has to depend on the launch, and must not go negative: an
+      // unsigned index that wraps below zero compares as huge.
+      if (!bound || !bound->max.hasSymbol() || !bound->max.monotone() ||
+          bound->max.constantTerm() < 0) {
+        LLVM_DEBUG(llvm::dbgs() << "GUARDDBG   cmp: index not bounded\n");
+        continue;
+      }
+      // Normalise to `index OP extent`; flipping the operands mirrors it.
+      cir::CmpOpKind k = kind;
+      if (!indexOnLhs)
+        k = k == cir::CmpOpKind::lt   ? cir::CmpOpKind::gt
+            : k == cir::CmpOpKind::le ? cir::CmpOpKind::ge
+            : k == cir::CmpOpKind::gt ? cir::CmpOpKind::lt
+                                      : cir::CmpOpKind::le;
+      // `index < extent` and `index >= extent` are settled by max < extent;
+      // `index <= extent` and `index > extent` by max <= extent.
+      bool strict = k == cir::CmpOpKind::lt || k == cir::CmpOpKind::ge;
+      bool foldTo = k == cir::CmpOpKind::lt || k == cir::CmpOpKind::le;
+      out.push_back({kernel, cmp, foldTo, strict, extent, *bound});
+      LLVM_DEBUG(llvm::dbgs() << "GUARDDBG   cmp: guard, folds to "
+                              << (foldTo ? "true" : "false") << "\n");
       return;
     }
-
-    // The block stride in the units the guard counts in. Requiring this to be
-    // exact is also what makes the *runtime* extent exact: integer division
-    // truncates, so `(num*n)/den` is only the rational value when `den`
-    // divides `num*n`. The host guard already establishes `n = m*d`, so
-    // `den | num*d` gives `den | num*n` for free.
-    if (scale->num > kMaxScale / std::max<int64_t>(d, 1))
-      return;
-    const int64_t scaledNumer = scale->num * d;
-    if (scaledNumer % scale->den != 0) {
-      LLVM_DEBUG(llvm::dbgs()
-                 << "GUARDDBG   cmp: extent scale " << scale->num << "/"
-                 << scale->den << " does not divide the block stride " << d
-                 << ", skipped\n");
-      return;
-    }
-    const int64_t dScaled = scaledNumer / scale->den;
-    if (dScaled <= 0)
-      return;
-
-    std::optional<MaxBound> bound = computeMax(indexSide, blockDimX);
-    if (!bound) {
-      LLVM_DEBUG(llvm::dbgs()
-                 << "GUARDDBG   cmp: index side not affine, skipped\n");
-      return;
-    }
-
-    // max(index) = blockIdCoeff*(n/d - 1) + constant. With the coefficient
-    // equal to the scaled block stride this is `extent - dScaled + constant`,
-    // so the guard is dead exactly when constant < dScaled. Other coefficients
-    // are not expressible as a multiple of the extent and are left alone.
-    if (bound->blockIdCoeff != dScaled) {
-      LLVM_DEBUG(llvm::dbgs()
-                 << "GUARDDBG   cmp: blockId coeff " << bound->blockIdCoeff
-                 << " != " << dScaled << ", skipped\n");
-      return;
-    }
-    if (bound->constant >= dScaled) {
-      LLVM_DEBUG(llvm::dbgs() << "GUARDDBG   cmp: max(index) = extent - "
-                              << dScaled << " + " << bound->constant
-                              << "  => can exceed extent, guard is live\n");
-      return;
-    }
-
-    // index < extent is established. Map that onto this predicate.
-    bool foldTo;
-    if (extentOnRhs)
-      foldTo = kind == cir::CmpOpKind::lt || kind == cir::CmpOpKind::le;
-    else
-      foldTo = kind == cir::CmpOpKind::gt || kind == cir::CmpOpKind::ge;
-
-    minWidth = std::min(minWidth, bound->minWidth);
-    out.push_back({cmp, foldTo});
-    LLVM_DEBUG(llvm::dbgs()
-               << "GUARDDBG   cmp: extent = " << scale->num << "*n/"
-               << scale->den << ", max(index) = extent - " << dScaled << " + "
-               << bound->constant << "  => PROVABLY DEAD (fold to "
-               << (foldTo ? "true" : "false") << ")\n");
   });
-  return minWidth;
 }
 
-// The launch facts every site of a kernel agrees on. One conclusion has to hold
-// for all of them, so a single disagreeing site abandons the kernel.
-struct LaunchFacts {
-  unsigned argIdx;
-  int64_t divisor;
-  int64_t blockDimX;
-};
+//===----------------------------------------------------------------------===//
+// The dispatch
+//===----------------------------------------------------------------------===//
 
-static std::optional<LaunchFacts>
-commonLaunchFacts(llvm::ArrayRef<cir::LaunchSite> sites) {
-  std::optional<LaunchFacts> facts;
-  for (const cir::LaunchSite &site : sites) {
-    if (!site.hasGeometry()) {
-      LLVM_DEBUG(llvm::dbgs() << "GUARDDBG   launch: no geometry\n");
-      return std::nullopt;
-    }
-
-    cir::LaunchSite::Dim3 block = site.getBlockDim();
-    auto blockX = mlir::dyn_cast_or_null<cir::IntAttr>(block.constX());
-    if (!blockX) {
-      LLVM_DEBUG(llvm::dbgs() << "GUARDDBG   launch: block.x not constant\n");
-      return std::nullopt;
-    }
-    int64_t blockDimX = blockX.getValue().getZExtValue();
-    if (blockDimX <= 0)
-      return std::nullopt;
-
-    // A grid dimension that could not be traced is not a relation to reason
-    // about; the x component is the only one this pass models.
-    mlir::Value gridX = site.getGridDim().x;
-    if (!gridX) {
-      LLVM_DEBUG(llvm::dbgs() << "GUARDDBG   launch: grid.x not traced\n");
-      return std::nullopt;
-    }
-
-    llvm::SmallVector<Value, 8> args;
-    for (unsigned i = 0, e = site.getNumArgs(); i != e; ++i)
-      args.push_back(site.getArg(i));
-
-    std::optional<cir::GridDimRelation> rel =
-        cir::findGridDimCandidate(gridX, args);
-    if (!rel || rel->divisor <= 1) {
-      LLVM_DEBUG(llvm::dbgs()
-                 << "GUARDDBG   launch: grid.x is not ceil(arg/d) ("
-                 << (rel ? "divisor " + std::to_string(rel->divisor)
-                         : std::string("no candidate arg"))
-                 << ")\n");
-      return std::nullopt;
-    }
-
-    LaunchFacts here{rel->argIndex, rel->divisor, blockDimX};
-    if (!facts) {
-      facts = here;
-      continue;
-    }
-    if (facts->argIdx != here.argIdx || facts->divisor != here.divisor ||
-        facts->blockDimX != here.blockDimX) {
-      LLVM_DEBUG(llvm::dbgs()
-                 << "GUARDDBG   launch: sites disagree (arg " << facts->argIdx
-                 << "/" << here.argIdx << ", d " << facts->divisor << "/"
-                 << here.divisor << ", block " << facts->blockDimX << "/"
-                 << here.blockDimX << ")\n");
-      return std::nullopt;
-    }
-  }
-  return facts;
-}
-
-// `if (n % d == 0 && n <= widthLimit) fast(...) else original(...)`.
-//
-// The width term is what makes the fold sound when the index arithmetic is
-// evaluated in fewer bits than the comparison: the proof assumes `d*blockIdx.x`
-// does not wrap, so the clone is simply not entered for extents large enough to
-// make it wrap.
-//
-// `call` already targets the fast clone, since cloning retargeted it; the slow
-// path is a copy of it pointed back at what it used to call.
-static void emitGuardedDispatch(cir::CallOp call, unsigned argIdx, int64_t d,
-                                unsigned minWidth,
-                                mlir::FlatSymbolRefAttr originalStub,
-                                cir::CUDAKernelNameAttr originalKernel) {
-  mlir::OperandRange args = call.getArgOperands();
-  if (argIdx >= args.size())
-    return;
-  Value extent = args[argIdx];
-  auto intTy = mlir::dyn_cast<cir::IntType>(extent.getType());
-  if (!intTy || intTy.getWidth() > 64)
-    return;
-
-  MLIRContext *ctx = call.getContext();
-  OpBuilder builder(call);
-  Location loc = call.getLoc();
+// Whether the premise of every guard holds for this launch, evaluated before
+// `call` with its grid and block size and arguments. Every extent has to be
+// recomputable at this launch (canRecompute).
+static Value emitPremise(OpBuilder &builder, Location loc, Value gridX,
+                         Value blockX, llvm::ArrayRef<Guard> guards,
+                         mlir::ValueRange args) {
+  MLIRContext *ctx = builder.getContext();
+  auto i64 = cir::IntType::get(ctx, 64, /*isSigned=*/true);
   auto boolTy = cir::BoolType::get(ctx);
-
-  auto constOf = [&](int64_t v) -> Value {
-    llvm::APInt wide(64, static_cast<uint64_t>(v), /*isSigned=*/true);
-    llvm::APInt fitted = wide.trunc(intTy.getWidth());
-    return cir::ConstantOp::create(builder, loc,
-                                   cir::IntAttr::get(intTy, fitted))
-        .getResult();
+  auto constant = [&](int64_t v) -> Value {
+    return cir::ConstantOp::create(builder, loc, cir::IntAttr::get(i64, v));
+  };
+  auto widen = [&](Value v) -> Value {
+    if (v.getType() == i64)
+      return v;
+    return cir::CastOp::create(builder, loc, i64, cir::CastKind::integral, v);
   };
 
-  Value rem =
-      cir::RemOp::create(builder, loc, intTy, extent, constOf(d)).getResult();
-  Value cond = cir::CmpOp::create(builder, loc, boolTy, cir::CmpOpKind::eq, rem,
-                                  constOf(0))
-                   .getResult();
+  // The symbols' values for this launch. Arithmetic wraps rather than being
+  // undefined; it can only wrap for a launch the runtime rejects anyway.
+  Value grid = widen(gridX), block = widen(blockX), one = constant(1);
+  Value symbols[] = {cir::SubOp::create(builder, loc, i64, grid, one),
+                     cir::SubOp::create(builder, loc, i64, block, one), block};
+  std::map<Poly, Value> evaluated;
+  auto evaluate = [&](const Poly &p) -> Value {
+    auto [it, inserted] = evaluated.try_emplace(p);
+    if (!inserted)
+      return it->second;
+    Value sum;
+    for (const auto &[mono, coeff] : p.terms) {
+      Value term = mono.empty() || coeff != 1 ? constant(coeff) : Value();
+      for (unsigned s : mono)
+        term = term ? cir::MulOp::create(builder, loc, i64, term, symbols[s])
+                          .getResult()
+                    : symbols[s];
+      sum = sum ? cir::AddOp::create(builder, loc, i64, sum, term).getResult()
+                : term;
+    }
+    return it->second = sum ? sum : constant(0);
+  };
 
-  if (minWidth < 64 && minWidth < intTy.getWidth()) {
-    // Largest extent for which the narrow arithmetic cannot wrap.
-    const int64_t limit = (int64_t(1) << minWidth) - 1;
-    Value fits = cir::CmpOp::create(builder, loc, boolTy, cir::CmpOpKind::le,
-                                    extent, constOf(limit))
-                     .getResult();
-    // Conjunction the way && reaches CIR.
-    cond =
+  Value premise;
+  auto conjoin = [&](Value cond) {
+    if (!premise) {
+      premise = cond;
+      return;
+    }
+    premise =
         cir::TernaryOp::create(
-            builder, loc, cond,
-            [&](OpBuilder &b, Location l) { cir::YieldOp::create(b, l, fits); },
+            builder, loc, premise,
+            [&](OpBuilder &b, Location l) { cir::YieldOp::create(b, l, cond); },
             [&](OpBuilder &b, Location l) {
               auto f = cir::ConstantOp::create(
                   b, l, cir::BoolAttr::get(ctx, boolTy, false));
               cir::YieldOp::create(b, l, f.getResult());
             })
             .getResult();
+  };
+
+  std::map<Poly, int64_t> limits;
+  for (const Guard &guard : guards) {
+    Value extent = recompute(guard.extent, guard.kernel, args, builder);
+    assert(extent && "dispatch at a launch whose extents canRecompute rejects");
+    conjoin(cir::CmpOp::create(builder, loc, boolTy,
+                               guard.strict ? cir::CmpOpKind::lt
+                                            : cir::CmpOpKind::le,
+                               evaluate(guard.bound.max), widen(extent)));
+    for (const auto &[poly, limit] : guard.bound.limits) {
+      auto [it, inserted] = limits.try_emplace(poly, limit);
+      if (!inserted)
+        it->second = std::min(it->second, limit);
+    }
   }
+  // Only the limits a launch could actually break: one no 32-bit grid and
+  // block can reach, or one implied by a larger bound under a smaller limit,
+  // needs no test.
+  for (const auto &[poly, limit] : limits) {
+    if (alwaysWithin(poly, limit))
+      continue;
+    if (llvm::any_of(limits, [&](const auto &other) {
+          return !(other.first == poly) && dominates(other.first, poly) &&
+                 other.second <= limit;
+        }))
+      continue;
+    conjoin(cir::CmpOp::create(builder, loc, boolTy, cir::CmpOpKind::le,
+                               evaluate(poly), constant(limit)));
+  }
+  return premise;
+}
+
+// `if (premise) fast(...) else original(...)`. `call` already targets the
+// fast clone, since cloning retargeted it; the slow path is a copy of it
+// pointed back at what it used to call.
+static void emitGuardedDispatch(cir::CallOp call, Value gridX, Value blockX,
+                                llvm::ArrayRef<Guard> guards,
+                                mlir::FlatSymbolRefAttr originalStub,
+                                cir::CUDAKernelNameAttr originalKernel) {
+  OpBuilder builder(call);
+  Location loc = call.getLoc();
+  Value premise =
+      emitPremise(builder, loc, gridX, blockX, guards, call.getArgOperands());
 
   auto emptyBuilder = [](OpBuilder &, Location) {};
-  auto ifOp = cir::IfOp::create(builder, loc, cond, /*withElseRegion=*/true,
+  auto ifOp = cir::IfOp::create(builder, loc, premise, /*withElseRegion=*/true,
                                 emptyBuilder, emptyBuilder);
   {
     OpBuilder::InsertionGuard guard(builder);
@@ -736,34 +795,37 @@ void OffloadEliminateCoveredGuardsPass::runOnOperation() {
   for (const auto &entry : table) {
     llvm::StringRef kernelName = entry.first;
     const cir::KernelBinding &binding = entry.second;
-    llvm::ArrayRef<cir::LaunchSite> sites = binding.launchSites;
 
-    // A kernel launched nowhere in this TU says nothing about its grid, and a
-    // copy of a copy gains nothing.
-    if (sites.empty() || kernelName.ends_with(kCoveredSuffix))
+    // A copy of a copy gains nothing.
+    if (kernelName.ends_with(kCoveredSuffix))
       continue;
 
-    std::optional<LaunchFacts> facts = commonLaunchFacts(sites);
-    if (!facts)
+    // The proof is independent of any launch, so it is done once, on the
+    // originals: cloning a kernel with no guard to fold would leave a copy
+    // nobody benefits from. A kernel compiled for several devices has a copy
+    // per device, and the premise has to cover the guards of each.
+    SmallVector<Guard> guards;
+    for (cir::FuncOp kernel : binding.deviceKernels)
+      if (!kernel.isDeclaration())
+        findGuards(kernel, guards);
+    if (guards.empty())
       continue;
 
-    // Prove against the originals first: cloning a kernel with no dead guard
-    // would leave a copy nobody benefits from, and the dispatch that goes with
-    // it costs a division at every launch.
-    unsigned minWidth = 64;
-    bool anyDead = false;
-    for (cir::FuncOp kernel : binding.deviceKernels) {
-      if (kernel.isDeclaration() || facts->argIdx >= kernel.getNumArguments())
+    // Only a launch whose grid and block size are known, and whose arguments
+    // the extents can be recomputed from, can test the premise; the others
+    // keep calling the original. This is settled before cloning, because
+    // cloning retargets the selected launches at the guard-free copy.
+    SmallVector<cir::LaunchSite> sites;
+    for (const cir::LaunchSite &site : binding.launchSites) {
+      if (!site.hasGeometry() || !site.getGridDim().x || !site.getBlockDim().x)
         continue;
-      SmallVector<DeadGuard> dead;
-      unsigned w = proveGuards(kernel, facts->argIdx, facts->divisor,
-                               facts->blockDimX, dead);
-      if (dead.empty())
-        continue;
-      anyDead = true;
-      minWidth = std::min(minWidth, w);
+      mlir::ValueRange args = cir::CallOp(site.stubCall).getArgOperands();
+      if (llvm::all_of(guards, [&](const Guard &g) {
+            return canRecompute(g.extent, g.kernel, args);
+          }))
+        sites.push_back(site);
     }
-    if (!anyDead)
+    if (sites.empty())
       continue;
 
     // What the launches called before cloning retargets them; the slow path
@@ -776,28 +838,29 @@ void OffloadEliminateCoveredGuardsPass::runOnOperation() {
     if (!originalKernel)
       continue;
 
-    // The dispatch below re-tests the premise at run time, so the copy is only
-    // reached where the proof holds -- but the copy still has to be a copy.
-    // Rewriting in place would strip guards from launches this pass never saw.
-    llvm::SmallVector<cir::CallOp, 2> calls;
-    for (const cir::LaunchSite &site : sites)
-      calls.push_back(site.stubCall);
-
+    // Rewriting in place would strip guards from launches this pass never saw,
+    // so the guards go from a copy that only these launches reach.
     std::optional<cir::KernelClone> copy =
         cir::cloneKernelForSites(container, binding, kCoveredSuffix, sites);
     if (!copy)
       continue;
+    changed = true;
 
-    // Re-prove on the copy: the second run finds the same comparisons in it,
-    // which avoids having to map operations across the clone.
-    unsigned folded = 0;
-    for (cir::FuncOp kernel : copy->deviceKernels) {
-      if (kernel.isDeclaration() || facts->argIdx >= kernel.getNumArguments())
+    // Each launch tests the premise with its own geometry and arguments, the
+    // ones the original's guards were proven against.
+    for (const cir::LaunchSite &site : sites)
+      emitGuardedDispatch(site.stubCall, site.getGridDim().x,
+                          site.getBlockDim().x, guards, originalStub,
+                          originalKernel);
+
+    // Fold the guards in the copy. Proving them again there finds the same
+    // comparisons, which avoids having to map operations across the clone.
+    for (cir::FuncOp clone : copy->deviceKernels) {
+      if (clone.isDeclaration())
         continue;
-      SmallVector<DeadGuard> dead;
-      proveGuards(kernel, facts->argIdx, facts->divisor, facts->blockDimX,
-                  dead);
-      for (DeadGuard &g : dead) {
+      SmallVector<Guard> cloneGuards;
+      findGuards(clone, cloneGuards);
+      for (Guard &g : cloneGuards) {
         OpBuilder b(g.cmp);
         auto boolTy = cir::BoolType::get(b.getContext());
         auto cst = cir::ConstantOp::create(
@@ -805,26 +868,8 @@ void OffloadEliminateCoveredGuardsPass::runOnOperation() {
             cir::BoolAttr::get(b.getContext(), boolTy, g.foldTo));
         g.cmp.getResult().replaceAllUsesWith(cst.getResult());
         g.cmp.erase();
-        ++folded;
       }
     }
-    if (!folded) {
-      // The copy proved nothing after all; it is still a faithful copy and the
-      // retargeted launches reach it, so it is left rather than unwound.
-      changed = true;
-      continue;
-    }
-
-    for (cir::CallOp call : calls)
-      emitGuardedDispatch(call, facts->argIdx, facts->divisor, minWidth,
-                          originalStub, originalKernel);
-
-    // Tell MultiversionDivisibility to leave this kernel alone; it would
-    // otherwise build a second dispatch on the very same condition.
-    for (cir::FuncOp kernel : binding.deviceKernels)
-      kernel->setAttr("covered_guards_handled",
-                      UnitAttr::get(kernel.getContext()));
-    changed = true;
   }
 
   if (!changed)

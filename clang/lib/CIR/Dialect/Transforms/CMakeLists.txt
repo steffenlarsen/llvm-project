@@ -12,6 +12,7 @@ add_clang_library(MLIRCIRTransforms
   TargetLowering.cpp
   FlattenCFG.cpp
   HoistAllocas.cpp
+  ResolveIndirectCalls.cpp
   LoweringPrepare.cpp
   GotoSolver.cpp
   IdiomRecognizer.cpp

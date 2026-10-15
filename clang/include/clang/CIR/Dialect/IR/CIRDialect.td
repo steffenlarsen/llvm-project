@@ -41,6 +41,9 @@ def CIR_Dialect : Dialect {
   let extraClassDeclaration = [{
     static llvm::StringRef getSourceLanguageAttrName() { return "cir.lang"; }
     static llvm::StringRef getTripleAttrName() { return "cir.triple"; }
+    // Set on a module emitted without the calling-convention lowering its
+    // target has, so the compile that resumes from it knows to run it.
+    static llvm::StringRef getCallConvLoweringDeferredAttrName() { return "cir.call_conv_lowering_deferred"; }
     static llvm::StringRef getSizeTypeWidthAttrName() { return "cir.size_type_width"; }
     static llvm::StringRef getIntTypeWidthAttrName() { return "cir.int_type_width"; }
     static llvm::StringRef getOptInfoAttrName() { return "cir.opt_info"; }

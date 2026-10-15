@@ -234,4 +234,42 @@ module attributes {
   // CHECK-NOT:    llvm.noalias
   // CHECK-NOT:    -> !rec_Big
 
+  // A returned value that is not a load of `__retval` -- after mem2reg, say --
+  // is stored through the sret pointer.
+  cir.func @returns_promoted() -> !rec_Big
+      attributes { test_classify = #indirect_return } {
+    %z = cir.const #cir.zero : !rec_Big
+    cir.return %z : !rec_Big
+  }
+  // CHECK:      cir.func{{.*}} @returns_promoted(%[[SRET:.*]]: !cir.ptr<!rec_Big> {
+  // CHECK:        %[[Z:.*]] = cir.const #cir.zero : !rec_Big
+  // CHECK-NEXT:   cir.store %[[Z]], %[[SRET]] : !rec_Big, !cir.ptr<!rec_Big>
+  // CHECK-NEXT:   cir.return
+  // CHECK-NEXT: }
+
+  // Returns loading different slots: the first is rewired to the sret pointer
+  // and the other's value is stored there, rather than lost.
+  cir.func @returns_two_slots(%c: !cir.bool) -> !rec_Big
+      attributes { test_classify = #indirect_return_bool } {
+    %a = cir.alloca "a" align(8) : !cir.ptr<!rec_Big>
+    %b = cir.alloca "b" align(8) : !cir.ptr<!rec_Big>
+    %z = cir.const #cir.zero : !rec_Big
+    cir.store %z, %a : !rec_Big, !cir.ptr<!rec_Big>
+    cir.store %z, %b : !rec_Big, !cir.ptr<!rec_Big>
+    cir.if %c {
+      %la = cir.load %a : !cir.ptr<!rec_Big>, !rec_Big
+      cir.return %la : !rec_Big
+    }
+    %lb = cir.load %b : !cir.ptr<!rec_Big>, !rec_Big
+    cir.return %lb : !rec_Big
+  }
+  // CHECK:      cir.func{{.*}} @returns_two_slots(%[[SRET:.*]]: !cir.ptr<!rec_Big> {{.*}}, %{{.*}}: !cir.bool
+  // CHECK:        %[[B:.*]] = cir.alloca "b"
+  // CHECK:        cir.store %{{.*}}, %[[SRET]] : !rec_Big, !cir.ptr<!rec_Big>
+  // CHECK:        cir.store %{{.*}}, %[[B]] : !rec_Big, !cir.ptr<!rec_Big>
+  // CHECK:        cir.if
+  // CHECK-NEXT:     cir.return
+  // CHECK:        %[[LB:.*]] = cir.load %[[B]] : !cir.ptr<!rec_Big>, !rec_Big
+  // CHECK-NEXT:   cir.store %[[LB]], %[[SRET]] : !rec_Big, !cir.ptr<!rec_Big>
+  // CHECK-NEXT:   cir.return
 }

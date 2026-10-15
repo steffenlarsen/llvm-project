@@ -134,7 +134,8 @@ static void collectParamsReaching(cir::FuncOp fn, Value v,
 
 /// Whether \p fn is a helper whose constants are worth pinning: it launches
 /// something, and it is not itself a device stub or an earlier clone.
-static bool isLaunchHelper(cir::FuncOp fn) {
+static bool isLaunchHelper(cir::FuncOp fn,
+                           mlir::SymbolTableCollection &symbols) {
   if (fn.isDeclaration() || fn.getBody().empty())
     return false;
   if (fn.getSymName().contains(kConstArgsInfix))
@@ -147,18 +148,19 @@ static bool isLaunchHelper(cir::FuncOp fn) {
 
   bool launches = false;
   fn.walk([&](cir::CallOp call) {
-    if (cir::getLaunchedKernel(call))
+    if (cir::getLaunchedKernel(call, symbols))
       launches = true;
   });
   return launches;
 }
 
 /// The integer parameters of \p fn that reach one of its launches.
-static llvm::SmallSet<unsigned, 8> pinnableParams(cir::FuncOp fn) {
+static llvm::SmallSet<unsigned, 8>
+pinnableParams(cir::FuncOp fn, mlir::SymbolTableCollection &symbols) {
   Block &entry = fn.getBody().front();
   llvm::SmallSet<unsigned, 8> reaching;
   fn.walk([&](cir::CallOp call) {
-    if (!cir::getLaunchedKernel(call))
+    if (!cir::getLaunchedKernel(call, symbols))
       return;
     for (Value arg : call.getArgOperands()) {
       llvm::SmallPtrSet<void *, 32> visited;
@@ -198,9 +200,12 @@ private:
 
 bool OffloadSpecializeConstantArgsPass::runOnce(ModuleOp host,
                                                 unsigned &created) {
+  // Only used to resolve the stubs launches call, none of which this round
+  // creates, so clones inserted below cannot leave it stale.
+  mlir::SymbolTableCollection symbols;
   SmallVector<cir::FuncOp> helpers;
   host.walk([&](cir::FuncOp fn) {
-    if (isLaunchHelper(fn))
+    if (isLaunchHelper(fn, symbols))
       helpers.push_back(fn);
   });
   if (helpers.empty())
@@ -211,7 +216,7 @@ bool OffloadSpecializeConstantArgsPass::runOnce(ModuleOp host,
   SmallVector<cir::FuncOp> abandoned;
 
   for (cir::FuncOp helper : helpers) {
-    llvm::SmallSet<unsigned, 8> pinnable = pinnableParams(helper);
+    llvm::SmallSet<unsigned, 8> pinnable = pinnableParams(helper, symbols);
     if (pinnable.empty())
       continue;
 

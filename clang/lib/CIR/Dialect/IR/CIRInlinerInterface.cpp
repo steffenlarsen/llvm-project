@@ -37,18 +37,35 @@ struct CIRInlinerInterface : public mlir::DialectInlinerInterface {
 
   bool isLegalToInline(mlir::Operation *call, mlir::Operation *callable,
                        bool wouldBeCloned) const final {
+    // A call to a device stub is a kernel launch, and has to stay a call for
+    // the launch to be recognised as one.
     if (call && call->hasAttr("cu.kernel_name"))
       return false;
     auto func = mlir::dyn_cast<cir::FuncOp>(callable);
-    if (!func || func.isDeclaration())
+    if (!func || func.isDeclaration() || func->hasAttr("cu.kernel_name"))
+      return false;
+    if (std::optional<cir::InlineKind> kind = func.getInlineKind();
+        kind && *kind == cir::InlineKind::NoInline)
       return false;
     mlir::Region &body = func.getBody();
     if (!body.hasOneBlock())
       return false;
     mlir::Block &block = body.front();
-    if (block.empty())
+    if (block.empty() || !mlir::isa<cir::ReturnOp>(&block.back()))
       return false;
-    return mlir::isa<cir::ReturnOp>(&block.back());
+    // Before CFG flattening a return may sit inside a structured region -- the
+    // `if (c) return x;` shape -- where, once inlined, it would return from the
+    // caller instead. Labels are named per function, so a goto could resolve
+    // to a label of the caller's.
+    mlir::WalkResult unsupported = func.walk([&](mlir::Operation *op) {
+      if (mlir::isa<cir::ReturnOp>(op) && op != &block.back())
+        return mlir::WalkResult::interrupt();
+      if (mlir::isa<cir::LabelOp, cir::GotoOp, cir::IndirectBrOp,
+                    cir::VAStartOp>(op))
+        return mlir::WalkResult::interrupt();
+      return mlir::WalkResult::advance();
+    });
+    return !unsupported.wasInterrupted();
   }
 
   bool isLegalToInline(mlir::Region *dest, mlir::Region *src, bool wouldBeCloned,
@@ -66,6 +83,27 @@ struct CIRInlinerInterface : public mlir::DialectInlinerInterface {
     cir::BrOp::create(builder, op->getLoc(), newDest, ret.getInput());
     op->erase();
   }
+  // Static allocas of the inlined body move to the entry block of the caller,
+  // where CIR keeps them: HoistAllocas would put them there before lowering
+  // anyway, and the promotion that follows inlining only sees them there.
+  void processInlinedCallBlocks(
+      mlir::Operation *call,
+      llvm::iterator_range<mlir::Region::iterator> inlinedBlocks) const final {
+    auto caller = call->getParentOfType<cir::FuncOp>();
+    if (!caller || caller.getBody().empty())
+      return;
+    mlir::Block *callerEntry = &caller.getBody().front();
+    mlir::Block *inlinedEntry = &*inlinedBlocks.begin();
+    if (callerEntry == inlinedEntry)
+      return;
+    llvm::SmallVector<cir::AllocaOp> allocas;
+    for (cir::AllocaOp alloca : inlinedEntry->getOps<cir::AllocaOp>())
+      if (!alloca.getDynAllocSize())
+        allocas.push_back(alloca);
+    for (cir::AllocaOp alloca : allocas)
+      alloca->moveBefore(callerEntry, callerEntry->begin());
+  }
+
   void handleTerminator(mlir::Operation *op,
                         mlir::ValueRange valuesToReplace) const final {
     auto ret = mlir::dyn_cast<cir::ReturnOp>(op);

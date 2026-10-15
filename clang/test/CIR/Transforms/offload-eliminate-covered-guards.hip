@@ -7,6 +7,7 @@
 // arithmetic on the device -- are the shapes the compiler actually emits.
 
 // RUN: %clang_cc1 -triple x86_64-unknown-linux-gnu -aux-triple amdgcn-amd-amdhsa \
+// RUN:   -fno-clangir-call-conv-lowering \
 // RUN:   -target-sdk-version=9.2 -fhip-new-launch-api -x hip -I %S/../../CodeGenCUDA/Inputs \
 // RUN:   -emit-cir %s -o %t-host.cir
 // RUN: %clang_cc1 -triple amdgcn-amd-amdhsa -target-cpu gfx900 -target-sdk-version=9.2 \
@@ -16,6 +17,16 @@
 // RUN:   -targets=host-x86_64-unknown-linux-gnu,hip-amdgcn-amd-amdhsa--gfx900 \
 // RUN:   -output=%t-combined.cir
 // RUN: FileCheck %s --input-file=%t-combined.cir
+
+// Optimising, CIRGen brackets every local with lifetime markers.
+// RUN: %clang_cc1 -triple amdgcn-amd-amdhsa -target-cpu gfx900 -target-sdk-version=9.2 \
+// RUN:   -fcuda-is-device -fhip-new-launch-api -x hip -I %S/../../CodeGenCUDA/Inputs \
+// RUN:   -O2 -emit-cir %s -o %t-dev-O2.cir
+// RUN: FileCheck %s --input-file=%t-dev-O2.cir --check-prefix=LIFETIME
+// RUN: cir-offload-merge -combine -input=%t-host.cir -input=%t-dev-O2.cir \
+// RUN:   -targets=host-x86_64-unknown-linux-gnu,hip-amdgcn-amd-amdhsa--gfx900 \
+// RUN:   -output=%t-combined-O2.cir
+// RUN: FileCheck %s --input-file=%t-combined-O2.cir
 
 #include "cuda.h"
 
@@ -41,17 +52,16 @@ __global__ void fill(int *out, int n) {
   out[i] = i;
 }
 
-// The launch picks between two copies on n % 256. The slow side is itself a
-// copy, because the later specialising passes get to the surviving launch too;
-// what matters here is that it is not the guard-free one.
+// The launch picks between two copies on whether its largest index stays below
+// n, which for this grid is n % 256 == 0. The slow side is itself a copy,
+// because the later specialising passes get to the surviving launch too; what
+// matters here is that it is not the guard-free one.
 // CHECK-LABEL: cir.func{{.*}} @_Z4hostPii
-// CHECK:         cir.rem
-// CHECK:         cir.cmp eq
+// CHECK:         cir.cmp lt
 // CHECK:         cir.call @_Z19__device_stub__fillPii.guards
 // CHECK:         cir.call @_Z19__device_stub__fillPii.blockshape
 
-// The guard survives everywhere except in the copy the divisibility test
-// dispatches to.
+// The guard survives everywhere except in the copy the premise dispatches to.
 // CHECK:      cir.func{{.*}} @_Z4fillPii(
 // CHECK:        cir.cmp ge
 // CHECK:      cir.func{{.*}} @_Z4fillPii.blockshape(
@@ -59,5 +69,9 @@ __global__ void fill(int *out, int n) {
 // CHECK:      cir.func{{.*}} @_Z4fillPii.guards(
 // CHECK-NOT:    cir.cmp ge
 // CHECK:        cir.const #false
+
+// LIFETIME-LABEL: cir.func{{.*}} @_Z4fillPii(
+// LIFETIME:         %[[I:.*]] = cir.alloca "i"
+// LIFETIME:         cir.lifetime.start %[[I]]
 
 void host(int *out, int n) { fill<<<(n + 255) / 256, 256>>>(out, n); }

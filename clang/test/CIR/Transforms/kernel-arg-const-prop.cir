@@ -574,3 +574,40 @@ module attributes {cir.offload.container} {
 // CHECK-LABEL: cir.func @kern_prod(%arg0: !s32i) cc(ptx_kernel)
 // CHECK-NEXT:    %[[C:.*]] = cir.const #cir.int<15> : !s32i
 // CHECK-NEXT:    cir.call @use_prod(%[[C]])
+
+// -----
+
+!s32i = !cir.int<s, 32>
+!rec_Empty = !cir.struct<"Empty" {}>
+
+// Nothing is cloned for a constant no copy of the kernel could take: an undef
+// argument, which an empty functor passed by value becomes once its slot is
+// promoted, and a constant for a parameter the kernel never reads. Both
+// launches are visible only through a clone, since the handle escapes.
+module attributes {cir.offload.container} {
+  module @host attributes {cir.offload.kind = #cir.offload<host>} {
+    cir.global constant external @kern_useless = #cir.global_view<@stub_useless> : !cir.ptr<!cir.func<(!rec_Empty, !s32i)>>
+    cir.func internal private @stub_useless(%arg0: !rec_Empty, %arg1: !s32i) attributes {cu.kernel_name = #cir.cu.kernel_name<"kern_useless">} {
+      %0 = cir.get_global @kern_useless : !cir.ptr<!cir.ptr<!cir.func<(!rec_Empty, !s32i)>>>
+      cir.return
+    }
+    cir.func @launch_useless() {
+      %0 = cir.const #cir.undef : !rec_Empty
+      %1 = cir.const #cir.int<7> : !s32i
+      cir.call @stub_useless(%0, %1) {cu.kernel_name = #cir.cu.kernel_name<"kern_useless">} : (!rec_Empty, !s32i) -> ()
+      cir.return
+    }
+  }
+  module @device_0 attributes {cir.offload.kind = #cir.offload<device>} {
+    cir.func @kern_useless(%arg0: !rec_Empty, %arg1: !s32i) cc(ptx_kernel) {
+      cir.call @use_empty(%arg0) : (!rec_Empty) -> ()
+      cir.return
+    }
+    cir.func private @use_empty(!rec_Empty)
+  }
+}
+
+// CHECK-NOT:   kern_useless.constprop
+// CHECK-LABEL: cir.func @kern_useless(%arg0: !rec_Empty, %arg1: !s32i) cc(ptx_kernel)
+// CHECK-NEXT:    cir.call @use_empty(%arg0)
+// CHECK-NOT:   kern_useless.constprop

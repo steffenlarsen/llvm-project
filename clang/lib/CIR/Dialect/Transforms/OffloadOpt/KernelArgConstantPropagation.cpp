@@ -64,12 +64,35 @@ commonConstantArg(llvm::ArrayRef<cir::LaunchSite> sites, unsigned argIdx) {
 // sites.
 using ArgConstants = llvm::SmallVector<std::pair<unsigned, mlir::TypedAttr>, 4>;
 
+// Whether pinning `value` as `kernel`'s parameter `i` changes anything. The
+// stub argument and the kernel argument at the same index are the same kernel
+// parameter; nothing has rewritten either signature yet.
+static bool takesConstant(cir::FuncOp kernel, unsigned i,
+                          mlir::TypedAttr value) {
+  if (kernel.isDeclaration() || i >= kernel.getNumArguments())
+    return false;
+  mlir::BlockArgument arg = kernel.getArgument(i);
+  return !arg.use_empty() && arg.getType() == value.getType();
+}
+
+// The constants every one of `sites` agrees on that some of `kernels` would
+// take. Deciding this before anything is cloned is what keeps a kernel from
+// being copied for constants none of its copies could use.
 static ArgConstants agreedConstants(llvm::ArrayRef<cir::LaunchSite> sites,
-                                    cir::FuncOp stub) {
+                                    cir::FuncOp stub,
+                                    llvm::ArrayRef<cir::FuncOp> kernels) {
   ArgConstants out;
-  for (unsigned i = 0, e = stub.getNumArguments(); i != e; ++i)
-    if (mlir::TypedAttr value = commonConstantArg(sites, i))
+  for (unsigned i = 0, e = stub.getNumArguments(); i != e; ++i) {
+    mlir::TypedAttr value = commonConstantArg(sites, i);
+    // An undefined argument -- an empty functor passed by value, say -- says
+    // nothing a kernel could use.
+    if (!value || mlir::isa<cir::UndefAttr, cir::PoisonAttr>(value))
+      continue;
+    if (llvm::any_of(kernels, [&](cir::FuncOp kernel) {
+          return takesConstant(kernel, i, value);
+        }))
       out.emplace_back(i, value);
+  }
   return out;
 }
 
@@ -107,14 +130,10 @@ bool OffloadKernelArgConstantPropagationPass::applyConstants(
     llvm::SmallPtrSetImpl<mlir::Operation *> &rewritten) {
   bool changed = false;
   for (auto [i, value] : constants) {
-    // The stub argument and the kernel argument at the same index are the
-    // same kernel parameter; nothing has rewritten either signature yet.
     for (cir::FuncOp kernel : kernels) {
-      if (kernel.isDeclaration() || i >= kernel.getNumArguments())
+      if (!takesConstant(kernel, i, value))
         continue;
       mlir::BlockArgument arg = kernel.getArgument(i);
-      if (arg.use_empty() || arg.getType() != value.getType())
-        continue;
 
       mlir::OpBuilder builder(&kernel.getBody().front(),
                               kernel.getBody().front().begin());
@@ -170,7 +189,8 @@ void OffloadKernelArgConstantPropagationPass::runOnOperation() {
     }
 
     // The constant every recorded site agrees on, per parameter.
-    ArgConstants constants = agreedConstants(sites, stub);
+    ArgConstants constants =
+        agreedConstants(sites, stub, binding.deviceKernels);
 
     // A launch helper whose address is also stored in a dispatch table -- which
     // is how ggml reaches its conversion kernels -- keeps one launch passing
@@ -188,7 +208,7 @@ void OffloadKernelArgConstantPropagationPass::runOnOperation() {
 
     ArgConstants splitConstants;
     if (!splitSites.empty() && !restSites.empty()) {
-      splitConstants = agreedConstants(splitSites, stub);
+      splitConstants = agreedConstants(splitSites, stub, binding.deviceKernels);
       if (!pinsMoreThan(splitConstants, constants))
         splitConstants.clear();
     }

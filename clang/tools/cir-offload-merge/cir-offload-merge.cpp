@@ -33,6 +33,7 @@
 #include "mlir/Transforms/Passes.h"
 #include "clang/Basic/TargetID.h"
 #include "clang/CIR/Dialect/IR/CIRDialect.h"
+#include "clang/CIR/Dialect/IR/CIRInlinerInterface.h"
 #include "clang/CIR/Dialect/OpenMP/RegisterOpenMPExtensions.h"
 #include "clang/CIR/Dialect/Passes.h"
 #include "clang/Driver/OffloadBundler.h"
@@ -83,6 +84,14 @@ llvm::cl::list<std::string>
                                    "multiple times in split mode."),
                     llvm::cl::cat(CIROffloadMergeCategory));
 
+llvm::cl::opt<bool> DisableCirResolveIndirectCalls(
+    "disable-cir-resolve-indirect-calls",
+    llvm::cl::desc("Disable resolving indirect calls to a known function"),
+    llvm::cl::cat(CIROffloadMergeCategory));
+llvm::cl::opt<bool> DisableCirInlineLaunchPaths(
+    "disable-cir-inline-launch-paths",
+    llvm::cl::desc("Disable inlining the calls that lead to a launch"),
+    llvm::cl::cat(CIROffloadMergeCategory));
 llvm::cl::opt<bool> DisableCirInferLaunchBounds(
     "disable-cir-infer-launch-bounds",
     llvm::cl::desc("Disable launch-bound inference from host launch sites"),
@@ -297,6 +306,9 @@ void registerDialects(mlir::DialectRegistry &registry) {
                   mlir::memref::MemRefDialect, mlir::LLVM::LLVMDialect,
                   mlir::DLTIDialect, mlir::omp::OpenMPDialect>();
   cir::omp::registerOpenMPExtensions(registry);
+  // The launch-path inliner asks every dialect a module mentions for its
+  // inliner interface.
+  cir::registerInlinerInterface(registry);
 }
 
 void initializeContext(mlir::MLIRContext &context) {
@@ -681,6 +693,18 @@ int runOffloadOptPasses(mlir::ModuleOp module) {
   // every nested module, host and device.
   modulePM.addPass(mlir::createMem2Reg());
   modulePM.addPass(mlir::createSCCPPass());
+  // A launch through a kernel pointer is invisible to the binding table until
+  // the call names the stub it reaches.
+  if (!DisableCirResolveIndirectCalls)
+    modulePM.addPass(mlir::createResolveIndirectCallsPass());
+  // A launch layered behind dispatch functions sees its geometry and arguments
+  // as parameters until the dispatch chain is inlined; the values then need
+  // promoting and propagating again.
+  if (!DisableCirInlineLaunchPaths) {
+    modulePM.addPass(mlir::createOffloadInlineLaunchPathsPass());
+    modulePM.addPass(mlir::createMem2Reg());
+    modulePM.addPass(mlir::createSCCPPass());
+  }
 
   // Container passes run on the container itself; the nested modules carry no
   // container attribute and would make them early-return.

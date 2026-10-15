@@ -12,12 +12,15 @@ add_clang_library(MLIRCIROffloadOpt
   PropagatePointerFacts.cpp
   EliminateCoveredGuards.cpp
   DeadArgElimination.cpp
+  InlineLaunchPaths.cpp
 
   DEPENDS
   MLIRCIROpsIncGen
   MLIRCIRPassIncGen
 
   LINK_LIBS PUBLIC
+  MLIRAnalysis
+  MLIRTransformUtils
   MLIRLLVMDialect
   MLIRCIRTransforms
   MLIRCIR

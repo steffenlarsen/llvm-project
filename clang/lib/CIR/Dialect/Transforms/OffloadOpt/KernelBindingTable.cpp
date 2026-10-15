@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "clang/CIR/Dialect/Transforms/OffloadOpt/KernelBindingTable.h"
+#include "mlir/IR/Dominance.h"
 #include "mlir/IR/SymbolTable.h"
 #include "clang/CIR/Dialect/IR/CIRAttrs.h"
 #include "clang/CIR/Dialect/IR/CIRDialect.h"
@@ -248,97 +249,135 @@ static bool constructsRecord(cir::CallOp call, mlir::Type recordType) {
   return ctor && ctor.getType() == recordType;
 }
 
-// Recover the dim3 written to `slot` field by field, the shape a dim3 leaves
-// behind once its constructor has been inlined:
+static cir::LaunchSite::Dim3
+traceDim3(mlir::Value dim, mlir::DominanceInfo &dom, unsigned depth = 0);
+
+// Recover the dim3 a local slot holds when `use` reads it, from the one write
+// that initializes it:
 //
-//   %fx = cir.get_member %t[0] {name = "x"} : !cir.ptr<!rec_dim3> -> !cir.ptr<!u32i>
-//   cir.store align(4) %x, %fx
-//   … indices 1 ("y") and 2 ("z")
-//   %d = cir.load %t
+//   cir.call @_ZN4dim3C1Ejjj(%t, %x, %y, %z)     a constructor
+//   cir.store %x, (cir.get_member %t[0]) ...     one store per field, the shape
+//                                                an inlined constructor leaves
+//   cir.store %d, %t                             a whole dim3
+//   cir.copy %named to %t                        a copy of another dim3 slot,
+//                                                `dim3 b(...); k<<<g, b>>>()`
 //
-// Same discipline as the constructor path: one store per field, in the load's
-// block and before it. A repeated write leaves the value undecided, so report
-// no geometry rather than a guess.
-static cir::LaunchSite::Dim3 traceInlinedDim3(mlir::Value slot,
-                                              cir::LoadOp load) {
+// The write may sit in an enclosing scope, as long as it dominates `use`. The
+// slot has to be a local that nothing else writes and whose address goes
+// nowhere else; a second write, or an escape, leaves the value undecided, so
+// report no geometry rather than a guess. A `const` local is the exception to
+// the escape rule: modifying a const object after its construction is
+// undefined, so handing its address to `f(const dim3 &)` cannot change it.
+static cir::LaunchSite::Dim3 traceDim3Slot(mlir::Value slot,
+                                           mlir::Operation *use,
+                                           mlir::DominanceInfo &dom,
+                                           unsigned depth) {
+  auto alloca = slot.getDefiningOp<cir::AllocaOp>();
+  if (depth > 4 || !alloca)
+    return {};
+  const bool isConst = alloca.getConstant();
   auto slotType = mlir::dyn_cast<cir::PointerType>(slot.getType());
   auto record =
       slotType ? mlir::dyn_cast<cir::RecordType>(slotType.getPointee())
                : cir::RecordType{};
-  if (!record || record.getName().getValue() != "dim3")
+  if (!record || !record.getName() || record.getName().getValue() != "dim3")
     return {};
 
-  mlir::Value fields[3];
+  cir::CallOp ctor;
+  cir::CopyOp copy;
+  cir::StoreOp whole;
+  cir::StoreOp fields[3];
+  unsigned writes = 0;
   for (mlir::Operation *user : slot.getUsers()) {
-    auto member = mlir::dyn_cast<cir::GetMemberOp>(user);
-    if (!member || member.getAddr() != slot || member.getIndex() > 2)
-      continue;
-
-    cir::StoreOp store;
-    for (mlir::Operation *memberUser : member.getResult().getUsers()) {
-      auto candidate = mlir::dyn_cast<cir::StoreOp>(memberUser);
-      if (!candidate || candidate.getAddr() != member.getResult())
-        continue;
-      // Users are unordered: a second store means the value is undecided.
-      if (store)
+    if (auto load = mlir::dyn_cast<cir::LoadOp>(user)) {
+      if (load.getAddr() != slot)
         return {};
-      store = candidate;
+      continue;
     }
-    if (!store || store->getBlock() != load->getBlock() ||
-        !store->isBeforeInBlock(load))
+    if (mlir::isa<cir::LifetimeStartOp, cir::LifetimeEndOp>(user))
+      continue;
+    if (auto c = mlir::dyn_cast<cir::CopyOp>(user)) {
+      if (c.getSrc() == slot && c.getDst() != slot)
+        continue;
+      if (c.getDst() != slot || copy)
+        return {};
+      copy = c;
+      ++writes;
+      continue;
+    }
+    if (auto store = mlir::dyn_cast<cir::StoreOp>(user)) {
+      if (store.getAddr() != slot || store.getValue() == slot || whole)
+        return {};
+      whole = store;
+      ++writes;
+      continue;
+    }
+    if (auto call = mlir::dyn_cast<cir::CallOp>(user)) {
+      mlir::OperandRange args = call.getArgOperands();
+      bool constructs = constructsRecord(call, record) && args.size() == 4 &&
+                        args[0] == slot &&
+                        !llvm::is_contained(args.drop_front(), slot);
+      if (!constructs) {
+        if (isConst)
+          continue;
+        return {};
+      }
+      if (ctor)
+        return {};
+      ctor = call;
+      ++writes;
+      continue;
+    }
+    auto member = mlir::dyn_cast<cir::GetMemberOp>(user);
+    if (!member && isConst)
+      continue;
+    if (!member || member.getAddr() != slot || member.getIndex() > 2)
       return {};
-    // Two members carrying the same index leave the field undecided as well.
-    if (fields[member.getIndex()])
-      return {};
-    fields[member.getIndex()] = store.getValue();
+    for (mlir::Operation *memberUser : member.getResult().getUsers()) {
+      if (mlir::isa<cir::LoadOp>(memberUser))
+        continue;
+      auto store = mlir::dyn_cast<cir::StoreOp>(memberUser);
+      if (!store || store.getAddr() != member.getResult() ||
+          fields[member.getIndex()])
+        return {};
+      fields[member.getIndex()] = store;
+    }
   }
-
-  if (!fields[0] || !fields[1] || !fields[2])
+  bool byFields = fields[0] || fields[1] || fields[2];
+  if (writes + byFields != 1)
     return {};
-  return {fields[0], fields[1], fields[2]};
+
+  if (ctor) {
+    if (!dom.properlyDominates(ctor, use))
+      return {};
+    mlir::OperandRange args = ctor.getArgOperands();
+    return {args[1], args[2], args[3]};
+  }
+  if (copy)
+    return dom.properlyDominates(copy, use)
+               ? traceDim3Slot(copy.getSrc(), copy, dom, depth + 1)
+               : cir::LaunchSite::Dim3{};
+  if (whole)
+    return dom.properlyDominates(whole, use)
+               ? traceDim3(whole.getValue(), dom, depth + 1)
+               : cir::LaunchSite::Dim3{};
+  for (cir::StoreOp store : fields)
+    if (!store || !dom.properlyDominates(store, use))
+      return {};
+  return {fields[0].getValue(), fields[1].getValue(), fields[2].getValue()};
 }
 
 // Recover a dim3's components by walking its loaded value back to the stack
-// slot filled by its constructor:
-//
-//   %t = cir.alloca "agg.tmp0" : !cir.ptr<!rec_dim3>
-//   cir.call @_ZN4dim3C1Ejjj(%t, %x, %y, %z)
-//   %d = cir.load %t
-//
-// Looking through the slot ties the constructor operands to the exact dim3
-// value used by this launch. Once the constructor is inlined away the slot is
-// written field by field instead, which traceInlinedDim3 recovers.
-static cir::LaunchSite::Dim3 traceDim3(mlir::Value dim) {
+// slot it was read from, which ties the components to the exact dim3 value
+// used by this launch.
+static cir::LaunchSite::Dim3
+traceDim3(mlir::Value dim, mlir::DominanceInfo &dom, unsigned depth) {
   if (!dim)
     return {};
   auto load = dim.getDefiningOp<cir::LoadOp>();
   if (!load)
     return {};
-  mlir::Value slot = load.getAddr();
-  auto slotType = mlir::dyn_cast<cir::PointerType>(slot.getType());
-  if (!slotType)
-    return {};
-
-  cir::CallOp ctor;
-  for (mlir::Operation *user : slot.getUsers()) {
-    auto call = mlir::dyn_cast<cir::CallOp>(user);
-    if (!call || !constructsRecord(call, slotType.getPointee()))
-      continue;
-    // Users are unordered, so a second construction of the same slot leaves
-    // the one reaching the load undecided; report no geometry instead.
-    if (ctor)
-      return {};
-    ctor = call;
-  }
-  if (!ctor)
-    return traceInlinedDim3(slot, load);
-  if (ctor->getBlock() != load->getBlock() || !ctor->isBeforeInBlock(load))
-    return {};
-
-  mlir::OperandRange args = ctor.getArgOperands();
-  if (args.size() != 4 || args[0] != slot)
-    return {};
-  return {args[1], args[2], args[3]};
+  return traceDim3Slot(load.getAddr(), load, dom, depth);
 }
 
 // Recover the record stored into the common coerce slot from which the two
@@ -404,13 +443,14 @@ static cir::LaunchSite::Dim3 tracePushDim(cir::CallOp call,
   assert(logicalDimIndex < 2 &&
          "push configuration has only grid and block dims");
   mlir::OperandRange ops = call.getArgOperands();
+  mlir::DominanceInfo dom(call->getParentOfType<cir::FuncOp>());
   if (ops.size() == 4)
-    return traceDim3(ops[logicalDimIndex]);
+    return traceDim3(ops[logicalDimIndex], dom);
   if (ops.size() != 6)
     return {};
   unsigned firstField = logicalDimIndex * 2;
   return traceDim3(
-      recordFromCoercedFields(ops[firstField], ops[firstField + 1]));
+      recordFromCoercedFields(ops[firstField], ops[firstField + 1]), dom);
 }
 
 // Shared memory (0) and stream (1) are the two trailing operands in both
@@ -426,7 +466,8 @@ static mlir::Value pushConfigScalar(cir::CallOp call, unsigned scalarIndex) {
 
 llvm::StringRef cir::LaunchSite::getKernelName() const {
   cir::CallOp call = stubCall;
-  return cir::getLaunchedKernel(call).getKernelName();
+  mlir::SymbolTableCollection symbols;
+  return cir::getLaunchedKernel(call, symbols).getKernelName();
 }
 
 unsigned cir::LaunchSite::getNumArgs() const {
@@ -486,10 +527,19 @@ bool cir::LaunchSite::isDefaultStream() const {
   return ptr && ptr.isNullValue();
 }
 
-cir::CUDAKernelNameAttr cir::getLaunchedKernel(mlir::Operation *op) {
-  if (!mlir::isa<cir::CallOp>(op))
+cir::CUDAKernelNameAttr
+cir::getLaunchedKernel(mlir::Operation *op,
+                       mlir::SymbolTableCollection &symbols) {
+  auto call = mlir::dyn_cast<cir::CallOp>(op);
+  if (!call)
     return {};
-  return op->getAttrOfType<cir::CUDAKernelNameAttr>(
+  if (auto tag = call->getAttrOfType<cir::CUDAKernelNameAttr>(
+          cir::CUDAKernelNameAttr::getMnemonic()))
+    return tag;
+  cir::FuncOp callee = call.resolveCalleeInTable(symbols);
+  if (!callee)
+    return {};
+  return callee->getAttrOfType<cir::CUDAKernelNameAttr>(
       cir::CUDAKernelNameAttr::getMnemonic());
 }
 
@@ -518,10 +568,12 @@ bool KernelBindingTable::allLaunchSitesVisible(
   auto uses = mlir::SymbolTable::getSymbolUses(stub, hostModule);
   if (!uses)
     return false;
+  mlir::SymbolTableCollection symbols;
   return llvm::all_of(*uses, [&](const mlir::SymbolTable::SymbolUse &use) {
     if (stub->isProperAncestor(use.getUser()))
       return true;
-    cir::CUDAKernelNameAttr launched = cir::getLaunchedKernel(use.getUser());
+    cir::CUDAKernelNameAttr launched =
+        cir::getLaunchedKernel(use.getUser(), symbols);
     return launched && launched.getKernelName() == kernelName;
   });
 }
@@ -545,8 +597,9 @@ KernelBindingTable::KernelBindingTable(mlir::ModuleOp container) {
   // Walked after the stubs, so every binding already has its host stub. A
   // launch site naming a kernel with no stub here launches nothing this table
   // describes, and recording it would leave a binding without a stub.
+  mlir::SymbolTableCollection symbols;
   hostModule.walk([&](mlir::Operation *op) {
-    cir::CUDAKernelNameAttr kernel = cir::getLaunchedKernel(op);
+    cir::CUDAKernelNameAttr kernel = cir::getLaunchedKernel(op, symbols);
     if (!kernel)
       return;
     auto it = bindings.find(kernel.getKernelName());

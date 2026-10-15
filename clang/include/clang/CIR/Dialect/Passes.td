@@ -58,6 +58,23 @@ def HoistAllocas : Pass<"cir-hoist-allocas"> {
   let dependentDialects = ["cir::CIRDialect"];
 }
 
+def ResolveIndirectCalls : Pass<"cir-resolve-indirect-calls", "mlir::ModuleOp"> {
+  let summary = "Make indirect calls to a provably known function direct";
+  let description = [{
+    An indirect call whose callee is provably one function is rewritten into a
+    direct call to that function. The callee is followed through bitcasts, the
+    address of a function (`cir.get_global`, `cir.const #cir.global_view`), a
+    load from a constant global initialized with a function's address, and a
+    direct call to a function every return of which yields the same function.
+
+    Interposable functions and globals are not looked through, since the
+    definition seen here need not be the one that runs. A call is only
+    rewritten when its function type is the callee's own.
+  }];
+  let constructor = "mlir::createResolveIndirectCallsPass()";
+  let dependentDialects = ["cir::CIRDialect"];
+}
+
 def CIRFlattenCFG : Pass<"cir-flatten-cfg"> {
   let summary = "Produces flatten CFG";
   let description = [{
@@ -598,6 +615,23 @@ def OffloadPromoteKernelArgSpace
     `cir.offload.container` unit attribute, leaving any other module alone.
   }];
   let constructor = "mlir::createOffloadPromoteKernelArgSpacePass()";
+  let dependentDialects = ["cir::CIRDialect"];
+}
+
+def OffloadInlineLaunchPaths
+    : Pass<"cir-offload-inline-launch-paths", "mlir::ModuleOp"> {
+  let summary = "Inline the calls that lead to a kernel launch";
+  let description = [{
+    Programming models layer a launch behind dispatch functions, so the launch
+    geometry and arguments reach the launch site as parameters. This inlines a
+    call when its callee, possibly through further calls, reaches a launch, so
+    that the launch site sits next to the values it uses. Other calls are left
+    alone, which bounds the growth to the dispatch chains.
+
+    What may be inlined is the CIR inliner interface's decision. Runs on any
+    module; one without launches is left unchanged.
+  }];
+  let constructor = "mlir::createOffloadInlineLaunchPathsPass()";
   let dependentDialects = ["cir::CIRDialect"];
 }
 

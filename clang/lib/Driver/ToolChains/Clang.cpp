@@ -5575,6 +5575,17 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
       rewriteKind = RK_Fragile;
     } else if (JA.getType() == types::TY_CIR) {
       CmdArgs.push_back("-emit-cir");
+      // CIR emitted for the offload merge, rather than for the user, is first
+      // rewritten by passes that reason about calls as the source wrote them,
+      // so calling-convention lowering is left to the compile that resumes
+      // from the split module. These are the conditions the driver builds the
+      // merge under.
+      if (Args.hasArg(options::OPT_fclangir) &&
+          Args.hasArg(options::OPT_clangir_offload_merge) &&
+          !Args.hasArg(options::OPT_emit_cir) &&
+          (C.isOffloadingHostKind(Action::OFK_Cuda) ||
+           C.isOffloadingHostKind(Action::OFK_HIP)))
+        CmdArgs.push_back("-fno-clangir-call-conv-lowering");
     } else if (JA.getType() == types::TY_Image && IsAMDSPIRVForHIPDevice) {
       CmdArgs.push_back("-emit-obj");
     } else {

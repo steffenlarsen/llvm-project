@@ -57,6 +57,24 @@ static cir::SyncScopeKind decodeAMDGPUSyncScope(const Expr *arg) {
       .Default(cir::SyncScopeKind::System);
 }
 
+/// Emit one of the AMDGPU atomic inc/dec builtins as a cir.atomic.fetch.
+static mlir::Value emitAMDGPUAtomicIncDec(CIRGenFunction &cgf,
+                                          const CallExpr *expr,
+                                          cir::AtomicFetchKind binOp) {
+  CIRGenBuilderTy &builder = cgf.getBuilder();
+  Address ptr = cgf.emitPointerWithAlignment(expr->getArg(0));
+  mlir::Value val = cgf.emitScalarExpr(expr->getArg(1));
+  QualType argTy = expr->getArg(0)->IgnoreImpCasts()->getType();
+  bool isVolatile =
+      argTy->castAs<clang::PointerType>()->getPointeeType().isVolatileQualified();
+  cir::MemOrder order = decodeAtomicOrder(expr->getArg(2), cgf.getContext());
+  cir::SyncScopeKind scope = decodeAMDGPUSyncScope(expr->getArg(3));
+  auto rmw = cir::AtomicFetchOp::create(
+      builder, cgf.getLoc(expr->getExprLoc()), ptr.emitRawPointer(), val,
+      binOp, order, scope, isVolatile, /*fetch_first=*/true);
+  return rmw->getResult(0);
+}
+
 static mlir::Value emitAMDGPUDispatchPtr(CIRGenFunction &cgf,
                                          const CallExpr *e = nullptr) {
   CIRGenBuilderTy &builder = cgf.getBuilder();
@@ -1070,8 +1088,10 @@ CIRGenFunction::emitAMDGPUBuiltinExpr(unsigned builtinId,
   }
   case AMDGPU::BI__builtin_amdgcn_atomic_inc32:
   case AMDGPU::BI__builtin_amdgcn_atomic_inc64:
+    return emitAMDGPUAtomicIncDec(*this, expr, cir::AtomicFetchKind::UIncWrap);
   case AMDGPU::BI__builtin_amdgcn_atomic_dec32:
   case AMDGPU::BI__builtin_amdgcn_atomic_dec64:
+    return emitAMDGPUAtomicIncDec(*this, expr, cir::AtomicFetchKind::UDecWrap);
   case AMDGPU::BI__builtin_amdgcn_ds_atomic_fadd_f64:
   case AMDGPU::BI__builtin_amdgcn_ds_atomic_fadd_f32:
   case AMDGPU::BI__builtin_amdgcn_ds_atomic_fadd_v2f16:

@@ -44,10 +44,9 @@ static llvm::abi::X86AVXABILevel getX86AVXABILevel(llvm::StringRef abi) {
 /// Whether `__attribute__((target(...)))` on a function may raise its AVX ABI
 /// level above the command line's.  A target that opts out, and any ABI older
 /// than the rule, stay at the module level.
-static bool allowsX86TargetAttrAvx(const clang::ASTContext &astContext,
+static bool allowsX86TargetAttrAvx(const llvm::Triple &triple,
                                    clang::LangOptions::ClangABI compat) {
-  return !astContext.getTargetInfo().getTriple().isPS() &&
-         compat > clang::LangOptions::ClangABI::Ver23;
+  return !triple.isPS() && compat > clang::LangOptions::ClangABI::Ver23;
 }
 
 /// The x86_64 ABI-compatibility flags, derived from the target and the
@@ -56,9 +55,8 @@ static bool allowsX86TargetAttrAvx(const clang::ASTContext &astContext,
 /// modern Linux target, so leaving it at the default classifies a union larger
 /// than an eightbyte as though every member spanned its size.
 static llvm::abi::X86ABICompatInfo
-getX86ABICompatInfo(const clang::ASTContext &astContext,
+getX86ABICompatInfo(const llvm::Triple &triple,
                     clang::LangOptions::ClangABI compat) {
-  const llvm::Triple &triple = astContext.getTargetInfo().getTriple();
   llvm::abi::X86ABICompatInfo abiCompat;
   abiCompat.HonorsRevision98 = !triple.isOSDarwin();
   abiCompat.ClassifyIntegerMMXAsSSE =
@@ -72,6 +70,47 @@ getX86ABICompatInfo(const clang::ASTContext &astContext,
   abiCompat.Clang11Compat =
       compat <= clang::LangOptions::ClangABI::Ver11 || triple.isPS();
   return abiCompat;
+}
+
+/// Add CallConvLowering for \p targetInfo's target, if it has one.
+/// CallConvLowering rewrites signatures and call sites using the classifier,
+/// so it must run after CXXABILowering has lowered C++ ABI types to plain
+/// records the classifier can handle.  Only the x86_64 System V classifier is
+/// implemented; other targets are left unchanged.
+static void addCallConvLoweringPass(mlir::OpPassManager &pm,
+                                    const clang::TargetInfo &targetInfo,
+                                    mlir::ModuleOp theModule) {
+  CallConvTarget target = getCallConvTarget(targetInfo.getTriple());
+  if (target == CallConvTarget::None)
+    return;
+  // Source the ABI-compatibility version from the module's serialized
+  // #cir.lowering_lang_options so a reloaded .cir classifies the same way it
+  // was compiled, without a live clang::LangOptions. CIRGen sets this attribute
+  // at module construction; if it is absent fall back to the LangOptions
+  // default, matching how LowerModule reads the same attribute.
+  auto compat = clang::LangOptions::ClangABI::Latest;
+  if (auto loweringLangOpts =
+          theModule->getAttrOfType<cir::LoweringLangOptionsAttr>(
+              cir::CIRDialect::getLoweringLangOptionsAttrName()))
+    compat = static_cast<clang::LangOptions::ClangABI>(
+        loweringLangOpts.getClangAbiCompat());
+  const llvm::Triple &triple = targetInfo.getTriple();
+  pm.addPass(mlir::createCallConvLoweringPass(
+      target, getX86AVXABILevel(targetInfo.getABI()),
+      allowsX86TargetAttrAvx(triple, compat),
+      getX86ABICompatInfo(triple, compat)));
+}
+
+mlir::LogicalResult runCallConvLowering(mlir::ModuleOp theModule,
+                                        mlir::MLIRContext &mlirContext,
+                                        const clang::TargetInfo &targetInfo) {
+  mlir::PassManager pm(&mlirContext);
+  addCallConvLoweringPass(pm, targetInfo, theModule);
+  (void)mlir::applyPassManagerCLOptions(pm);
+  if (mlir::failed(pm.run(theModule)))
+    return mlir::failure();
+  theModule->removeAttr(cir::CIRDialect::getCallConvLoweringDeferredAttrName());
+  return mlir::success();
 }
 
 mlir::LogicalResult
@@ -114,31 +153,12 @@ runCIRToCIRPasses(mlir::ModuleOp theModule, mlir::MLIRContext &mlirContext,
   pm.addPass(mlir::createLoweringPreparePass(&astContext));
   pm.addPass(mlir::createCUDARegisterModulePass());
 
-  if (enableCallConvLowering) {
-    // CallConvLowering rewrites signatures and call sites using the classifier,
-    // so it must run after CXXABILowering has lowered C++ ABI types to plain
-    // records the classifier can handle.  Only the x86_64 System V classifier
-    // is implemented; other targets are left unchanged.
-    const clang::TargetInfo &targetInfo = astContext.getTargetInfo();
-    CallConvTarget target = getCallConvTarget(targetInfo.getTriple());
-    if (target != CallConvTarget::None) {
-      // Source the ABI-compatibility version from the module's serialized
-      // #cir.lowering_lang_options so a reloaded .cir classifies the same way
-      // it was compiled, without a live clang::LangOptions. CIRGen sets this
-      // attribute at module construction; if it is absent fall back to the
-      // LangOptions default, matching how LowerModule reads the same attribute.
-      auto compat = clang::LangOptions::ClangABI::Latest;
-      if (auto loweringLangOpts =
-              theModule->getAttrOfType<cir::LoweringLangOptionsAttr>(
-                  cir::CIRDialect::getLoweringLangOptionsAttrName()))
-        compat = static_cast<clang::LangOptions::ClangABI>(
-            loweringLangOpts.getClangAbiCompat());
-      pm.addPass(mlir::createCallConvLoweringPass(
-          target, getX86AVXABILevel(targetInfo.getABI()),
-          allowsX86TargetAttrAvx(astContext, compat),
-          getX86ABICompatInfo(astContext, compat)));
-    }
-  }
+  if (enableCallConvLowering)
+    addCallConvLoweringPass(pm, astContext.getTargetInfo(), theModule);
+  else if (getCallConvTarget(astContext.getTargetInfo().getTriple()) !=
+           CallConvTarget::None)
+    theModule->setAttr(cir::CIRDialect::getCallConvLoweringDeferredAttrName(),
+                       mlir::UnitAttr::get(&mlirContext));
 
   pm.enableVerifier(enableVerifier);
   (void)mlir::applyPassManagerCLOptions(pm);

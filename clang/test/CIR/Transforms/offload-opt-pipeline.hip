@@ -2,6 +2,7 @@
 // inference leaves the existing AMDGPU work-group-size attribute unchanged.
 
 // RUN: %clang_cc1 -triple x86_64-unknown-linux-gnu -aux-triple amdgcn-amd-amdhsa \
+// RUN:   -fno-clangir-call-conv-lowering \
 // RUN:   -target-sdk-version=9.2 -x hip -I %S/../CodeGenCUDA/Inputs \
 // RUN:   -emit-cir %s -o %t-host.cir
 // RUN: %clang_cc1 -triple amdgcn-amd-amdhsa -target-cpu gfx900 \
