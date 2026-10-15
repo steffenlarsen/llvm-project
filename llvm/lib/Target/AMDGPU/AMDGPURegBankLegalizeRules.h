@@ -11,6 +11,7 @@
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
+#include <cstdint>
 #include <functional>
 
 namespace llvm {
@@ -361,6 +362,55 @@ enum FastRulesTypes {
   Vector,    // S32, V2S32, V3S32, V4S32
 };
 
+// Subtarget features that rules depend on. A rule can require features to be
+// present or absent, see FeatureCond.
+enum RegBankLegalizeFeature : uint8_t {
+  UseVMulU64Inst,
+  HasScalarMulHiInsts,
+  HasScalarSMulU64,
+  HasScalarCompareEq64,
+  Has16BitInsts,
+  HasAtomicFlatPkAdd16Insts,
+  HasAtomicBufferGlobalPkAddF16Insts,
+  HasAtomicDsPkAdd16Insts,
+  HasScalarDwordx3Loads,
+  HasScalarSubwordLoads,
+  UseRealTrue16Insts,
+  HasSALUFloatInsts,
+  HasPseudoScalarTrans,
+  HasSafeSmemPrefetch,
+  HasVmemPrefInsts,
+  HasSALUMinimumMaximumInsts,
+  HasGFX90AInsts
+};
+
+using FeatureMask = uint32_t;
+
+constexpr FeatureMask featureBit(RegBankLegalizeFeature F) {
+  return FeatureMask(1) << F;
+}
+
+// Features that must be present (Required) and absent (Forbidden) for a rule
+// to apply. The default condition always holds.
+struct FeatureCond {
+  FeatureMask Required = 0;
+  FeatureMask Forbidden = 0;
+
+  constexpr bool holds(FeatureMask Features) const {
+    return (Features & Required) == Required && !(Features & Forbidden);
+  }
+};
+
+constexpr FeatureCond If(RegBankLegalizeFeature F) {
+  return {featureBit(F), 0};
+}
+constexpr FeatureCond IfNot(RegBankLegalizeFeature F) {
+  return {0, featureBit(F)};
+}
+constexpr FeatureCond operator&&(FeatureCond A, FeatureCond B) {
+  return {A.Required | B.Required, A.Forbidden | B.Forbidden};
+}
+
 struct RegBankLLTMapping {
   SmallVector<RegBankLLTMappingApplyID, 2> DstOpMapping;
   SmallVector<RegBankLLTMappingApplyID, 4> SrcOpMapping;
@@ -425,6 +475,8 @@ private:
 class RegBankLegalizeRules {
   const GCNSubtarget *ST;
   MachineRegisterInfo *MRI;
+  // The subtarget's features, which select the conditional rules.
+  FeatureMask Features = 0;
   // Separate maps for G-opcodes and intrinsics since they are in different
   // enums. Multiple opcodes can share same set of rules.
   // RulesAlias = map<Opcode, KeyOpcode>
@@ -435,6 +487,7 @@ class RegBankLegalizeRules {
   SmallDenseMap<unsigned, SetOfRulesForOpcode, 64> IRules;
   class RuleSetInitializer {
     SetOfRulesForOpcode *RuleSet;
+    FeatureMask Features;
 
   public:
     // Used for clang-format line breaks and to force  writing all rules for
@@ -442,7 +495,9 @@ class RegBankLegalizeRules {
     template <class AliasMap, class RulesMap>
     RuleSetInitializer(std::initializer_list<unsigned> OpcList,
                        AliasMap &RulesAlias, RulesMap &Rules,
-                       FastRulesTypes FastTypes = NoFastRules) {
+                       FeatureMask Features,
+                       FastRulesTypes FastTypes = NoFastRules)
+        : Features(Features) {
       unsigned KeyOpcode = *OpcList.begin();
       for (unsigned Opc : OpcList) {
         [[maybe_unused]] auto [_, NewInput] =
@@ -464,22 +519,22 @@ class RegBankLegalizeRules {
 
     RuleSetInitializer &Div(UniformityLLTOpPredicateID Ty,
                             RegBankLLTMapping RuleApplyIDs,
-                            bool STPred = true) {
-      if (STPred)
+                            FeatureCond Cond = {}) {
+      if (Cond.holds(Features))
         RuleSet->addFastRuleDivergent(Ty, RuleApplyIDs);
       return *this;
     }
 
     RuleSetInitializer &Uni(UniformityLLTOpPredicateID Ty,
                             RegBankLLTMapping RuleApplyIDs,
-                            bool STPred = true) {
-      if (STPred)
+                            FeatureCond Cond = {}) {
+      if (Cond.holds(Features))
         RuleSet->addFastRuleUniform(Ty, RuleApplyIDs);
       return *this;
     }
 
-    RuleSetInitializer &Any(RegBankLegalizeRule Init, bool STPred = true) {
-      if (STPred)
+    RuleSetInitializer &Any(RegBankLegalizeRule Init, FeatureCond Cond = {}) {
+      if (Cond.holds(Features))
         RuleSet->addRule(Init);
       return *this;
     }
