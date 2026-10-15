@@ -361,7 +361,8 @@ public:
 
   ArrayRef<uint8_t> consumeDebugMagic();
 
-  static ArrayRef<uint8_t> consumeDebugMagic(ArrayRef<uint8_t> data,
+  static ArrayRef<uint8_t> consumeDebugMagic(COFFLinkerContext &ctx,
+                                             ArrayRef<uint8_t> data,
                                              StringRef sectionName);
 
   static SectionChunk *findByName(ArrayRef<SectionChunk *> sections,
@@ -971,12 +972,12 @@ inline void Chunk::setEntryThunk(Defined *entryThunk) {
     c->entryThunk = entryThunk;
 }
 
-void applyMOV32T(uint8_t *off, uint32_t v);
-void applyBranch24T(uint8_t *off, int32_t v);
+void applyMOV32T(COFFLinkerContext &ctx, uint8_t *off, uint32_t v);
+void applyBranch24T(COFFLinkerContext &ctx, uint8_t *off, int32_t v);
 
 void applyArm64Addr(uint8_t *off, uint64_t s, uint64_t p, int shift);
 void applyArm64Imm(uint8_t *off, uint64_t imm, uint32_t rangeLimit);
-void applyArm64Branch26(uint8_t *off, int64_t v);
+void applyArm64Branch26(COFFLinkerContext &ctx, uint8_t *off, int64_t v);
 
 // Convenience class for initializing a coff_section with specific flags.
 class FakeSection {

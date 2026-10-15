@@ -462,15 +462,15 @@ Writer::getThunk(DenseMap<uint64_t, Defined *> &lastThunks, Defined *target,
   Chunk *c;
   switch (getMachineArchType(machine)) {
   case Triple::thumb:
-    c = make<RangeExtensionThunkARM>(ctx, target);
+    c = ctx.make<RangeExtensionThunkARM>(ctx, target);
     break;
   case Triple::aarch64:
-    c = make<RangeExtensionThunkARM64>(machine, target);
+    c = ctx.make<RangeExtensionThunkARM64>(machine, target);
     break;
   default:
     llvm_unreachable("Unexpected architecture");
   }
-  Defined *d = make<DefinedSynthetic>("range_extension_thunk", c);
+  Defined *d = ctx.make<DefinedSynthetic>("range_extension_thunk", c);
   lastThunk = d;
   return {d, true};
 }
@@ -565,7 +565,7 @@ bool Writer::createThunks(OutputSection *os, int margin) {
     MutableArrayRef<coff_relocation> newRelocs;
     if (originalRelocs.data() == curRelocs.data()) {
       newRelocs = MutableArrayRef(
-          bAlloc().Allocate<coff_relocation>(originalRelocs.size()),
+          ctx.bAlloc.Allocate<coff_relocation>(originalRelocs.size()),
           originalRelocs.size());
     } else {
       newRelocs = MutableArrayRef(
@@ -777,7 +777,7 @@ void Writer::run() {
 
     calculateStubDependentSizes();
     if (ctx.config.machine == ARM64X)
-      ctx.dynamicRelocs = make<DynamicRelocsChunk>();
+      ctx.dynamicRelocs = ctx.make<DynamicRelocsChunk>();
     createImportTables();
     createSections();
     appendImportThunks();
@@ -831,7 +831,7 @@ void Writer::run() {
 
   printSummary();
 
-  if (errorCount())
+  if (errCount(ctx))
     return;
 
   llvm::TimeTraceScope timeScope("Commit PE to disk");
@@ -1081,7 +1081,7 @@ void Writer::createSections() {
   auto createSection = [&](StringRef name, uint32_t outChars) {
     OutputSection *&sec = sections[{name, outChars}];
     if (!sec) {
-      sec = make<OutputSection>(name, outChars);
+      sec = ctx.make<OutputSection>(name, outChars);
       ctx.outputSections.push_back(sec);
     }
     return sec;
@@ -1249,7 +1249,7 @@ void Writer::createMiscChunks() {
       config->cetCompatIpValidationRelaxed ||
       config->cetCompatDynamicApisInProcOnly || config->hotpatchCompat) {
     debugDirectory =
-        make<DebugDirectoryChunk>(ctx, debugRecords, config->repro);
+        ctx.make<DebugDirectoryChunk>(ctx, debugRecords, config->repro);
     debugDirectory->setAlignment(4);
     debugInfoSec->addChunk(debugDirectory);
   }
@@ -1259,7 +1259,7 @@ void Writer::createMiscChunks() {
     // output a PDB no matter what, and this chunk provides the only means of
     // allowing a debugger to match a PDB and an executable.  So we need it even
     // if we're ultimately not going to write CodeView data to the PDB.
-    buildId = make<CVDebugRecordChunk>(ctx);
+    buildId = ctx.make<CVDebugRecordChunk>(ctx);
     debugRecords.emplace_back(COFF::IMAGE_DEBUG_TYPE_CODEVIEW, buildId);
     ctx.forEachSymtab([&](SymbolTable &symtab) {
       if (Symbol *buildidSym = symtab.findUnderscore("__buildid"))
@@ -1287,7 +1287,7 @@ void Writer::createMiscChunks() {
   if (ex_characteristics_flags) {
     debugRecords.emplace_back(
         COFF::IMAGE_DEBUG_TYPE_EX_DLLCHARACTERISTICS,
-        make<ExtendedDllCharacteristicsChunk>(ex_characteristics_flags));
+        ctx.make<ExtendedDllCharacteristicsChunk>(ex_characteristics_flags));
   }
 
   // Align and add each chunk referenced by the debug data directory.
@@ -2056,7 +2056,7 @@ template <typename PEHeaderTy> void Writer::writeHeader() {
 }
 
 void Writer::openFile(StringRef path) {
-  buffer = CHECK(
+  buffer = CHECK2(
       FileOutputBuffer::create(path, fileSize, FileOutputBuffer::F_executable),
       "failed to open " + path);
 }
@@ -2338,9 +2338,9 @@ void Writer::maybeAddRVATable(SymbolRVASet tableSymbols, StringRef tableSym,
 
   NonSectionChunk *tableChunk;
   if (hasFlag)
-    tableChunk = make<RVAFlagTableChunk>(std::move(tableSymbols));
+    tableChunk = ctx.make<RVAFlagTableChunk>(std::move(tableSymbols));
   else
-    tableChunk = make<RVATableChunk>(std::move(tableSymbols));
+    tableChunk = ctx.make<RVATableChunk>(std::move(tableSymbols));
   rdataSec->addChunk(tableChunk);
 
   ctx.forEachSymtab([&](SymbolTable &symtab) {
@@ -2384,19 +2384,20 @@ void Writer::createECChunks() {
     }
   }
 
-  auto codeMapChunk = make<ECCodeMapChunk>(codeMap);
+  auto codeMapChunk = ctx.make<ECCodeMapChunk>(codeMap);
   rdataSec->addChunk(codeMapChunk);
   Symbol *codeMapSym = ctx.symtab.findUnderscore("__hybrid_code_map");
   replaceSymbol<DefinedSynthetic>(codeMapSym, codeMapSym->getName(),
                                   codeMapChunk);
 
-  CHPECodeRangesChunk *ranges = make<CHPECodeRangesChunk>(exportThunks);
+  CHPECodeRangesChunk *ranges = ctx.make<CHPECodeRangesChunk>(exportThunks);
   rdataSec->addChunk(ranges);
   Symbol *rangesSym =
       ctx.symtab.findUnderscore("__x64_code_ranges_to_entry_points");
   replaceSymbol<DefinedSynthetic>(rangesSym, rangesSym->getName(), ranges);
 
-  CHPERedirectionChunk *entryPoints = make<CHPERedirectionChunk>(exportThunks);
+  CHPERedirectionChunk *entryPoints =
+      ctx.make<CHPERedirectionChunk>(exportThunks);
   a64xrmSec->addChunk(entryPoints);
   Symbol *entryPointsSym =
       ctx.symtab.findUnderscore("__arm64x_redirection_metadata");
@@ -2454,9 +2455,9 @@ void Writer::createRuntimePseudoRelocs() {
                "runtime";
     }
 
-    PseudoRelocTableChunk *table = make<PseudoRelocTableChunk>(rels);
+    PseudoRelocTableChunk *table = ctx.make<PseudoRelocTableChunk>(rels);
     rdataSec->addChunk(table);
-    EmptyChunk *endOfList = make<EmptyChunk>();
+    EmptyChunk *endOfList = ctx.make<EmptyChunk>();
     rdataSec->addChunk(endOfList);
 
     Symbol *headSym = symtab.findUnderscore("__RUNTIME_PSEUDO_RELOC_LIST__");
@@ -2473,10 +2474,14 @@ void Writer::createRuntimePseudoRelocs() {
 // and __DTOR_LIST__ respectively.
 void Writer::insertCtorDtorSymbols() {
   ctx.forEachSymtab([&](SymbolTable &symtab) {
-    AbsolutePointerChunk *ctorListHead = make<AbsolutePointerChunk>(symtab, -1);
-    AbsolutePointerChunk *ctorListEnd = make<AbsolutePointerChunk>(symtab, 0);
-    AbsolutePointerChunk *dtorListHead = make<AbsolutePointerChunk>(symtab, -1);
-    AbsolutePointerChunk *dtorListEnd = make<AbsolutePointerChunk>(symtab, 0);
+    AbsolutePointerChunk *ctorListHead =
+        ctx.make<AbsolutePointerChunk>(symtab, -1);
+    AbsolutePointerChunk *ctorListEnd =
+        ctx.make<AbsolutePointerChunk>(symtab, 0);
+    AbsolutePointerChunk *dtorListHead =
+        ctx.make<AbsolutePointerChunk>(symtab, -1);
+    AbsolutePointerChunk *dtorListEnd =
+        ctx.make<AbsolutePointerChunk>(symtab, 0);
     ctorsSec->insertChunkAtStart(ctorListHead);
     ctorsSec->addChunk(ctorListEnd);
     dtorsSec->insertChunkAtStart(dtorListHead);
@@ -2851,13 +2856,13 @@ void Writer::addBaserelBlocks(std::vector<Baserel> &v) {
     uint32_t p = v[j].rva & mask;
     if (p == page)
       continue;
-    relocSec->addChunk(make<BaserelChunk>(page, &v[i], &v[0] + j));
+    relocSec->addChunk(ctx.make<BaserelChunk>(page, &v[i], &v[0] + j));
     i = j;
     page = p;
   }
   if (i == j)
     return;
-  relocSec->addChunk(make<BaserelChunk>(page, &v[i], &v[0] + j));
+  relocSec->addChunk(ctx.make<BaserelChunk>(page, &v[i], &v[0] + j));
 }
 
 void Writer::createDynamicRelocs() {
@@ -2965,7 +2970,7 @@ PartialSection *Writer::createPartialSection(StringRef name,
   PartialSection *&pSec = partialSections[{name, outChars}];
   if (pSec)
     return pSec;
-  pSec = make<PartialSection>(name, outChars);
+  pSec = ctx.make<PartialSection>(name, outChars);
   return pSec;
 }
 

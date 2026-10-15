@@ -50,25 +50,27 @@ const uint16_t RT_MANIFEST = 24;
 
 class Executor {
 public:
-  explicit Executor(StringRef s) : prog(saver().save(s)) {}
-  void add(StringRef s) { args.push_back(saver().save(s)); }
-  void add(std::string &s) { args.push_back(saver().save(s)); }
-  void add(Twine s) { args.push_back(saver().save(s)); }
-  void add(const char *s) { args.push_back(saver().save(s)); }
+  Executor(COFFLinkerContext &ctx, StringRef s)
+      : ctx(ctx), prog(ctx.saver.save(s)) {}
+  void add(StringRef s) { args.push_back(ctx.saver.save(s)); }
+  void add(std::string &s) { args.push_back(ctx.saver.save(s)); }
+  void add(Twine s) { args.push_back(ctx.saver.save(s)); }
+  void add(const char *s) { args.push_back(ctx.saver.save(s)); }
 
   void run() {
     ErrorOr<std::string> exeOrErr = sys::findProgramByName(prog);
     if (auto ec = exeOrErr.getError())
-      fatal("unable to find " + prog + " in PATH: " + ec.message());
-    StringRef exe = saver().save(*exeOrErr);
+      Fatal(ctx) << "unable to find " + prog + " in PATH: " + ec.message();
+    StringRef exe = ctx.saver.save(*exeOrErr);
     args.insert(args.begin(), exe);
 
     if (sys::ExecuteAndWait(args[0], args) != 0)
-      fatal("ExecuteAndWait failed: " +
-            llvm::join(args.begin(), args.end(), " "));
+      Fatal(ctx) << "ExecuteAndWait failed: " +
+                        llvm::join(args.begin(), args.end(), " ");
   }
 
 private:
+  COFFLinkerContext &ctx;
   StringRef prog;
   std::vector<StringRef> args;
 };
@@ -221,7 +223,7 @@ void LinkerDriver::parseSectionLayout(StringRef path) {
   if (path.starts_with("@"))
     path = path.substr(1);
   std::unique_ptr<MemoryBuffer> layoutFile =
-      CHECK(MemoryBuffer::getFile(path), "could not open " + path);
+      CHECK2(MemoryBuffer::getFile(path), "could not open " + path);
   StringRef content = layoutFile->getBuffer();
   int index = 0;
 
@@ -255,7 +257,7 @@ void LinkerDriver::parseSectionLayout(StringRef path) {
 
 void LinkerDriver::parseDosStub(StringRef path) {
   std::unique_ptr<MemoryBuffer> stub =
-      CHECK(MemoryBuffer::getFile(path), "could not open " + path);
+      CHECK2(MemoryBuffer::getFile(path), "could not open " + path);
   size_t bufferSize = stub->getBufferSize();
   const char *bufferStart = stub->getBufferStart();
   // MS link.exe compatibility:
@@ -421,10 +423,10 @@ public:
   // is called (you cannot remove an opened file on Windows.)
   std::unique_ptr<MemoryBuffer> getMemoryBuffer() {
     // IsVolatile=true forces MemoryBuffer to not use mmap().
-    return CHECK(MemoryBuffer::getFile(path, /*IsText=*/false,
-                                       /*RequiresNullTerminator=*/false,
-                                       /*IsVolatile=*/true),
-                 "could not open " + path);
+    return CHECK2(MemoryBuffer::getFile(path, /*IsText=*/false,
+                                        /*RequiresNullTerminator=*/false,
+                                        /*IsVolatile=*/true),
+                  "could not open " + path);
   }
 
   COFFLinkerContext &ctx;
@@ -474,7 +476,7 @@ LinkerDriver::createManifestXmlWithInternalMt(StringRef defaultXml) {
 
   for (StringRef filename : ctx.config.manifestInput) {
     std::unique_ptr<MemoryBuffer> manifest =
-        check(MemoryBuffer::getFile(filename));
+        check(ctx.e, MemoryBuffer::getFile(filename));
     // Call takeBuffer to include in /reproduce: output if applicable.
     if (auto e = merger.merge(takeBuffer(std::move(manifest))))
       Fatal(ctx) << "internal manifest tool failed on file " << filename << ": "
@@ -499,7 +501,7 @@ LinkerDriver::createManifestXmlWithExternalMt(StringRef defaultXml) {
   // enabled, we must shell out to Microsoft's mt.exe tool.
   TemporaryFile user(ctx, "user", "manifest");
 
-  Executor e("mt.exe");
+  Executor e(ctx, "mt.exe");
   e.add("/manifest");
   e.add(Default.path);
   for (StringRef filename : ctx.config.manifestInput) {
@@ -516,7 +518,7 @@ LinkerDriver::createManifestXmlWithExternalMt(StringRef defaultXml) {
   e.run();
 
   return std::string(
-      CHECK(MemoryBuffer::getFile(user.path), "could not open " + user.path)
+      CHECK2(MemoryBuffer::getFile(user.path), "could not open " + user.path)
           .get()
           ->getBuffer());
 }
@@ -705,7 +707,8 @@ MemoryBufferRef LinkerDriver::convertResToCOFF(ArrayRef<MemoryBufferRef> mbs,
 
   std::vector<std::string> duplicates;
   for (MemoryBufferRef mb : mbs) {
-    std::unique_ptr<object::Binary> bin = check(object::createBinary(mb));
+    std::unique_ptr<object::Binary> bin =
+        check(ctx.e, object::createBinary(mb));
     object::WindowsResource *rf = dyn_cast<object::WindowsResource>(bin.get());
     if (!rf)
       Fatal(ctx) << "cannot compile non-resource file as resource";
@@ -742,7 +745,7 @@ MemoryBufferRef LinkerDriver::convertResToCOFF(ArrayRef<MemoryBufferRef> mbs,
     Fatal(ctx) << "failed to write .res to COFF: " << toString(e.takeError());
 
   MemoryBufferRef mbref = **e;
-  make<std::unique_ptr<MemoryBuffer>>(std::move(*e)); // take ownership
+  ctx.make<std::unique_ptr<MemoryBuffer>>(std::move(*e)); // take ownership
   return mbref;
 }
 
@@ -811,7 +814,7 @@ opt::InputArgList ArgParser::parse(ArrayRef<const char *> argv) {
                                               argv.data() + argv.size());
   if (!args.hasArg(OPT_lldignoreenv))
     addLINK(expandedArgv);
-  cl::ExpandResponseFiles(saver(), getQuotingStyle(ctx, args), expandedArgv);
+  cl::ExpandResponseFiles(ctx.saver, getQuotingStyle(ctx, args), expandedArgv);
   args = ctx.optTable.ParseArgs(ArrayRef(expandedArgv).drop_front(),
                                 missingIndex, missingCount);
 
@@ -867,7 +870,7 @@ ParsedDirectives ArgParser::parseDirectives(StringRef s) {
   // Handle /EXPORT and /INCLUDE in a fast path. These directives can appear for
   // potentially every symbol in the object, so they must be handled quickly.
   SmallVector<StringRef, 16> tokens;
-  cl::TokenizeWindowsCommandLineNoCopy(s, saver(), tokens);
+  cl::TokenizeWindowsCommandLineNoCopy(s, ctx.saver, tokens);
   for (StringRef tok : tokens) {
     if (tok.starts_with_insensitive("/export:") ||
         tok.starts_with_insensitive("-export:"))
@@ -883,7 +886,7 @@ ParsedDirectives ArgParser::parseDirectives(StringRef s) {
       // already copied quoted arguments for us, so those do not need to be
       // copied again.
       bool HasNul = tok.end() != s.end() && tok.data()[tok.size()] == '\0';
-      rest.push_back(HasNul ? tok.data() : saver().save(tok).data());
+      rest.push_back(HasNul ? tok.data() : ctx.saver.save(tok).data());
     }
   }
 
@@ -918,7 +921,7 @@ void ArgParser::addLINK(SmallVector<const char *, 256> &argv) {
 
 std::vector<const char *> ArgParser::tokenize(StringRef s) {
   SmallVector<const char *, 16> tokens;
-  cl::TokenizeWindowsCommandLine(s, saver(), tokens);
+  cl::TokenizeWindowsCommandLine(s, ctx.saver, tokens);
   return std::vector<const char *>(tokens.begin(), tokens.end());
 }
 

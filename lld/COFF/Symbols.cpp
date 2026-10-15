@@ -62,7 +62,8 @@ void Symbol::computeName() {
          "should only compute the name once for DefinedCOFF symbols");
   auto *d = cast<DefinedCOFF>(this);
   StringRef nameStr =
-      check(cast<ObjFile>(d->file)->getCOFFObj()->getSymbolName(d->sym));
+      check(d->file->symtab.ctx.e,
+            cast<ObjFile>(d->file)->getCOFFObj()->getSymbolName(d->sym));
   nameData = nameStr.data();
   nameSize = nameStr.size();
   assert(nameSize == nameStr.size() && "name length truncated");
@@ -121,6 +122,11 @@ DefinedImportThunk::DefinedImportThunk(COFFLinkerContext &ctx, StringRef name,
                                        ImportThunkChunk *chunk)
     : Defined(DefinedImportThunkKind, name), wrappedSym(s), data(chunk) {}
 
+DefinedLocalImport::DefinedLocalImport(COFFLinkerContext &ctx, StringRef n,
+                                       Defined *s)
+    : Defined(DefinedLocalImportKind, n),
+      data(ctx.make<LocalImportChunk>(ctx, s)) {}
+
 Symbol *Undefined::getWeakAlias() {
   // A weak alias may be a weak alias to another symbol, so check recursively.
   DenseSet<Symbol *> weakChain;
@@ -162,12 +168,13 @@ bool Undefined::resolveWeakAlias() {
 }
 
 MemoryBufferRef LazyArchive::getMemberBuffer() {
+  COFFLinkerContext &ctx = file->symtab.ctx;
   Archive::Child c =
-      CHECK(sym.getMember(), "could not get the member for symbol " +
-                                 toCOFFString(file->symtab.ctx, sym));
-  return CHECK(c.getMemoryBufferRef(),
-               "could not get the buffer for the member defining symbol " +
-                   toCOFFString(file->symtab.ctx, sym));
+      CHECK2(sym.getMember(),
+             "could not get the member for symbol " + toCOFFString(ctx, sym));
+  return CHECK2(c.getMemoryBufferRef(),
+                "could not get the buffer for the member defining symbol " +
+                    toCOFFString(ctx, sym));
 }
 } // namespace coff
 } // namespace lld
