@@ -67,7 +67,7 @@ int call_small(Pair2 p, Pair16 q) { return vf(p, q); }
 int call_big(Pair2 p, Big b) { return vf(p, b); }
 
 // CIR-LABEL: cir.func {{.*}}@call_big(%arg0: !u64i loc({{.+}}), %arg1: !cir.ptr<!rec_Big> {llvm.align = 8 : i64, llvm.byval = !rec_Big, llvm.noundef} loc({{.+}})) -> !s32i
-// CIR:         %{{[0-9]+}} = cir.load %arg1 : !cir.ptr<!rec_Big>, !rec_Big
+// CIR:         cir.copy %arg1 align({{[0-9]+}}) to %{{[0-9]+}} align({{[0-9]+}}) : !cir.ptr<!rec_Big>
 // CIR:         %[[PV:[0-9]+]] = cir.load %{{[0-9]+}} : !cir.ptr<!u64i>, !u64i
 // CIR-NEXT:    %[[COPY:[0-9]+]] = cir.alloca "byval" align(8) : !cir.ptr<!rec_Big>
 // CIR-NEXT:    cir.store %{{[0-9]+}}, %[[COPY]] : !rec_Big, !cir.ptr<!rec_Big>
@@ -76,7 +76,7 @@ int call_big(Pair2 p, Big b) { return vf(p, b); }
 // CIR copies the incoming byval slot before forwarding it.  OGCG does not.
 // LLVM-CIR-LABEL: define dso_local i32 @call_big(
 // LLVM-CIR-SAME:    i64 %[[P:[0-9a-zA-Z._]+]], ptr noundef byval(%struct.Big) align 8 %[[B:[0-9a-zA-Z._]+]])
-// LLVM-CIR:       %{{[0-9a-zA-Z._]+}} = load %struct.Big, ptr %[[B]], align 8
+// LLVM-CIR:       call void @llvm.memcpy.p0.p0.i64(ptr align 8 %{{[0-9a-zA-Z._]+}}, ptr align 8 %[[B]], i64 {{[0-9]+}}, i1 false)
 // LLVM-CIR:       %[[PV:[0-9a-zA-Z._]+]] = load i64, ptr %{{[0-9a-zA-Z._]+}}, align 8
 // LLVM-CIR-NEXT:  %[[COPY:[0-9a-zA-Z._]+]] = alloca %struct.Big, align 8
 // LLVM-CIR-NEXT:  store %struct.Big %{{[0-9a-zA-Z._]+}}, ptr %[[COPY]], align 8
@@ -178,7 +178,7 @@ int call_wide(Pair2 p, Wide w) { return vf(p, w); }
 int call_wide_char(Pair2 p, WideChar w) { return vf(p, w); }
 
 // CIR-LABEL: cir.func {{.*}}@call_wide_char(%arg0: !u64i loc({{.+}}), %arg1: !cir.ptr<!rec_WideChar> {llvm.align = 16 : i64, llvm.byval = !rec_WideChar, llvm.noundef} loc({{.+}})) -> !s32i
-// CIR:         %{{[0-9]+}} = cir.load %arg1 : !cir.ptr<!rec_WideChar>, !rec_WideChar
+// CIR:         cir.copy %arg1 align({{[0-9]+}}) to %{{[0-9]+}} align({{[0-9]+}}) : !cir.ptr<!rec_WideChar>
 // CIR:         %[[PV:[0-9]+]] = cir.load %{{[0-9]+}} : !cir.ptr<!u64i>, !u64i
 // CIR-NEXT:    %[[COPY:[0-9]+]] = cir.alloca "byval" align(16) : !cir.ptr<!rec_WideChar>
 // CIR-NEXT:    cir.store %{{[0-9]+}}, %[[COPY]] : !rec_WideChar, !cir.ptr<!rec_WideChar>
@@ -186,7 +186,7 @@ int call_wide_char(Pair2 p, WideChar w) { return vf(p, w); }
 
 // LLVM-CIR-LABEL: define dso_local i32 @call_wide_char(
 // LLVM-CIR-SAME:    i64 %[[P:[0-9a-zA-Z._]+]], ptr noundef byval(%struct.WideChar) align 16 %[[W:[0-9a-zA-Z._]+]])
-// LLVM-CIR:       %{{[0-9a-zA-Z._]+}} = load %struct.WideChar, ptr %[[W]], align 16
+// LLVM-CIR:       call void @llvm.memcpy.p0.p0.i64(ptr align 16 %{{[0-9a-zA-Z._]+}}, ptr align 16 %[[W]], i64 {{[0-9]+}}, i1 false)
 // LLVM-CIR:       %[[PV:[0-9a-zA-Z._]+]] = load i64, ptr %{{[0-9a-zA-Z._]+}}, align 8
 // LLVM-CIR-NEXT:  %[[COPY:[0-9a-zA-Z._]+]] = alloca %struct.WideChar, align 16
 // LLVM-CIR-NEXT:  store %struct.WideChar %{{[0-9a-zA-Z._]+}}, ptr %[[COPY]], align 16

@@ -595,6 +595,17 @@ static void eraseDeadRecordLoads(ArrayRef<cir::LoadOp> loads) {
       load->erase();
 }
 
+/// The store that spills indirect parameter \p blockArg, if the parameter's
+/// only use is that store.  Null otherwise.
+static cir::StoreOp maybeFindParamSpill(mlir::BlockArgument blockArg) {
+  if (!blockArg.hasOneUse())
+    return {};
+  auto store = dyn_cast<cir::StoreOp>(*blockArg.user_begin());
+  if (!store || store.getValue() != blockArg)
+    return {};
+  return store;
+}
+
 /// The store that spills non-byval indirect parameter \p blockArg, and the
 /// slot it spills into.  prepareNonByvalParameters has already established
 /// that the spill is the block argument's only use and that it stores into
@@ -845,14 +856,51 @@ void insertArgCoercion(
         if (destAlloca)
           pendingParamSlots.emplace_back(destAlloca, blockArg);
       } else {
-        // byval: load the incoming pointer so the body sees a T value (and
-        // any CIRGen param-slot store becomes a local copy of that value).
+        // byval or IndirectAliased: the body works on a copy of the incoming
+        // object. A record's spill slot is filled by a byte copy of it rather
+        // than by a store of the loaded value, as classic codegen does: a value
+        // store leaves the padding unwritten, which for a union can be another
+        // member's live data; and an IndirectAliased kernel argument read as
+        // one whole-record load leaves AMDGPU unable to see that the pointers
+        // inside it come from the kernel's arguments, so their accesses stay
+        // flat rather than global. A _BitInt keeps its load and spill store,
+        // which are its conversion between value and in-memory form.
+        cir::StoreOp paramStore;
+        if (mlir::isa<cir::RecordType>(blockArg.getType()))
+          paramStore = maybeFindParamSpill(blockArg);
+
+        // Erasing the spill before the block argument is retyped keeps the
+        // store from being left with a value operand of the wrong type.
+        mlir::Value destAddr;
+        mlir::IntegerAttr destAlign;
+        mlir::Operation *spillPos = nullptr;
+        if (paramStore) {
+          destAddr = paramStore.getAddr();
+          if (cir::AllocaOp destAlloca = cir::getUnderlyingAlloca(destAddr))
+            destAlign = destAlloca.getAlignmentAttr();
+          spillPos = paramStore->getNextNode();
+          assert(spillPos &&
+                 "param spill must be followed by a block terminator");
+          paramStore->erase();
+        }
+
         blockArg.setType(ptrTy);
 
-        builder.setInsertionPointToStart(&entry);
-        auto loadOp = cir::LoadOp::create(builder, funcOp.getLoc(), blockArg);
-        SmallPtrSet<mlir::Operation *, 1> loadOps = {loadOp};
-        blockArg.replaceAllUsesExcept(loadOp.getResult(), loadOps);
+        if (destAddr) {
+          mlir::OpBuilder::InsertionGuard guard(builder);
+          builder.setInsertionPoint(spillPos);
+          cir::CopyOp::create(
+              builder, funcOp.getLoc(), destAddr, blockArg, destAlign,
+              builder.getI64IntegerAttr(ac.indirectAlign.value()),
+              /*is_volatile=*/mlir::UnitAttr(),
+              /*skip_tail_padding=*/mlir::UnitAttr());
+        } else {
+          // No spill to replace, so materialize the value the body reads.
+          builder.setInsertionPointToStart(&entry);
+          auto loadOp = cir::LoadOp::create(builder, funcOp.getLoc(), blockArg);
+          SmallPtrSet<mlir::Operation *, 1> loadOps = {loadOp};
+          blockArg.replaceAllUsesExcept(loadOp.getResult(), loadOps);
+        }
       }
     }
     // Ignore, Extend, and Direct-without-coerce need no block-level changes.
