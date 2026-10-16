@@ -681,7 +681,11 @@ static mlir::Type adjustGlobalUnionTypeForInit(
     return structTy;
 
   uint64_t unionSize = dataLayout.getTypeSize(unionTy).getFixedValue();
-  uint64_t initSize = dataLayout.getTypeSize(memberTy).getFixedValue();
+  // The bytes the member occupies, which for x86_fp80 is more than it stores:
+  // padding after it would start past those, not past the stored ones.
+  uint64_t initSize =
+      llvm::alignTo(dataLayout.getTypeSize(memberTy).getFixedValue(),
+                    dataLayout.getTypeABIAlignment(memberTy));
   assert(initSize <= unionSize && "union initializer larger than the union");
 
   llvm::SmallVector<mlir::Type> newBody;

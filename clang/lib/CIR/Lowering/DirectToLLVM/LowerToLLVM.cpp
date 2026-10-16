@@ -4180,6 +4180,22 @@ static void prepareTypeConverter(mlir::LLVMTypeConverter &converter,
             convertTypeForMemory(converter, dataLayout, storage);
         if (!storageTy)
           return {};
+        // A union value stands in for every member, so loading or storing it
+        // has to move all of its bytes. x86_fp80 stores 10 of the 16 bytes it
+        // occupies, which would drop whatever another member keeps in the rest
+        // (the pointer of a std::string_view in std::format's argument union,
+        // for one). Such storage is lowered as integers spanning the slot.
+        uint64_t storeSize = dataLayout.getTypeSize(storageTy).getFixedValue();
+        uint64_t align = dataLayout.getTypeABIAlignment(storageTy);
+        uint64_t allocSize = llvm::alignTo(storeSize, align);
+        if (storeSize != allocSize) {
+          mlir::Type unit =
+              mlir::IntegerType::get(type.getContext(), align * 8);
+          storageTy =
+              allocSize == align
+                  ? unit
+                  : mlir::LLVM::LLVMArrayType::get(unit, allocSize / align);
+        }
         llvmMembers.push_back(storageTy);
       }
     if (mlir::Type pad = type.getPadding()) {
