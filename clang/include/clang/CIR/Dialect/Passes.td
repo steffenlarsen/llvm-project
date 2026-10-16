@@ -475,6 +475,46 @@ def OffloadEliminateCoveredGuards
   let dependentDialects = ["cir::CIRDialect"];
 }
 
+def OffloadSpecializeDriverFields
+    : Pass<"cir-offload-specialize-driver-fields", "mlir::ModuleOp"> {
+  let summary = "Unswitch kernels on the flags of the driver they are launched "
+                "with";
+  let description = [{
+    Runs on an offload container module. A kernel launched with a driver
+    object -- a functor and its iteration policy, as Kokkos launches them --
+    often tests fields of it in its loops that do not change during a run. The
+    device compiler cannot know their values, and LLVM does not unswitch loops
+    on them on targets with divergent branches.
+
+    For each kernel, the fields only ever tested -- by `int_to_bool`, by a
+    comparison against a constant, or as a `bool` -- at least once in a loop
+    are chosen, the most tested first. The kernel is cloned once per
+    combination of the tests' outcomes, along with the functions it passes the
+    driver to on the way to a test, and each test is folded to its outcome. At
+    every launch whose driver bytes the host can read, the host reads the
+    fields and calls the copy for their outcomes; the original serves every
+    other launch.
+
+    The driver is either a by-value kernel argument, or copied into a
+    `__constant__` buffer with a copy-to-symbol call before a launch with no
+    arguments, which the kernel reads as the driver. The latter relies on the
+    buffer holding the copied bytes when the launch runs, as the runtime has
+    to for the kernel to see its driver. Fields are matched by byte offset,
+    since the device's record may differ from the host's.
+
+    The pass is anchored on a module; it acts only when the module carries the
+    `cir.offload.container` unit attribute, leaving any other module alone.
+  }];
+  let options = [
+    Option<"maxFields", "max-fields", "unsigned", /*default=*/"3",
+           "Most fields to specialise one kernel on">,
+    Option<"maxCallDepth", "max-call-depth", "unsigned", /*default=*/"3",
+           "Most calls to follow the driver through from the kernel">
+  ];
+  let constructor = "mlir::createOffloadSpecializeDriverFieldsPass()";
+  let dependentDialects = ["cir::CIRDialect"];
+}
+
 def OffloadSpecializeConstantArgs
     : Pass<"cir-offload-specialize-constant-args", "mlir::ModuleOp"> {
   let summary = "Clone launch helpers per constant scalar argument";

@@ -12,6 +12,7 @@ add_clang_library(MLIRCIROffloadOpt
   PropagateBlockShape.cpp
   PropagatePointerFacts.cpp
   EliminateCoveredGuards.cpp
+  SpecializeDriverFields.cpp
   DeadArgElimination.cpp
   InlineLaunchPaths.cpp
 
