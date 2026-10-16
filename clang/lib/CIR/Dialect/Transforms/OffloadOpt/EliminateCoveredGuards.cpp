@@ -62,6 +62,7 @@
 #include "clang/CIR/Dialect/Transforms/OffloadOpt/DeviceIndex.h"
 #include "clang/CIR/Dialect/Transforms/OffloadOpt/KernelBindingTable.h"
 #include "clang/CIR/Dialect/Transforms/OffloadOpt/KernelCloning.h"
+#include "clang/CIR/Dialect/Transforms/OffloadOpt/LocalSlots.h"
 #include "clang/CIR/Interfaces/CIRLoopOpInterface.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallVector.h"
@@ -299,78 +300,12 @@ static IndexBound merge(IndexBound a, const IndexBound &b, Poly max) {
 // Locals
 //===----------------------------------------------------------------------===//
 
-/// Find the slot behind an address, looking through the address-space casts
-/// CIRGen puts on every device-side local (allocas land in
-/// target_address_space(5) and are cast to generic before use).
-static cir::AllocaOp findSlot(Value addr) {
-  while (auto cast = addr.getDefiningOp<cir::CastOp>())
-    addr = cast.getOperand();
-  return addr.getDefiningOp<cir::AllocaOp>();
-}
-
-/// Users of a slot, reached through those same casts. Lifetime markers are
-/// left out: they neither write the slot nor let it escape.
-static void collectSlotUsers(cir::AllocaOp slot,
-                             SmallVectorImpl<Operation *> &out) {
-  SmallVector<Value, 4> worklist{slot.getResult()};
-  while (!worklist.empty()) {
-    Value v = worklist.pop_back_val();
-    for (Operation *user : v.getUsers()) {
-      if (auto cast = dyn_cast<cir::CastOp>(user)) {
-        worklist.push_back(cast.getResult());
-        continue;
-      }
-      if (isa<cir::LifetimeStartOp, cir::LifetimeEndOp>(user))
-        continue;
-      out.push_back(user);
-    }
-  }
-}
-
-/// Does \p addr refer to \p slot, modulo those casts?
-static bool addrIsSlot(Value addr, cir::AllocaOp slot) {
-  return findSlot(addr) == slot;
-}
-
-/// The one store into \p slot, when every other use of it reads it: a local
-/// assigned once whose address goes nowhere. Null otherwise.
-static cir::StoreOp onlyStore(cir::AllocaOp slot) {
-  cir::StoreOp only;
-  SmallVector<Operation *, 8> slotUsers;
-  collectSlotUsers(slot, slotUsers);
-  for (Operation *user : slotUsers) {
-    if (auto store = dyn_cast<cir::StoreOp>(user)) {
-      if (only || !addrIsSlot(store.getAddr(), slot))
-        return {};
-      only = store;
-      continue;
-    }
-    if (!isa<cir::LoadOp>(user))
-      return {};
-  }
-  return only;
-}
-
-/// Resolve \p v to a constant, additionally looking through a local slot that
-/// is written exactly once and never escapes.
-///
-/// `tryResolveToConstant` stops at the address-space cast every device-side
-/// local carries, so a `constexpr` that CIRGen spilled to a slot is invisible
-/// to it.  ggml's loop bound `nint` is exactly this, and without the hop the
-/// enclosing loop looks unbounded.
-static std::optional<int64_t> tryConstThroughSlot(Value v) {
-  if (std::optional<int64_t> c = cir::tryResolveToConstant(v))
-    return c;
-
-  auto load = v.getDefiningOp<cir::LoadOp>();
-  if (!load)
-    return std::nullopt;
-  cir::AllocaOp slot = findSlot(load.getAddr());
-  cir::StoreOp only = slot ? onlyStore(slot) : cir::StoreOp();
-  if (!only)
-    return std::nullopt;
-  return cir::tryResolveToConstant(only.getValue());
-}
+// Locals assigned once, shared with the other offload passes.
+using cir::addrIsSlot;
+using cir::collectSlotUsers;
+using cir::findSlot;
+using cir::onlyStore;
+using cir::tryConstThroughSlot;
 
 /// Largest value a structured `cir.for` induction variable reaches.
 ///
