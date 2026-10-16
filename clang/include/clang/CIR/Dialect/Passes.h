@@ -53,6 +53,7 @@ std::unique_ptr<Pass> createOffloadPromoteKernelArgSpacePass();
 std::unique_ptr<Pass> createOffloadPropagatePointerFactsPass();
 std::unique_ptr<Pass> createOffloadPropagateBlockShapePass();
 std::unique_ptr<Pass> createOffloadEliminateCoveredGuardsPass();
+std::unique_ptr<Pass> createOffloadSpecializeDriverFieldsPass();
 std::unique_ptr<Pass> createOffloadDeadArgEliminationPass();
 std::unique_ptr<Pass> createOffloadInlineLaunchPathsPass();
 std::unique_ptr<Pass> createOffloadInlineLaunchPathsPass(bool indexPaths);

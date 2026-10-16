@@ -109,6 +109,11 @@ llvm::cl::opt<bool> DisableCirEliminateCoveredGuards(
     "disable-cir-eliminate-covered-guards",
     llvm::cl::desc("Disable the covered-guard elimination pass"),
     llvm::cl::cat(CIROffloadMergeCategory));
+llvm::cl::opt<bool> EnableCirSpecializeDriverFields(
+    "enable-cir-specialize-driver-fields",
+    llvm::cl::desc("Enable unswitching kernels on the flags of their driver "
+                   "(experimental)"),
+    llvm::cl::cat(CIROffloadMergeCategory));
 llvm::cl::opt<bool> DisableCirSpecializeConstantArgs(
     "disable-cir-specialize-constant-args",
     llvm::cl::desc(
@@ -725,6 +730,8 @@ int runOffloadOptPasses(mlir::ModuleOp module) {
     pm.addPass(mlir::createOffloadSpecializeConstantArgsPass());
   if (!DisableCirEliminateCoveredGuards)
     pm.addPass(mlir::createOffloadEliminateCoveredGuardsPass());
+  if (EnableCirSpecializeDriverFields)
+    pm.addPass(mlir::createOffloadSpecializeDriverFieldsPass());
   if (!DisableCirPropKernelArgs)
     pm.addPass(mlir::createOffloadKernelArgConstantPropagationPass());
   if (!DisableCirPropagateBlockShape)
