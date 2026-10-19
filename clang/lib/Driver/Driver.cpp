@@ -3438,6 +3438,29 @@ static Action *buildHipFatBinary(Compilation &C,
                                               types::TY_HIP_FATBIN);
 }
 
+// Package the per-arch OpenMP device images into one offload binary
+// (llvm-offload-binary) for the host object to embed, as the new offload
+// driver does. The device images are linked when the program is.
+static Action *buildOpenMPOffloadBinary(Compilation &C,
+                                        ArrayRef<Action *> DeviceActions,
+                                        ArrayRef<const ToolChain *> ToolChains,
+                                        ArrayRef<const char *> BoundArchs) {
+  assert(DeviceActions.size() == ToolChains.size() &&
+         DeviceActions.size() == BoundArchs.size());
+  ActionList OffloadActions;
+  for (unsigned I = 0, E = DeviceActions.size(); I != E; ++I) {
+    OffloadAction::DeviceDependences DDep;
+    DDep.add(*DeviceActions[I], *ToolChains[I], BoundArch(BoundArchs[I]),
+             Action::OFK_OpenMP);
+    OffloadActions.push_back(
+        C.MakeAction<OffloadAction>(DDep, DeviceActions[I]->getType()));
+  }
+  if (OffloadActions.empty())
+    return nullptr;
+  return C.MakeAction<OffloadPackagerJobAction>(OffloadActions,
+                                                types::TY_Image);
+}
+
 void Driver::handleArguments(Compilation &C, DerivedArgList &Args,
                              const InputList &Inputs,
                              ActionList &Actions) const {
@@ -3646,13 +3669,14 @@ static bool shouldBundleHIPAsm(const Compilation &C,
 }
 
 // True when the ClangIR host/device offload-merge pipeline is requested for a
-// CUDA/HIP compilation.
+// CUDA, HIP or OpenMP offloading compilation.
 static bool isCIROffloadMerge(const Compilation &C,
                               const llvm::opt::ArgList &Args) {
   return Args.hasArg(options::OPT_fclangir) &&
          Args.hasArg(options::OPT_clangir_offload_merge) &&
          (C.isOffloadingHostKind(Action::OFK_Cuda) ||
-          C.isOffloadingHostKind(Action::OFK_HIP));
+          C.isOffloadingHostKind(Action::OFK_HIP) ||
+          C.isOffloadingHostKind(Action::OFK_OpenMP));
 }
 
 void Driver::BuildActions(Compilation &C, DerivedArgList &Args,
@@ -3764,10 +3788,26 @@ void Driver::BuildActions(Compilation &C, DerivedArgList &Args,
       // path, which matters when -save-temps keeps them as separate jobs.
       if (isCIROffloadMerge(C, Args) && Phase == phases::Backend) {
         if (auto *OA = dyn_cast<OffloadAction>(Current)) {
+          const ToolChain *HostTC =
+              C.getSingleOffloadToolChain<Action::OFK_Host>();
+          Action *HostAction = OA->getHostDependence();
+          // An OpenMP device module is lowered against the offload entries of
+          // the host module, so the host module is lowered to bitcode first.
+          // The host backend then starts from that bitcode, as it does without
+          // the merge.
+          if (C.isOffloadingHostKind(Action::OFK_OpenMP)) {
+            HostAction =
+                C.MakeAction<CompileJobAction>(HostAction, types::TY_LLVM_BC);
+            HostAction->propagateHostOffloadInfo(Action::OFK_OpenMP,
+                                                 BoundArch());
+            HostAction->setCannotBeCollapsedWithNextDependentAction();
+          }
+
           OffloadAction::DeviceDependences DDeps;
-          // CUDA and HIP are mutually exclusive, so one set of per-arch device
-          // inputs serves whichever fatbin builder applies. The collected
-          // element differs by kind: the device CIR for HIP, the PTX for CUDA.
+          // The offload kinds are mutually exclusive, so one set of per-arch
+          // device inputs serves whichever image builder applies. The
+          // collected element differs by kind: the device CIR for HIP, the PTX
+          // for CUDA, the device object or bitcode for OpenMP.
           SmallVector<Action *, 4> DeviceActions;
           SmallVector<const ToolChain *, 4> DeviceToolChains;
           SmallVector<const char *, 4> DeviceArchs;
@@ -3777,13 +3817,29 @@ void Driver::BuildActions(Compilation &C, DerivedArgList &Args,
                   BoundArch DepBoundArch) {
                 Action::OffloadKind Kind = DepA->getOffloadingDeviceKind();
                 Action *DeviceAction = DepA;
-                if (Kind == Action::OFK_Cuda) {
+                LTOKind DeviceLTOMode = LTOK_None;
+                if (Kind == Action::OFK_OpenMP) {
+                  // Lowering the device module is the compile step, which
+                  // takes the host IR as it does without the merge.
+                  DeviceAction = C.MakeAction<CompileJobAction>(
+                      DeviceAction, types::TY_LLVM_BC);
+                  DeviceAction->propagateDeviceOffloadInfo(Kind, DepBoundArch,
+                                                           DepTC);
+                  OffloadAction::HostDependence HDep(*HostAction, *HostTC,
+                                                     DepBoundArch, Kind);
+                  OffloadAction::DeviceDependences DDep;
+                  DDep.add(*DeviceAction, *DepTC, DepBoundArch, Kind);
+                  DeviceAction = C.MakeAction<OffloadAction>(HDep, DDep);
+                  DeviceLTOMode = DepTC->getLTOMode(Args, Kind);
+                }
+                if (Kind == Action::OFK_Cuda || Kind == Action::OFK_OpenMP) {
                   for (phases::ID DevicePhase :
                        {phases::Backend, phases::Assemble}) {
                     if (!llvm::is_contained(PL, DevicePhase))
                       break;
-                    DeviceAction = ConstructPhaseAction(C, Args, DevicePhase,
-                                                        DeviceAction, Kind);
+                    DeviceAction =
+                        ConstructPhaseAction(C, Args, DevicePhase, DeviceAction,
+                                             Kind, DeviceLTOMode);
                     DeviceAction->propagateDeviceOffloadInfo(Kind, DepBoundArch,
                                                              DepTC);
                   }
@@ -3801,18 +3857,24 @@ void Driver::BuildActions(Compilation &C, DerivedArgList &Args,
           else if (FatbinKind == Action::OFK_HIP)
             Fatbin = buildHipFatBinary(C, DeviceActions, DeviceToolChains,
                                        DeviceArchs);
+          else if (FatbinKind == Action::OFK_OpenMP)
+            Fatbin = buildOpenMPOffloadBinary(C, DeviceActions,
+                                              DeviceToolChains, DeviceArchs);
           // All arches share the single device toolchain of their kind; the
           // merged fatbin is arch-agnostic, so any collected TC serves here.
-          if (Fatbin)
+          // The OpenMP offload binary belongs to the host, as without the
+          // merge.
+          if (Fatbin && FatbinKind == Action::OFK_OpenMP)
+            DDeps.add(*Fatbin, *HostTC, /*BoundArch=*/BoundArch(),
+                      C.getActiveOffloadKinds());
+          else if (Fatbin)
             DDeps.add(*Fatbin, *DeviceToolChains.front(),
                       /*BoundArch=*/BoundArch(), FatbinKind);
 
-          Action *HostAction = OA->getHostDependence();
           HostAction = ConstructPhaseAction(C, Args, Phase, HostAction);
 
-          OffloadAction::HostDependence HDep(
-              *HostAction, *C.getSingleOffloadToolChain<Action::OFK_Host>(),
-              /*BoundArch=*/BoundArch(), DDeps);
+          OffloadAction::HostDependence HDep(*HostAction, *HostTC,
+                                             /*BoundArch=*/BoundArch(), DDeps);
           NewCurrent = C.MakeAction<OffloadAction>(HDep, DDeps);
         }
       }
@@ -4258,8 +4320,8 @@ Driver::BuildOffloadingActions(Compilation &C, llvm::opt::DerivedArgList &Args,
         getFinalPhase(Args) == phases::Preprocess))
     return HostAction;
 
-  // For CUDA/HIP with ClangIR, merge serialized host/device CIR modules and
-  // split them again before the backend consumes each module with -x cir.
+  // For CUDA/HIP/OpenMP with ClangIR, merge serialized host/device CIR modules
+  // and split them again before the backend consumes each module with -x cir.
   if (isCIROffloadMerge(C, Args) && !Args.hasArg(options::OPT_emit_cir) &&
       isa<CompileJobAction>(HostAction) &&
       HostAction->getType() == types::TY_CIR) {
@@ -4275,8 +4337,8 @@ Driver::BuildOffloadingActions(Compilation &C, llvm::opt::DerivedArgList &Args,
     Deps.push_back({C.getSingleOffloadToolChain<Action::OFK_Host>(),
                     BoundArch(), Action::OFK_Host});
 
-    const Action::OffloadKind CIRKinds[] = {Action::OFK_Cuda,
-                                            Action::OFK_HIP};
+    const Action::OffloadKind CIRKinds[] = {Action::OFK_Cuda, Action::OFK_HIP,
+                                            Action::OFK_OpenMP};
     for (Action::OffloadKind Kind : CIRKinds) {
       if ((Kind == Action::OFK_Cuda && !types::isCuda(Input.first)) ||
           (Kind == Action::OFK_HIP && !types::isHIP(Input.first)))
@@ -4289,9 +4351,12 @@ Driver::BuildOffloadingActions(Compilation &C, llvm::opt::DerivedArgList &Args,
 
       for (const ToolChain *TC : ToolChains) {
         for (BoundArch Arch : getOffloadArchs(C, Args, Kind, *TC)) {
+          // An OpenMP device compiles the source as it is. Its host IR is only
+          // needed later, when the device module is lowered.
           types::ID DeviceInputType =
-              Kind == Action::OFK_HIP ? types::TY_HIP_DEVICE
-                                      : types::TY_CUDA_DEVICE;
+              Kind == Action::OFK_HIP    ? types::TY_HIP_DEVICE
+              : Kind == Action::OFK_Cuda ? types::TY_CUDA_DEVICE
+                                         : Input.first;
           Action *DeviceAction =
               C.MakeAction<InputAction>(*Input.second, DeviceInputType, CUID);
           DeviceAction->propagateDeviceOffloadInfo(Kind, Arch, TC);

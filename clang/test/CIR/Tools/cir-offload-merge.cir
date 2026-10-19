@@ -154,6 +154,25 @@
 // RUN: not cir-offload-merge -split -input=%t/compatible-target-id.cir -targets=hip-amdgcn-amd-amdhsa--gfx908:xnack+,hip-amdgcn-amd-amdhsa--gfx908:sramecc+ -output=%t/xnack.cir -output=%t/sramecc.cir 2>&1 | FileCheck %s --check-prefix=ERR-MULTI-MATCH
 // ERR-MULTI-MATCH: error: module bundle ID 'hip-amdgcn-amd-amdhsa--gfx908' matches multiple requested targets
 
+// Source locations survive the combine and the split. They carry the debug
+// info, and OpenMP names a target region after its source line.
+// RUN: cir-offload-merge -combine \
+// RUN:   -input=%t/host-loc.cir \
+// RUN:   -input=%t/device-loc.cir \
+// RUN:   -targets=host-x86_64-unknown-linux-gnu,openmp-amdgcn-amd-amdhsa--gfx90a \
+// RUN:   -output=%t/combined-loc.cir
+// RUN: FileCheck %s --check-prefix=LOC --input-file=%t/combined-loc.cir
+// RUN: cir-offload-merge -split \
+// RUN:   -input=%t/combined-loc.cir \
+// RUN:   -targets=host-x86_64-unknown-linux-gnu,openmp-amdgcn-amd-amdhsa--gfx90a \
+// RUN:   -output=%t/split-loc-host.cir \
+// RUN:   -output=%t/split-loc-device.cir
+// RUN: FileCheck %s --check-prefix=LOC --input-file=%t/split-loc-host.cir
+// RUN: FileCheck %s --check-prefix=LOC --input-file=%t/split-loc-device.cir
+
+// LOC: cir.return loc(#[[RET:loc[0-9]*]])
+// LOC: #[[RET]] = loc("target.c":3:5)
+
 //--- host.cir
 module @old_host attributes {cir.triple = "x86_64-unknown-linux-gnu"} {
 }
@@ -230,4 +249,18 @@ module {
     builtin.module @device_1 attributes {cir.offload.bundle_id = "cuda-nvptx64-nvidia-cuda--sm_90", cir.offload.kind = #cir.offload<device>} {
     }
   }
+}
+
+//--- host-loc.cir
+module attributes {cir.triple = "x86_64-unknown-linux-gnu"} {
+  cir.func @f() {
+    cir.return loc("target.c":3:5)
+  } loc("target.c":2:1)
+}
+
+//--- device-loc.cir
+module attributes {cir.triple = "amdgcn-amd-amdhsa"} {
+  cir.func @f() {
+    cir.return loc("target.c":3:5)
+  } loc("target.c":2:1)
 }

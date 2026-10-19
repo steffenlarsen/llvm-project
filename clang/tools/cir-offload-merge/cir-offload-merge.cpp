@@ -367,7 +367,12 @@ int writeModuleToOutput(mlir::ModuleOp module, llvm::StringRef outputFileName) {
   // Emit the combined CIR module as textual MLIR.
   // TODO: Eventually when bytecode support lands for CIR, we should handle
   // such case here.
-  module->print(outputFile->os());
+  // Locations are kept, as -emit-cir keeps them. They carry the debug info,
+  // and OpenMP names a target region after its source line, which host and
+  // device must agree on.
+  mlir::OpPrintingFlags flags;
+  flags.enableDebugInfo(/*enable=*/true, /*prettyForm=*/false);
+  module->print(outputFile->os(), flags);
   outputFile->os() << '\n';
   outputFile->keep();
   return 0;

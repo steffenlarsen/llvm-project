@@ -9659,8 +9659,8 @@ void addOffloadTargetsArg(
                                 ->ComputeEffectiveClangTriple(
                                     TCArgs, Dep.DependentBoundArch))
                    .normalize(llvm::Triple::CanonicalForm::FOUR_IDENT);
-    if ((Dep.DependentOffloadKind == Action::OFK_HIP ||
-         Dep.DependentOffloadKind == Action::OFK_Cuda) &&
+    // The arch tells apart devices that share a triple.
+    if (Dep.DependentOffloadKind != Action::OFK_Host &&
         !Dep.DependentBoundArch.empty()) {
       Triples += '-';
       Triples += Dep.DependentBoundArch.ArchName;

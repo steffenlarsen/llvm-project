@@ -3765,6 +3765,8 @@ void CompilerInvocationBase::GenerateLangArgs(const LangOptions &Opts,
          serializeSanitizerKinds(Opts.UBSanFeatureIgnoredSanitize))
       GenerateArg(Consumer, OPT_fsanitize_ignore_for_ubsan_feature_EQ,
                   Sanitizer);
+    if (IK.getLanguage() == Language::CIR && !Opts.OMPHostIRFile.empty())
+      GenerateArg(Consumer, OPT_fopenmp_host_ir_file_path, Opts.OMPHostIRFile);
 
     return;
   }
@@ -4060,6 +4062,11 @@ bool CompilerInvocation::ParseLangArgs(LangOptions &Opts, ArgList &Args,
         "-fsanitize-ignore-for-ubsan-feature=",
         Args.getAllArgValues(OPT_fsanitize_ignore_for_ubsan_feature_EQ), Diags,
         Opts.UBSanFeatureIgnoredSanitize);
+    // An OpenMP device module resumed from CIR is lowered against the host IR
+    // that exists by then, not the one CIRGen saw.
+    if (IK.getLanguage() == Language::CIR)
+      Opts.OMPHostIRFile =
+          Args.getLastArgValue(OPT_fopenmp_host_ir_file_path).str();
 
     return Diags.getNumErrors() == NumErrorsBefore;
   }

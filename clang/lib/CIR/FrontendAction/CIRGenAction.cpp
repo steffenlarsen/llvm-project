@@ -158,6 +158,29 @@ static void attachDeviceBinaryFromFile(mlir::ModuleOp module,
                   mlir::StringAttr::get(bytes, binaryTy));
 }
 
+// The language options of a resumed .cir input are not parsed, so whether the
+// module was generated for OpenMP is read from the module itself.
+static bool isOpenMPModule(mlir::ModuleOp module, const LangOptions &LangOpts) {
+  if (LangOpts.OpenMP)
+    return true;
+  auto loweringLangOpts = module->getAttrOfType<cir::LoweringLangOptionsAttr>(
+      cir::CIRDialect::getLoweringLangOptionsAttrName());
+  return loweringLangOpts && loweringLangOpts.getOpenmp();
+}
+
+// CIRGen records the host IR on an OpenMP device module, but a resumed device
+// module can be generated before the host IR exists. Take the host IR the
+// driver passed so the device lowering sees the host offload entries.
+static void attachHostIRFile(mlir::ModuleOp module,
+                             const LangOptions &LangOpts) {
+  if (LangOpts.OMPHostIRFile.empty())
+    return;
+  auto offloadModule =
+      mlir::dyn_cast<mlir::omp::OffloadModuleInterface>(module.getOperation());
+  if (offloadModule && offloadModule.getIsTargetDevice())
+    offloadModule.setHostIRFilePath(LangOpts.OMPHostIRFile);
+}
+
 static bool linkInModules(CompilerInstance &CI, CodeGenOptions &CGO,
                           llvm::Module &M,
                           SmallVectorImpl<::clang::LinkModule> &LinkModules) {
@@ -482,6 +505,7 @@ void CIRGenAction::ExecuteAction() {
     return;
 
   attachDeviceBinaryFromFile(*MLIRMod, CI, CI.getCodeGenOpts());
+  attachHostIRFile(*MLIRMod, CI.getLangOpts());
 
   if (Action == OutputType::EmitCIR) {
     mlir::OpPrintingFlags Flags;
@@ -509,9 +533,9 @@ void CIRGenAction::ExecuteAction() {
     mlirSaveTempsOutFile = std::string(stem);
   }
 
-  std::unique_ptr<llvm::Module> LLVMModule =
-      lowerFromCIRToLLVMIR(*MLIRMod, *Ctx, CI.getLangOpts().OpenMP,
-                           mlirSaveTempsOutFile, &CI.getVirtualFileSystem());
+  std::unique_ptr<llvm::Module> LLVMModule = lowerFromCIRToLLVMIR(
+      *MLIRMod, *Ctx, isOpenMPModule(*MLIRMod, CI.getLangOpts()),
+      mlirSaveTempsOutFile, &CI.getVirtualFileSystem());
   if (!LLVMModule)
     return;
 
