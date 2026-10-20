@@ -473,6 +473,7 @@ public:
   Overlap_t mayOverlap() const { return Overlap_t(overlapFlag); }
 
   IsZeroed_t isZeroed() const { return IsZeroed_t(zeroedFlag); }
+  void setZeroed(bool zeroed = true) { zeroedFlag = zeroed; }
 
   IsAliased_t isPotentiallyAliased() const { return IsAliased_t(aliasedFlag); }
 

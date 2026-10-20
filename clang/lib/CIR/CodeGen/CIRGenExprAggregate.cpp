@@ -28,6 +28,138 @@
 using namespace clang;
 using namespace clang::CIRGen;
 
+// TODO(cir): This could be shared with classic codegen.
+/// Whether the cast leaves a zero value with an all-zero representation.
+static bool castPreservesZero(const CastExpr *ce) {
+  switch (ce->getCastKind()) {
+    // No-ops.
+  case CK_NoOp:
+  case CK_UserDefinedConversion:
+  case CK_ConstructorConversion:
+  case CK_BitCast:
+  case CK_ToUnion:
+  case CK_ToVoid:
+    // Conversions between (possibly-complex) integral, (possibly-complex)
+    // floating-point, and bool.
+  case CK_BooleanToSignedIntegral:
+  case CK_FloatingCast:
+  case CK_FloatingComplexCast:
+  case CK_FloatingComplexToBoolean:
+  case CK_FloatingComplexToIntegralComplex:
+  case CK_FloatingComplexToReal:
+  case CK_FloatingRealToComplex:
+  case CK_FloatingToBoolean:
+  case CK_FloatingToIntegral:
+  case CK_IntegralCast:
+  case CK_IntegralComplexCast:
+  case CK_IntegralComplexToBoolean:
+  case CK_IntegralComplexToFloatingComplex:
+  case CK_IntegralComplexToReal:
+  case CK_IntegralRealToComplex:
+  case CK_IntegralToBoolean:
+  case CK_IntegralToFloating:
+    // Reinterpreting integers as pointers and vice versa.
+  case CK_IntegralToPointer:
+  case CK_PointerToIntegral:
+    // Language extensions.
+  case CK_VectorSplat:
+  case CK_MatrixCast:
+  case CK_NonAtomicToAtomic:
+  case CK_AtomicToNonAtomic:
+  case CK_HLSLVectorTruncation:
+  case CK_HLSLMatrixTruncation:
+  case CK_HLSLElementwiseCast:
+  case CK_HLSLAggregateSplatCast:
+    return true;
+
+  case CK_BaseToDerivedMemberPointer:
+  case CK_DerivedToBaseMemberPointer:
+  case CK_MemberPointerToBoolean:
+  case CK_NullToMemberPointer:
+  case CK_ReinterpretMemberPointer:
+    // FIXME: ABI-dependent.
+    return false;
+
+  case CK_AnyPointerToBlockPointerCast:
+  case CK_BlockPointerToObjCPointerCast:
+  case CK_CPointerToObjCPointerCast:
+  case CK_ObjCObjectLValueCast:
+  case CK_IntToOCLSampler:
+  case CK_ZeroToOCLOpaqueType:
+    // FIXME: Check these.
+    return false;
+
+  case CK_FixedPointCast:
+  case CK_FixedPointToBoolean:
+  case CK_FixedPointToFloating:
+  case CK_FixedPointToIntegral:
+  case CK_FloatingToFixedPoint:
+  case CK_IntegralToFixedPoint:
+    // FIXME: Do all fixed-point types represent zero as all 0 bits?
+    return false;
+
+  case CK_AddressSpaceConversion:
+  case CK_BaseToDerived:
+  case CK_DerivedToBase:
+  case CK_Dynamic:
+  case CK_NullToPointer:
+  case CK_PointerToBoolean:
+    // FIXME: Preserves zeroes only if zero pointers and null pointers have the
+    // same representation in all involved address spaces.
+    return false;
+
+  case CK_ARCConsumeObject:
+  case CK_ARCExtendBlockObject:
+  case CK_ARCProduceObject:
+  case CK_ARCReclaimReturnedObject:
+  case CK_CopyAndAutoreleaseBlockObject:
+  case CK_ArrayToPointerDecay:
+  case CK_FunctionToPointerDecay:
+  case CK_BuiltinFnToFnPtr:
+  case CK_Dependent:
+  case CK_LValueBitCast:
+  case CK_LValueToRValue:
+  case CK_LValueToRValueBitCast:
+  case CK_UncheckedDerivedToBase:
+  case CK_HLSLArrayRValue:
+    return false;
+  }
+  llvm_unreachable("Unhandled clang::CastKind enum");
+}
+
+/// Whether the expression is a simple zero, whose value has an all-zero
+/// representation.
+static bool isSimpleZero(const Expr *e, CIRGenFunction &cgf) {
+  e = e->IgnoreParens();
+  while (auto *ce = dyn_cast<CastExpr>(e)) {
+    if (!castPreservesZero(ce))
+      break;
+    e = ce->getSubExpr()->IgnoreParens();
+  }
+
+  // 0
+  if (const auto *il = dyn_cast<IntegerLiteral>(e))
+    return il->getValue() == 0;
+  // +0.0
+  if (const auto *fl = dyn_cast<FloatingLiteral>(e))
+    return fl->getValue().isPosZero();
+  // int()
+  if ((isa<ImplicitValueInitExpr>(e) || isa<CXXScalarValueInitExpr>(e)) &&
+      cgf.getTypes().isZeroInitializable(e->getType()))
+    return true;
+  // (int*)0 - Null pointer expressions.
+  if (const auto *ice = dyn_cast<CastExpr>(e))
+    return ice->getCastKind() == CK_NullToPointer &&
+           cgf.getTypes().isZeroInitializable(e->getType()) &&
+           !e->HasSideEffects(cgf.getContext());
+  // '\0'
+  if (const auto *cl = dyn_cast<CharacterLiteral>(e))
+    return cl->getValue() == 0;
+
+  // Otherwise, hard case: conservatively return false.
+  return false;
+}
+
 namespace {
 class AggExprEmitter : public StmtVisitor<AggExprEmitter> {
 
@@ -950,6 +1082,10 @@ void AggExprEmitter::emitCopy(QualType type, const AggValueSlot &dest,
 void AggExprEmitter::emitInitializationToLValue(Expr *e, LValue lv) {
   const QualType type = lv.getType();
 
+  // Storing a zero to memory that is already zeroed is a no-op.
+  if (dest.isZeroed() && isSimpleZero(e, cgf))
+    return;
+
   if (isa<ImplicitValueInitExpr, CXXScalarValueInitExpr>(e)) {
     const mlir::Location loc = cgf.getLoc(e->getSourceRange());
     return emitNullInitializationToLValue(loc, lv);
@@ -1303,7 +1439,115 @@ AggValueSlot::Overlap_t CIRGenFunction::getOverlapForBaseInit(
   return AggValueSlot::MayOverlap;
 }
 
+/// An upper bound on the number of bytes of the initializer that are not
+/// zero.
+static CharUnits getNumNonZeroBytesInInit(const Expr *e, CIRGenFunction &cgf) {
+  if (auto *mte = dyn_cast<MaterializeTemporaryExpr>(e))
+    e = mte->getSubExpr();
+  e = e->IgnoreParenNoopCasts(cgf.getContext());
+
+  if (isSimpleZero(e, cgf))
+    return CharUnits::Zero();
+
+  const auto *ile = dyn_cast<InitListExpr>(e);
+  while (ile && ile->isTransparent())
+    ile = dyn_cast<InitListExpr>(ile->getInit(0));
+  if (!ile || !cgf.getTypes().isZeroInitializable(ile->getType()))
+    return cgf.getContext().getTypeSizeInChars(e->getType());
+
+  if (const RecordType *rt = e->getType()->getAsCanonical<RecordType>()) {
+    if (!rt->isUnionType()) {
+      RecordDecl *sd = rt->getDecl()->getDefinitionOrSelf();
+      CharUnits numNonZeroBytes = CharUnits::Zero();
+
+      unsigned ileElement = 0;
+      if (auto *cxxrd = dyn_cast<CXXRecordDecl>(sd))
+        while (ileElement != cxxrd->getNumBases())
+          numNonZeroBytes +=
+              getNumNonZeroBytesInInit(ile->getInit(ileElement++), cgf);
+      for (const auto *field : sd->fields()) {
+        // We're done once we hit the flexible array member or run out of
+        // InitListExpr elements.
+        if (field->getType()->isIncompleteArrayType() ||
+            ileElement == ile->getNumInits())
+          break;
+        if (field->isUnnamedBitField())
+          continue;
+
+        const Expr *init = ile->getInit(ileElement++);
+
+        // Reference values are always non-null and have the width of a
+        // pointer.
+        if (field->getType()->isReferenceType())
+          numNonZeroBytes += cgf.getContext().toCharUnitsFromBits(
+              cgf.getTarget().getPointerWidth(LangAS::Default));
+        else
+          numNonZeroBytes += getNumNonZeroBytesInInit(init, cgf);
+      }
+
+      return numNonZeroBytes;
+    }
+  }
+
+  // FIXME: This overestimates the number of non-zero bytes for bit-fields.
+  CharUnits numNonZeroBytes = CharUnits::Zero();
+  for (unsigned i = 0, e = ile->getNumInits(); i != e; ++i)
+    numNonZeroBytes += getNumNonZeroBytesInInit(ile->getInit(i), cgf);
+  return numNonZeroBytes;
+}
+
+/// If the initializer of a large aggregate is mostly zero, zero the whole
+/// slot with a memset first, padding included, as classic codegen does, and
+/// mark it zeroed so that only the non-zero parts are stored.
+static void checkAggExprForMemSetUse(AggValueSlot &slot, const Expr *e,
+                                     CIRGenFunction &cgf) {
+  // If the slot is already known to be zeroed, nothing to do. Don't mess with
+  // volatile stores.
+  if (slot.isZeroed() || slot.isVolatile() || !slot.getAddress().isValid())
+    return;
+
+  // C++ objects with a user-declared constructor don't need zero'ing.
+  if (cgf.getLangOpts().CPlusPlus)
+    if (const RecordType *rt = cgf.getContext()
+                                   .getBaseElementType(e->getType())
+                                   ->getAsCanonical<RecordType>()) {
+      const auto *rd = cast<CXXRecordDecl>(rt->getDecl());
+      if (rd->hasUserDeclaredConstructor())
+        return;
+    }
+
+  // If the type is 16-bytes or smaller, prefer individual stores over memset.
+  // A slot that may overlap another object is only written up to its data
+  // size.
+  ASTContext &ctx = cgf.getContext();
+  CharUnits size = slot.mayOverlap()
+                       ? ctx.getTypeInfoDataSizeInChars(e->getType()).Width
+                       : ctx.getTypeSizeInChars(e->getType());
+  if (size <= CharUnits::fromQuantity(16))
+    return;
+
+  // Check to see if over 3/4 of the initializer are known to be zero. If so,
+  // we prefer to emit memset + individual stores for the rest.
+  CharUnits numNonZeroBytes = getNumNonZeroBytesInInit(e, cgf);
+  if (numNonZeroBytes * 4 > size)
+    return;
+
+  CIRGenBuilderTy &builder = cgf.getBuilder();
+  mlir::Location loc = cgf.getLoc(e->getSourceRange());
+  mlir::Value zero = builder.getNullValue(builder.getUInt8Ty(), loc);
+  mlir::Value sizeValue =
+      builder.getConstInt(loc, cgf.cgm.uInt64Ty, size.getQuantity());
+  Address addr = slot.getAddress().withElementType(builder, cgf.cgm.voidTy);
+  builder.createMemSet(loc, addr, zero, sizeValue);
+
+  // Tell the AggExprEmitter that the slot is known zero.
+  slot.setZeroed();
+}
+
 void CIRGenFunction::emitAggExpr(const Expr *e, AggValueSlot slot) {
+  // Optimize the slot if possible.
+  checkAggExprForMemSetUse(slot, e, *this);
+
   AggExprEmitter(*this, slot).Visit(const_cast<Expr *>(e));
 }
 
