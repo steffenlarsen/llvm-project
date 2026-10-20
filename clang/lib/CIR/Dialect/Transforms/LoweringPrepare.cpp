@@ -2585,6 +2585,32 @@ void LoweringPreparePass::lowerTrivialCopyCall(cir::CallOp op) {
     builder.setInsertionPoint(op);
     builder.createCopy(dest, src);
     op.erase();
+    return;
+  }
+
+  // A trivial copy or move assignment copies the whole object, padding
+  // included, as classic codegen does. The member-by-member body would leave
+  // the padding of the left-hand side as it was. The left-hand side may be a
+  // base subobject whose tail padding holds another object, so tail padding,
+  // if the record has any, is not copied.
+  if (funcOp.getCxxSpecialAssignKind() && funcOp.isCxxTrivialMemberFunction()) {
+    CIRBaseBuilderTy builder(getContext());
+    mlir::ValueRange operands = op.getOperands();
+    mlir::Value dest = operands[0];
+    mlir::Value src = operands[1];
+    bool skipTailPadding = false;
+    if (auto structTy = mlir::dyn_cast<cir::StructType>(
+            mlir::cast<cir::PointerType>(dest.getType()).getPointee())) {
+      cir::CIRDataLayout dataLayout(mlirModule);
+      skipTailPadding = structTy.computeStructDataSize(dataLayout.layout) !=
+                        dataLayout.layout.getTypeSize(structTy);
+    }
+    builder.setInsertionPoint(op);
+    builder.createCopy(dest, src, /*isVolatile=*/false, skipTailPadding);
+    // The operator returns its left-hand side.
+    if (op->getNumResults())
+      op->getResult(0).replaceAllUsesWith(dest);
+    op.erase();
   }
 }
 

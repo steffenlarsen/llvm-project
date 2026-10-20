@@ -926,7 +926,7 @@ void test_agg_assign_throw(bool c, Agg &a) {
 // CIR:     cir.get_member %[[TMP]][1] {name = "y"}
 // CIR:   }
 // CIR:   %[[A_VAL:.*]] = cir.load %[[A_REF]]
-// CIR:   cir.call @_ZN3AggaSEOS_(%[[A_VAL]], %[[TMP]])
+// CIR:   cir.copy %[[TMP]] to %[[A_VAL]] : !cir.ptr<!rec_Agg>
 
 // LLVMCIR-LABEL: define{{.*}} void @_Z21test_agg_assign_throwbR3Agg(
 // LLVMCIR:   br i1 %{{.*}}, label %[[TRUE_BB:.*]], label %[[FALSE_BB:.*]]
@@ -939,7 +939,7 @@ void test_agg_assign_throw(bool c, Agg &a) {
 // LLVMCIR:   store i32 2, ptr %{{.*}}
 // LLVMCIR:   br label %[[END:.*]]
 // LLVMCIR: [[END]]:
-// LLVMCIR:   call{{.*}} ptr @_ZN3AggaSEOS_(
+// LLVMCIR:   call void @llvm.memcpy.p0.p0.i64(ptr align 4 %{{.*}}, ptr align 4 %{{.*}}, i64 8
 
 // OGCG-LABEL: define{{.*}} void @_Z21test_agg_assign_throwbR3Agg(
 // OGCG:   br i1 %{{.*}}, label %[[TRUE_BB:.*]], label %[[FALSE_BB:.*]]
