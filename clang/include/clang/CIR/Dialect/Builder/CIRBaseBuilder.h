@@ -996,8 +996,8 @@ public:
     cir::FenvAttr fenv;
     if (cir::isFPOrVectorOfFPType(lhs.getType()))
       fenv = getConstrainedFPAttr();
-    return cir::VecCmpOp::create(*this, loc, integralVecTy, kind, lhs, rhs,
-                                 fenv, mlir::BoolAttr{});
+    return cir::VecCmpOp::create(*this, loc, resultTy, kind, lhs, rhs, fenv,
+                                 mlir::BoolAttr{});
   }
 
   mlir::Value createIsNaN(mlir::Location loc, mlir::Value operand) {
