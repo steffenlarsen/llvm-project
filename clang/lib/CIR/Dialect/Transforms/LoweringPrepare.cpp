@@ -2794,8 +2794,12 @@ void LoweringPreparePass::runOnOp(mlir::Operation *op) {
     else if (auto globalDtor = fnOp.getGlobalDtorPriority())
       globalDtorList.emplace_back(fnOp.getName(), globalDtor.value());
 
-    if (mlir::Attribute attr =
-            fnOp->getAttr(cir::CUDAKernelNameAttr::getMnemonic())) {
+    // Only a kernel whose stub is defined here is in this module's device
+    // binary. A kernel that is only declared, such as an extern template
+    // instantiation, is registered by the module that defines it.
+    mlir::Attribute attr =
+        fnOp->getAttr(cir::CUDAKernelNameAttr::getMnemonic());
+    if (attr && !fnOp.isDeclaration()) {
       auto kernelNameAttr = dyn_cast<CUDAKernelNameAttr>(attr);
       llvm::StringRef kernelName = kernelNameAttr.getKernelName();
       cudaKernelMap[kernelName] = fnOp;
