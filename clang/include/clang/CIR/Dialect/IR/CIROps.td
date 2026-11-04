@@ -4103,16 +4103,24 @@ def CIR_GetMemberOp : CIR_Op<"get_member", [Pure]> {
     // Get the address of the member at index 1.
     %1 = cir.get_member %0[1] {name = "i"} : (!cir.ptr<!ty_B>) -> !cir.ptr<!s8i>
     ```
+
+    The address of a member is within the record, so it is computed as an
+    inbounds and nuw `getelementptr`. With the `no_inbounds` unit attribute,
+    the base pointer need not point to an object, as for a member access under
+    `-fwrapv-pointer` or through a null pointer constant, and the address is
+    computed without these flags.
   }];
 
   let arguments = (ins
     CIR_PointerType:$addr,
     StrAttr:$name,
-    IndexAttr:$index_attr);
+    IndexAttr:$index_attr,
+    UnitProp:$no_inbounds);
 
   let results = (outs Res<CIR_PointerType, "">:$result);
 
   let assemblyFormat = [{
+    (`no_inbounds` $no_inbounds^)?
     $addr `[` $index_attr `]` `{` `name` `=` $name `}` attr-dict
     `:` qualified(type($addr)) `->` qualified(type($result))
   }];
@@ -4121,10 +4129,11 @@ def CIR_GetMemberOp : CIR_Op<"get_member", [Pure]> {
     OpBuilder<(ins "mlir::Type":$type,
                    "mlir::Value":$value,
                    "llvm::StringRef":$name,
-                   "unsigned":$index),
+                   "unsigned":$index,
+                   CArg<"bool", "true">:$isInBounds),
     [{
       mlir::APInt fieldIdx(64, index);
-      build($_builder, $_state, type, value, name, fieldIdx);
+      build($_builder, $_state, type, value, name, fieldIdx, !isInBounds);
     }]>
   ];
 
@@ -6275,15 +6284,20 @@ def CIR_GetRuntimeMemberOp : CIR_Op<"get_runtime_member", [Pure]> {
 
     This operation expects a pointer to the base record as well as the pointer
     to the target member.
+
+    As for `cir.get_member`, the address is computed as an inbounds
+    `getelementptr` unless the `no_inbounds` unit attribute is present.
   }];
 
   let arguments = (ins
     CIR_PtrToRecordType:$addr,
-    CIR_DataMemberType:$member);
+    CIR_DataMemberType:$member,
+    UnitProp:$no_inbounds);
 
   let results = (outs Res<CIR_PointerType, "">:$result);
 
   let assemblyFormat = [{
+    (`no_inbounds` $no_inbounds^)?
     $addr `[` $member `:` qualified(type($member)) `]` attr-dict
     `:` qualified(type($addr)) `->` qualified(type($result))
   }];

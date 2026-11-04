@@ -32,7 +32,7 @@ void test_field_initializer() {
 // CIR:   cir.store align(4) %[[ZERO]], %[[X_ADDR]] : !s32i, !cir.ptr<!s32i>
 // CIR:   %[[VOID_PTR_THIS:.*]] = cir.cast bitcast %[[THIS]] : !cir.ptr<!rec_Container> -> !cir.ptr<!u8i>
 // CIR:   %[[FOUR:.*]] = cir.const #cir.int<4> : !u64i
-// CIR:   %[[CONTAINED_ADDR_VOID:.*]] = cir.ptr_stride %[[VOID_PTR_THIS]], %[[FOUR]] : (!cir.ptr<!u8i>, !u64i) -> !cir.ptr<!u8i>
+// CIR:   %[[CONTAINED_ADDR_VOID:.*]] = cir.ptr_stride inbounds %[[VOID_PTR_THIS]], %[[FOUR]] : (!cir.ptr<!u8i>, !u64i) -> !cir.ptr<!u8i>
 // CIR:   %[[CONTAINED_ADDR:.*]] = cir.cast bitcast %[[CONTAINED_ADDR_VOID]] : !cir.ptr<!u8i> -> !cir.ptr<!rec_Contained>
 // CIR:   %[[ONE:.*]] = cir.const #cir.int<1> : !s32i
 // CIR:   cir.call @_ZN9ContainedC1Ei(%[[CONTAINED_ADDR]], %[[ONE]])
@@ -48,7 +48,7 @@ void test_field_initializer() {
 // LLVM:   %[[THIS:.*]] = load ptr, ptr %{{.*}}
 // LLVM:   %[[X_ADDR:.*]] = getelementptr inbounds nuw %class.Container, ptr %[[THIS]], i32 0, i32 0
 // LLVM:   store i32 0, ptr %[[X_ADDR]]
-// LLVM:   %[[CONTAINED_ADDR:.*]] = getelementptr i8, ptr %[[THIS]], i64 4
+// LLVM:   %[[CONTAINED_ADDR:.*]] = getelementptr inbounds i8, ptr %[[THIS]], i64 4
 // LLVM:   call void @_ZN9ContainedC1Ei(ptr {{.*}} %[[CONTAINED_ADDR]], i32 {{.*}} 1)
 // LLVM:   invoke void @_Z8mayThrowv()
 // LLVM:           to label %[[INVOKE_CONT:.*]] unwind label %[[LPAD:.*]]

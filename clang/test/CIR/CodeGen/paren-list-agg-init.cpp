@@ -588,7 +588,7 @@ void foo18() {
 // CIR: cir.store{{.*}} %[[TWO]], %[[GET_A]] : !s32i, !cir.ptr<!s32i>
 // CIR: %[[G_TO_CHAR:.*]] = cir.cast bitcast %[[G_ALLOCA]] : !cir.ptr<![[STRUCT_G]]> -> !cir.ptr<!u8i>
 // CIR: %[[FOUR:.*]] = cir.const #cir.int<4> : !u64i
-// CIR: %[[F_OFFSET:.*]] = cir.ptr_stride %[[G_TO_CHAR]], %[[FOUR]] : (!cir.ptr<!u8i>, !u64i) -> !cir.ptr<!u8i>
+// CIR: %[[F_OFFSET:.*]] = cir.ptr_stride inbounds %[[G_TO_CHAR]], %[[FOUR]] : (!cir.ptr<!u8i>, !u64i) -> !cir.ptr<!u8i>
 // CIR: %[[F:.*]] = cir.cast bitcast %[[F_OFFSET]] : !cir.ptr<!u8i> -> !cir.ptr<![[STRUCT_F]]>
 // CIR: %[[ONE:.*]] = cir.const #cir.int<1> : !s32i
 // CIR: cir.call @_ZN1FC1Ei(%[[F]], %[[ONE]])

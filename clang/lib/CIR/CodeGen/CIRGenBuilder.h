@@ -641,7 +641,8 @@ public:
 
   cir::GetRuntimeMemberOp createGetIndirectMember(mlir::Location loc,
                                                   mlir::Value objectPtr,
-                                                  mlir::Value memberPtr) {
+                                                  mlir::Value memberPtr,
+                                                  bool isInBounds = true) {
     auto memberPtrTy = mlir::cast<cir::DataMemberType>(memberPtr.getType());
 
     // TODO(cir): consider address space.
@@ -649,7 +650,7 @@ public:
     cir::PointerType resultTy = getPointerTo(memberPtrTy.getMemberTy());
 
     return cir::GetRuntimeMemberOp::create(*this, loc, resultTy, objectPtr,
-                                           memberPtr);
+                                           memberPtr, !isInBounds);
   }
 
   /// Create a cir.ptr_stride operation to get access to an array element.

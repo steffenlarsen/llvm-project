@@ -603,11 +603,12 @@ void CIRGenFunction::emitInitializerForField(FieldDecl *field, LValue lhs,
 
 Address CIRGenFunction::emitCXXMemberDataPointerAddress(
     const Expr *e, Address base, mlir::Value memberPtr,
-    const MemberPointerType *memberPtrType, LValueBaseInfo *baseInfo) {
+    const MemberPointerType *memberPtrType, bool isInBounds,
+    LValueBaseInfo *baseInfo) {
   assert(!cir::MissingFeatures::cxxABI());
 
   cir::GetRuntimeMemberOp op = builder.createGetIndirectMember(
-      getLoc(e->getSourceRange()), base.getPointer(), memberPtr);
+      getLoc(e->getSourceRange()), base.getPointer(), memberPtr, isInBounds);
 
   QualType memberType = memberPtrType->getPointeeType();
   assert(!cir::MissingFeatures::opTBAA());

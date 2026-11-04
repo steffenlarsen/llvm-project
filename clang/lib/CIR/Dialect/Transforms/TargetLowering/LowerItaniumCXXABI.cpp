@@ -324,10 +324,9 @@ mlir::Operation *LowerItaniumCXXABI::lowerGetRuntimeMember(
       mlir::cast<cir::PointerType>(op.getAddr().getType()).getAddrSpace());
   auto objectBytesPtr = cir::CastOp::create(
       builder, op.getLoc(), bytePtrTy, cir::CastKind::bitcast, op.getAddr());
-  // A data member is within the object, as in classic codegen.
   auto memberBytesPtr = cir::PtrStrideOp::create(
       builder, op.getLoc(), bytePtrTy, objectBytesPtr, loweredMember,
-      /*inbounds=*/true, /*no_unsigned_wrap=*/false);
+      /*inbounds=*/!op.getNoInbounds(), /*no_unsigned_wrap=*/false);
   return cir::CastOp::create(builder, op.getLoc(), op.getType(),
                              cir::CastKind::bitcast, memberBytesPtr);
 }

@@ -46,7 +46,8 @@ using namespace cir;
 /// record layout, so we compute their address using the ASTContext field
 /// offset and byte-level pointer arithmetic instead of cir.get_member.
 static Address emitAddrOfZeroSizeField(CIRGenFunction &cgf, Address base,
-                                       const FieldDecl *field) {
+                                       const FieldDecl *field,
+                                       bool isInBounds) {
   CIRGenBuilderTy &builder = cgf.getBuilder();
   CharUnits offset = cgf.getContext().toCharUnitsFromBits(
       cgf.getContext().getFieldOffset(field));
@@ -63,8 +64,9 @@ static Address emitAddrOfZeroSizeField(CIRGenFunction &cgf, Address base,
   mlir::Location loc = cgf.getLoc(field->getLocation());
   mlir::Value addr =
       builder.createPtrBitcast(base.getPointer(), builder.getUInt8Ty());
-  addr = builder.createPtrStride(loc, addr,
-                                 builder.getUInt64(offset.getQuantity(), loc));
+  addr = builder.createPtrStride(
+      loc, addr, builder.getUInt64(offset.getQuantity(), loc),
+      isInBounds ? cir::PtrOffsetFlags::InBounds : cir::PtrOffsetFlags::None);
   addr = builder.createPtrBitcast(addr, fieldType);
   return Address(addr, base.getAlignment().alignmentAtOffset(offset));
 }
@@ -72,7 +74,8 @@ static Address emitAddrOfZeroSizeField(CIRGenFunction &cgf, Address base,
 Address CIRGenFunction::emitAddrOfFieldStorage(Address base,
                                                const FieldDecl *field,
                                                llvm::StringRef fieldName,
-                                               unsigned fieldIndex) {
+                                               unsigned fieldIndex,
+                                               bool isInBounds) {
   // Retrieve layout information for both type resolution and alignment.
   const RecordDecl *rec = field->getParent();
   const CIRGenRecordLayout &layout = cgm.getTypes().getCIRGenRecordLayout(rec);
@@ -82,7 +85,7 @@ Address CIRGenFunction::emitAddrOfFieldStorage(Address base,
           ? layout.hasCIRField(field)
           : !CodeGenUtils::isEmptyFieldForLayout(getContext(), field);
   if (!addressedByFieldIndex)
-    return emitAddrOfZeroSizeField(*this, base, field);
+    return emitAddrOfZeroSizeField(*this, base, field, isInBounds);
 
   mlir::Location loc = getLoc(field->getLocation());
   unsigned idx = layout.getCIRFieldNo(field);
@@ -110,7 +113,7 @@ Address CIRGenFunction::emitAddrOfFieldStorage(Address base,
   // which do not currently carry the name, so it can be passed down from the
   // CaptureStmt.
   mlir::Value addr = builder.createGetMember(loc, fieldPtr, base.getPointer(),
-                                             fieldName, fieldIndex);
+                                             fieldName, fieldIndex, isInBounds);
 
   // If the field is potentially overlapping, the record member uses the base
   // subobject type. Cast to the complete object pointer type expected by
@@ -588,21 +591,24 @@ RValue CIRGenFunction::emitLoadOfBitfieldLValue(LValue lv, SourceLocation loc) {
 Address CIRGenFunction::getAddrOfBitFieldStorage(LValue base,
                                                  const FieldDecl *field,
                                                  mlir::Type fieldType,
-                                                 unsigned index) {
+                                                 unsigned index,
+                                                 bool isInBounds) {
   mlir::Location loc = getLoc(field->getLocation());
   cir::PointerType fieldPtr =
       cir::PointerType::get(fieldType, base.getAddress().getAddressSpace());
   auto rec = cast<cir::RecordType>(base.getAddress().getElementType());
   cir::GetMemberOp sea = getBuilder().createGetMember(
       loc, fieldPtr, base.getPointer(), field->getName(),
-      mlir::isa<cir::UnionType>(rec) ? field->getFieldIndex() : index);
+      mlir::isa<cir::UnionType>(rec) ? field->getFieldIndex() : index,
+      isInBounds);
   CharUnits offset = CharUnits::fromQuantity(
       rec.getElementOffset(cgm.getDataLayout().layout, index));
   return Address(sea, base.getAlignment().alignmentAtOffset(offset));
 }
 
 LValue CIRGenFunction::emitLValueForBitField(LValue base,
-                                             const FieldDecl *field) {
+                                             const FieldDecl *field,
+                                             bool isInBounds) {
   LValueBaseInfo baseInfo = base.getBaseInfo();
   const CIRGenRecordLayout &layout =
       cgm.getTypes().getCIRGenRecordLayout(field->getParent());
@@ -611,7 +617,8 @@ LValue CIRGenFunction::emitLValueForBitField(LValue base,
   assert(!cir::MissingFeatures::preservedAccessIndexRegion());
 
   unsigned idx = layout.getCIRFieldNo(field);
-  Address addr = getAddrOfBitFieldStorage(base, field, info.storageType, idx);
+  Address addr =
+      getAddrOfBitFieldStorage(base, field, info.storageType, idx, isInBounds);
 
   mlir::Location loc = getLoc(field->getLocation());
   if (addr.getElementType() != info.storageType)
@@ -625,11 +632,12 @@ LValue CIRGenFunction::emitLValueForBitField(LValue base,
   return LValue::makeBitfield(addr, info, fieldType, fieldBaseInfo);
 }
 
-LValue CIRGenFunction::emitLValueForField(LValue base, const FieldDecl *field) {
+LValue CIRGenFunction::emitLValueForField(LValue base, const FieldDecl *field,
+                                          bool isInBounds) {
   LValueBaseInfo baseInfo = base.getBaseInfo();
 
   if (field->isBitField())
-    return emitLValueForBitField(base, field);
+    return emitLValueForBitField(base, field, isInBounds);
 
   QualType fieldType = field->getType();
   const RecordDecl *rec = field->getParent();
@@ -660,7 +668,7 @@ LValue CIRGenFunction::emitLValueForField(LValue base, const FieldDecl *field) {
   const CIRGenRecordLayout &layout =
       cgm.getTypes().getCIRGenRecordLayout(field->getParent());
   if (!rec->isUnion() && !layout.hasCIRField(field)) {
-    addr = emitAddrOfZeroSizeField(*this, addr, field);
+    addr = emitAddrOfZeroSizeField(*this, addr, field, isInBounds);
     LValue lv = makeAddrLValue(addr, fieldType, fieldBaseInfo);
     lv.getQuals().addCVRQualifiers(recordCVR);
     return lv;
@@ -671,7 +679,7 @@ LValue CIRGenFunction::emitLValueForField(LValue base, const FieldDecl *field) {
   else
     fieldIndex = layout.getCIRFieldNo(field);
 
-  addr = emitAddrOfFieldStorage(addr, field, fieldName, fieldIndex);
+  addr = emitAddrOfFieldStorage(addr, field, fieldName, fieldIndex, isInBounds);
   assert(!cir::MissingFeatures::preservedAccessIndexRegion());
 
   // If this is a reference field, load the reference right now.
@@ -713,14 +721,15 @@ LValue CIRGenFunction::emitLValueForFieldInitialization(
   if (!fieldType->isReferenceType())
     return emitLValueForField(base, field);
 
+  bool isInBounds = !getLangOpts().PointerOverflowDefined;
   Address v = base.getAddress();
   const CIRGenRecordLayout &layout =
       cgm.getTypes().getCIRGenRecordLayout(field->getParent());
   if (!layout.hasCIRField(field)) {
-    v = emitAddrOfZeroSizeField(*this, v, field);
+    v = emitAddrOfZeroSizeField(*this, v, field, isInBounds);
   } else {
     unsigned fieldIndex = layout.getCIRFieldNo(field);
-    v = emitAddrOfFieldStorage(v, field, fieldName, fieldIndex);
+    v = emitAddrOfFieldStorage(v, field, fieldName, fieldIndex, isInBounds);
   }
 
   // Make sure that the address is pointing to the right type.
@@ -941,10 +950,12 @@ CIRGenFunction::emitPointerToDataMemberBinaryExpr(const BinaryOperator *e) {
 
   mlir::Value memberPtr = emitScalarExpr(e->getRHS());
 
+  bool isInBounds = !getLangOpts().PointerOverflowDefined &&
+                    !isUnderlyingBasePointerConstantNull(e->getLHS());
   LValueBaseInfo baseInfo;
   assert(!cir::MissingFeatures::opTBAA());
-  Address memberAddr = emitCXXMemberDataPointerAddress(e, baseAddr, memberPtr,
-                                                       memberPtrTy, &baseInfo);
+  Address memberAddr = emitCXXMemberDataPointerAddress(
+      e, baseAddr, memberPtr, memberPtrTy, isInBounds, &baseInfo);
 
   return makeAddrLValue(memberAddr, memberPtrTy->getPointeeType(), baseInfo);
 }
@@ -1986,6 +1997,13 @@ static DeclRefExpr *tryToConvertMemberExprToDeclRefExpr(CIRGenFunction &cgf,
   return nullptr;
 }
 
+bool CIRGenFunction::isUnderlyingBasePointerConstantNull(const Expr *e) {
+  const Expr *underlyingBaseExpr = e->IgnoreParens();
+  while (auto *baseMemberExpr = dyn_cast<MemberExpr>(underlyingBaseExpr))
+    underlyingBaseExpr = baseMemberExpr->getBase()->IgnoreParens();
+  return getContext().isSentinelNullExpr(underlyingBaseExpr);
+}
+
 LValue CIRGenFunction::emitMemberExpr(const MemberExpr *e) {
   if (DeclRefExpr *dre = tryToConvertMemberExprToDeclRefExpr(*this, e)) {
     emitIgnoredExpr(e->getBase());
@@ -1993,6 +2011,10 @@ LValue CIRGenFunction::emitMemberExpr(const MemberExpr *e) {
   }
 
   Expr *baseExpr = e->getBase();
+  // A null base pointer constant comes from the offsetof idiom, which must
+  // not be marked inbounds.
+  bool isInBounds = !getLangOpts().PointerOverflowDefined &&
+                    !isUnderlyingBasePointerConstantNull(baseExpr);
   // If this is s.x, emit s as an lvalue.  If it is s->x, emit s as a scalar.
   LValue baseLV;
   if (e->isArrow()) {
@@ -2009,7 +2031,7 @@ LValue CIRGenFunction::emitMemberExpr(const MemberExpr *e) {
 
   const NamedDecl *nd = e->getMemberDecl();
   if (auto *field = dyn_cast<FieldDecl>(nd)) {
-    LValue lv = emitLValueForField(baseLV, field);
+    LValue lv = emitLValueForField(baseLV, field, isInBounds);
     assert(!cir::MissingFeatures::setObjCGCLValueClass());
     if (getLangOpts().OpenMP) {
       // If the member was explicitly marked as nontemporal, mark it as
@@ -2257,7 +2279,8 @@ LValue CIRGenFunction::emitMaterializeTemporaryExpr(
     case SubobjectAdjustment::MemberPointerAdjustment: {
       mlir::Value ptr = emitScalarExpr(adjustment.Ptr.RHS);
       object = emitCXXMemberDataPointerAddress(
-          e, object, ptr, adjustment.Ptr.MPT, /*baseInfo=*/nullptr);
+          e, object, ptr, adjustment.Ptr.MPT, /*isInBounds=*/true,
+          /*baseInfo=*/nullptr);
       break;
     }
     }

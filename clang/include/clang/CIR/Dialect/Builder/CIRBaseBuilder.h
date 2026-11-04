@@ -639,8 +639,9 @@ public:
 
   cir::GetMemberOp createGetMember(mlir::Location loc, mlir::Type resultTy,
                                    mlir::Value base, llvm::StringRef name,
-                                   unsigned index) {
-    return cir::GetMemberOp::create(*this, loc, resultTy, base, name, index);
+                                   unsigned index, bool isInBounds = true) {
+    return cir::GetMemberOp::create(*this, loc, resultTy, base, name, index,
+                                    isInBounds);
   }
 
   mlir::Value createDummyValue(mlir::Location loc, mlir::Type type,

@@ -258,12 +258,12 @@ void test_nested_dtor() {
 // CIR: cir.func {{.*}} @_ZN1DD2Ev
 // CIR:   %[[BASE:.*]] = cir.cast bitcast %{{.*}} : !cir.ptr<!rec_D> -> !cir.ptr<!u8i>
 // CIR:   %[[OFFSET:.*]] = cir.const #cir.int<4> : !u64i
-// CIR:   %[[PTR:.*]] = cir.ptr_stride %[[BASE]], %[[OFFSET]] : (!cir.ptr<!u8i>, !u64i) -> !cir.ptr<!u8i>
+// CIR:   %[[PTR:.*]] = cir.ptr_stride inbounds %[[BASE]], %[[OFFSET]] : (!cir.ptr<!u8i>, !u64i) -> !cir.ptr<!u8i>
 // CIR:   %[[C:.*]] = cir.cast bitcast %[[PTR]] : !cir.ptr<!u8i> -> !cir.ptr<!rec_C>
 // CIR:   cir.call @_ZN1CD1Ev(%[[C]])
 
 // LLVM: define {{.*}} void @_ZN1DD2Ev
-// LLVM:   %[[C:.*]] = getelementptr i8, ptr %{{.*}}, i64 4
+// LLVM:   %[[C:.*]] = getelementptr inbounds i8, ptr %{{.*}}, i64 4
 // LLVM:   call void @_ZN1CD1Ev(ptr {{.*}} %[[C]])
 
 // OGCG: define {{.*}} void @_ZN1DD2Ev

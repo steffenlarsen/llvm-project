@@ -119,3 +119,31 @@ int *vla_add(int n, int (*p)[n], int i) { return *(p + i); }
 // LLVM: getelementptr inbounds i32, ptr %{{.*}}, i64 %{{.*}}
 // WRAPV-LABEL: define {{.*}} @vla_add(
 // WRAPV: getelementptr i32, ptr %{{.*}}, i64 %{{.*}}
+
+// A member address is inbounds and nuw, unless it is computed from a null
+// pointer constant as in the offsetof idiom.
+
+struct S { int a; int b; unsigned bf : 3; };
+
+int *member(struct S *s) { return &s->b; }
+
+// CIR-LABEL: cir.func {{.*}} @member(
+// CIR: cir.get_member %{{.*}}[1] {name = "b"}
+// LLVM-LABEL: define {{.*}} @member(
+// LLVM: getelementptr inbounds nuw %struct.S, ptr %{{.*}}, i32 0, i32 1
+// WRAPV-LABEL: define {{.*}} @member(
+// WRAPV: getelementptr %struct.S, ptr %{{.*}}, i32 0, i32 1
+
+unsigned bitfield(struct S *s) { return s->bf; }
+
+// CIR-LABEL: cir.func {{.*}} @bitfield(
+// CIR: cir.get_member %{{.*}}[2] {name = "bf"}
+// LLVM-LABEL: define {{.*}} @bitfield(
+// LLVM: getelementptr inbounds nuw %struct.S, ptr %{{.*}}, i32 0, i32 2
+// WRAPV-LABEL: define {{.*}} @bitfield(
+// WRAPV: getelementptr %struct.S, ptr %{{.*}}, i32 0, i32 2
+
+unsigned long offset_of(void) { return (unsigned long)&((struct S *)0)->b; }
+
+// CIR-LABEL: cir.func {{.*}} @offset_of(
+// CIR: cir.get_member no_inbounds %{{.*}}[1] {name = "b"}

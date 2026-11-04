@@ -5024,12 +5024,13 @@ mlir::LogicalResult CIRToLLVMGetMemberOpLowering::matchAndRewrite(
   const mlir::Type elementTy = getTypeConverter()->convertType(structTy);
   if (!elementTy)
     return emitTypeConversionError(op, structTy);
-  // Struct member accesses are always inbounds and nuw: the base pointer
-  // is valid and the member offset is a positive, constant offset within
-  // the struct layout, so it cannot wrap. This matches LLVM's
-  // IRBuilder::CreateStructGEP.
+  // A member offset is a positive constant within the struct layout, so the
+  // access is inbounds and nuw whenever the base points to an object. This
+  // matches LLVM's IRBuilder::CreateStructGEP.
   mlir::LLVM::GEPNoWrapFlags flags =
-      mlir::LLVM::GEPNoWrapFlags::inbounds | mlir::LLVM::GEPNoWrapFlags::nuw;
+      op.getNoInbounds() ? mlir::LLVM::GEPNoWrapFlags::none
+                         : mlir::LLVM::GEPNoWrapFlags::inbounds |
+                               mlir::LLVM::GEPNoWrapFlags::nuw;
   rewriter.replaceOpWithNewOp<mlir::LLVM::GEPOp>(
       op, llResTy, elementTy, adaptor.getAddr(), offset, flags);
   return mlir::success();

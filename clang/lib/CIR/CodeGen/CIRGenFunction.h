@@ -1156,7 +1156,8 @@ public:
   }
 
   Address getAddrOfBitFieldStorage(LValue base, const clang::FieldDecl *field,
-                                   mlir::Type fieldType, unsigned index);
+                                   mlir::Type fieldType, unsigned index,
+                                   bool isInBounds);
 
   /// Given an opaque value expression, return its LValue mapping if it exists,
   /// otherwise create one.
@@ -1854,8 +1855,8 @@ private:
 
 public:
   Address emitAddrOfFieldStorage(Address base, const FieldDecl *field,
-                                 llvm::StringRef fieldName,
-                                 unsigned fieldIndex);
+                                 llvm::StringRef fieldName, unsigned fieldIndex,
+                                 bool isInBounds);
 
   mlir::Value emitAlloca(llvm::StringRef name, mlir::Type ty,
                          mlir::Location loc, clang::CharUnits alignment,
@@ -2201,9 +2202,11 @@ public:
   RValue emitCXXMemberCallExpr(const clang::CXXMemberCallExpr *e,
                                ReturnValueSlot returnValue);
 
-  Address emitCXXMemberDataPointerAddress(
-      const Expr *e, Address base, mlir::Value memberPtr,
-      const MemberPointerType *memberPtrType, LValueBaseInfo *baseInfo);
+  Address
+  emitCXXMemberDataPointerAddress(const Expr *e, Address base,
+                                  mlir::Value memberPtr,
+                                  const MemberPointerType *memberPtrType,
+                                  bool isInBounds, LValueBaseInfo *baseInfo);
 
   RValue emitCXXMemberOrOperatorCall(
       const clang::CXXMethodDecl *md, const CIRGenCallee &callee,
@@ -2462,8 +2465,14 @@ public:
   /// of the expression.
   /// FIXME: document this function better.
   LValue emitLValue(const clang::Expr *e);
-  LValue emitLValueForBitField(LValue base, const FieldDecl *field);
-  LValue emitLValueForField(LValue base, const clang::FieldDecl *field);
+  /// Return true if the base of a member access chain is a null pointer
+  /// constant, as in the offsetof idiom.
+  bool isUnderlyingBasePointerConstantNull(const Expr *e);
+
+  LValue emitLValueForBitField(LValue base, const FieldDecl *field,
+                               bool isInBounds);
+  LValue emitLValueForField(LValue base, const clang::FieldDecl *field,
+                            bool isInBounds = true);
 
   LValue emitLValueForLambdaField(const FieldDecl *field);
   LValue emitLValueForLambdaField(const FieldDecl *field,

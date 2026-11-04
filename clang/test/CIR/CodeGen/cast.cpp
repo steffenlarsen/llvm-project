@@ -163,7 +163,7 @@ void null_cast(long) {
 // CIR:    %[[NULLPTR:.*]] = cir.const #cir.ptr<null> : !cir.ptr<!s32i>
 // CIR:    cir.store{{.*}} %{{.*}}, %[[NULLPTR]] : !s32i, !cir.ptr<!s32i>
 // CIR:    %[[NULLPTR_A:.*]] = cir.const #cir.ptr<null> : !cir.ptr<!rec_A>
-// CIR:    %[[A_X:.*]] = cir.get_member %[[NULLPTR_A]][0] {name = "x"} : !cir.ptr<!rec_A> -> !cir.ptr<!s32i>
+// CIR:    %[[A_X:.*]] = cir.get_member no_inbounds %[[NULLPTR_A]][0] {name = "x"} : !cir.ptr<!rec_A> -> !cir.ptr<!s32i>
 
 struct B {
   int *p;
