@@ -11,4 +11,4 @@ const unsigned char *f(const unsigned char *p, int n) {
 // CHECK: store i32 [[NEG]], ptr {{.*}}, align 4
 // CHECK: [[EXT:%.*]] = sext i32 [[N]] to i64
 // CHECK: [[WIDENED:%.*]] = sub i64 0, [[EXT]]
-// CHECK: getelementptr i8, ptr {{.*}}, i64 [[WIDENED]]
+// CHECK: getelementptr inbounds i8, ptr {{.*}}, i64 [[WIDENED]]

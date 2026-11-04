@@ -157,12 +157,12 @@ __device__ void func_name() { take(__func__); }
 // CIR-SPV-LABEL: cir.func{{.*}} @_Z9subscripti
 // CIR-SPV: %[[G:.*]] = cir.get_global @".str.2" : !cir.ptr<!cir.array<!s8i x 4>, target_address_space(1)>
 // CIR-SPV: %[[C:.*]] = cir.cast address_space %[[G]] : !cir.ptr<!cir.array<!s8i x 4>, target_address_space(1)> -> !cir.ptr<!cir.array<!s8i x 4>, target_address_space(4)>
-// CIR-SPV: cir.get_element %[[C]][{{.*}}] : !cir.ptr<!cir.array<!s8i x 4>, target_address_space(4)> -> !cir.ptr<!s8i, target_address_space(4)>
+// CIR-SPV: cir.get_element inbounds %[[C]][{{.*}}] : !cir.ptr<!cir.array<!s8i x 4>, target_address_space(4)> -> !cir.ptr<!s8i, target_address_space(4)>
 
 // CIR-GCN-LABEL: cir.func{{.*}} @_Z9subscripti
 // CIR-GCN: %[[G:.*]] = cir.get_global @".str.2" : !cir.ptr<!cir.array<!s8i x 4>, target_address_space(4)>
 // CIR-GCN: %[[C:.*]] = cir.cast address_space %[[G]] : !cir.ptr<!cir.array<!s8i x 4>, target_address_space(4)> -> !cir.ptr<!cir.array<!s8i x 4>>
-// CIR-GCN: cir.get_element %[[C]][{{.*}}] : !cir.ptr<!cir.array<!s8i x 4>> -> !cir.ptr<!s8i>
+// CIR-GCN: cir.get_element inbounds %[[C]][{{.*}}] : !cir.ptr<!cir.array<!s8i x 4>> -> !cir.ptr<!s8i>
 
 // LLVM-SPV-LABEL: define{{.*}} i8 @_Z9subscripti
 // LLVM-SPV: getelementptr {{.*}}[4 x i8], ptr addrspace(4) addrspacecast (ptr addrspace(1) @.str.2 to ptr addrspace(4))

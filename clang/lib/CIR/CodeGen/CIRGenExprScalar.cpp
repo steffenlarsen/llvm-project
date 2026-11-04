@@ -774,6 +774,15 @@ public:
       }
     } else if (const PointerType *ptr = type->getAs<PointerType>()) {
       QualType type = ptr->getPointeeType();
+      // The step is taken as unsigned, and a decrement as a subtraction.
+      const cir::PtrOffsetFlags flags =
+          cgf.getLangOpts().PointerOverflowDefined
+              ? cir::PtrOffsetFlags::None
+              : cgf.getInBoundsPtrOffsetFlags(
+                    value,
+                    mlir::cast<cir::PointerType>(value.getType()).getPointee(),
+                    /*signedIndices=*/false,
+                    /*isSubtraction=*/!e->isIncrementOp());
       if (const VariableArrayType *vla =
               cgf.getContext().getAsVariableArrayType(type)) {
         mlir::Location loc = cgf.getLoc(e->getSourceRange());
@@ -781,14 +790,14 @@ public:
         if (!e->isIncrementOp())
           numElts = cgf.getBuilder().createNeg(loc, numElts, /*nsw=*/true);
         assert(!cir::MissingFeatures::sanitizers());
-        value = cgf.getBuilder().createPtrStride(loc, value, numElts);
+        value = cgf.getBuilder().createPtrStride(loc, value, numElts, flags);
       } else {
         // For everything else, we can just do a simple increment.
         mlir::Location loc = cgf.getLoc(e->getSourceRange());
         int amount = e->isIncrementOp() ? 1 : -1;
         mlir::Value amt = builder.getSInt32(amount, loc);
         assert(!cir::MissingFeatures::sanitizers());
-        value = builder.createPtrStride(loc, value, amt);
+        value = builder.createPtrStride(loc, value, amt, flags);
       }
     } else if (type->isVectorType()) {
       if (type->hasIntegerRepresentation()) {
@@ -2057,6 +2066,18 @@ static mlir::Value emitPointerArithmetic(CIRGenFunction &cgf,
     return nullptr;
   }
 
+  // Pointer arithmetic stays within the object unless pointer overflow is
+  // defined.
+  const bool isSigned =
+      indexOperand->getType()->isSignedIntegerOrEnumerationType();
+  const cir::PtrOffsetFlags flags =
+      cgf.getLangOpts().PointerOverflowDefined
+          ? cir::PtrOffsetFlags::None
+          : cgf.getInBoundsPtrOffsetFlags(
+                pointer,
+                mlir::cast<cir::PointerType>(pointer.getType()).getPointee(),
+                isSigned, isSubtraction);
+
   QualType elementType = pointerType->getPointeeType();
   if (const VariableArrayType *vla =
           cgf.getContext().getAsVariableArrayType(elementType)) {
@@ -2074,14 +2095,12 @@ static mlir::Value emitPointerArithmetic(CIRGenFunction &cgf,
     index =
         cgf.getBuilder().createMul(loc, index, numElements, overflowBehavior);
     assert(!cir::MissingFeatures::sanitizers());
-    return cir::PtrStrideOp::create(cgf.getBuilder(), loc, pointer.getType(),
-                                    pointer, index);
+    return cgf.getBuilder().createPtrStride(loc, pointer, index, flags);
   }
 
   assert(!cir::MissingFeatures::sanitizers());
-  return cir::PtrStrideOp::create(cgf.getBuilder(),
-                                  cgf.getLoc(op.e->getExprLoc()),
-                                  pointer.getType(), pointer, index);
+  return cgf.getBuilder().createPtrStride(cgf.getLoc(op.e->getExprLoc()),
+                                          pointer, index, flags);
 }
 
 static bool isIntegerVectorBinOp(mlir::Type ty) {

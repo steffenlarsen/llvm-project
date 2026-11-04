@@ -62,6 +62,32 @@ constexpr bool testFlag(OverflowBehavior ob, OverflowBehavior flag) {
   return (ob & flag) != OverflowBehavior::None;
 }
 
+/// The no-wrap flags of a cir.ptr_stride or cir.get_element.
+enum class PtrOffsetFlags {
+  None = 0,
+  InBounds = 1 << 0,
+  NoUnsignedWrap = 1 << 1,
+};
+
+constexpr PtrOffsetFlags operator|(PtrOffsetFlags a, PtrOffsetFlags b) {
+  return static_cast<PtrOffsetFlags>(llvm::to_underlying(a) |
+                                     llvm::to_underlying(b));
+}
+
+constexpr PtrOffsetFlags operator&(PtrOffsetFlags a, PtrOffsetFlags b) {
+  return static_cast<PtrOffsetFlags>(llvm::to_underlying(a) &
+                                     llvm::to_underlying(b));
+}
+
+constexpr PtrOffsetFlags &operator|=(PtrOffsetFlags &a, PtrOffsetFlags b) {
+  a = a | b;
+  return a;
+}
+
+constexpr bool testFlag(PtrOffsetFlags flags, PtrOffsetFlags flag) {
+  return (flags & flag) != PtrOffsetFlags::None;
+}
+
 class CIRBaseBuilderTy : public mlir::OpBuilder {
 
 public:
@@ -628,9 +654,13 @@ public:
                                /*invariant=*/false);
   }
 
-  cir::PtrStrideOp createPtrStride(mlir::Location loc, mlir::Value base,
-                                   mlir::Value stride) {
-    return cir::PtrStrideOp::create(*this, loc, base.getType(), base, stride);
+  cir::PtrStrideOp
+  createPtrStride(mlir::Location loc, mlir::Value base, mlir::Value stride,
+                  PtrOffsetFlags flags = PtrOffsetFlags::None) {
+    return cir::PtrStrideOp::create(
+        *this, loc, base.getType(), base, stride,
+        testFlag(flags, PtrOffsetFlags::InBounds),
+        testFlag(flags, PtrOffsetFlags::NoUnsignedWrap));
   }
 
   //===--------------------------------------------------------------------===//

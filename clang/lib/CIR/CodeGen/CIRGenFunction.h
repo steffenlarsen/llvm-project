@@ -1913,6 +1913,14 @@ public:
   LValue emitArraySubscriptExpr(const clang::ArraySubscriptExpr *e);
   LValue emitInitListLValue(const InitListExpr *e);
 
+  /// The flags of an offset of \p base, which points to \p srcElemTy, that the
+  /// source language guarantees stays within the object \p base points into.
+  /// \p signedIndices tells whether any index is signed.
+  cir::PtrOffsetFlags getInBoundsPtrOffsetFlags(mlir::Value base,
+                                                mlir::Type srcElemTy,
+                                                bool signedIndices,
+                                                bool isSubtraction) const;
+
   LValue emitExtVectorElementExpr(const ExtVectorElementExpr *e);
 
   LValue emitMatrixSubscriptExpr(const MatrixSubscriptExpr *e);

@@ -29,7 +29,7 @@ int test1(void) {
 // CIR-LABEL: cir.func{{.*}} @_Z5test1v
 // CIR:         %[[BASE:.*]] = cir.call @_Z6baseFnv()
 // CIR-NEXT:    %[[IDX:.*]] = cir.call @_Z5idxFnv()
-// CIR:         cir.ptr_stride %[[BASE]], {{.*}}
+// CIR:         cir.ptr_stride inbounds %[[BASE]], {{.*}}
 
 // LLVM-LABEL: define{{.*}} i32 @_Z5test1v()
 // LLVM:         %[[BASE:.*]] = call {{.*}} ptr @_Z6baseFnv()
@@ -43,7 +43,7 @@ int test2(void) {
 // CIR-LABEL: cir.func{{.*}} @_Z5test2v
 // CIR:         %[[IDX:.*]] = cir.call @_Z5idxFnv()
 // CIR-NEXT:    %[[BASE:.*]] = cir.call @_Z6baseFnv()
-// CIR:         cir.ptr_stride %[[BASE]], {{.*}}
+// CIR:         cir.ptr_stride inbounds %[[BASE]], {{.*}}
 
 // LLVM-LABEL: define{{.*}} i32 @_Z5test2v()
 // LLVM:         %[[IDX:.*]] = call {{.*}} i32 @_Z5idxFnv()
@@ -57,7 +57,7 @@ int test3(void) {
 // CIR-LABEL: cir.func{{.*}} @_Z5test3v
 // CIR:         %[[BASE:.*]] = cir.call @_Z6getArrv()
 // CIR-NEXT:    %[[IDX:.*]] = cir.call @_Z5idxFnv()
-// CIR:         cir.get_element %[[BASE]][{{.*}}]
+// CIR:         cir.get_element inbounds %[[BASE]][{{.*}}]
 
 // LLVM-LABEL: define{{.*}} i32 @_Z5test3v()
 // LLVM:         %[[BASE:.*]] = call {{.*}} ptr @_Z6getArrv()
@@ -103,7 +103,7 @@ int test_vla(int n, int m, int arr[n][m]) {
 // CIR-NEXT:    %[[ARR:.*]] = cir.load
 // CIR-NEXT:    %[[IDX:.*]] = cir.call @_Z5idxFnv()
 // CIR:         cir.mul nsw {{.*}}
-// CIR:         cir.ptr_stride %[[ARR]], {{.*}}
+// CIR:         cir.ptr_stride inbounds %[[ARR]], {{.*}}
 
 // LLVM-LABEL: define{{.*}} i32 @_Z8test_vlaiiPA_i
 // LLVM:         call void @_Z5touchv()

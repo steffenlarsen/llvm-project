@@ -5,43 +5,43 @@
 void foo(int *iptr, char *cptr, unsigned ustride) {
   iptr + 2;
   // CHECK: %[[#STRIDE:]] = cir.const #cir.int<2> : !s32i
-  // CHECK: cir.ptr_stride %{{.+}}, %[[#STRIDE]] : (!cir.ptr<!s32i>, !s32i) -> !cir.ptr<!s32i>
+  // CHECK: cir.ptr_stride inbounds %{{.+}}, %[[#STRIDE]] : (!cir.ptr<!s32i>, !s32i) -> !cir.ptr<!s32i>
   cptr + 3;
   // CHECK: %[[#STRIDE:]] = cir.const #cir.int<3> : !s32i
-  // CHECK: cir.ptr_stride %{{.+}}, %[[#STRIDE]] : (!cir.ptr<!s8i>, !s32i) -> !cir.ptr<!s8i>
+  // CHECK: cir.ptr_stride inbounds %{{.+}}, %[[#STRIDE]] : (!cir.ptr<!s8i>, !s32i) -> !cir.ptr<!s8i>
 
   // We need to assign to a temporary in these cases because otherwise
   // constant folding of the unary minus for thenegative stride value also
   // triggers erasing the unused result of the ptr_stride operation.
   int* iptr2 = iptr - 2;
   // CHECK: %[[#STRIDE:]] = cir.const #cir.int<-2> : !s32i
-  // CHECK: cir.ptr_stride %{{.+}}, %[[#STRIDE]] : (!cir.ptr<!s32i>, !s32i) -> !cir.ptr<!s32i>
+  // CHECK: cir.ptr_stride inbounds %{{.+}}, %[[#STRIDE]] : (!cir.ptr<!s32i>, !s32i) -> !cir.ptr<!s32i>
   char* cptr2 = cptr - 3;
 
   // CHECK: %[[#STRIDE:]] = cir.const #cir.int<-3> : !s32i
-  // CHECK: cir.ptr_stride %{{.+}}, %[[#STRIDE]] : (!cir.ptr<!s8i>, !s32i) -> !cir.ptr<!s8i>
+  // CHECK: cir.ptr_stride inbounds %{{.+}}, %[[#STRIDE]] : (!cir.ptr<!s8i>, !s32i) -> !cir.ptr<!s8i>
   iptr + ustride;
   // CHECK: %[[#STRIDE:]] = cir.load{{.*}} %{{.+}} : !cir.ptr<!u32i>, !u32i
-  // CHECK: cir.ptr_stride %{{.+}}, %[[#STRIDE]] : (!cir.ptr<!s32i>, !u32i) -> !cir.ptr<!s32i>
+  // CHECK: cir.ptr_stride inbounds nuw %{{.+}}, %[[#STRIDE]] : (!cir.ptr<!s32i>, !u32i) -> !cir.ptr<!s32i>
 
   // Must convert unsigned stride to a signed one.
   iptr - ustride;
   // CHECK: %[[#STRIDE:]] = cir.load{{.*}} %{{.+}} : !cir.ptr<!u32i>, !u32i
   // CHECK: %[[#SIGNSTRIDE:]] = cir.cast integral %[[#STRIDE]] : !u32i -> !s32i
   // CHECK: %[[#NEGSTRIDE:]] = cir.minus %[[#SIGNSTRIDE]] : !s32i
-  // CHECK: cir.ptr_stride %{{.+}}, %[[#NEGSTRIDE]] : (!cir.ptr<!s32i>, !s32i) -> !cir.ptr<!s32i>
+  // CHECK: cir.ptr_stride inbounds %{{.+}}, %[[#NEGSTRIDE]] : (!cir.ptr<!s32i>, !s32i) -> !cir.ptr<!s32i>
 
   4 + iptr;
   // CHECK: %[[#STRIDE:]] = cir.const #cir.int<4> : !s32i
-  // CHECK: cir.ptr_stride %{{.+}}, %[[#STRIDE]] : (!cir.ptr<!s32i>, !s32i) -> !cir.ptr<!s32i>
+  // CHECK: cir.ptr_stride inbounds %{{.+}}, %[[#STRIDE]] : (!cir.ptr<!s32i>, !s32i) -> !cir.ptr<!s32i>
 
   iptr++;
   // CHECK: %[[#STRIDE:]] = cir.const #cir.int<1> : !s32i
-  // CHECK: cir.ptr_stride %{{.+}}, %[[#STRIDE]] : (!cir.ptr<!s32i>, !s32i) -> !cir.ptr<!s32i>
+  // CHECK: cir.ptr_stride inbounds nuw %{{.+}}, %[[#STRIDE]] : (!cir.ptr<!s32i>, !s32i) -> !cir.ptr<!s32i>
 
   iptr--;
   // CHECK: %[[#STRIDE:]] = cir.const #cir.int<-1> : !s32i
-  // CHECK: cir.ptr_stride %{{.+}}, %[[#STRIDE]] : (!cir.ptr<!s32i>, !s32i) -> !cir.ptr<!s32i>
+  // CHECK: cir.ptr_stride inbounds %{{.+}}, %[[#STRIDE]] : (!cir.ptr<!s32i>, !s32i) -> !cir.ptr<!s32i>
 }
 
 void testPointerSubscriptAccess(int *ptr) {
@@ -49,7 +49,7 @@ void testPointerSubscriptAccess(int *ptr) {
   ptr[1];
   // CHECK: %[[#PTR:]] = cir.load{{.*}} %{{.+}} : !cir.ptr<!cir.ptr<!s32i>>, !cir.ptr<!s32i>
   // CHECK: %[[#STRIDE:]] = cir.const #cir.int<1> : !s64i
-  // CHECK: cir.ptr_stride %[[#PTR]], %[[#STRIDE]] : (!cir.ptr<!s32i>, !s64i) -> !cir.ptr<!s32i>
+  // CHECK: cir.ptr_stride inbounds %[[#PTR]], %[[#STRIDE]] : (!cir.ptr<!s32i>, !s64i) -> !cir.ptr<!s32i>
 }
 
 void testPointerMultiDimSubscriptAccess(int **ptr) {
@@ -57,10 +57,10 @@ void testPointerMultiDimSubscriptAccess(int **ptr) {
   ptr[1][2];
   // CHECK: %[[#PTR1:]] = cir.load{{.*}} %{{.+}} : !cir.ptr<!cir.ptr<!cir.ptr<!s32i>>>, !cir.ptr<!cir.ptr<!s32i>>
   // CHECK: %[[#STRIDE1:]] = cir.const #cir.int<1> : !s64i
-  // CHECK: %[[#PTR2:]] = cir.ptr_stride %[[#PTR1]], %[[#STRIDE1]] : (!cir.ptr<!cir.ptr<!s32i>>, !s64i) -> !cir.ptr<!cir.ptr<!s32i>>
+  // CHECK: %[[#PTR2:]] = cir.ptr_stride inbounds %[[#PTR1]], %[[#STRIDE1]] : (!cir.ptr<!cir.ptr<!s32i>>, !s64i) -> !cir.ptr<!cir.ptr<!s32i>>
   // CHECK: %[[#PTR3:]] = cir.load{{.*}} %[[#PTR2]] : !cir.ptr<!cir.ptr<!s32i>>, !cir.ptr<!s32i>
   // CHECK: %[[#STRIDE2:]] = cir.const #cir.int<2> : !s64i
-  // CHECK: cir.ptr_stride %[[#PTR3]], %[[#STRIDE2]] : (!cir.ptr<!s32i>, !s64i) -> !cir.ptr<!s32i>
+  // CHECK: cir.ptr_stride inbounds %[[#PTR3]], %[[#STRIDE2]] : (!cir.ptr<!s32i>, !s64i) -> !cir.ptr<!s32i>
 }
 
 // This test is meant to verify code that handles the 'p = nullptr + n' idiom
@@ -76,5 +76,5 @@ int *testGnuNullPtrArithmetic(unsigned n) {
   return NULLPTRINT + n;
   // CHECK: %[[NULLPTR:.*]] = cir.const #cir.ptr<null> : !cir.ptr<!s32i>
   // CHECK: %[[N:.*]] = cir.load{{.*}} %{{.*}} : !cir.ptr<!u32i>, !u32i
-  // CHECK: %[[RESULT:.*]] = cir.ptr_stride %[[NULLPTR]], %[[N]] : (!cir.ptr<!s32i>, !u32i) -> !cir.ptr<!s32i>
+  // CHECK: %[[RESULT:.*]] = cir.ptr_stride inbounds nuw %[[NULLPTR]], %[[N]] : (!cir.ptr<!s32i>, !u32i) -> !cir.ptr<!s32i>
 }

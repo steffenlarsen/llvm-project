@@ -71,7 +71,7 @@ B:
 // CIR:   %[[C_TBL:.*]] = cir.get_global @c.tbl
 // CIR: [[LABEL_A:.*]]:
 // CIR:   cir.label "A"
-// CIR:   %[[P:.*]] = cir.get_element %[[C_TBL]][%{{.*}}]
+// CIR:   %[[P:.*]] = cir.get_element inbounds %[[C_TBL]][%{{.*}}]
 // CIR: [[LABEL_B:.*]]:
 // CIR:   cir.label "B"
 

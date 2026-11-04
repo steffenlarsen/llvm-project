@@ -1419,24 +1419,44 @@ static CharUnits getArrayElementAlign(CharUnits arrayAlign, mlir::Value idx,
   return arrayAlign.alignmentOfArrayElement(eltSize);
 }
 
+cir::PtrOffsetFlags CIRGenFunction::getInBoundsPtrOffsetFlags(
+    mlir::Value base, mlir::Type srcElemTy, bool signedIndices,
+    bool isSubtraction) const {
+  cir::PtrOffsetFlags flags = cir::PtrOffsetFlags::None;
+  // An OpenMP target device may map a section of an array of arrays, which
+  // indexes out of bounds of the inner array, unless the array is a local.
+  auto arrayTy = mlir::dyn_cast<cir::ArrayType>(srcElemTy);
+  bool sectionGEP = getLangOpts().OpenMPIsTargetDevice && arrayTy &&
+                    mlir::isa<cir::ArrayType>(arrayTy.getElementType()) &&
+                    !base.getDefiningOp<cir::AllocaOp>();
+  if (!sectionGEP)
+    flags |= cir::PtrOffsetFlags::InBounds;
+  if (!signedIndices && !isSubtraction)
+    flags |= cir::PtrOffsetFlags::NoUnsignedWrap;
+  return flags;
+}
+
 static mlir::Value emitArraySubscriptPtr(CIRGenFunction &cgf,
                                          mlir::Location beginLoc,
                                          mlir::Location endLoc, mlir::Value ptr,
                                          mlir::Type eltTy, mlir::Value idx,
-                                         bool shouldDecay) {
+                                         bool shouldDecay, bool inbounds,
+                                         bool signedIndices) {
   CIRGenModule &cgm = cgf.getCIRGenModule();
-  // TODO(cir): LLVM codegen emits in bound gep check here, is there anything
-  // that would enhance tracking this later in CIR?
-  assert(!cir::MissingFeatures::emitCheckedInBoundsGEP());
+  cir::PtrOffsetFlags flags =
+      inbounds ? cgf.getInBoundsPtrOffsetFlags(ptr, eltTy, signedIndices,
+                                               /*isSubtraction=*/false)
+               : cir::PtrOffsetFlags::None;
   return cgm.getBuilder().getArrayElement(beginLoc, endLoc, ptr, eltTy, idx,
-                                          shouldDecay);
+                                          shouldDecay, flags);
 }
 
 static Address emitArraySubscriptPtr(CIRGenFunction &cgf,
                                      mlir::Location beginLoc,
                                      mlir::Location endLoc, Address addr,
                                      QualType eltType, mlir::Value idx,
-                                     mlir::Location loc, bool shouldDecay) {
+                                     mlir::Location loc, bool shouldDecay,
+                                     bool inbounds, bool signedIndices) {
 
   // Determine the element size of the statically-sized base.  This is
   // the thing that the indices are expressed in terms of.
@@ -1451,9 +1471,9 @@ static Address emitArraySubscriptPtr(CIRGenFunction &cgf,
       getArrayElementAlign(addr.getAlignment(), idx, eltSize);
 
   assert(!cir::MissingFeatures::preservedAccessIndexRegion());
-  const mlir::Value eltPtr =
-      emitArraySubscriptPtr(cgf, beginLoc, endLoc, addr.getPointer(),
-                            addr.getElementType(), idx, shouldDecay);
+  const mlir::Value eltPtr = emitArraySubscriptPtr(
+      cgf, beginLoc, endLoc, addr.getPointer(), addr.getElementType(), idx,
+      shouldDecay, inbounds, signedIndices);
   const mlir::Type elementType = cgf.convertTypeForMem(eltType);
   return Address(eltPtr, elementType, eltAlign);
 }
@@ -1470,6 +1490,10 @@ CIRGenFunction::emitArraySubscriptExpr(const clang::ArraySubscriptExpr *e) {
   mlir::Value idxPre = (e->getLHS() == e->getIdx())
                            ? emitScalarExpr(e->getIdx())
                            : mlir::Value();
+
+  const bool signedIndices =
+      e->getIdx()->getType()->isSignedIntegerOrEnumerationType();
+  const bool inbounds = !getLangOpts().PointerOverflowDefined;
 
   auto emitIdxAfterBase = [&, idxPre](bool promote) -> mlir::Value {
     mlir::Value idx = idxPre;
@@ -1528,10 +1552,10 @@ CIRGenFunction::emitArraySubscriptExpr(const clang::ArraySubscriptExpr *e) {
     Address addr = emitExtVectorElementLValue(lv, cgm.getLoc(e->getExprLoc()));
 
     QualType elementType = lv.getType()->castAs<VectorType>()->getElementType();
-    addr = emitArraySubscriptPtr(*this, cgm.getLoc(e->getBeginLoc()),
-                                 cgm.getLoc(e->getEndLoc()), addr, e->getType(),
-                                 idx, cgm.getLoc(e->getExprLoc()),
-                                 /*shouldDecay=*/false);
+    addr = emitArraySubscriptPtr(
+        *this, cgm.getLoc(e->getBeginLoc()), cgm.getLoc(e->getEndLoc()), addr,
+        e->getType(), idx, cgm.getLoc(e->getExprLoc()),
+        /*shouldDecay=*/false, /*inbounds=*/true, signedIndices);
 
     return makeAddrLValue(addr, elementType, lv.getBaseInfo());
   }
@@ -1558,10 +1582,10 @@ CIRGenFunction::emitArraySubscriptExpr(const clang::ArraySubscriptExpr *e) {
     idx = builder.createMul(cgm.getLoc(e->getExprLoc()), idx, numElements,
                             overflowBehavior);
 
-    addr = emitArraySubscriptPtr(*this, cgm.getLoc(e->getBeginLoc()),
-                                 cgm.getLoc(e->getEndLoc()), addr, e->getType(),
-                                 idx, cgm.getLoc(e->getExprLoc()),
-                                 /*shouldDecay=*/false);
+    addr = emitArraySubscriptPtr(
+        *this, cgm.getLoc(e->getBeginLoc()), cgm.getLoc(e->getEndLoc()), addr,
+        e->getType(), idx, cgm.getLoc(e->getExprLoc()),
+        /*shouldDecay=*/false, inbounds, signedIndices);
 
     return makeAddrLValue(addr, vla->getElementType(), LValueBaseInfo());
   }
@@ -1578,7 +1602,7 @@ CIRGenFunction::emitArraySubscriptExpr(const clang::ArraySubscriptExpr *e) {
     const Address addr = emitArraySubscriptPtr(
         *this, cgm.getLoc(array->getBeginLoc()), cgm.getLoc(array->getEndLoc()),
         arrayLV.getAddress(), e->getType(), idx, cgm.getLoc(e->getExprLoc()),
-        /*shouldDecay=*/true);
+        /*shouldDecay=*/true, inbounds, signedIndices);
 
     const LValue lv = LValue::makeAddr(addr, e->getType(), LValueBaseInfo());
 
@@ -1600,7 +1624,7 @@ CIRGenFunction::emitArraySubscriptExpr(const clang::ArraySubscriptExpr *e) {
   const Address addxr = emitArraySubscriptPtr(
       *this, cgm.getLoc(e->getBeginLoc()), cgm.getLoc(e->getEndLoc()), ptrAddr,
       e->getType(), idx, cgm.getLoc(e->getExprLoc()),
-      /*shouldDecay=*/false);
+      /*shouldDecay=*/false, inbounds, signedIndices);
 
   const LValue lv = LValue::makeAddr(addxr, e->getType(), eltBaseInfo);
 

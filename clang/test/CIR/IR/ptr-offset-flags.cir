@@ -1,0 +1,44 @@
+// RUN: cir-opt %s --verify-roundtrip | FileCheck %s
+// RUN: cir-opt %s -cir-to-llvm -o - | FileCheck %s --check-prefix=LLVM
+
+!s32i = !cir.int<s, 32>
+!u32i = !cir.int<u, 32>
+
+module attributes {cir.triple = "x86_64-unknown-linux-gnu"} {
+  cir.func @ptr_stride(%p: !cir.ptr<!s32i>, %i: !s32i, %u: !u32i) {
+    %0 = cir.ptr_stride %p, %i : (!cir.ptr<!s32i>, !s32i) -> !cir.ptr<!s32i>
+    %1 = cir.ptr_stride inbounds %p, %i : (!cir.ptr<!s32i>, !s32i) -> !cir.ptr<!s32i>
+    %2 = cir.ptr_stride inbounds nuw %p, %u : (!cir.ptr<!s32i>, !u32i) -> !cir.ptr<!s32i>
+    %3 = cir.ptr_stride nuw %p, %u : (!cir.ptr<!s32i>, !u32i) -> !cir.ptr<!s32i>
+    cir.return
+  }
+
+  // CHECK-LABEL: cir.func @ptr_stride(
+  // CHECK: cir.ptr_stride %{{.*}}, %{{.*}} : (!cir.ptr<!s32i>, !s32i) -> !cir.ptr<!s32i>
+  // CHECK: cir.ptr_stride inbounds %{{.*}}, %{{.*}} : (!cir.ptr<!s32i>, !s32i) -> !cir.ptr<!s32i>
+  // CHECK: cir.ptr_stride inbounds nuw %{{.*}}, %{{.*}} : (!cir.ptr<!s32i>, !u32i) -> !cir.ptr<!s32i>
+  // CHECK: cir.ptr_stride nuw %{{.*}}, %{{.*}} : (!cir.ptr<!s32i>, !u32i) -> !cir.ptr<!s32i>
+
+  // LLVM-LABEL: llvm.func @ptr_stride(
+  // LLVM: llvm.getelementptr %{{.*}}[%{{.*}}] : (!llvm.ptr, {{i[0-9]+}}) -> !llvm.ptr, i32
+  // LLVM: llvm.getelementptr inbounds %{{.*}}[%{{.*}}] : (!llvm.ptr, {{i[0-9]+}}) -> !llvm.ptr, i32
+  // LLVM: llvm.getelementptr inbounds|nuw %{{.*}}[%{{.*}}] : (!llvm.ptr, {{i[0-9]+}}) -> !llvm.ptr, i32
+  // LLVM: llvm.getelementptr nuw %{{.*}}[%{{.*}}] : (!llvm.ptr, {{i[0-9]+}}) -> !llvm.ptr, i32
+
+  cir.func @get_element(%a: !cir.ptr<!cir.array<!s32i x 4>>, %i: !s32i, %u: !u32i) {
+    %0 = cir.get_element %a[%i : !s32i] : !cir.ptr<!cir.array<!s32i x 4>> -> !cir.ptr<!s32i>
+    %1 = cir.get_element inbounds %a[%i : !s32i] : !cir.ptr<!cir.array<!s32i x 4>> -> !cir.ptr<!s32i>
+    %2 = cir.get_element inbounds nuw %a[%u : !u32i] : !cir.ptr<!cir.array<!s32i x 4>> -> !cir.ptr<!s32i>
+    cir.return
+  }
+
+  // CHECK-LABEL: cir.func @get_element(
+  // CHECK: cir.get_element %{{.*}}[%{{.*}} : !s32i] : !cir.ptr<!cir.array<!s32i x 4>> -> !cir.ptr<!s32i>
+  // CHECK: cir.get_element inbounds %{{.*}}[%{{.*}} : !s32i] : !cir.ptr<!cir.array<!s32i x 4>> -> !cir.ptr<!s32i>
+  // CHECK: cir.get_element inbounds nuw %{{.*}}[%{{.*}} : !u32i] : !cir.ptr<!cir.array<!s32i x 4>> -> !cir.ptr<!s32i>
+
+  // LLVM-LABEL: llvm.func @get_element(
+  // LLVM: llvm.getelementptr %{{.*}}[0, %{{.*}}] : (!llvm.ptr, {{i[0-9]+}}) -> !llvm.ptr, !llvm.array<4 x i32>
+  // LLVM: llvm.getelementptr inbounds %{{.*}}[0, %{{.*}}] : (!llvm.ptr, {{i[0-9]+}}) -> !llvm.ptr, !llvm.array<4 x i32>
+  // LLVM: llvm.getelementptr inbounds|nuw %{{.*}}[0, %{{.*}}] : (!llvm.ptr, {{i[0-9]+}}) -> !llvm.ptr, !llvm.array<4 x i32>
+}

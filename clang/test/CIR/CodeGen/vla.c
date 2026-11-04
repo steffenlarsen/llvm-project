@@ -338,7 +338,7 @@ int f5(unsigned long len) {
 // CIR:   cir.store{{.*}} %[[STACK_PTR]], %[[SAVED_STACK]]
 // CIR:   %[[ARR:.*]] = cir.alloca "arr" {{.*}} size(%[[LEN]]) : !cir.ptr<!s32i>
 // CIR:   %[[TWO:.*]] = cir.const #cir.int<2> : !s64i
-// CIR:   %[[ARR_2:.*]] = cir.ptr_stride %[[ARR]], %[[TWO]]
+// CIR:   %[[ARR_2:.*]] = cir.ptr_stride inbounds %[[ARR]], %[[TWO]]
 // CIR:   %[[ARR_VAL:.*]] = cir.load{{.*}} %[[ARR_2]] : !cir.ptr<!s32i>, !s32i
 // CIR:   cir.store{{.*}} %[[ARR_VAL]], %[[RET_ADDR]] : !s32i, !cir.ptr<!s32i>
 // CIR:   %[[STACK_RESTORE_PTR:.*]] = cir.load{{.*}} %[[SAVED_STACK]]
@@ -356,7 +356,7 @@ int f5(unsigned long len) {
 // LLVM:   %[[STACK_PTR:.*]] = call ptr @llvm.stacksave.p0()
 // LLVM:   store ptr %[[STACK_PTR]], ptr %[[SAVED_STACK]]
 // LLVM:   %[[ARR:.*]] = alloca i32, i64 %[[LEN]]
-// LLVM:   %[[ARR_2:.*]] = getelementptr i32, ptr %[[ARR]], i64 2
+// LLVM:   %[[ARR_2:.*]] = getelementptr inbounds i32, ptr %[[ARR]], i64 2
 // LLVM:   %[[ARR_VAL:.*]] = load i32, ptr %[[ARR_2]]
 // LLVM:   store i32 %[[ARR_VAL]], ptr %[[RET_ADDR]]
 // LLVM:   %[[STACK_RESTORE_PTR:.*]] = load ptr, ptr %[[SAVED_STACK]]
@@ -399,13 +399,13 @@ void vla_subscript_expr() {
 // CIR: cir.store {{.*}} %[[A_VAL]], %[[COMPOUND_ADDR]] : !cir.ptr<!cir.ptr<!s32i>>, !cir.ptr<!cir.ptr<!cir.ptr<!s32i>>>
 // CIR: %[[TMP_COMPOUND:.*]] = cir.load {{.*}} %[[COMPOUND_ADDR]] : !cir.ptr<!cir.ptr<!cir.ptr<!s32i>>>, !cir.ptr<!cir.ptr<!s32i>>
 // CIR: %[[CONST_0:.*]] = cir.const #cir.int<0> : !s64i
-// CIR: %[[COMPOUND_PTR:.*]] = cir.ptr_stride %[[TMP_COMPOUND]], %[[CONST_0]] : (!cir.ptr<!cir.ptr<!s32i>>, !s64i) -> !cir.ptr<!cir.ptr<!s32i>>
+// CIR: %[[COMPOUND_PTR:.*]] = cir.ptr_stride inbounds %[[TMP_COMPOUND]], %[[CONST_0]] : (!cir.ptr<!cir.ptr<!s32i>>, !s64i) -> !cir.ptr<!cir.ptr<!s32i>>
 // CIR: %[[TMP_COMPOUND:.*]] = cir.load {{.*}} %[[COMPOUND_PTR]] : !cir.ptr<!cir.ptr<!s32i>>, !cir.ptr<!s32i>
 // CIR: %[[CONST_1:.*]] = cir.const #cir.int<1> : !u64i
 // CIR: %[[VLA_IDX:.*]] = cir.mul nsw %[[CONST_1]], %[[TMP_N]] : !u64i
-// CIR: %[[VLA_A_PTR:.*]] = cir.ptr_stride %[[TMP_COMPOUND]], %[[VLA_IDX]] : (!cir.ptr<!s32i>, !u64i) -> !cir.ptr<!s32i>
+// CIR: %[[VLA_A_PTR:.*]] = cir.ptr_stride inbounds %[[TMP_COMPOUND]], %[[VLA_IDX]] : (!cir.ptr<!s32i>, !u64i) -> !cir.ptr<!s32i>
 // CIR: %[[CONST_5:.*]] = cir.const #cir.int<5> : !s64i
-// CIR: %[[ELEM_5_PTR:.*]] = cir.ptr_stride %[[VLA_A_PTR]], %[[CONST_5]] : (!cir.ptr<!s32i>, !s64i) -> !cir.ptr<!s32i>
+// CIR: %[[ELEM_5_PTR:.*]] = cir.ptr_stride inbounds %[[VLA_A_PTR]], %[[CONST_5]] : (!cir.ptr<!s32i>, !s64i) -> !cir.ptr<!s32i>
 // CIR: cir.store {{.*}} %[[CONST_0_VAL]], %[[ELEM_5_PTR]] : !s32i, !cir.ptr<!s32i>
 
 // LLVM: %[[A_ADDR:.*]] = alloca ptr, align 8
@@ -415,11 +415,11 @@ void vla_subscript_expr() {
 // LLVM: %[[TMP_N:.*]] = load i64, ptr %[[N_ADDR]], align 8
 // LLVM: store ptr %[[A_ADDR]], ptr %[[COMPOUND_ADDR]], align 8
 // LLVM: %[[TMP_COMPOUND:.*]] = load ptr, ptr %[[COMPOUND_ADDR]], align 8
-// LLVM: %[[COMPOUND_PTR:.*]] = getelementptr ptr, ptr %[[TMP_COMPOUND]], i64 0
+// LLVM: %[[COMPOUND_PTR:.*]] = getelementptr inbounds ptr, ptr %[[TMP_COMPOUND]], i64 0
 // LLVM: %[[TMP_COMPOUND:.*]] = load ptr, ptr %[[COMPOUND_PTR]], align 8
 // LLVM: %[[VLA_IDX:.*]] = mul nsw i64 1, %[[TMP_N]]
-// LLVM: %[[VLA_A_PTR:.*]] = getelementptr i32, ptr %[[TMP_COMPOUND]], i64 %[[VLA_IDX]]
-// LLVM: %[[ELEM_5_PTR:.*]] = getelementptr i32, ptr %[[VLA_A_PTR]], i64 5
+// LLVM: %[[VLA_A_PTR:.*]] = getelementptr inbounds i32, ptr %[[TMP_COMPOUND]], i64 %[[VLA_IDX]]
+// LLVM: %[[ELEM_5_PTR:.*]] = getelementptr inbounds i32, ptr %[[VLA_A_PTR]], i64 5
 // LLVM: store i32 0, ptr %[[ELEM_5_PTR]], align 4
 
 // OGCG: %[[A_ADDR:.*]] = alloca ptr, align 8
@@ -456,10 +456,10 @@ double vla_param_2d(int n, double m[n][n], int i, int j) {
 // CIR:   %[[I_EXT_S:.*]] = cir.cast integral %[[I]] : !s32i -> !s64i
 // CIR:   %[[I_EXT:.*]] = cir.cast integral %[[I_EXT_S]] : !s64i -> !u64i
 // CIR:   %[[ROW_OFF:.*]] = cir.mul nsw %[[I_EXT]], %[[VLA_SIZE]] : !u64i
-// CIR:   %[[ROW_PTR:.*]] = cir.ptr_stride %[[M]], %[[ROW_OFF]]
+// CIR:   %[[ROW_PTR:.*]] = cir.ptr_stride inbounds %[[M]], %[[ROW_OFF]]
 // CIR:   %[[J:.*]] = cir.load{{.*}} %[[J_ADDR]]
 // CIR:   %[[J_EXT:.*]] = cir.cast integral %[[J]] : !s32i -> !s64i
-// CIR:   %[[ELEM_PTR:.*]] = cir.ptr_stride %[[ROW_PTR]], %[[J_EXT]]
+// CIR:   %[[ELEM_PTR:.*]] = cir.ptr_stride inbounds %[[ROW_PTR]], %[[J_EXT]]
 // CIR:   %[[ELEM:.*]] = cir.load{{.*}} %[[ELEM_PTR]] : !cir.ptr<!cir.double>, !cir.double
 
 // LLVM: define{{.*}} double @vla_param_2d(i32 {{.*}} %[[N_ARG:.*]], ptr {{.*}} %[[M_ARG:.*]], i32 {{.*}} %[[I_ARG:.*]], i32 {{.*}} %[[J_ARG:.*]])
@@ -477,10 +477,10 @@ double vla_param_2d(int n, double m[n][n], int i, int j) {
 // LLVM:   %[[I:.*]] = load i32, ptr %[[I_ADDR]]
 // LLVM:   %[[I_EXT:.*]] = sext i32 %[[I]] to i64
 // LLVM:   %[[ROW_OFF:.*]] = mul nsw i64 %[[I_EXT]], %[[VLA_SIZE]]
-// LLVM:   %[[ROW_PTR:.*]] = getelementptr double, ptr %[[M]], i64 %[[ROW_OFF]]
+// LLVM:   %[[ROW_PTR:.*]] = getelementptr inbounds double, ptr %[[M]], i64 %[[ROW_OFF]]
 // LLVM:   %[[J:.*]] = load i32, ptr %[[J_ADDR]]
 // LLVM:   %[[J_EXT:.*]] = sext i32 %[[J]] to i64
-// LLVM:   %[[ELEM_PTR:.*]] = getelementptr double, ptr %[[ROW_PTR]], i64 %[[J_EXT]]
+// LLVM:   %[[ELEM_PTR:.*]] = getelementptr inbounds double, ptr %[[ROW_PTR]], i64 %[[J_EXT]]
 // LLVM:   %[[ELEM:.*]] = load double, ptr %[[ELEM_PTR]]
 
 // OGCG: define{{.*}} double @vla_param_2d(i32 {{.*}} %[[N_ARG:.*]], ptr {{.*}} %[[M_ARG:.*]], i32 {{.*}} %[[I_ARG:.*]], i32 {{.*}} %[[J_ARG:.*]])

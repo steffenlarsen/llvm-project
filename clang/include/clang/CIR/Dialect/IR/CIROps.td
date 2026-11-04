@@ -546,20 +546,32 @@ def CIR_PtrStrideOp : CIR_Op<"ptr_stride", [
     and an integer stride, similar to a single-index `getelementptr` in LLVM IR.
     It moves the pointer by `stride * sizeof(element_type)` bytes.
 
+    The optional `inbounds` and `nuw` unit attributes have the meaning of the
+    same flags on an LLVM `getelementptr`. With `inbounds`, the result is
+    poison if the base pointer and the result are not in bounds of the same
+    allocated object. With `nuw`, the result is poison if adding the offset to
+    the base address wraps around as an unsigned number.
+
     ```
     %2 = cir.const #cir.int<1> : !s32i
     %3 = cir.ptr_stride %1, %2 : (!cir.ptr<!s32i>, !s32i) -> !cir.ptr<!s32i>
+    %4 = cir.ptr_stride inbounds nuw %1, %2
+           : (!cir.ptr<!s32i>, !s32i) -> !cir.ptr<!s32i>
     ```
   }];
 
   let arguments = (ins
     CIR_PointerType:$base,
-    CIR_AnyFundamentalIntType:$stride
+    CIR_AnyFundamentalIntType:$stride,
+    UnitProp:$inbounds,
+    UnitProp:$no_unsigned_wrap
   );
 
   let results = (outs CIR_PointerType:$result);
 
   let assemblyFormat = [{
+    (`inbounds` $inbounds^)?
+    (`nuw` $no_unsigned_wrap^)?
     $base`,` $stride `:` functional-type(operands, results) attr-dict
   }];
 
@@ -4264,16 +4276,27 @@ def CIR_GetElementOp : CIR_Op<"get_element", [
       !cir.ptr<!cir.array<!s32i x 10>, target_address_space(5)> ->
       !cir.ptr<!s32i, target_address_space(5)>
 
+    // Known to stay within the array object, with an index that does not
+    // wrap as an unsigned number.
+    %elem_ib = cir.get_element inbounds nuw %0[%i : !u32i]
+      : !cir.ptr<!array_ty> -> !cir.ptr<!s32i>
     ```
+
+    The optional `inbounds` and `nuw` unit attributes have the meaning of the
+    same flags on an LLVM `getelementptr`, as on `cir.ptr_stride`.
   }];
 
   let arguments = (ins
     Arg<CIR_PtrToArray, "the base address of the array ">:$base,
-    Arg<CIR_AnyFundamentalIntType, "the index of the element">:$index
+    Arg<CIR_AnyFundamentalIntType, "the index of the element">:$index,
+    UnitProp:$inbounds,
+    UnitProp:$no_unsigned_wrap
   );
   let results = (outs CIR_PointerType : $result);
 
   let assemblyFormat = [{
+    (`inbounds` $inbounds^)?
+    (`nuw` $no_unsigned_wrap^)?
     $base`[` $index `:` type($index) `]` attr-dict
       `:` qualified(type($base)) `->` qualified(type($result))
   }];

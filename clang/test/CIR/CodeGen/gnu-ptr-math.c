@@ -13,7 +13,7 @@ vptr vptr_add(vptr p) {
   // CIR: %[[ARG:.*]] = cir.alloca "p" {{.*}} init : !cir.ptr<!cir.ptr<!void>>
   // CIR: %[[ARG_LOAD:.*]] = cir.load {{.*}}%[[ARG]] : !cir.ptr<!cir.ptr<!void>>, !cir.ptr<!void>
   // CIR: %[[OFFSET:.*]] = cir.const #cir.int<3> : !s32i
-  // CIR: %[[STRIDE:.*]] = cir.ptr_stride %[[ARG_LOAD]], %[[OFFSET]]
+  // CIR: %[[STRIDE:.*]] = cir.ptr_stride inbounds %[[ARG_LOAD]], %[[OFFSET]]
   // CIR: cir.store {{.*}}%[[STRIDE]], %[[RET]]
 
   // LLVM-LABEL: vptr_add
@@ -32,7 +32,7 @@ vptr vptr_sub(vptr p) {
   // CIR: %[[ARG:.*]] = cir.alloca "p" {{.*}} init : !cir.ptr<!cir.ptr<!void>>
   // CIR: %[[ARG_LOAD:.*]] = cir.load {{.*}}%[[ARG]] : !cir.ptr<!cir.ptr<!void>>, !cir.ptr<!void>
   // CIR: %[[OFFSET:.*]] = cir.const #cir.int<-2> : !s32i
-  // CIR: %[[STRIDE:.*]] = cir.ptr_stride %[[ARG_LOAD]], %[[OFFSET]]
+  // CIR: %[[STRIDE:.*]] = cir.ptr_stride inbounds %[[ARG_LOAD]], %[[OFFSET]]
   // CIR: cir.store {{.*}}%[[STRIDE]], %[[RET]]
 
   // LLVM-LABEL: vptr_sub
@@ -51,7 +51,7 @@ vptr vptr_inc(vptr p) {
   // CIR: %[[ARG:.*]] = cir.alloca "p" {{.*}} init : !cir.ptr<!cir.ptr<!void>>
   // CIR: %[[ARG_LOAD:.*]] = cir.load {{.*}}%[[ARG]] : !cir.ptr<!cir.ptr<!void>>, !cir.ptr<!void>
   // CIR: %[[OFFSET:.*]] = cir.const #cir.int<1> : !s32i
-  // CIR: %[[STRIDE:.*]] = cir.ptr_stride %[[ARG_LOAD]], %[[OFFSET]]
+  // CIR: %[[STRIDE:.*]] = cir.ptr_stride inbounds nuw %[[ARG_LOAD]], %[[OFFSET]]
   // CIR: cir.store {{.*}}%[[STRIDE]], %[[ARG]]
 
   // LLVM-LABEL: vptr_inc
@@ -69,7 +69,7 @@ vptr vptr_dec(vptr p) {
   // CIR: %[[ARG:.*]] = cir.alloca "p" {{.*}} init : !cir.ptr<!cir.ptr<!void>>
   // CIR: %[[ARG_LOAD:.*]] = cir.load {{.*}}%[[ARG]] : !cir.ptr<!cir.ptr<!void>>, !cir.ptr<!void>
   // CIR: %[[OFFSET:.*]] = cir.const #cir.int<-1> : !s32i
-  // CIR: %[[STRIDE:.*]] = cir.ptr_stride %[[ARG_LOAD]], %[[OFFSET]]
+  // CIR: %[[STRIDE:.*]] = cir.ptr_stride inbounds %[[ARG_LOAD]], %[[OFFSET]]
   // CIR: cir.store {{.*}}%[[STRIDE]], %[[RET]]
 
   // LLVM-LABEL: vptr_dec
@@ -88,7 +88,7 @@ fptr fptr_add(fptr p) {
   // CIR: %[[ARG:.*]] = cir.alloca "p" {{.*}} init :  !cir.ptr<!cir.ptr<!cir.func<(!s32i, !cir.double) -> !s32i>>>
   // CIR: %[[ARG_LOAD:.*]] = cir.load {{.*}}%[[ARG]] : !cir.ptr<!cir.ptr<!cir.func<(!s32i, !cir.double) -> !s32i>>>, !cir.ptr<!cir.func<(!s32i, !cir.double) -> !s32i>>
   // CIR: %[[OFFSET:.*]] = cir.const #cir.int<3> : !s32i
-  // CIR: %[[STRIDE:.*]] = cir.ptr_stride %[[ARG_LOAD]], %[[OFFSET]]
+  // CIR: %[[STRIDE:.*]] = cir.ptr_stride inbounds %[[ARG_LOAD]], %[[OFFSET]]
   // CIR: cir.store {{.*}}%[[STRIDE]], %[[RET]]
 
   // LLVM-LABEL: fptr_add
@@ -107,7 +107,7 @@ fptr fptr_sub(fptr p) {
   // CIR: %[[ARG:.*]] = cir.alloca "p" {{.*}} init :  !cir.ptr<!cir.ptr<!cir.func<(!s32i, !cir.double) -> !s32i>>>
   // CIR: %[[ARG_LOAD:.*]] = cir.load {{.*}}%[[ARG]] : !cir.ptr<!cir.ptr<!cir.func<(!s32i, !cir.double) -> !s32i>>>, !cir.ptr<!cir.func<(!s32i, !cir.double) -> !s32i>>
   // CIR: %[[OFFSET:.*]] = cir.const #cir.int<-2> : !s32i
-  // CIR: %[[STRIDE:.*]] = cir.ptr_stride %[[ARG_LOAD]], %[[OFFSET]]
+  // CIR: %[[STRIDE:.*]] = cir.ptr_stride inbounds %[[ARG_LOAD]], %[[OFFSET]]
   // CIR: cir.store {{.*}}%[[STRIDE]], %[[RET]]
 
   // LLVM-LABEL: fptr_sub
@@ -126,7 +126,7 @@ fptr fptr_inc(fptr p) {
   // CIR: %[[ARG:.*]] = cir.alloca "p" {{.*}} init : !cir.ptr<!cir.ptr<!cir.func<(!s32i, !cir.double) -> !s32i>>>
   // CIR: %[[ARG_LOAD:.*]] = cir.load {{.*}}%[[ARG]] : !cir.ptr<!cir.ptr<!cir.func<(!s32i, !cir.double) -> !s32i>>>, !cir.ptr<!cir.func<(!s32i, !cir.double) -> !s32i>>
   // CIR: %[[OFFSET:.*]] = cir.const #cir.int<1> : !s32i
-  // CIR: %[[STRIDE:.*]] = cir.ptr_stride %[[ARG_LOAD]], %[[OFFSET]]
+  // CIR: %[[STRIDE:.*]] = cir.ptr_stride inbounds nuw %[[ARG_LOAD]], %[[OFFSET]]
   // CIR: cir.store {{.*}}%[[STRIDE]], %[[ARG]]
 
   // LLVM-LABEL: fptr_inc
@@ -143,7 +143,7 @@ fptr fptr_dec(fptr p) {
   // CIR: %[[ARG:.*]] = cir.alloca "p" {{.*}} init : !cir.ptr<!cir.ptr<!cir.func<(!s32i, !cir.double) -> !s32i>>>
   // CIR: %[[ARG_LOAD:.*]] = cir.load {{.*}}%[[ARG]] : !cir.ptr<!cir.ptr<!cir.func<(!s32i, !cir.double) -> !s32i>>>, !cir.ptr<!cir.func<(!s32i, !cir.double) -> !s32i>>
   // CIR: %[[OFFSET:.*]] = cir.const #cir.int<-1> : !s32i
-  // CIR: %[[STRIDE:.*]] = cir.ptr_stride %[[ARG_LOAD]], %[[OFFSET]]
+  // CIR: %[[STRIDE:.*]] = cir.ptr_stride inbounds %[[ARG_LOAD]], %[[OFFSET]]
   // CIR: cir.store {{.*}}%[[STRIDE]], %[[RET]]
 
   // LLVM-LABEL: fptr_dec

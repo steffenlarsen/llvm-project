@@ -2228,6 +2228,16 @@ static mlir::Value convertToIndexTy(mlir::ConversionPatternRewriter &rewriter,
   return index;
 }
 
+static mlir::LLVM::GEPNoWrapFlags getGEPNoWrapFlags(bool inbounds,
+                                                    bool noUnsignedWrap) {
+  mlir::LLVM::GEPNoWrapFlags flags = mlir::LLVM::GEPNoWrapFlags::none;
+  if (inbounds)
+    flags = flags | mlir::LLVM::GEPNoWrapFlags::inbounds;
+  if (noUnsignedWrap)
+    flags = flags | mlir::LLVM::GEPNoWrapFlags::nuw;
+  return flags;
+}
+
 mlir::LogicalResult CIRToLLVMPtrStrideOpLowering::matchAndRewrite(
     cir::PtrStrideOp ptrStrideOp, OpAdaptor adaptor,
     mlir::ConversionPatternRewriter &rewriter) const {
@@ -2254,7 +2264,9 @@ mlir::LogicalResult CIRToLLVMPtrStrideOpLowering::matchAndRewrite(
       dyn_cast<cir::IntType>(ptrStrideOp.getOperand(1).getType()));
 
   rewriter.replaceOpWithNewOp<mlir::LLVM::GEPOp>(
-      ptrStrideOp, resultTy, elementTy, adaptor.getBase(), index);
+      ptrStrideOp, resultTy, elementTy, adaptor.getBase(), index,
+      getGEPNoWrapFlags(ptrStrideOp.getInbounds(),
+                        ptrStrideOp.getNoUnsignedWrap()));
   return mlir::success();
 }
 
@@ -2287,8 +2299,9 @@ mlir::LogicalResult CIRToLLVMGetElementOpLowering::matchAndRewrite(
     // offset is always zero. The second offset tell us which member it
     // will access.
     std::array<mlir::LLVM::GEPArg, 2> offset{0, index};
-    rewriter.replaceOpWithNewOp<mlir::LLVM::GEPOp>(op, llResultTy, llArrayTy,
-                                                   adaptor.getBase(), offset);
+    rewriter.replaceOpWithNewOp<mlir::LLVM::GEPOp>(
+        op, llResultTy, llArrayTy, adaptor.getBase(), offset,
+        getGEPNoWrapFlags(op.getInbounds(), op.getNoUnsignedWrap()));
     return mlir::success();
   }
 

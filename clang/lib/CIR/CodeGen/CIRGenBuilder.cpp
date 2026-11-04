@@ -36,7 +36,8 @@ mlir::Value CIRGenBuilderTy::getArrayElement(mlir::Location arrayLocBegin,
                                              mlir::Location arrayLocEnd,
                                              mlir::Value arrayPtr,
                                              mlir::Type eltTy, mlir::Value idx,
-                                             bool shouldDecay) {
+                                             bool shouldDecay,
+                                             cir::PtrOffsetFlags flags) {
   auto arrayPtrTy = mlir::dyn_cast<cir::PointerType>(arrayPtr.getType());
   assert(arrayPtrTy && "expected pointer type");
   // If the array pointer is not decayed, emit a GetElementOp.
@@ -49,8 +50,10 @@ mlir::Value CIRGenBuilderTy::getArrayElement(mlir::Location arrayLocBegin,
   if (shouldDecay && arrayTy && arrayTy == eltTy) {
     auto eltPtrTy =
         getPointerTo(arrayTy.getElementType(), arrayPtrTy.getAddrSpace());
-    return cir::GetElementOp::create(*this, arrayLocEnd, eltPtrTy, arrayPtr,
-                                     idx);
+    return cir::GetElementOp::create(
+        *this, arrayLocEnd, eltPtrTy, arrayPtr, idx,
+        cir::testFlag(flags, cir::PtrOffsetFlags::InBounds),
+        cir::testFlag(flags, cir::PtrOffsetFlags::NoUnsignedWrap));
   }
 
   // If we don't have sufficient type information, emit a PtrStrideOp.
@@ -58,7 +61,10 @@ mlir::Value CIRGenBuilderTy::getArrayElement(mlir::Location arrayLocBegin,
   if (shouldDecay)
     basePtr = maybeBuildArrayDecay(arrayLocBegin, arrayPtr, eltTy);
   const mlir::Type flatPtrTy = basePtr.getType();
-  return cir::PtrStrideOp::create(*this, arrayLocEnd, flatPtrTy, basePtr, idx);
+  return cir::PtrStrideOp::create(
+      *this, arrayLocEnd, flatPtrTy, basePtr, idx,
+      cir::testFlag(flags, cir::PtrOffsetFlags::InBounds),
+      cir::testFlag(flags, cir::PtrOffsetFlags::NoUnsignedWrap));
 }
 
 cir::ConstantOp CIRGenBuilderTy::getConstInt(mlir::Location loc,

@@ -89,10 +89,10 @@ _BitInt(129) local_arr(void) {
 // CIR: cir.copy %[[CONST_ARR]] align(16) to %[[ARR]] align(16) : !cir.ptr<!cir.array<!cir.int<s, 129, bitint> x 2>>
 // CIR: %[[THREE:.*]] = cir.const #cir.int<3> : !cir.int<s, 129, bitint>
 // CIR: %[[ONE:.*]] = cir.const #cir.int<1> : !s64i
-// CIR: %[[GET_ELT_ONE:.*]] = cir.get_element %[[ARR]][%[[ONE]] : !s64i] : !cir.ptr<!cir.array<!cir.int<s, 129, bitint> x 2>> -> !cir.ptr<!cir.int<s, 129, bitint>>
+// CIR: %[[GET_ELT_ONE:.*]] = cir.get_element inbounds %[[ARR]][%[[ONE]] : !s64i] : !cir.ptr<!cir.array<!cir.int<s, 129, bitint> x 2>> -> !cir.ptr<!cir.int<s, 129, bitint>>
 // CIR: cir.store align(8) %[[THREE]], %[[GET_ELT_ONE]] : !cir.int<s, 129, bitint>, !cir.ptr<!cir.int<s, 129, bitint>>
 // CIR: %[[ZERO:.*]] = cir.const #cir.int<0> : !s64i
-// CIR: %[[GET_ELT_ZERO:.*]] = cir.get_element %[[ARR]][%[[ZERO]] : !s64i] : !cir.ptr<!cir.array<!cir.int<s, 129, bitint> x 2>> -> !cir.ptr<!cir.int<s, 129, bitint>>
+// CIR: %[[GET_ELT_ZERO:.*]] = cir.get_element inbounds %[[ARR]][%[[ZERO]] : !s64i] : !cir.ptr<!cir.array<!cir.int<s, 129, bitint> x 2>> -> !cir.ptr<!cir.int<s, 129, bitint>>
 // CIR: %[[LOAD_ELT_ZERO:.*]] = cir.load align(16) %[[GET_ELT_ZERO]] : !cir.ptr<!cir.int<s, 129, bitint>>, !cir.int<s, 129, bitint>
 // CIR: cir.store %[[LOAD_ELT_ZERO]], %[[RET_ARG]] : !cir.int<s, 129, bitint>, !cir.ptr<!cir.int<s, 129, bitint>>
 

@@ -63,12 +63,12 @@
 // CIR:         %[[CPP_VAL:.*]] = cir.load deref {{.*}} %[[CPP_ASCAST]]
 // CIR:         cir.store {{.*}}, %[[CPP_VAL]] : !s8i, !cir.ptr<!s8i, target_address_space(4)>
 // CIR:         %[[ARR_DECAY1:.*]] = cir.cast array_to_ptrdecay %[[ARR_ASCAST]]
-// CIR:         %[[ADD_PTR:.*]] = cir.ptr_stride %[[ARR_DECAY1]], {{.*}} : (!cir.ptr<!s32i, target_address_space(4)>, !s32i) -> !cir.ptr<!s32i, target_address_space(4)>
+// CIR:         %[[ADD_PTR:.*]] = cir.ptr_stride inbounds %[[ARR_DECAY1]], {{.*}} : (!cir.ptr<!s32i, target_address_space(4)>, !s32i) -> !cir.ptr<!s32i, target_address_space(4)>
 // CIR:         cir.store {{.*}} %[[ADD_PTR]], %[[APTR_ASCAST]]
 // CIR:         cir.scope {
 // CIR:           %[[APTR_VAL:.*]] = cir.load {{.*}} %[[APTR_ASCAST]]
 // CIR:           %[[ARR_DECAY2:.*]] = cir.cast array_to_ptrdecay %[[ARR_ASCAST]]
-// CIR:           %[[ADD_PTR2:.*]] = cir.ptr_stride %[[ARR_DECAY2]], {{.*}} : (!cir.ptr<!s32i, target_address_space(4)>, !u64i) -> !cir.ptr<!s32i, target_address_space(4)>
+// CIR:           %[[ADD_PTR2:.*]] = cir.ptr_stride inbounds nuw %[[ARR_DECAY2]], {{.*}} : (!cir.ptr<!s32i, target_address_space(4)>, !u64i) -> !cir.ptr<!s32i, target_address_space(4)>
 // CIR:           %[[CMP2:.*]] = cir.cmp lt %[[APTR_VAL]], %[[ADD_PTR2]] : !cir.ptr<!s32i, target_address_space(4)>
 // CIR:           cir.if %[[CMP2]] {
 // CIR:             %[[APTR_VAL2:.*]] = cir.load deref {{.*}} %[[APTR_ASCAST]]
@@ -106,13 +106,13 @@
 // LLVM-NEXT: %[[TMP5:.*]] = load ptr addrspace(4), ptr addrspace(4) %[[CPP_ASCAST]], align 8
 // LLVM-NEXT: store i8 43, ptr addrspace(4) %[[TMP5]], align 1
 // LLVM-NEXT: %[[TMP6:.*]] = getelementptr i32, ptr addrspace(4) %[[ARR_ASCAST]], i32 0
-// LLVM-NEXT: %[[TMP7:.*]] = getelementptr i32, ptr addrspace(4) %[[TMP6]], i64 10
+// LLVM-NEXT: %[[TMP7:.*]] = getelementptr inbounds i32, ptr addrspace(4) %[[TMP6]], i64 10
 // LLVM-NEXT: store ptr addrspace(4) %[[TMP7]], ptr addrspace(4) %[[APTR_ASCAST]], align 8
 // LLVM-NEXT: br label %[[TMP8:.*]]
 // LLVM: [[TMP8]]:
 // LLVM-NEXT: %[[TMP9:.*]] = load ptr addrspace(4), ptr addrspace(4) %[[APTR_ASCAST]], align 8
 // LLVM-NEXT: %[[TMP10:.*]] = getelementptr i32, ptr addrspace(4) %[[ARR_ASCAST]], i32 0
-// LLVM-NEXT: %[[TMP11:.*]] = getelementptr i32, ptr addrspace(4) %[[TMP10]], i64 168
+// LLVM-NEXT: %[[TMP11:.*]] = getelementptr inbounds nuw i32, ptr addrspace(4) %[[TMP10]], i64 168
 // LLVM-NEXT: %[[TMP12:.*]] = icmp ult ptr addrspace(4) %[[TMP9]], %[[TMP11]]
 // LLVM-NEXT: br i1 %[[TMP12]], label %[[TMP13:.*]], label %[[TMP14:.*]]
 // LLVM: [[TMP13]]:
