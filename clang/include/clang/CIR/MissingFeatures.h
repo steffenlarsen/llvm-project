@@ -222,7 +222,6 @@ struct MissingFeatures {
   static bool devirtualizeDestructor() { return false; }
   static bool dtorCleanups() { return false; }
   static bool ehCleanupScope() { return false; }
-  static bool emitCheckedInBoundsGEP() { return false; }
   static bool emitCondLikelihoodViaExpectIntrinsic() { return false; }
   static bool emitConstrainedFPCall() { return false; }
   static bool emitLifetimeMarkers() { return false; }

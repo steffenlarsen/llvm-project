@@ -2452,7 +2452,9 @@ RValue CIRGenFunction::emitBuiltinExpr(const GlobalDecl &gd, unsigned builtinID,
     if (builtinID == Builtin::BImempcpy ||
         builtinID == Builtin::BI__builtin_mempcpy) {
       mlir::Value destPtr = destCast.getPointer();
-      mlir::Value end = builder.createPtrStride(loc, destPtr, sizeVal);
+      // The end is one past the copied bytes, as in classic codegen.
+      mlir::Value end = builder.createPtrStride(loc, destPtr, sizeVal,
+                                                cir::PtrOffsetFlags::InBounds);
       return RValue::get(end);
     }
     return RValue::get(dest.getPointer());
@@ -2557,7 +2559,6 @@ RValue CIRGenFunction::emitBuiltinExpr(const GlobalDecl &gd, unsigned builtinID,
     cir::PointerType ppTy = builder.getPointerTo(voidPtrTy);
     Address castBuf = buf.withElementType(builder, voidPtrTy);
 
-    assert(!cir::MissingFeatures::emitCheckedInBoundsGEP());
     if (getTarget().getTriple().isSystemZ()) {
       cgm.errorNYI(e->getExprLoc(), "setjmp on SystemZ");
       return {};
@@ -2572,8 +2573,10 @@ RValue CIRGenFunction::emitBuiltinExpr(const GlobalDecl &gd, unsigned builtinID,
 
     mlir::Value stacksave =
         cir::StackSaveOp::create(builder, loc, voidPtrTy).getResult();
+    // The slot is within the jump buffer, as in classic codegen.
     cir::PtrStrideOp stackSaveSlot = cir::PtrStrideOp::create(
-        builder, loc, ppTy, castBuf.getPointer(), builder.getSInt32(2, loc));
+        builder, loc, ppTy, castBuf.getPointer(), builder.getSInt32(2, loc),
+        /*inbounds=*/true, /*no_unsigned_wrap=*/false);
     llvm::TypeSize voidPtrTySize =
         cgm.getDataLayout().getTypeAllocSize(voidPtrTy);
     CharUnits slotAlign = castBuf.getAlignment().alignmentAtOffset(

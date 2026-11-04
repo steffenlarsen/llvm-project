@@ -170,12 +170,15 @@ static mlir::Value emitAMDGPUWorkGroupID(CIRGenFunction &cgf,
 }
 
 // Load a \p ty value at byte \p offset from \p base as an invariant load.
+// \p flags are the flags of the address computation, which classic codegen
+// does not make inbounds for every field.
 static mlir::Value emitAMDGPUInvariantLoad(CIRGenFunction &cgf,
                                            mlir::Location loc, mlir::Value base,
                                            mlir::Value offset, mlir::Type ty,
-                                           CharUnits align) {
+                                           CharUnits align,
+                                           cir::PtrOffsetFlags flags) {
   CIRGenBuilderTy &builder = cgf.getBuilder();
-  mlir::Value addr = builder.createPtrStride(loc, base, offset);
+  mlir::Value addr = builder.createPtrStride(loc, base, offset, flags);
   cir::LoadOp load = builder.createAlignedLoad(loc, ty, addr, align);
   load.setInvariant(true);
   assert(!cir::MissingFeatures::opLoadRangeNoundefMetadata());
@@ -190,7 +193,8 @@ static mlir::Value emitAMDGPUGridSize(CIRGenFunction &cgf, mlir::Location loc,
   // Indexing the HSA kernel_dispatch_packet struct.
   return emitAMDGPUInvariantLoad(
       cgf, loc, dispatchPtr, builder.getUInt64(xOffset + index * 4, loc),
-      builder.getUInt32Ty(), CharUnits::fromQuantity(4));
+      builder.getUInt32Ty(), CharUnits::fromQuantity(4),
+      cir::PtrOffsetFlags::None);
 }
 
 static mlir::Value emitAMDGPUWorkGroupSizeV5(CIRGenFunction &cgf,
@@ -212,7 +216,8 @@ static mlir::Value emitAMDGPUWorkGroupSizeV5(CIRGenFunction &cgf,
   } else {
     mlir::Value blockCount = emitAMDGPUInvariantLoad(
         cgf, loc, implicitArgPtr, builder.getUInt64(blockCountOffset, loc),
-        builder.getUInt32Ty(), CharUnits::fromQuantity(4));
+        builder.getUInt32Ty(), CharUnits::fromQuantity(4),
+        cir::PtrOffsetFlags::None);
     mlir::Value workgroupID = emitAMDGPUWorkGroupID(cgf, loc, index);
     mlir::Value isFull =
         builder.createCompare(loc, cir::CmpOpKind::lt, workgroupID, blockCount);
@@ -221,9 +226,9 @@ static mlir::Value emitAMDGPUWorkGroupSizeV5(CIRGenFunction &cgf,
                                       builder.getUInt64(remainderOffset, loc));
   }
 
-  mlir::Value size = emitAMDGPUInvariantLoad(cgf, loc, implicitArgPtr,
-                                             sizeOffset, builder.getUInt16Ty(),
-                                             CharUnits::fromQuantity(2));
+  mlir::Value size = emitAMDGPUInvariantLoad(
+      cgf, loc, implicitArgPtr, sizeOffset, builder.getUInt16Ty(),
+      CharUnits::fromQuantity(2), cir::PtrOffsetFlags::InBounds);
   return builder.createIntCast(size, builder.getUInt32Ty());
 }
 
@@ -236,7 +241,8 @@ static mlir::Value emitAMDGPUWorkGroupSizeV4(CIRGenFunction &cgf,
   // Indexing the HSA kernel_dispatch_packet struct.
   mlir::Value groupSizeLd = emitAMDGPUInvariantLoad(
       cgf, loc, dispatchPtr, builder.getUInt64(4 + index * 2, loc),
-      builder.getUInt16Ty(), CharUnits::fromQuantity(2));
+      builder.getUInt16Ty(), CharUnits::fromQuantity(2),
+      cir::PtrOffsetFlags::InBounds);
   mlir::Value groupSize =
       builder.createIntCast(groupSizeLd, builder.getUInt32Ty());
 
@@ -246,7 +252,8 @@ static mlir::Value emitAMDGPUWorkGroupSizeV4(CIRGenFunction &cgf,
   mlir::Value workgroupID = emitAMDGPUWorkGroupID(cgf, loc, index);
   mlir::Value gridSize = emitAMDGPUInvariantLoad(
       cgf, loc, dispatchPtr, builder.getUInt64(12 + index * 4, loc),
-      builder.getUInt32Ty(), CharUnits::fromQuantity(4));
+      builder.getUInt32Ty(), CharUnits::fromQuantity(4),
+      cir::PtrOffsetFlags::InBounds);
   mlir::Value mul = builder.createMul(loc, workgroupID, groupSize);
   mlir::Value remainder = builder.createSub(loc, gridSize, mul);
   mlir::Value isPartial =

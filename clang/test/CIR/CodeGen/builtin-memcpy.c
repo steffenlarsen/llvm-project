@@ -62,7 +62,7 @@ void *test_mempcpy(void *dst, const void *src, size_t n) {
 // CIR-NEXT:    %[[SRC:.*]] = cir.load align(8) %{{.*}} : !cir.ptr<!cir.ptr<!void>>, !cir.ptr<!void>
 // CIR-NEXT:    %[[N:.*]] = cir.load align(8) %{{.*}} : !cir.ptr<!u64i>, !u64i
 // CIR-NEXT:    cir.libc.memcpy %[[N]] bytes from %[[SRC]] align(1) to %[[DST]] align(1) : !u64i, !cir.ptr<!void> -> !cir.ptr<!void>
-// CIR-NEXT:    %[[END:.*]] = cir.ptr_stride %[[DST]], %[[N]] : (!cir.ptr<!void>, !u64i) -> !cir.ptr<!void>
+// CIR-NEXT:    %[[END:.*]] = cir.ptr_stride inbounds %[[DST]], %[[N]] : (!cir.ptr<!void>, !u64i) -> !cir.ptr<!void>
 // CIR:         cir.return %{{.*}} : !cir.ptr<!void>
 
 // LLVM-LABEL: define dso_local ptr @test_mempcpy

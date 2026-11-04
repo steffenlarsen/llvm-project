@@ -16,7 +16,7 @@ void test_setjmp(void *env) {
   // CIR-NEXT: cir.store align(8) [[FA]], [[CAST]] : !cir.ptr<!void>, !cir.ptr<!cir.ptr<!void>>
   // CIR-NEXT: [[SS:%[0-9]+]] = cir.stacksave
   // CIR-NEXT: [[TWO:%[0-9]+]] = cir.const #cir.int<2>
-  // CIR-NEXT: [[GEP:%[0-9]+]] = cir.ptr_stride [[CAST]], [[TWO]] : (!cir.ptr<!cir.ptr<!void>>, !s32i) -> !cir.ptr<!cir.ptr<!void>>
+  // CIR-NEXT: [[GEP:%[0-9]+]] = cir.ptr_stride inbounds [[CAST]], [[TWO]] : (!cir.ptr<!cir.ptr<!void>>, !s32i) -> !cir.ptr<!cir.ptr<!void>>
   // CIR-NEXT: cir.store align(8) [[SS]], [[GEP]] : !cir.ptr<!void>, !cir.ptr<!cir.ptr<!void>>
   // CIR-NEXT: [[SJ:%[0-9]+]] = cir.eh.setjmp [[CAST]] : (!cir.ptr<!cir.ptr<!void>>) -> !s32i
 
@@ -26,7 +26,7 @@ void test_setjmp(void *env) {
   // LLVM-NEXT: [[FA:%[0-9]+]] = {{.*}}@llvm.frameaddress.p0(i32 0) 
   // LLVM-NEXT: store ptr [[FA]], ptr [[ENV]], align 8
   // LLVM-NEXT: [[SS:%[0-9]+]] = {{.*}}@llvm.stacksave.p0() 
-  // LLVM-NEXT: [[GEP:%[0-9]+]] = getelementptr i8, ptr [[ENV]], i64 16
+  // LLVM-NEXT: [[GEP:%[0-9]+]] = getelementptr inbounds nuw i8, ptr [[ENV]], i64 16
   // LLVM-NEXT: store ptr [[SS]], ptr [[GEP]], align 8
   // LLVM-NEXT: @llvm.eh.sjlj.setjmp(ptr{{.*}}[[ENV]])
   

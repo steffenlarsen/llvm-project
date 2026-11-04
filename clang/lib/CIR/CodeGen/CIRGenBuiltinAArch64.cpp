@@ -3851,7 +3851,8 @@ CIRGenFunction::emitAArch64BuiltinExpr(unsigned builtinID, const CallExpr *expr,
         indices.push_back(i + e + vi);
       }
       cir::ConstantOp idx = builder.getConstInt(loc, builder.getSInt32Ty(), vi);
-      mlir::Value addr = builder.createPtrStride(loc, baseAddr, idx);
+      mlir::Value addr = builder.createPtrStride(loc, baseAddr, idx,
+                                                 cir::PtrOffsetFlags::InBounds);
       sv = builder.createVecShuffle(loc, ops[1], ops[2], indices);
       (void)builder.CIRBaseBuilderTy::createStore(loc, sv, addr);
     }
@@ -3871,7 +3872,8 @@ CIRGenFunction::emitAArch64BuiltinExpr(unsigned builtinID, const CallExpr *expr,
         indices.push_back(2 * i + vi);
       }
       cir::ConstantOp idx = builder.getConstInt(loc, builder.getSInt32Ty(), vi);
-      mlir::Value addr = builder.createPtrStride(loc, baseAddr, idx);
+      mlir::Value addr = builder.createPtrStride(loc, baseAddr, idx,
+                                                 cir::PtrOffsetFlags::InBounds);
       sv = builder.createVecShuffle(loc, ops[1], ops[2], indices);
       (void)builder.CIRBaseBuilderTy::createStore(loc, sv, addr);
     }
@@ -3892,7 +3894,8 @@ CIRGenFunction::emitAArch64BuiltinExpr(unsigned builtinID, const CallExpr *expr,
         indices.push_back(((i + vi * e) >> 1) + e);
       }
       cir::ConstantOp idx = builder.getConstInt(loc, builder.getSInt32Ty(), vi);
-      mlir::Value addr = builder.createPtrStride(loc, baseAddr, idx);
+      mlir::Value addr = builder.createPtrStride(loc, baseAddr, idx,
+                                                 cir::PtrOffsetFlags::InBounds);
       sv = builder.createVecShuffle(loc, ops[1], ops[2], indices);
       (void)builder.CIRBaseBuilderTy::createStore(loc, sv, addr);
     }

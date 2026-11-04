@@ -135,7 +135,7 @@ __device__ void test_grid_size(unsigned *out) {
 // CIR-LABEL: @_Z19test_workgroup_sizePj
 // CIR: %[[P:.*]] = cir.call_llvm_intrinsic "amdgcn.implicitarg.ptr" : () -> !cir.ptr<!void, target_address_space(4)>
 // CIR: %[[OFF:.*]] = cir.const #cir.int<12> : !u64i
-// CIR: %[[GEP:.*]] = cir.ptr_stride %[[P]], %[[OFF]]
+// CIR: %[[GEP:.*]] = cir.ptr_stride inbounds %[[P]], %[[OFF]]
 // CIR: %[[PTR:.*]] = cir.cast bitcast %[[GEP]] : !cir.ptr<!void, target_address_space(4)> -> !cir.ptr<!u16i, target_address_space(4)>
 // CIR: %[[SIZE:.*]] = cir.load invariant align(2) %[[PTR]]
 // CIR: cir.cast integral %[[SIZE]] : !u16i -> !u32i
