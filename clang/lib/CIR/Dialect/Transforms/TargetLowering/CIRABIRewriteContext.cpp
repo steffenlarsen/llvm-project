@@ -399,7 +399,10 @@ emitViewAtOffset(mlir::OpBuilder &builder, mlir::Location loc,
     auto strideVal = cir::ConstantOp::create(
         builder, loc, cir::IntAttr::get(strideTy, offset));
     createdOps.insert(strideVal);
-    view = cir::PtrStrideOp::create(builder, loc, u8PtrTy, u8Base, strideVal);
+    // The view is within the value it is taken of, as in classic codegen.
+    view = cir::PtrStrideOp::create(builder, loc, u8PtrTy, u8Base, strideVal,
+                                    /*inbounds=*/true,
+                                    /*no_unsigned_wrap=*/false);
     createdOps.insert(view.getDefiningOp());
   }
   auto typedView = cir::CastOp::create(builder, loc,
@@ -2412,8 +2415,10 @@ mlir::Value roundPointerUpToAlignment(CIRBaseBuilderTy &b, mlir::Location loc,
          "the bump strides in bytes, so the pointee must be u8");
   assert(llvm::isPowerOf2_64(align) &&
          "mask rounding needs a power-of-two alignment");
+  // As in classic codegen, the bump is taken to stay within the argument area.
   mlir::Value bumped =
-      b.createPtrStride(loc, bytePtr, b.getSignedInt(loc, align - 1, 32));
+      b.createPtrStride(loc, bytePtr, b.getSignedInt(loc, align - 1, 32),
+                        cir::PtrOffsetFlags::InBounds);
   std::optional<uint64_t> indexWidth =
       dl.getTypeIndexBitwidth(bytePtr.getType());
   assert(indexWidth && "a pointer in the argument area has an index width");

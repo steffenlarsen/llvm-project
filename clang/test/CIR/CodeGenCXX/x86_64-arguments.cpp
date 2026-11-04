@@ -47,7 +47,7 @@ void f3(struct s3_1 x) {}
 // CIR:         %[[SLOT:.+]] = cir.alloca "coerce"
 // CIR:         %[[U8:.+]] = cir.cast bitcast %[[SLOT]] : !cir.ptr<!rec_s3_1> -> !cir.ptr<!u8i>
 // CIR:         %[[OFF:.+]] = cir.const #cir.int<8> : !s64i
-// CIR:         %[[GEP:.+]] = cir.ptr_stride %[[U8]], %[[OFF]]
+// CIR:         %[[GEP:.+]] = cir.ptr_stride inbounds %[[U8]], %[[OFF]]
 // CIR:         %[[HI:.+]] = cir.cast bitcast %[[GEP]] : !cir.ptr<!u8i> -> !cir.ptr<!s64i>
 // CIR:         cir.store %arg0, %[[HI]] : !s64i, !cir.ptr<!s64i>
 // LLVM-LABEL: define {{.*}} void @_Z2f34s3_1(
@@ -138,7 +138,7 @@ namespace PR5179 {
 // CIR:         %[[SLOT:.+]] = cir.alloca "coerce"
 // CIR:         %[[U8:.+]] = cir.cast bitcast %[[SLOT]] : !cir.ptr<!rec_PR51793A3AB2> -> !cir.ptr<!u8i>
 // CIR:         %[[OFF:.+]] = cir.const #cir.int<8> : !s64i
-// CIR:         %[[GEP:.+]] = cir.ptr_stride %[[U8]], %[[OFF]]
+// CIR:         %[[GEP:.+]] = cir.ptr_stride inbounds %[[U8]], %[[OFF]]
 // CIR:         %[[PA:.+]] = cir.cast bitcast %[[GEP]] : !cir.ptr<!u8i> -> !cir.ptr<!cir.ptr<!void>>
 // CIR:         cir.store %arg0, %[[PA]] : !cir.ptr<!void>, !cir.ptr<!cir.ptr<!void>>
 // LLVM-LABEL: define {{.*}} ptr @_ZN6PR51793barENS_2B2E(

@@ -198,7 +198,7 @@ long takeHiWord(HiWord v) { return v.hi; }
 // CIR:   %[[SLOT:.+]] = cir.alloca "coerce"
 // CIR:   %[[U8:.+]] = cir.cast bitcast %[[SLOT]] : !cir.ptr<!rec_HiWord> -> !cir.ptr<!u8i>
 // CIR:   %[[OFF:.+]] = cir.const #cir.int<8> : !s64i
-// CIR:   %[[GEP:.+]] = cir.ptr_stride %[[U8]], %[[OFF]]
+// CIR:   %[[GEP:.+]] = cir.ptr_stride inbounds %[[U8]], %[[OFF]]
 // CIR:   %[[HI:.+]] = cir.cast bitcast %[[GEP]] : !cir.ptr<!u8i> -> !cir.ptr<!s64i>
 // CIR:   cir.store %arg0, %[[HI]] : !s64i, !cir.ptr<!s64i>
 // LLVM: define dso_local noundef i64 @_Z10takeHiWord6HiWord(i64 %[[ARG:[^)]+]])
@@ -231,12 +231,12 @@ long callerHiWord(long hi) {
 // CIR:   %[[TMP:.+]] = cir.alloca "agg.tmp0" align(8) : !cir.ptr<!rec_HiWord>
 // CIR:   %[[RET:.+]] = cir.call @_Z10giveHiWordl(
 // CIR:   %[[ROFF:.+]] = cir.const #cir.int<8> : !s64i
-// CIR:   %[[RGEP:.+]] = cir.ptr_stride %{{.+}}, %[[ROFF]]
+// CIR:   %[[RGEP:.+]] = cir.ptr_stride inbounds %{{.+}}, %[[ROFF]]
 // CIR:   %[[RPTR:.+]] = cir.cast bitcast %[[RGEP]] : !cir.ptr<!u8i> -> !cir.ptr<!s64i>
 // CIR:   cir.store %[[RET]], %[[RPTR]] : !s64i, !cir.ptr<!s64i>
 // CIR:   cir.copy %[[COERCE]] align(8) to %[[TMP]] align(8) : !cir.ptr<!rec_HiWord>
 // CIR:   %[[AOFF:.+]] = cir.const #cir.int<8> : !s64i
-// CIR:   %[[AGEP:.+]] = cir.ptr_stride %{{.+}}, %[[AOFF]]
+// CIR:   %[[AGEP:.+]] = cir.ptr_stride inbounds %{{.+}}, %[[AOFF]]
 // CIR:   %[[APTR:.+]] = cir.cast bitcast %[[AGEP]] : !cir.ptr<!u8i> -> !cir.ptr<!s64i>
 // CIR:   %[[AVAL:.+]] = cir.load align(8) %[[APTR]] : !cir.ptr<!s64i>, !s64i
 // CIR:   %{{.+}} = cir.call @_Z10takeHiWord6HiWord(%[[AVAL]])
@@ -508,7 +508,7 @@ long takeNuaHiWord(NuaHiWord v) { return v.hi; }
 // CIR:   %[[NSLOT:.+]] = cir.alloca "coerce"
 // CIR:   %[[NU8:.+]] = cir.cast bitcast %[[NSLOT]] : !cir.ptr<!rec_NuaHiWord> -> !cir.ptr<!u8i>
 // CIR:   %[[NOFF:.+]] = cir.const #cir.int<8> : !s64i
-// CIR:   %[[NGEP:.+]] = cir.ptr_stride %[[NU8]], %[[NOFF]]
+// CIR:   %[[NGEP:.+]] = cir.ptr_stride inbounds %[[NU8]], %[[NOFF]]
 // CIR:   %[[NHI:.+]] = cir.cast bitcast %[[NGEP]] : !cir.ptr<!u8i> -> !cir.ptr<!s64i>
 // CIR:   cir.store %arg0, %[[NHI]] : !s64i, !cir.ptr<!s64i>
 // LLVM: define dso_local noundef i64 @_Z13takeNuaHiWord9NuaHiWord(i64 %[[NARG:[^,)]+]])

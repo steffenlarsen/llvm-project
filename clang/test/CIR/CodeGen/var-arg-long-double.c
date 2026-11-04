@@ -22,7 +22,7 @@ long double varargs_long_double(int count, ...) {
 // CIR:   %[[OVERFLOW:.+]] = cir.load %[[OVERFLOW_P]] : !cir.ptr<!cir.ptr<!void>>, !cir.ptr<!void>
 // CIR:   %[[OVERFLOW_B:.+]] = cir.cast bitcast %[[OVERFLOW]] : !cir.ptr<!void> -> !cir.ptr<!u8i>
 // CIR:   %[[BUMP:.+]] = cir.const #cir.int<15> : !s32i
-// CIR:   %[[UNALIGNED:.+]] = cir.ptr_stride %[[OVERFLOW_B]], %[[BUMP]] : (!cir.ptr<!u8i>, !s32i) -> !cir.ptr<!u8i>
+// CIR:   %[[UNALIGNED:.+]] = cir.ptr_stride inbounds %[[OVERFLOW_B]], %[[BUMP]] : (!cir.ptr<!u8i>, !s32i) -> !cir.ptr<!u8i>
 // CIR:   %[[MASK:.+]] = cir.const #cir.int<-16> : !s64i
 // CIR:   %[[ALIGNED:.+]] = cir.ptr_mask %[[UNALIGNED]], %[[MASK]] : (!cir.ptr<!u8i>, !s64i) -> !cir.ptr<!u8i>
 // CIR:   %[[STRIDE:.+]] = cir.const #cir.int<16> : !s32i
@@ -36,7 +36,7 @@ long double varargs_long_double(int count, ...) {
 // LLVM:   %[[OVERFLOW_P:.+]] = getelementptr inbounds nuw %struct.__va_list_tag, ptr %{{.*}}, i32 0, i32 2
 // LLVM:   %[[OVERFLOW:.+]] = load ptr, ptr %[[OVERFLOW_P]], align 8
 // The overflow cursor is rounded up to 16 before the read.
-// LLVMCIR: %[[UNALIGNED:.+]] = getelementptr i8, ptr %[[OVERFLOW]], i64 15
+// LLVMCIR: %[[UNALIGNED:.+]] = getelementptr inbounds i8, ptr %[[OVERFLOW]], i64 15
 // OGCG:    %[[UNALIGNED:.+]] = getelementptr inbounds i8, ptr %[[OVERFLOW]], i32 15
 // LLVM:   %[[ALIGNED:.+]] = call ptr @llvm.ptrmask.p0.i64(ptr %[[UNALIGNED]], i64 -16)
 // LLVM:   %[[OVERFLOW_NEXT:.+]] = getelementptr i8, ptr %[[ALIGNED]], i{{32|64}} 16

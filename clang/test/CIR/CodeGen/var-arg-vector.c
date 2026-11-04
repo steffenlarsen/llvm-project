@@ -33,7 +33,7 @@ v4f take_16(int count, ...) {
 // the advance start from the rounded pointer.
 // CIR:           %[[OVERFLOW_B:.+]] = cir.cast bitcast %{{.+}} : !cir.ptr<!void> -> !cir.ptr<!u8i>
 // CIR:           %[[BUMP:.+]] = cir.const #cir.int<15> : !s32i
-// CIR:           %[[UNALIGNED:.+]] = cir.ptr_stride %[[OVERFLOW_B]], %[[BUMP]] : (!cir.ptr<!u8i>, !s32i) -> !cir.ptr<!u8i>
+// CIR:           %[[UNALIGNED:.+]] = cir.ptr_stride inbounds %[[OVERFLOW_B]], %[[BUMP]] : (!cir.ptr<!u8i>, !s32i) -> !cir.ptr<!u8i>
 // CIR:           %[[MASK:.+]] = cir.const #cir.int<-16> : !s64i
 // CIR:           %[[ALIGNED:.+]] = cir.ptr_mask %[[UNALIGNED]], %[[MASK]] : (!cir.ptr<!u8i>, !s64i) -> !cir.ptr<!u8i>
 // CIR:           %[[STRIDE:.+]] = cir.const #cir.int<16> : !s32i
@@ -76,7 +76,7 @@ v8f take_32(int count, ...) {
 // CIR:         %[[OVERFLOW_P:.+]] = cir.get_member %{{.+}}[2] {name = "overflow_arg_area"}
 // CIR:         %[[OVERFLOW:.+]] = cir.load %[[OVERFLOW_P]] : !cir.ptr<!cir.ptr<!void>>, !cir.ptr<!void>
 // CIR:         %[[OVERFLOW_B:.+]] = cir.cast bitcast %[[OVERFLOW]] : !cir.ptr<!void> -> !cir.ptr<!u8i>
-// CIR:         %[[UNALIGNED:.+]] = cir.ptr_stride %[[OVERFLOW_B]], %{{.+}} : (!cir.ptr<!u8i>, !s32i) -> !cir.ptr<!u8i>
+// CIR:         %[[UNALIGNED:.+]] = cir.ptr_stride inbounds %[[OVERFLOW_B]], %{{.+}} : (!cir.ptr<!u8i>, !s32i) -> !cir.ptr<!u8i>
 // CIR:         %[[MASK:.+]] = cir.const #cir.int<-32> : !s64i
 // CIR:         %[[ALIGNED:.+]] = cir.ptr_mask %[[UNALIGNED]], %[[MASK]] : (!cir.ptr<!u8i>, !s64i) -> !cir.ptr<!u8i>
 // CIR:         %[[STRIDE:.+]] = cir.const #cir.int<32> : !s32i

@@ -34,7 +34,7 @@ module attributes {
   // CIR:   %[[SLOT:.*]] = cir.alloca "coerce" {{.*}} : !cir.ptr<!rec_HiWord>
   // CIR:   %[[U8:.*]] = cir.cast bitcast %[[SLOT]] : !cir.ptr<!rec_HiWord> -> !cir.ptr<!u8i>
   // CIR:   %[[OFF:.*]] = cir.const #cir.int<8> : !s64i
-  // CIR:   %[[GEP:.*]] = cir.ptr_stride %[[U8]], %[[OFF]] : (!cir.ptr<!u8i>, !s64i) -> !cir.ptr<!u8i>
+  // CIR:   %[[GEP:.*]] = cir.ptr_stride inbounds %[[U8]], %[[OFF]] : (!cir.ptr<!u8i>, !s64i) -> !cir.ptr<!u8i>
   // CIR:   %[[CAST:.*]] = cir.cast bitcast %[[GEP]] : !cir.ptr<!u8i> -> !cir.ptr<!s64i>
   // CIR:   cir.store %arg0, %[[CAST]] : !s64i, !cir.ptr<!s64i>
   // CIR:   %[[H:.*]] = cir.alloca "h" align(8) : !cir.ptr<!rec_HiWord>
@@ -51,7 +51,7 @@ module attributes {
   // CIR:   %[[RSLOT:.*]] = cir.alloca "h" align(8) : !cir.ptr<!rec_HiWord>
   // CIR:   %[[RU8:.*]] = cir.cast bitcast %[[RSLOT]] : !cir.ptr<!rec_HiWord> -> !cir.ptr<!u8i>
   // CIR:   %[[ROFF:.*]] = cir.const #cir.int<8> : !s64i
-  // CIR:   %[[RGEP:.*]] = cir.ptr_stride %[[RU8]], %[[ROFF]] : (!cir.ptr<!u8i>, !s64i) -> !cir.ptr<!u8i>
+  // CIR:   %[[RGEP:.*]] = cir.ptr_stride inbounds %[[RU8]], %[[ROFF]] : (!cir.ptr<!u8i>, !s64i) -> !cir.ptr<!u8i>
   // CIR:   %[[RCAST:.*]] = cir.cast bitcast %[[RGEP]] : !cir.ptr<!u8i> -> !cir.ptr<!s64i>
   // CIR:   %[[RVAL:.*]] = cir.load align(8) %[[RCAST]] : !cir.ptr<!s64i>, !s64i
   // CIR:   cir.return %[[RVAL]] : !s64i
@@ -67,7 +67,7 @@ module attributes {
   // CIR-NEXT:   %[[ASLOT:.*]] = cir.alloca "h" align(16) : !cir.ptr<!rec_HiWord>
   // CIR-NEXT:   %[[AU8:.*]] = cir.cast bitcast %[[ASLOT]] : !cir.ptr<!rec_HiWord> -> !cir.ptr<!u8i>
   // CIR-NEXT:   %[[AOFF:.*]] = cir.const #cir.int<8> : !s64i
-  // CIR-NEXT:   %[[AGEP:.*]] = cir.ptr_stride %[[AU8]], %[[AOFF]] : (!cir.ptr<!u8i>, !s64i) -> !cir.ptr<!u8i>
+  // CIR-NEXT:   %[[AGEP:.*]] = cir.ptr_stride inbounds %[[AU8]], %[[AOFF]] : (!cir.ptr<!u8i>, !s64i) -> !cir.ptr<!u8i>
   // CIR-NEXT:   %[[ACAST:.*]] = cir.cast bitcast %[[AGEP]] : !cir.ptr<!u8i> -> !cir.ptr<!s64i>
   // CIR-NEXT:   %[[AVAL:.*]] = cir.load align(8) %[[ACAST]] : !cir.ptr<!s64i>, !s64i
   // CIR-NEXT:   cir.return %[[AVAL]] : !s64i
@@ -83,7 +83,7 @@ module attributes {
   // CIR-NEXT:   %[[PSLOT:.*]] = cir.alloca "l" align(1) : !cir.ptr<!rec_LeadPad3>
   // CIR-NEXT:   %[[PU8:.*]] = cir.cast bitcast %[[PSLOT]] : !cir.ptr<!rec_LeadPad3> -> !cir.ptr<!u8i>
   // CIR-NEXT:   %[[POFF:.*]] = cir.const #cir.int<8> : !s64i
-  // CIR-NEXT:   %[[PGEP:.*]] = cir.ptr_stride %[[PU8]], %[[POFF]] : (!cir.ptr<!u8i>, !s64i) -> !cir.ptr<!u8i>
+  // CIR-NEXT:   %[[PGEP:.*]] = cir.ptr_stride inbounds %[[PU8]], %[[POFF]] : (!cir.ptr<!u8i>, !s64i) -> !cir.ptr<!u8i>
   // CIR-NEXT:   %[[PCAST:.*]] = cir.cast bitcast %[[PGEP]] : !cir.ptr<!u8i> -> !cir.ptr<!cir.int<u, 24>>
   // CIR-NEXT:   %[[PVAL:.*]] = cir.load align(1) %[[PCAST]] : !cir.ptr<!cir.int<u, 24>>, !cir.int<u, 24>
   // CIR-NEXT:   cir.return %[[PVAL]] : !cir.int<u, 24>
@@ -99,7 +99,7 @@ module attributes {
   // CIR-NEXT:   %[[SSLOT:.*]] = cir.alloca "h" align(8) : !cir.ptr<!rec_HiWord, target_address_space(5)>
   // CIR-NEXT:   %[[SU8:.*]] = cir.cast bitcast %[[SSLOT]] : !cir.ptr<!rec_HiWord, target_address_space(5)> -> !cir.ptr<!u8i, target_address_space(5)>
   // CIR-NEXT:   %[[SOFF:.*]] = cir.const #cir.int<8> : !s64i
-  // CIR-NEXT:   %[[SGEP:.*]] = cir.ptr_stride %[[SU8]], %[[SOFF]] : (!cir.ptr<!u8i, target_address_space(5)>, !s64i) -> !cir.ptr<!u8i, target_address_space(5)>
+  // CIR-NEXT:   %[[SGEP:.*]] = cir.ptr_stride inbounds %[[SU8]], %[[SOFF]] : (!cir.ptr<!u8i, target_address_space(5)>, !s64i) -> !cir.ptr<!u8i, target_address_space(5)>
   // CIR-NEXT:   %[[SCAST:.*]] = cir.cast bitcast %[[SGEP]] : !cir.ptr<!u8i, target_address_space(5)> -> !cir.ptr<!s64i, target_address_space(5)>
   // CIR-NEXT:   %[[SVAL:.*]] = cir.load align(8) %[[SCAST]] : !cir.ptr<!s64i, target_address_space(5)>, !s64i
   // CIR-NEXT:   cir.return %[[SVAL]] : !s64i
@@ -115,7 +115,7 @@ module attributes {
   // CIR-NEXT:   cir.copy %arg0 align(8) to %[[CSLOT2]] align(8) : !cir.ptr<!rec_HiWord>
   // CIR-NEXT:   %[[CU82:.*]] = cir.cast bitcast %[[CSLOT2]] : !cir.ptr<!rec_HiWord> -> !cir.ptr<!u8i>
   // CIR-NEXT:   %[[COFF2:.*]] = cir.const #cir.int<8> : !s64i
-  // CIR-NEXT:   %[[CGEP2:.*]] = cir.ptr_stride %[[CU82]], %[[COFF2]] : (!cir.ptr<!u8i>, !s64i) -> !cir.ptr<!u8i>
+  // CIR-NEXT:   %[[CGEP2:.*]] = cir.ptr_stride inbounds %[[CU82]], %[[COFF2]] : (!cir.ptr<!u8i>, !s64i) -> !cir.ptr<!u8i>
   // CIR-NEXT:   %[[CCAST2:.*]] = cir.cast bitcast %[[CGEP2]] : !cir.ptr<!u8i> -> !cir.ptr<!s64i>
   // CIR-NEXT:   %[[CVAL2:.*]] = cir.load align(8) %[[CCAST2]] : !cir.ptr<!s64i>, !s64i
   // CIR-NEXT:   cir.return %[[CVAL2]] : !s64i
@@ -136,7 +136,7 @@ module attributes {
   // CIR:   %[[CRET:.*]] = cir.call @give_hiword() : () -> !s64i
   // CIR:   %[[CU8:.*]] = cir.cast bitcast %[[CSLOT]] : !cir.ptr<!rec_HiWord> -> !cir.ptr<!u8i>
   // CIR:   %[[COFF:.*]] = cir.const #cir.int<8> : !s64i
-  // CIR:   %[[CGEP:.*]] = cir.ptr_stride %[[CU8]], %[[COFF]] : (!cir.ptr<!u8i>, !s64i) -> !cir.ptr<!u8i>
+  // CIR:   %[[CGEP:.*]] = cir.ptr_stride inbounds %[[CU8]], %[[COFF]] : (!cir.ptr<!u8i>, !s64i) -> !cir.ptr<!u8i>
   // CIR:   %[[CCAST:.*]] = cir.cast bitcast %[[CGEP]] : !cir.ptr<!u8i> -> !cir.ptr<!s64i>
   // CIR:   cir.store %[[CRET]], %[[CCAST]] : !s64i, !cir.ptr<!s64i>
   // CIR:   %[[R:.*]] = cir.alloca "r" align(8) : !cir.ptr<!rec_HiWord>
@@ -155,7 +155,7 @@ module attributes {
   // CIR:   cir.copy %[[PARAM]] align(8) to %[[PSLOT]] align(8) : !cir.ptr<!rec_HiWord>
   // CIR:   %[[PU8:.*]] = cir.cast bitcast %[[PSLOT]] : !cir.ptr<!rec_HiWord> -> !cir.ptr<!u8i>
   // CIR:   %[[POFF:.*]] = cir.const #cir.int<8> : !s64i
-  // CIR:   %[[PGEP:.*]] = cir.ptr_stride %[[PU8]], %[[POFF]] : (!cir.ptr<!u8i>, !s64i) -> !cir.ptr<!u8i>
+  // CIR:   %[[PGEP:.*]] = cir.ptr_stride inbounds %[[PU8]], %[[POFF]] : (!cir.ptr<!u8i>, !s64i) -> !cir.ptr<!u8i>
   // CIR:   %[[PCAST:.*]] = cir.cast bitcast %[[PGEP]] : !cir.ptr<!u8i> -> !cir.ptr<!s64i>
   // CIR:   %[[PVAL:.*]] = cir.load %[[PCAST]] : !cir.ptr<!s64i>, !s64i
   // CIR:   %{{.*}} = cir.call @take_hiword(%[[PVAL]]) : (!s64i) -> !s64i
@@ -174,7 +174,7 @@ module attributes {
   // CIR:   %[[LSLOT:.*]] = cir.alloca "coerce" {{.*}} : !cir.ptr<!rec_LeadPad>
   // CIR:   %[[LU8:.*]] = cir.cast bitcast %[[LSLOT]] : !cir.ptr<!rec_LeadPad> -> !cir.ptr<!u8i>
   // CIR:   %[[LOFF:.*]] = cir.const #cir.int<8> : !s64i
-  // CIR:   %[[LGEP:.*]] = cir.ptr_stride %[[LU8]], %[[LOFF]] : (!cir.ptr<!u8i>, !s64i) -> !cir.ptr<!u8i>
+  // CIR:   %[[LGEP:.*]] = cir.ptr_stride inbounds %[[LU8]], %[[LOFF]] : (!cir.ptr<!u8i>, !s64i) -> !cir.ptr<!u8i>
   // CIR:   %[[LCAST:.*]] = cir.cast bitcast %[[LGEP]] : !cir.ptr<!u8i> -> !cir.ptr<!s32i>
   // CIR:   cir.store %arg0, %[[LCAST]] : !s32i, !cir.ptr<!s32i>
   // CIR:   %[[L:.*]] = cir.alloca "l" align(4) : !cir.ptr<!rec_LeadPad>
@@ -185,23 +185,23 @@ module attributes {
 // LLVM: define i64 @give_hiword()
 // LLVM: define i64 @give_hiword_align16()
 // LLVM-NEXT:   %[[AH:.+]] = alloca %struct.HiWord, align 16
-// LLVM-NEXT:   %[[AGEP:.+]] = getelementptr i8, ptr %[[AH]], i64 8
+// LLVM-NEXT:   %[[AGEP:.+]] = getelementptr inbounds i8, ptr %[[AH]], i64 8
 // LLVM-NEXT:   %[[AVAL:.+]] = load i64, ptr %[[AGEP]], align 8
 // LLVM-NEXT:   ret i64 %[[AVAL]]
 // LLVM: define i24 @give_lead_pad3()
 // LLVM-NEXT:   %[[PL:.+]] = alloca %struct.LeadPad3, align 1
-// LLVM-NEXT:   %[[PGEP:.+]] = getelementptr i8, ptr %[[PL]], i64 8
+// LLVM-NEXT:   %[[PGEP:.+]] = getelementptr inbounds i8, ptr %[[PL]], i64 8
 // LLVM-NEXT:   %[[PVAL:.+]] = load i24, ptr %[[PGEP]], align 1
 // LLVM-NEXT:   ret i24 %[[PVAL]]
 // LLVM: define i64 @give_hiword_as5()
 // LLVM-NEXT:   %[[SH:.+]] = alloca %struct.HiWord, align 8, addrspace(5)
-// LLVM-NEXT:   %[[SGEP:.+]] = getelementptr i8, ptr addrspace(5) %[[SH]], i64 8
+// LLVM-NEXT:   %[[SGEP:.+]] = getelementptr inbounds i8, ptr addrspace(5) %[[SH]], i64 8
 // LLVM-NEXT:   %[[SVAL:.+]] = load i64, ptr addrspace(5) %[[SGEP]], align 8
 // LLVM-NEXT:   ret i64 %[[SVAL]]
 // LLVM: define i64 @give_hiword_from_pointer(ptr %[[P:.+]])
 // LLVM-NEXT:   %[[CH:.+]] = alloca %struct.HiWord, align 8
 // LLVM-NEXT:   call void @llvm.memcpy.p0.p0.i64(ptr align 8 %[[CH]], ptr align 8 %[[P]], i64 16, i1 false)
-// LLVM-NEXT:   %[[CGEP:.+]] = getelementptr i8, ptr %[[CH]], i64 8
+// LLVM-NEXT:   %[[CGEP:.+]] = getelementptr inbounds i8, ptr %[[CH]], i64 8
 // LLVM-NEXT:   %[[CVAL:.+]] = load i64, ptr %[[CGEP]], align 8
 // LLVM-NEXT:   ret i64 %[[CVAL]]
 // LLVM: define i64 @call_hiword()

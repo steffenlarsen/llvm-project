@@ -397,7 +397,7 @@ struct OverAligned varargs_aggregate_overaligned(int count, ...) {
 // CIR:     cir.yield %[[TEMP_B]] : !cir.ptr<!u8i>
 // CIR:   }, false {
 // CIR:     %[[BUMP:.+]] = cir.const #cir.int<15> : !s32i
-// CIR:     %[[UNALIGNED:.+]] = cir.ptr_stride %{{.+}}, %[[BUMP]] : (!cir.ptr<!u8i>, !s32i) -> !cir.ptr<!u8i>
+// CIR:     %[[UNALIGNED:.+]] = cir.ptr_stride inbounds %{{.+}}, %[[BUMP]] : (!cir.ptr<!u8i>, !s32i) -> !cir.ptr<!u8i>
 // CIR:     %[[MASK:.+]] = cir.const #cir.int<-16> : !s64i
 // CIR:     %[[ALIGNED:.+]] = cir.ptr_mask %[[UNALIGNED]], %[[MASK]] : (!cir.ptr<!u8i>, !s64i) -> !cir.ptr<!u8i>
 // CIR:     cir.yield %[[ALIGNED]] : !cir.ptr<!u8i>
