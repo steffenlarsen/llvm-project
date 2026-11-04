@@ -82,14 +82,14 @@ void do_things(unsigned A, unsigned B) {
 // CHECK-NEXT: %[[TL_ALLOCA:.*]] = cir.alloca "openacc.private.init" align(16) init : !cir.ptr<!cir.array<!rec_CtorDtor x 5>>
 // CHECK-NEXT: %[[ARR_SIZE:.*]] = cir.const #cir.int<5> : !u64i
 // CHECK-NEXT: %[[DECAY:.*]] = cir.cast array_to_ptrdecay %[[TL_ALLOCA]] : !cir.ptr<!cir.array<!rec_CtorDtor x 5>> -> !cir.ptr<!rec_CtorDtor>
-// CHECK-NEXT: %[[ONE_PAST_LAST_ELT:.*]] = cir.ptr_stride %[[DECAY]], %[[ARR_SIZE]] : (!cir.ptr<!rec_CtorDtor>, !u64i) -> !cir.ptr<!rec_CtorDtor>
+// CHECK-NEXT: %[[ONE_PAST_LAST_ELT:.*]] = cir.ptr_stride inbounds %[[DECAY]], %[[ARR_SIZE]] : (!cir.ptr<!rec_CtorDtor>, !u64i) -> !cir.ptr<!rec_CtorDtor>
 // CHECK-NEXT: %[[ARR_IDX:.*]] = cir.alloca "__array_idx" align(1) : !cir.ptr<!cir.ptr<!rec_CtorDtor>>
 // CHECK-NEXT: cir.store %[[DECAY]], %[[ARR_IDX]] : !cir.ptr<!rec_CtorDtor>, !cir.ptr<!cir.ptr<!rec_CtorDtor>>
 // CHECK-NEXT: cir.do {
 // CHECK-NEXT: %[[IDX_LOAD:.*]] = cir.load %[[ARR_IDX]] : !cir.ptr<!cir.ptr<!rec_CtorDtor>>, !cir.ptr<!rec_CtorDtor>
 // CHECK-NEXT: cir.call @_ZN8CtorDtorC1Ev(%[[IDX_LOAD]]) : (!cir.ptr<!rec_CtorDtor> {{.*}}) -> ()
 // CHECK-NEXT: %[[ONE:.*]] = cir.const #cir.int<1> : !u64i
-// CHECK-NEXT: %[[INC_STRIDE:.*]] = cir.ptr_stride %[[IDX_LOAD]], %[[ONE]] : (!cir.ptr<!rec_CtorDtor>, !u64i) -> !cir.ptr<!rec_CtorDtor>
+// CHECK-NEXT: %[[INC_STRIDE:.*]] = cir.ptr_stride inbounds %[[IDX_LOAD]], %[[ONE]] : (!cir.ptr<!rec_CtorDtor>, !u64i) -> !cir.ptr<!rec_CtorDtor>
 // CHECK-NEXT: cir.store %[[INC_STRIDE]], %[[ARR_IDX]] : !cir.ptr<!rec_CtorDtor>, !cir.ptr<!cir.ptr<!rec_CtorDtor>>
 // CHECK-NEXT: cir.yield
 // CHECK-NEXT: } while {
@@ -102,13 +102,13 @@ void do_things(unsigned A, unsigned B) {
 // CHECK-NEXT: ^bb0(%[[ARG:.*]]: !cir.ptr<!cir.array<!rec_CtorDtor x 5>> {{.*}}, %[[PRIVATE:.*]]: !cir.ptr<!cir.array<!rec_CtorDtor x 5>> {{.*}}):
 // CHECK-NEXT: %[[LAST_IDX:.*]] = cir.const #cir.int<5> : !u64i
 // CHECK-NEXT: %[[DECAY:.*]] = cir.cast array_to_ptrdecay %[[PRIVATE]] : !cir.ptr<!cir.array<!rec_CtorDtor x 5>> -> !cir.ptr<!rec_CtorDtor>
-// CHECK-NEXT: %[[LAST_ELT:.*]] = cir.ptr_stride %[[DECAY]], %[[LAST_IDX]] : (!cir.ptr<!rec_CtorDtor>, !u64i) -> !cir.ptr<!rec_CtorDtor>
+// CHECK-NEXT: %[[LAST_ELT:.*]] = cir.ptr_stride inbounds %[[DECAY]], %[[LAST_IDX]] : (!cir.ptr<!rec_CtorDtor>, !u64i) -> !cir.ptr<!rec_CtorDtor>
 // CHECK-NEXT: %[[ARR_IDX:.*]] = cir.alloca "__array_idx" align(1) : !cir.ptr<!cir.ptr<!rec_CtorDtor>>
 // CHECK-NEXT: cir.store %[[LAST_ELT]], %[[ARR_IDX]] : !cir.ptr<!rec_CtorDtor>, !cir.ptr<!cir.ptr<!rec_CtorDtor>>
 // CHECK-NEXT: cir.do {
 // CHECK-NEXT: %[[IDX_LOAD:.*]] = cir.load %[[ARR_IDX]] : !cir.ptr<!cir.ptr<!rec_CtorDtor>>, !cir.ptr<!rec_CtorDtor>
 // CHECK-NEXT: %[[NEG_ONE:.*]] = cir.const #cir.int<-1> : !s64i
-// CHECK-NEXT: %[[DEC_STRIDE:.*]] = cir.ptr_stride %[[IDX_LOAD]], %[[NEG_ONE]] : (!cir.ptr<!rec_CtorDtor>, !s64i) -> !cir.ptr<!rec_CtorDtor>
+// CHECK-NEXT: %[[DEC_STRIDE:.*]] = cir.ptr_stride inbounds %[[IDX_LOAD]], %[[NEG_ONE]] : (!cir.ptr<!rec_CtorDtor>, !s64i) -> !cir.ptr<!rec_CtorDtor>
 // CHECK-NEXT: cir.store %[[DEC_STRIDE]], %[[ARR_IDX]] : !cir.ptr<!rec_CtorDtor>, !cir.ptr<!cir.ptr<!rec_CtorDtor>>
 // CHECK-NEXT: cir.call @_ZN8CtorDtorD1Ev(%[[DEC_STRIDE]]) nothrow : (!cir.ptr<!rec_CtorDtor> {{.*}}) -> ()
 // CHECK-NEXT: cir.yield
@@ -248,14 +248,14 @@ void do_things(unsigned A, unsigned B) {
 // CHECK-NEXT: %[[BITCAST:.*]] = cir.cast bitcast %[[TL_ALLOCA]] : !cir.ptr<!cir.array<!cir.array<!rec_CtorDtor x 5> x 5>> -> !cir.ptr<!cir.array<!rec_CtorDtor x 25>>
 // CHECK-NEXT: %[[ARR_SIZE:.*]] = cir.const #cir.int<25> : !u64i
 // CHECK-NEXT: %[[DECAY:.*]] = cir.cast array_to_ptrdecay %[[BITCAST]] : !cir.ptr<!cir.array<!rec_CtorDtor x 25>> -> !cir.ptr<!rec_CtorDtor>
-// CHECK-NEXT: %[[ONE_PAST_LAST_ELT:.*]] = cir.ptr_stride %[[DECAY]], %[[ARR_SIZE]] : (!cir.ptr<!rec_CtorDtor>, !u64i) -> !cir.ptr<!rec_CtorDtor>
+// CHECK-NEXT: %[[ONE_PAST_LAST_ELT:.*]] = cir.ptr_stride inbounds %[[DECAY]], %[[ARR_SIZE]] : (!cir.ptr<!rec_CtorDtor>, !u64i) -> !cir.ptr<!rec_CtorDtor>
 // CHECK-NEXT: %[[ARR_IDX:.*]] = cir.alloca "__array_idx" align(1) : !cir.ptr<!cir.ptr<!rec_CtorDtor>>
 // CHECK-NEXT: cir.store %[[DECAY]], %[[ARR_IDX]] : !cir.ptr<!rec_CtorDtor>, !cir.ptr<!cir.ptr<!rec_CtorDtor>>
 // CHECK-NEXT: cir.do {
 // CHECK-NEXT: %[[IDX_LOAD:.*]] = cir.load %[[ARR_IDX]] : !cir.ptr<!cir.ptr<!rec_CtorDtor>>, !cir.ptr<!rec_CtorDtor>
 // CHECK-NEXT: cir.call @_ZN8CtorDtorC1Ev(%[[IDX_LOAD]]) : (!cir.ptr<!rec_CtorDtor> {{.*}}) -> ()
 // CHECK-NEXT: %[[ONE:.*]] = cir.const #cir.int<1> : !u64i
-// CHECK-NEXT: %[[INC_STRIDE:.*]] = cir.ptr_stride %[[IDX_LOAD]], %[[ONE]] : (!cir.ptr<!rec_CtorDtor>, !u64i) -> !cir.ptr<!rec_CtorDtor>
+// CHECK-NEXT: %[[INC_STRIDE:.*]] = cir.ptr_stride inbounds %[[IDX_LOAD]], %[[ONE]] : (!cir.ptr<!rec_CtorDtor>, !u64i) -> !cir.ptr<!rec_CtorDtor>
 // CHECK-NEXT: cir.store %[[INC_STRIDE]], %[[ARR_IDX]] : !cir.ptr<!rec_CtorDtor>, !cir.ptr<!cir.ptr<!rec_CtorDtor>>
 // CHECK-NEXT: cir.yield
 // CHECK-NEXT: } while {
@@ -269,13 +269,13 @@ void do_things(unsigned A, unsigned B) {
 // CHECK-NEXT: %[[BITCAST:.*]] = cir.cast bitcast %[[PRIVATE]] : !cir.ptr<!cir.array<!cir.array<!rec_CtorDtor x 5> x 5>> -> !cir.ptr<!cir.array<!rec_CtorDtor x 25>>
 // CHECK-NEXT: %[[LAST_IDX:.*]] = cir.const #cir.int<25> : !u64i
 // CHECK-NEXT: %[[DECAY:.*]] = cir.cast array_to_ptrdecay %[[BITCAST]] : !cir.ptr<!cir.array<!rec_CtorDtor x 25>> -> !cir.ptr<!rec_CtorDtor>
-// CHECK-NEXT: %[[LAST_ELT:.*]] = cir.ptr_stride %[[DECAY]], %[[LAST_IDX]] : (!cir.ptr<!rec_CtorDtor>, !u64i) -> !cir.ptr<!rec_CtorDtor>
+// CHECK-NEXT: %[[LAST_ELT:.*]] = cir.ptr_stride inbounds %[[DECAY]], %[[LAST_IDX]] : (!cir.ptr<!rec_CtorDtor>, !u64i) -> !cir.ptr<!rec_CtorDtor>
 // CHECK-NEXT: %[[ARR_IDX:.*]] = cir.alloca "__array_idx" align(1) : !cir.ptr<!cir.ptr<!rec_CtorDtor>>
 // CHECK-NEXT: cir.store %[[LAST_ELT]], %[[ARR_IDX]] : !cir.ptr<!rec_CtorDtor>, !cir.ptr<!cir.ptr<!rec_CtorDtor>>
 // CHECK-NEXT: cir.do {
 // CHECK-NEXT: %[[IDX_LOAD:.*]] = cir.load %[[ARR_IDX]] : !cir.ptr<!cir.ptr<!rec_CtorDtor>>, !cir.ptr<!rec_CtorDtor>
 // CHECK-NEXT: %[[NEG_ONE:.*]] = cir.const #cir.int<-1> : !s64i
-// CHECK-NEXT: %[[DEC_STRIDE:.*]] = cir.ptr_stride %[[IDX_LOAD]], %[[NEG_ONE]] : (!cir.ptr<!rec_CtorDtor>, !s64i) -> !cir.ptr<!rec_CtorDtor>
+// CHECK-NEXT: %[[DEC_STRIDE:.*]] = cir.ptr_stride inbounds %[[IDX_LOAD]], %[[NEG_ONE]] : (!cir.ptr<!rec_CtorDtor>, !s64i) -> !cir.ptr<!rec_CtorDtor>
 // CHECK-NEXT: cir.store %[[DEC_STRIDE]], %[[ARR_IDX]] : !cir.ptr<!rec_CtorDtor>, !cir.ptr<!cir.ptr<!rec_CtorDtor>>
 // CHECK-NEXT: cir.call @_ZN8CtorDtorD1Ev(%[[DEC_STRIDE]]) nothrow : (!cir.ptr<!rec_CtorDtor> {{.*}}) -> ()
 // CHECK-NEXT: cir.yield
@@ -493,14 +493,14 @@ void do_things(unsigned A, unsigned B) {
 // CHECK-NEXT: %[[STRIDE:.*]] = cir.ptr_stride %[[BOUND2_STRIDE_DECAY]], %[[ITR1_LOAD]] : (!cir.ptr<!cir.array<!rec_CtorDtor x 5>>, !u64i) -> !cir.ptr<!cir.array<!rec_CtorDtor x 5>>
 // CHECK-NEXT: %[[ARR_SIZE:.*]] = cir.const #cir.int<5> : !u64i
 // CHECK-NEXT: %[[ARR_DECAY:.*]] = cir.cast array_to_ptrdecay %[[STRIDE]] : !cir.ptr<!cir.array<!rec_CtorDtor x 5>> -> !cir.ptr<!rec_CtorDtor>
-// CHECK-NEXT: %[[LAST_ELT:.*]] = cir.ptr_stride %[[ARR_DECAY]], %[[ARR_SIZE]] : (!cir.ptr<!rec_CtorDtor>, !u64i) -> !cir.ptr<!rec_CtorDtor>
+// CHECK-NEXT: %[[LAST_ELT:.*]] = cir.ptr_stride inbounds %[[ARR_DECAY]], %[[ARR_SIZE]] : (!cir.ptr<!rec_CtorDtor>, !u64i) -> !cir.ptr<!rec_CtorDtor>
 // CHECK-NEXT: %[[ARR_IDX:.*]] = cir.alloca "__array_idx" align(1) : !cir.ptr<!cir.ptr<!rec_CtorDtor>>
 // CHECK-NEXT: cir.store %[[ARR_DECAY]], %[[ARR_IDX]] : !cir.ptr<!rec_CtorDtor>, !cir.ptr<!cir.ptr<!rec_CtorDtor>>
 // CHECK-NEXT: cir.do {
 // CHECK-NEXT: %[[IDX_LOAD:.*]] = cir.load %[[ARR_IDX]] : !cir.ptr<!cir.ptr<!rec_CtorDtor>>, !cir.ptr<!rec_CtorDtor>
 // CHECK-NEXT: cir.call @_ZN8CtorDtorC1Ev(%[[IDX_LOAD]]) : (!cir.ptr<!rec_CtorDtor> {{.*}}) -> ()
 // CHECK-NEXT: %[[ONE:.*]] = cir.const #cir.int<1> : !u64i
-// CHECK-NEXT: %[[INC_STRIDE:.*]] = cir.ptr_stride %[[IDX_LOAD]], %[[ONE]] : (!cir.ptr<!rec_CtorDtor>, !u64i) -> !cir.ptr<!rec_CtorDtor>
+// CHECK-NEXT: %[[INC_STRIDE:.*]] = cir.ptr_stride inbounds %[[IDX_LOAD]], %[[ONE]] : (!cir.ptr<!rec_CtorDtor>, !u64i) -> !cir.ptr<!rec_CtorDtor>
 // CHECK-NEXT: cir.store %[[INC_STRIDE]], %[[ARR_IDX]] : !cir.ptr<!rec_CtorDtor>, !cir.ptr<!cir.ptr<!rec_CtorDtor>>
 // CHECK-NEXT: cir.yield
 // CHECK-NEXT: } while {
@@ -566,13 +566,13 @@ void do_things(unsigned A, unsigned B) {
 // CHECK-NEXT: %[[STRIDE:.*]] = cir.ptr_stride %[[BOUND2_STRIDE_DECAY]], %[[ITR1_LOAD]] : (!cir.ptr<!cir.array<!rec_CtorDtor x 5>>, !u64i) -> !cir.ptr<!cir.array<!rec_CtorDtor x 5>>
 // CHECK-NEXT: %[[LAST_IDX:.*]] = cir.const #cir.int<5> : !u64i
 // CHECK-NEXT: %[[ARR_DECAY:.*]] = cir.cast array_to_ptrdecay %[[STRIDE]] : !cir.ptr<!cir.array<!rec_CtorDtor x 5>> -> !cir.ptr<!rec_CtorDtor>
-// CHECK-NEXT: %[[LAST_ELT:.*]] = cir.ptr_stride %[[ARR_DECAY]], %[[LAST_IDX]] : (!cir.ptr<!rec_CtorDtor>, !u64i) -> !cir.ptr<!rec_CtorDtor>
+// CHECK-NEXT: %[[LAST_ELT:.*]] = cir.ptr_stride inbounds %[[ARR_DECAY]], %[[LAST_IDX]] : (!cir.ptr<!rec_CtorDtor>, !u64i) -> !cir.ptr<!rec_CtorDtor>
 // CHECK-NEXT: %[[ARR_IDX:.*]] = cir.alloca "__array_idx" align(1) : !cir.ptr<!cir.ptr<!rec_CtorDtor>>
 // CHECK-NEXT: cir.store %[[LAST_ELT]], %[[ARR_IDX]] : !cir.ptr<!rec_CtorDtor>, !cir.ptr<!cir.ptr<!rec_CtorDtor>>
 // CHECK-NEXT: cir.do {
 // CHECK-NEXT: %[[IDX_LOAD:.*]] = cir.load %[[ARR_IDX]] : !cir.ptr<!cir.ptr<!rec_CtorDtor>>, !cir.ptr<!rec_CtorDtor>
 // CHECK-NEXT: %[[NEG_ONE:.*]] = cir.const #cir.int<-1> : !s64i
-// CHECK-NEXT: %[[DEC_STRIDE:.*]] = cir.ptr_stride %[[IDX_LOAD]], %[[NEG_ONE]] : (!cir.ptr<!rec_CtorDtor>, !s64i) -> !cir.ptr<!rec_CtorDtor>
+// CHECK-NEXT: %[[DEC_STRIDE:.*]] = cir.ptr_stride inbounds %[[IDX_LOAD]], %[[NEG_ONE]] : (!cir.ptr<!rec_CtorDtor>, !s64i) -> !cir.ptr<!rec_CtorDtor>
 // CHECK-NEXT: cir.store %[[DEC_STRIDE]], %[[ARR_IDX]] : !cir.ptr<!rec_CtorDtor>, !cir.ptr<!cir.ptr<!rec_CtorDtor>>
 // CHECK-NEXT: cir.call @_ZN8CtorDtorD1Ev(%[[DEC_STRIDE]]) nothrow : (!cir.ptr<!rec_CtorDtor> {{.*}}) -> ()
 // CHECK-NEXT: cir.yield
@@ -611,14 +611,14 @@ void do_things(unsigned A, unsigned B) {
 // CHECK-NEXT: %[[BITCAST:.*]] = cir.cast bitcast %[[TL_ALLOCA]] : !cir.ptr<!cir.array<!cir.array<!cir.array<!rec_CtorDtor x 5> x 5> x 5>> -> !cir.ptr<!cir.array<!rec_CtorDtor x 125>>
 // CHECK-NEXT: %[[ARR_SIZE:.*]] = cir.const #cir.int<125> : !u64i
 // CHECK-NEXT: %[[DECAY:.*]] = cir.cast array_to_ptrdecay %[[BITCAST]] : !cir.ptr<!cir.array<!rec_CtorDtor x 125>> -> !cir.ptr<!rec_CtorDtor>
-// CHECK-NEXT: %[[ONE_PAST_LAST_ELT:.*]] = cir.ptr_stride %[[DECAY]], %[[ARR_SIZE]] : (!cir.ptr<!rec_CtorDtor>, !u64i) -> !cir.ptr<!rec_CtorDtor>
+// CHECK-NEXT: %[[ONE_PAST_LAST_ELT:.*]] = cir.ptr_stride inbounds %[[DECAY]], %[[ARR_SIZE]] : (!cir.ptr<!rec_CtorDtor>, !u64i) -> !cir.ptr<!rec_CtorDtor>
 // CHECK-NEXT: %[[ARR_IDX:.*]] = cir.alloca "__array_idx" align(1) : !cir.ptr<!cir.ptr<!rec_CtorDtor>>
 // CHECK-NEXT: cir.store %[[DECAY]], %[[ARR_IDX]] : !cir.ptr<!rec_CtorDtor>, !cir.ptr<!cir.ptr<!rec_CtorDtor>>
 // CHECK-NEXT: cir.do {
 // CHECK-NEXT: %[[IDX_LOAD:.*]] = cir.load %[[ARR_IDX]] : !cir.ptr<!cir.ptr<!rec_CtorDtor>>, !cir.ptr<!rec_CtorDtor>
 // CHECK-NEXT: cir.call @_ZN8CtorDtorC1Ev(%[[IDX_LOAD]]) : (!cir.ptr<!rec_CtorDtor> {{.*}}) -> ()
 // CHECK-NEXT: %[[ONE:.*]] = cir.const #cir.int<1> : !u64i
-// CHECK-NEXT: %[[INC_STRIDE:.*]] = cir.ptr_stride %[[IDX_LOAD]], %[[ONE]] : (!cir.ptr<!rec_CtorDtor>, !u64i) -> !cir.ptr<!rec_CtorDtor>
+// CHECK-NEXT: %[[INC_STRIDE:.*]] = cir.ptr_stride inbounds %[[IDX_LOAD]], %[[ONE]] : (!cir.ptr<!rec_CtorDtor>, !u64i) -> !cir.ptr<!rec_CtorDtor>
 // CHECK-NEXT: cir.store %[[INC_STRIDE]], %[[ARR_IDX]] : !cir.ptr<!rec_CtorDtor>, !cir.ptr<!cir.ptr<!rec_CtorDtor>>
 // CHECK-NEXT: cir.yield
 // CHECK-NEXT: } while {
@@ -632,13 +632,13 @@ void do_things(unsigned A, unsigned B) {
 // CHECK-NEXT: %[[BITCAST:.*]] = cir.cast bitcast %[[PRIVATE]] : !cir.ptr<!cir.array<!cir.array<!cir.array<!rec_CtorDtor x 5> x 5> x 5>> -> !cir.ptr<!cir.array<!rec_CtorDtor x 125>>
 // CHECK-NEXT: %[[LAST_IDX:.*]] = cir.const #cir.int<125> : !u64i
 // CHECK-NEXT: %[[DECAY:.*]] = cir.cast array_to_ptrdecay %[[BITCAST]] : !cir.ptr<!cir.array<!rec_CtorDtor x 125>> -> !cir.ptr<!rec_CtorDtor>
-// CHECK-NEXT: %[[LAST_ELT:.*]] = cir.ptr_stride %[[DECAY]], %[[LAST_IDX]] : (!cir.ptr<!rec_CtorDtor>, !u64i) -> !cir.ptr<!rec_CtorDtor>
+// CHECK-NEXT: %[[LAST_ELT:.*]] = cir.ptr_stride inbounds %[[DECAY]], %[[LAST_IDX]] : (!cir.ptr<!rec_CtorDtor>, !u64i) -> !cir.ptr<!rec_CtorDtor>
 // CHECK-NEXT: %[[ARR_IDX:.*]] = cir.alloca "__array_idx" align(1) : !cir.ptr<!cir.ptr<!rec_CtorDtor>>
 // CHECK-NEXT: cir.store %[[LAST_ELT]], %[[ARR_IDX]] : !cir.ptr<!rec_CtorDtor>, !cir.ptr<!cir.ptr<!rec_CtorDtor>>
 // CHECK-NEXT: cir.do {
 // CHECK-NEXT: %[[IDX_LOAD:.*]] = cir.load %[[ARR_IDX]] : !cir.ptr<!cir.ptr<!rec_CtorDtor>>, !cir.ptr<!rec_CtorDtor>
 // CHECK-NEXT: %[[NEG_ONE:.*]] = cir.const #cir.int<-1> : !s64i
-// CHECK-NEXT: %[[DEC_STRIDE:.*]] = cir.ptr_stride %[[IDX_LOAD]], %[[NEG_ONE]] : (!cir.ptr<!rec_CtorDtor>, !s64i) -> !cir.ptr<!rec_CtorDtor>
+// CHECK-NEXT: %[[DEC_STRIDE:.*]] = cir.ptr_stride inbounds %[[IDX_LOAD]], %[[NEG_ONE]] : (!cir.ptr<!rec_CtorDtor>, !s64i) -> !cir.ptr<!rec_CtorDtor>
 // CHECK-NEXT: cir.store %[[DEC_STRIDE]], %[[ARR_IDX]] : !cir.ptr<!rec_CtorDtor>, !cir.ptr<!cir.ptr<!rec_CtorDtor>>
 // CHECK-NEXT: cir.call @_ZN8CtorDtorD1Ev(%[[DEC_STRIDE]]) nothrow : (!cir.ptr<!rec_CtorDtor> {{.*}}) -> ()
 // CHECK-NEXT: cir.yield

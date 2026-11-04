@@ -204,7 +204,7 @@ void test_delete_array_destructed(Destructed *ptr) {
 //
 // Destruct elements in reverse order.
 // CIR:     cir.cleanup.scope {
-// CIR:       %[[END:.*]] = cir.ptr_stride %[[PTR]], %[[NUM_ELEM]] : (!cir.ptr<!rec_Destructed>, !u64i) -> !cir.ptr<!rec_Destructed>
+// CIR:       %[[END:.*]] = cir.ptr_stride inbounds %[[PTR]], %[[NUM_ELEM]] : (!cir.ptr<!rec_Destructed>, !u64i) -> !cir.ptr<!rec_Destructed>
 // CIR:       %[[NOT_EMPTY:.*]] = cir.cmp ne %[[END]], %[[PTR]] : !cir.ptr<!rec_Destructed>
 // CIR:       cir.if %[[NOT_EMPTY]] {
 // CIR:         %[[ARR_IDX:.*]] = cir.alloca "__array_idx" align(1) : !cir.ptr<!cir.ptr<!rec_Destructed>>
@@ -212,7 +212,7 @@ void test_delete_array_destructed(Destructed *ptr) {
 // CIR:         cir.do {
 // CIR:           %[[ARR_CUR:.*]] = cir.load{{.*}} %[[ARR_IDX]] : !cir.ptr<!cir.ptr<!rec_Destructed>>, !cir.ptr<!rec_Destructed>
 // CIR:           %[[NEG_ONE:.*]] = cir.const #cir.int<-1> : !s64i
-// CIR:           %[[ARR_PREV:.*]] = cir.ptr_stride %[[ARR_CUR]], %[[NEG_ONE]] : (!cir.ptr<!rec_Destructed>, !s64i) -> !cir.ptr<!rec_Destructed>
+// CIR:           %[[ARR_PREV:.*]] = cir.ptr_stride inbounds %[[ARR_CUR]], %[[NEG_ONE]] : (!cir.ptr<!rec_Destructed>, !s64i) -> !cir.ptr<!rec_Destructed>
 // CIR:           cir.store %[[ARR_PREV]], %[[ARR_IDX]] : !cir.ptr<!rec_Destructed>, !cir.ptr<!cir.ptr<!rec_Destructed>>
 // CIR:           cir.call @_ZN10DestructedD1Ev(%[[ARR_PREV]]) nothrow : (!cir.ptr<!rec_Destructed>) -> ()
 // CIR:           cir.yield
@@ -240,7 +240,7 @@ void test_delete_array_destructed(Destructed *ptr) {
 // LLVM: [[DELETE_NOTNULL]]:
 // LLVM:   %[[ALLOC_PTR:.*]] = getelementptr i8, ptr %[[PTR]], i64 -8
 // LLVM:   %[[NUM_ELEM:.*]] = load i64, ptr %[[ALLOC_PTR]], align 4
-// LLVM:   %[[ARR_END:.*]] = getelementptr %struct.Destructed, ptr %[[PTR]], i64 %[[NUM_ELEM]]
+// LLVM:   %[[ARR_END:.*]] = getelementptr inbounds %struct.Destructed, ptr %[[PTR]], i64 %[[NUM_ELEM]]
 // LLVM:   %[[NOT_EMPTY:.*]] = icmp ne ptr %[[ARR_END]], %[[PTR]]
 // LLVM:   br i1 %[[NOT_EMPTY]], label %[[DESTROY_ELEMENTS:.*]], label %[[CALL_DELETE:.*]]
 // LLVM: [[DESTROY_ELEMENTS:.*]]:
@@ -252,7 +252,7 @@ void test_delete_array_destructed(Destructed *ptr) {
 // LLVM:   br i1 %[[CMP]], label %[[DELETE_ELEMENT:.*]], label %[[LOOP_END:.*]]
 // LLVM: [[DELETE_ELEMENT]]:
 // LLVM:   %[[ELEM:.*]] = load ptr, ptr %[[ARR_IDX]]
-// LLVM:   %[[PREV:.*]] = getelementptr %struct.Destructed, ptr %[[ELEM]], i64 -1
+// LLVM:   %[[PREV:.*]] = getelementptr inbounds %struct.Destructed, ptr %[[ELEM]], i64 -1
 // LLVM:   store ptr %[[PREV]], ptr %[[ARR_IDX]]
 // LLVM:   call void @_ZN10DestructedD1Ev(ptr %[[PREV]])
 // LLVM:   br label %[[LOOP_CONDITION]]

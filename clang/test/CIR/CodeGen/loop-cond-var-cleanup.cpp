@@ -1248,7 +1248,7 @@ void while_cond_var_extended_init_list() {
 // CIR-NEXT:      cir.if %[[ACTIVE]] {
 // CIR-NEXT:        %[[SIZE:.*]] = cir.const #cir.int<2> : !u64i
 // CIR-NEXT:        %[[BEGIN:.*]] = cir.cast array_to_ptrdecay %[[ARRAY]]
-// CIR-NEXT:        cir.ptr_stride %[[BEGIN]], %[[SIZE]]
+// CIR-NEXT:        cir.ptr_stride inbounds %[[BEGIN]], %[[SIZE]]
 // CIR:             cir.do {
 // CIR:               cir.call @_ZN1SD1Ev({{.*}}) nothrow{{.*}}
 // CIR:             } while {

@@ -38,7 +38,7 @@ void test(Dtor *ptr) {
 // CIR:     %[[NUM_ELEM:.*]] = cir.load{{.*}} %[[COOKIE_PTR]] : !cir.ptr<!u64i>, !u64i
 //
 // Compute end pointer and check for empty array.
-// CIR:     %[[END:.*]] = cir.ptr_stride %[[PTR]], %[[NUM_ELEM]] : (!cir.ptr<!rec_Dtor>, !u64i) -> !cir.ptr<!rec_Dtor>
+// CIR:     %[[END:.*]] = cir.ptr_stride inbounds %[[PTR]], %[[NUM_ELEM]] : (!cir.ptr<!rec_Dtor>, !u64i) -> !cir.ptr<!rec_Dtor>
 // CIR:     %[[NOT_EMPTY:.*]] = cir.cmp ne %[[END]], %[[PTR]] : !cir.ptr<!rec_Dtor>
 // CIR:     cir.if %[[NOT_EMPTY]] {
 //
@@ -48,7 +48,7 @@ void test(Dtor *ptr) {
 // CIR:       cir.do {
 // CIR:         %[[CUR:.*]] = cir.load %[[ARR_IDX]]
 // CIR:         %[[NEG_ONE:.*]] = cir.const #cir.int<-1> : !s64i
-// CIR:         %[[PREV:.*]] = cir.ptr_stride %[[CUR]], %[[NEG_ONE]] : (!cir.ptr<!rec_Dtor>, !s64i) -> !cir.ptr<!rec_Dtor>
+// CIR:         %[[PREV:.*]] = cir.ptr_stride inbounds %[[CUR]], %[[NEG_ONE]] : (!cir.ptr<!rec_Dtor>, !s64i) -> !cir.ptr<!rec_Dtor>
 // CIR:         cir.store %[[PREV]], %[[ARR_IDX]]
 // CIR:         cir.call @_ZN4DtorD1Ev(%[[PREV]]) nothrow : (!cir.ptr<!rec_Dtor>) -> ()
 // CIR:         cir.yield
@@ -70,7 +70,7 @@ void test(Dtor *ptr) {
 // LLVM: [[DELETE_NOTNULL]]:
 // LLVM:   %[[ALLOC_PTR:.*]] = getelementptr i8, ptr %[[PTR]], i64 -8
 // LLVM:   %[[NUM_ELEM:.*]] = load i64, ptr %[[ALLOC_PTR]], align 4
-// LLVM:   %[[ARR_END:.*]] = getelementptr %struct.Dtor, ptr %[[PTR]], i64 %[[NUM_ELEM]]
+// LLVM:   %[[ARR_END:.*]] = getelementptr inbounds %struct.Dtor, ptr %[[PTR]], i64 %[[NUM_ELEM]]
 // LLVM:   %[[NOT_EMPTY:.*]] = icmp ne ptr %[[ARR_END]], %[[PTR]]
 // LLVM:   br i1 %[[NOT_EMPTY]], label %[[DESTROY:.*]], label %[[CALL_DELETE:.*]]
 // LLVM: [[DESTROY]]:
@@ -82,7 +82,7 @@ void test(Dtor *ptr) {
 // LLVM:   br i1 %[[CMP]], label %[[DTOR_LOOP]], label %[[LOOP_END:.*]]
 // LLVM: [[DTOR_LOOP]]:
 // LLVM:   %[[ELEM:.*]] = load ptr, ptr %[[ARR_IDX]]
-// LLVM:   %[[PREV:.*]] = getelementptr %struct.Dtor, ptr %[[ELEM]], i64 -1
+// LLVM:   %[[PREV:.*]] = getelementptr inbounds %struct.Dtor, ptr %[[ELEM]], i64 -1
 // LLVM:   store ptr %[[PREV]], ptr %[[ARR_IDX]]
 // LLVM:   call void @_ZN4DtorD1Ev(ptr %[[PREV]])
 // LLVM:   br label %[[LOOP_COND]]

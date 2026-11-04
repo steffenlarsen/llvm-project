@@ -29,7 +29,7 @@ void test_partial_array_cleanup() {
 // CIR:       %[[ARRAY:.*]] = cir.alloca "s" {{.*}} init : !cir.ptr<!cir.array<!rec_S x 4>>
 // CIR:       %[[CONST4:.*]] = cir.const #cir.int<4> : !u64i
 // CIR:       %[[BEGIN:.*]] = cir.cast array_to_ptrdecay %[[ARRAY]] : !cir.ptr<!cir.array<!rec_S x 4>> -> !cir.ptr<!rec_S>
-// CIR:       %[[END:.*]] = cir.ptr_stride %[[BEGIN]], %[[CONST4]] : (!cir.ptr<!rec_S>, !u64i) -> !cir.ptr<!rec_S>
+// CIR:       %[[END:.*]] = cir.ptr_stride inbounds %[[BEGIN]], %[[CONST4]] : (!cir.ptr<!rec_S>, !u64i) -> !cir.ptr<!rec_S>
 // CIR:       %[[ITER:.*]] = cir.alloca "__array_idx" {{.*}} : !cir.ptr<!cir.ptr<!rec_S>>
 // CIR:       cir.store %[[BEGIN]], %[[ITER]] : !cir.ptr<!rec_S>, !cir.ptr<!cir.ptr<!rec_S>>
 // CIR:       cir.cleanup.scope {
@@ -37,7 +37,7 @@ void test_partial_array_cleanup() {
 // CIR:           %[[CUR:.*]] = cir.load %[[ITER]] : !cir.ptr<!cir.ptr<!rec_S>>, !cir.ptr<!rec_S>
 // CIR:           cir.call @_ZN1SC1Ev(%[[CUR]]) : (!cir.ptr<!rec_S>{{.*}}) -> ()
 // CIR:           %[[CONST1:.*]] = cir.const #cir.int<1> : !u64i
-// CIR:           %[[NEXT:.*]] = cir.ptr_stride %[[CUR]], %[[CONST1]] : (!cir.ptr<!rec_S>, !u64i) -> !cir.ptr<!rec_S>
+// CIR:           %[[NEXT:.*]] = cir.ptr_stride inbounds %[[CUR]], %[[CONST1]] : (!cir.ptr<!rec_S>, !u64i) -> !cir.ptr<!rec_S>
 // CIR:           cir.store %[[NEXT]], %[[ITER]] : !cir.ptr<!rec_S>, !cir.ptr<!cir.ptr<!rec_S>>
 // CIR:           cir.yield
 // CIR:         } while {
@@ -53,7 +53,7 @@ void test_partial_array_cleanup() {
 // CIR:           cir.do {
 // CIR:             %[[EL:.*]] = cir.load %[[ITER]] : !cir.ptr<!cir.ptr<!rec_S>>, !cir.ptr<!rec_S>
 // CIR:             %[[NEG1:.*]] = cir.const #cir.int<-1> : !s64i
-// CIR:             %[[PREV:.*]] = cir.ptr_stride %[[EL]], %[[NEG1]] : (!cir.ptr<!rec_S>, !s64i) -> !cir.ptr<!rec_S>
+// CIR:             %[[PREV:.*]] = cir.ptr_stride inbounds %[[EL]], %[[NEG1]] : (!cir.ptr<!rec_S>, !s64i) -> !cir.ptr<!rec_S>
 // CIR:             cir.store %[[PREV]], %[[ITER]] : !cir.ptr<!rec_S>, !cir.ptr<!cir.ptr<!rec_S>>
 // CIR:             cir.call @_ZN1SD1Ev(%[[PREV]]){{.*}} : (!cir.ptr<!rec_S>{{.*}}) -> ()
 // CIR:             cir.yield
@@ -69,7 +69,7 @@ void test_partial_array_cleanup() {
 // LLVM:     define dso_local void @_Z26test_partial_array_cleanupv()
 // LLVM:       %[[ARRAY:.*]] = alloca [4 x %struct.S]
 // LLVM:       %[[BEGIN:.*]] = getelementptr inbounds %struct.S, ptr %[[ARRAY]], i32 0
-// LLVM:       %[[END:.*]] = getelementptr %struct.S, ptr %[[BEGIN]], i64 4
+// LLVM:       %[[END:.*]] = getelementptr inbounds %struct.S, ptr %[[BEGIN]], i64 4
 // LLVM:       %[[ITER:.*]] = alloca ptr
 // LLVM:       store ptr %[[BEGIN]], ptr %[[ITER]]
 //
@@ -89,7 +89,7 @@ void test_partial_array_cleanup() {
 // LLVM:         to label %[[CTOR_CONT:.*]] unwind label %[[LPAD:.*]]
 //
 // LLVM:     [[CTOR_CONT]]:
-// LLVM:       %[[NEXT:.*]] = getelementptr %struct.S, ptr %[[CUR]], i64 1
+// LLVM:       %[[NEXT:.*]] = getelementptr inbounds %struct.S, ptr %[[CUR]], i64 1
 // LLVM:       store ptr %[[NEXT]], ptr %[[ITER]]
 // LLVM:       br label %[[CTOR_LOOP_COND]]
 //
@@ -114,7 +114,7 @@ void test_partial_array_cleanup() {
 //            --- partial dtor loop body ---
 // LLVM:     [[DTOR_BODY]]:
 // LLVM:       %[[DCUR:.*]] = load ptr, ptr %[[ITER]]
-// LLVM:       %[[PREV:.*]] = getelementptr %struct.S, ptr %[[DCUR]], i64 -1
+// LLVM:       %[[PREV:.*]] = getelementptr inbounds %struct.S, ptr %[[DCUR]], i64 -1
 // LLVM:       store ptr %[[PREV]], ptr %[[ITER]]
 // LLVM:       call void @_ZN1SD1Ev(ptr{{.*}} %[[PREV]])
 // LLVM:       br label %[[DTOR_LOOP_COND]]
@@ -198,7 +198,7 @@ void test_variable_size_partial_array_cleanup(int n) {
 // CIR:       cir.store {{.*}} %[[STACK]], %[[SAVED_STACK]] : !cir.ptr<!u8i>, !cir.ptr<!cir.ptr<!u8i>>
 // CIR:       cir.cleanup.scope {
 // CIR:         %[[BEGIN:.*]] = cir.alloca "s" {{.*}} init size(%[[N]]) : !cir.ptr<!rec_S>
-// CIR:         %[[END:.*]] = cir.ptr_stride %[[BEGIN]], %[[N]] : (!cir.ptr<!rec_S>, !u64i) -> !cir.ptr<!rec_S>
+// CIR:         %[[END:.*]] = cir.ptr_stride inbounds %[[BEGIN]], %[[N]] : (!cir.ptr<!rec_S>, !u64i) -> !cir.ptr<!rec_S>
 // CIR:         %[[ZERO:.*]] = cir.const #cir.int<0> : !u64i
 // CIR:         %[[IS_NONZERO:.*]] = cir.cmp ne %[[N]], %[[ZERO]] : !u64i
 // CIR:         cir.if %[[IS_NONZERO]] {
@@ -209,7 +209,7 @@ void test_variable_size_partial_array_cleanup(int n) {
 // CIR:               %[[CUR:.*]] = cir.load %[[ITER]] : !cir.ptr<!cir.ptr<!rec_S>>, !cir.ptr<!rec_S>
 // CIR:               cir.call @_ZN1SC1Ev(%[[CUR]]) : (!cir.ptr<!rec_S>{{.*}}) -> ()
 // CIR:               %[[CONST1:.*]] = cir.const #cir.int<1> : !u64i
-// CIR:               %[[NEXT:.*]] = cir.ptr_stride %[[CUR]], %[[CONST1]] : (!cir.ptr<!rec_S>, !u64i) -> !cir.ptr<!rec_S>
+// CIR:               %[[NEXT:.*]] = cir.ptr_stride inbounds %[[CUR]], %[[CONST1]] : (!cir.ptr<!rec_S>, !u64i) -> !cir.ptr<!rec_S>
 // CIR:               cir.store %[[NEXT]], %[[ITER]] : !cir.ptr<!rec_S>, !cir.ptr<!cir.ptr<!rec_S>>
 // CIR:               cir.yield
 // CIR:             } while {
@@ -225,7 +225,7 @@ void test_variable_size_partial_array_cleanup(int n) {
 // CIR:               cir.do {
 // CIR:                 %[[EL:.*]] = cir.load %[[ITER]] : !cir.ptr<!cir.ptr<!rec_S>>, !cir.ptr<!rec_S>
 // CIR:                 %[[NEG1:.*]] = cir.const #cir.int<-1> : !s64i
-// CIR:                 %[[PREV:.*]] = cir.ptr_stride %[[EL]], %[[NEG1]] : (!cir.ptr<!rec_S>, !s64i) -> !cir.ptr<!rec_S>
+// CIR:                 %[[PREV:.*]] = cir.ptr_stride inbounds %[[EL]], %[[NEG1]] : (!cir.ptr<!rec_S>, !s64i) -> !cir.ptr<!rec_S>
 // CIR:                 cir.store %[[PREV]], %[[ITER]] : !cir.ptr<!rec_S>, !cir.ptr<!cir.ptr<!rec_S>>
 // CIR:                 cir.call @_ZN1SD1Ev(%[[PREV]]){{.*}} : (!cir.ptr<!rec_S>{{.*}}) -> ()
 // CIR:                 cir.yield
@@ -241,7 +241,7 @@ void test_variable_size_partial_array_cleanup(int n) {
 //
 //              --- normal dtor ---
 // CIR:         } cleanup all {
-// CIR:           %[[LAST:.*]] = cir.ptr_stride %[[BEGIN]], %[[N]] : (!cir.ptr<!rec_S>, !u64i) -> !cir.ptr<!rec_S>
+// CIR:           %[[LAST:.*]] = cir.ptr_stride inbounds %[[BEGIN]], %[[N]] : (!cir.ptr<!rec_S>, !u64i) -> !cir.ptr<!rec_S>
 // CIR:           %[[DTOR_NE:.*]] = cir.cmp ne %[[LAST]], %[[BEGIN]] : !cir.ptr<!rec_S>
 // CIR:           cir.if %[[DTOR_NE]] {
 // CIR:             %[[DTOR_ITER:.*]] = cir.alloca "__array_idx" {{.*}} : !cir.ptr<!cir.ptr<!rec_S>>
@@ -249,7 +249,7 @@ void test_variable_size_partial_array_cleanup(int n) {
 // CIR:             cir.do {
 // CIR:               %[[DTOR_CUR:.*]] = cir.load %[[DTOR_ITER]] : !cir.ptr<!cir.ptr<!rec_S>>, !cir.ptr<!rec_S>
 // CIR:               %[[DTOR_NEG1:.*]] = cir.const #cir.int<-1> : !s64i
-// CIR:               %[[DTOR_PREV:.*]] = cir.ptr_stride %[[DTOR_CUR]], %[[DTOR_NEG1]] : (!cir.ptr<!rec_S>, !s64i) -> !cir.ptr<!rec_S>
+// CIR:               %[[DTOR_PREV:.*]] = cir.ptr_stride inbounds %[[DTOR_CUR]], %[[DTOR_NEG1]] : (!cir.ptr<!rec_S>, !s64i) -> !cir.ptr<!rec_S>
 // CIR:               cir.store %[[DTOR_PREV]], %[[DTOR_ITER]] : !cir.ptr<!rec_S>, !cir.ptr<!cir.ptr<!rec_S>>
 // CIR:               cir.call @_ZN1SD1Ev(%[[DTOR_PREV]]){{.*}} : (!cir.ptr<!rec_S>{{.*}}) -> ()
 // CIR:               cir.yield
@@ -274,7 +274,7 @@ void test_variable_size_partial_array_cleanup(int n) {
 //
 //            --- VLA alloca + zero check ---
 // LLVM:       %[[BEGIN:.*]] = alloca %struct.S, i64 %[[N]]
-// LLVM:       %[[END:.*]] = getelementptr %struct.S, ptr %[[BEGIN]], i64 %[[N]]
+// LLVM:       %[[END:.*]] = getelementptr inbounds %struct.S, ptr %[[BEGIN]], i64 %[[N]]
 // LLVM:       %[[IS_NONZERO:.*]] = icmp ne i64 %[[N]], 0
 // LLVM:       br i1 %[[IS_NONZERO]], label %[[CTOR_SETUP:.*]], label %[[AFTER_CTOR:.*]]
 //
@@ -299,7 +299,7 @@ void test_variable_size_partial_array_cleanup(int n) {
 // LLVM:         to label %[[CTOR_CONT:.*]] unwind label %[[LPAD:.*]]
 //
 // LLVM:     [[CTOR_CONT]]:
-// LLVM:       %[[NEXT:.*]] = getelementptr %struct.S, ptr %[[CUR]], i64 1
+// LLVM:       %[[NEXT:.*]] = getelementptr inbounds %struct.S, ptr %[[CUR]], i64 1
 // LLVM:       store ptr %[[NEXT]], ptr %[[CTOR_ITER]]
 // LLVM:       br label %[[CTOR_LOOP_COND]]
 //
@@ -327,7 +327,7 @@ void test_variable_size_partial_array_cleanup(int n) {
 //            --- partial dtor loop body ---
 // LLVM:     [[PDTOR_BODY]]:
 // LLVM:       %[[PDCUR:.*]] = load ptr, ptr %[[CTOR_ITER]]
-// LLVM:       %[[PPREV:.*]] = getelementptr %struct.S, ptr %[[PDCUR]], i64 -1
+// LLVM:       %[[PPREV:.*]] = getelementptr inbounds %struct.S, ptr %[[PDCUR]], i64 -1
 // LLVM:       store ptr %[[PPREV]], ptr %[[CTOR_ITER]]
 // LLVM:       call void @_ZN1SD1Ev(ptr{{.*}} %[[PPREV]])
 // LLVM:       br label %[[PDTOR_LOOP_COND]]
@@ -344,7 +344,7 @@ void test_variable_size_partial_array_cleanup(int n) {
 //
 //            --- normal dtor setup ---
 // LLVM:     [[AFTER_CTOR]]:
-// LLVM:       %[[LAST:.*]] = getelementptr %struct.S, ptr %[[BEGIN]], i64 %[[N]]
+// LLVM:       %[[LAST:.*]] = getelementptr inbounds %struct.S, ptr %[[BEGIN]], i64 %[[N]]
 // LLVM:       %[[DTOR_NE:.*]] = icmp ne ptr %[[LAST]], %[[BEGIN]]
 // LLVM:       br i1 %[[DTOR_NE]], label %[[NDTOR_ENTRY:.*]], label %[[NDTOR_DONE:.*]]
 //
@@ -361,7 +361,7 @@ void test_variable_size_partial_array_cleanup(int n) {
 //            --- normal dtor loop body ---
 // LLVM:     [[NDTOR_BODY]]:
 // LLVM:       %[[NDCUR:.*]] = load ptr, ptr %[[DTOR_ITER]]
-// LLVM:       %[[NDPREV:.*]] = getelementptr %struct.S, ptr %[[NDCUR]], i64 -1
+// LLVM:       %[[NDPREV:.*]] = getelementptr inbounds %struct.S, ptr %[[NDCUR]], i64 -1
 // LLVM:       store ptr %[[NDPREV]], ptr %[[DTOR_ITER]]
 // LLVM:       call void @_ZN1SD1Ev(ptr{{.*}} %[[NDPREV]])
 // LLVM:       br label %[[NDTOR_LOOP_COND]]
@@ -511,7 +511,7 @@ void test_multi_dim_vla(int n, int m) {
 //
 //            --- normal dtor ---
 // LLVM:       %[[NM2:.*]] = mul nuw i64 %[[N]], %[[M]]
-// LLVM:       %[[LAST:.*]] = getelementptr %struct.S, ptr %[[BEGIN]], i64 %[[NM2]]
+// LLVM:       %[[LAST:.*]] = getelementptr inbounds %struct.S, ptr %[[BEGIN]], i64 %[[NM2]]
 // LLVM:       %[[DTOR_NE:.*]] = icmp ne ptr %[[LAST]], %[[BEGIN]]
 // LLVM:       call void @_ZN1SD1Ev
 // LLVM:       call void @llvm.stackrestore.p0
@@ -981,7 +981,7 @@ void test_multi_dim_init_list_partial_array_cleanup() {
 // CIR:         %[[FLAT:.*]] = cir.cast bitcast %[[ARRAY]] : !cir.ptr<!cir.array<!cir.array<!rec_S x 2> x 2>> -> !cir.ptr<!cir.array<!rec_S x 4>>
 // CIR:         %[[FOUR:.*]] = cir.const #cir.int<4> : !u64i
 // CIR:         %[[FLAT_BEGIN:.*]] = cir.cast array_to_ptrdecay %[[FLAT]] : !cir.ptr<!cir.array<!rec_S x 4>> -> !cir.ptr<!rec_S>
-// CIR:         %[[FLAT_END:.*]] = cir.ptr_stride %[[FLAT_BEGIN]], %[[FOUR]] : (!cir.ptr<!rec_S>, !u64i) -> !cir.ptr<!rec_S>
+// CIR:         %[[FLAT_END:.*]] = cir.ptr_stride inbounds %[[FLAT_BEGIN]], %[[FOUR]] : (!cir.ptr<!rec_S>, !u64i) -> !cir.ptr<!rec_S>
 // CIR:         cir.do {
 // CIR:           cir.call @_ZN1SD1Ev
 // CIR:           cir.yield
@@ -1074,13 +1074,13 @@ void test_multi_dim_init_list_partial_array_cleanup() {
 //
 //            --- normal (non-EH) cleanup: destroys all 4 elements ---
 // LLVM:      %[[FLAT_BEGIN:.*]] = getelementptr inbounds %struct.S, ptr %[[ARR]], i32 0
-// LLVM:      %[[FLAT_END:.*]] = getelementptr %struct.S, ptr %[[FLAT_BEGIN]], i64 4
+// LLVM:      %[[FLAT_END:.*]] = getelementptr inbounds %struct.S, ptr %[[FLAT_BEGIN]], i64 4
 // LLVM:      store ptr %[[FLAT_END]], ptr %[[NORM_ITER:.*]]
 // LLVM:      br label %[[NORM_BODY:.*]]
 //
 // LLVM:      [[NORM_BODY]]:
 // LLVM:        %[[NORM_CUR:.*]] = load ptr, ptr %[[NORM_ITER]]
-// LLVM:        %[[NORM_PREV:.*]] = getelementptr %struct.S, ptr %[[NORM_CUR]], i64 -1
+// LLVM:        %[[NORM_PREV:.*]] = getelementptr inbounds %struct.S, ptr %[[NORM_CUR]], i64 -1
 // LLVM:        store ptr %[[NORM_PREV]], ptr %[[NORM_ITER]]
 // LLVM:        call void @_ZN1SD1Ev(ptr {{.*}} %[[NORM_PREV]])
 // LLVM:      ret void
@@ -1248,7 +1248,7 @@ void Temp2InArray() {
 // CIR:           cir.do {
 // CIR-NEXT:        %[[CURRENT:.*]] = cir.load %[[ARR_IDX]] : !cir.ptr<!cir.ptr<!rec_CausesTemp2>>, !cir.ptr<!rec_CausesTemp2>
 // CIR-NEXT:        %[[NEG_1:.*]] = cir.const #cir.int<-1> : !s64i
-// CIR-NEXT:        %[[STRIDE:.*]] = cir.ptr_stride %[[CURRENT]], %[[NEG_1]] : (!cir.ptr<!rec_CausesTemp2>, !s64i) -> !cir.ptr<!rec_CausesTemp2>
+// CIR-NEXT:        %[[STRIDE:.*]] = cir.ptr_stride inbounds %[[CURRENT]], %[[NEG_1]] : (!cir.ptr<!rec_CausesTemp2>, !s64i) -> !cir.ptr<!rec_CausesTemp2>
 // CIR:             cir.call @_ZN11CausesTemp2D1Ev(%[[STRIDE]]) nothrow 
 // CIR-NEXT:        cir.yield
 // CIR-NEXT:      } while {
@@ -1263,7 +1263,7 @@ void Temp2InArray() {
 // CIR:         cir.do {
 // CIR-NEXT:      %[[ARR_LOAD:.*]] = cir.load %[[ARR_IDX]] : !cir.ptr<!cir.ptr<!rec_CausesTemp2>>, !cir.ptr<!rec_CausesTemp2>
 // CIR-NEXT:      %[[NEG_1:.*]] = cir.const #cir.int<-1> : !s64i
-// CIR-NEXT:      %[[STRIDE:.*]] = cir.ptr_stride %[[ARR_LOAD]], %[[NEG_1]] : (!cir.ptr<!rec_CausesTemp2>, !s64i) -> !cir.ptr<!rec_CausesTemp2>
+// CIR-NEXT:      %[[STRIDE:.*]] = cir.ptr_stride inbounds %[[ARR_LOAD]], %[[NEG_1]] : (!cir.ptr<!rec_CausesTemp2>, !s64i) -> !cir.ptr<!rec_CausesTemp2>
 // CIR:           cir.call @_ZN11CausesTemp2D1Ev(%[[STRIDE]]) nothrow
 // CIR-NEXT:      cir.yield
 // CIR-NEXT:    } while {
@@ -1304,11 +1304,11 @@ void Temp2InArray() {
 // LLVM: br label %[[DTOR_TMP:.*]]
 //
 // LLVM: [[DTOR_TMP]]:
-// LLVM: %[[DTOR_ELT:.*]] = getelementptr %struct.CausesTemp2, ptr %{{.*}}, i64 -1
+// LLVM: %[[DTOR_ELT:.*]] = getelementptr inbounds %struct.CausesTemp2, ptr %{{.*}}, i64 -1
 // LLVM: call void @_ZN11CausesTemp2D1Ev(ptr {{.*}}%[[DTOR_ELT]])
 //
 // Array destruction:
-// LLVM: %[[GET_ELT:.*]] = getelementptr %struct.CausesTemp2, ptr %{{.*}}, i64 -1
+// LLVM: %[[GET_ELT:.*]] = getelementptr inbounds %struct.CausesTemp2, ptr %{{.*}}, i64 -1
 // LLVM: call void @_ZN11CausesTemp2D1Ev(ptr {{.*}}%[[GET_ELT]])
 
 // OGCG-LABEL: define {{.*}}@_Z12Temp2InArrayv()

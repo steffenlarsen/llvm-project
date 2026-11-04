@@ -2392,16 +2392,22 @@ static void lowerArrayDtorCtorIntoLoop(cir::CIRBaseBuilderTy &builder,
   // Both constructors and destructors use end = begin + numElements.
   // Constructors iterate forward [begin, end).  Destructors iterate backward
   // from end, decrementing before calling the destructor on each element.
+  // Every element pointer stays within the array, so like classic codegen the
+  // address computations are inbounds.
   mlir::Value begin, end;
   if (isDynamic) {
     begin = addr;
-    end = cir::PtrStrideOp::create(builder, loc, eltTy, begin, numElements);
+    end = cir::PtrStrideOp::create(builder, loc, eltTy, begin, numElements,
+                                   /*inbounds=*/true,
+                                   /*no_unsigned_wrap=*/false);
   } else {
     mlir::Value endOffsetVal =
         builder.getUnsignedInt(loc, arrayLen, sizeTypeSize);
     begin = cir::CastOp::create(builder, loc, eltTy,
                                 cir::CastKind::array_to_ptrdecay, addr);
-    end = cir::PtrStrideOp::create(builder, loc, eltTy, begin, endOffsetVal);
+    end = cir::PtrStrideOp::create(builder, loc, eltTy, begin, endOffsetVal,
+                                   /*inbounds=*/true,
+                                   /*no_unsigned_wrap=*/false);
   }
 
   mlir::Value start = isCtor ? begin : end;
@@ -2482,13 +2488,15 @@ static void lowerArrayDtorCtorIntoLoop(cir::CIRBaseBuilderTy &builder,
           if (isCtor) {
             cloneRegionBodyInto(bodyBlock, currentElement);
             mlir::Value stride = builder.getUnsignedInt(loc, 1, sizeTypeSize);
-            auto nextElement = cir::PtrStrideOp::create(builder, loc, eltTy,
-                                                        currentElement, stride);
+            auto nextElement = cir::PtrStrideOp::create(
+                builder, loc, eltTy, currentElement, stride,
+                /*inbounds=*/true, /*no_unsigned_wrap=*/false);
             builder.createStore(loc, nextElement, tmpAddr);
           } else {
             mlir::Value stride = builder.getSignedInt(loc, -1, sizeTypeSize);
-            auto prevElement = cir::PtrStrideOp::create(builder, loc, eltTy,
-                                                        currentElement, stride);
+            auto prevElement = cir::PtrStrideOp::create(
+                builder, loc, eltTy, currentElement, stride,
+                /*inbounds=*/true, /*no_unsigned_wrap=*/false);
             builder.createStore(loc, prevElement, tmpAddr);
             cloneRegionBodyInto(bodyBlock, prevElement);
           }
@@ -2527,8 +2535,9 @@ static void lowerArrayDtorCtorIntoLoop(cir::CIRBaseBuilderTy &builder,
                       auto el = cir::LoadOp::create(b, loc, eltTy, tmpAddr);
                       mlir::Value negOne =
                           builder.getSignedInt(loc, -1, sizeTypeSize);
-                      auto prev = cir::PtrStrideOp::create(builder, loc, eltTy,
-                                                           el, negOne);
+                      auto prev = cir::PtrStrideOp::create(
+                          builder, loc, eltTy, el, negOne, /*inbounds=*/true,
+                          /*no_unsigned_wrap=*/false);
                       builder.createStore(loc, prev, tmpAddr);
                       cloneRegionBodyInto(partialDtorBlock, prev);
                       builder.createYield(loc);

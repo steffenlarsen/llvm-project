@@ -26,13 +26,13 @@ void test_cleanup_array() {
 // CIR:   %[[S:.*]] = cir.alloca "s" {{.*}} : !cir.ptr<!cir.array<!rec_S x 42>>
 // CIR:   %[[CONST42:.*]] = cir.const #cir.int<42> : !u64i
 // CIR:   %[[DECAY:.*]] = cir.cast array_to_ptrdecay %[[S]] : !cir.ptr<!cir.array<!rec_S x 42>> -> !cir.ptr<!rec_S>
-// CIR:   %[[END_PTR:.*]] = cir.ptr_stride %[[DECAY]], %[[CONST42]] : (!cir.ptr<!rec_S>, !u64i) -> !cir.ptr<!rec_S>
+// CIR:   %[[END_PTR:.*]] = cir.ptr_stride inbounds %[[DECAY]], %[[CONST42]] : (!cir.ptr<!rec_S>, !u64i) -> !cir.ptr<!rec_S>
 // CIR:   %[[ITER:.*]] = cir.alloca "__array_idx" {{.*}} : !cir.ptr<!cir.ptr<!rec_S>>
 // CIR:   cir.store %[[END_PTR]], %[[ITER]] : !cir.ptr<!rec_S>, !cir.ptr<!cir.ptr<!rec_S>>
 // CIR:   cir.do {
 // CIR:     %[[CURRENT:.*]] = cir.load %[[ITER]] : !cir.ptr<!cir.ptr<!rec_S>>, !cir.ptr<!rec_S>
 // CIR:     %[[CONST_MINUS1:.*]] = cir.const #cir.int<-1> : !s64i
-// CIR:     %[[PREV:.*]] = cir.ptr_stride %[[CURRENT]], %[[CONST_MINUS1]] : (!cir.ptr<!rec_S>, !s64i) -> !cir.ptr<!rec_S>
+// CIR:     %[[PREV:.*]] = cir.ptr_stride inbounds %[[CURRENT]], %[[CONST_MINUS1]] : (!cir.ptr<!rec_S>, !s64i) -> !cir.ptr<!rec_S>
 // CIR:     cir.store %[[PREV]], %[[ITER]] : !cir.ptr<!rec_S>, !cir.ptr<!cir.ptr<!rec_S>>
 // CIR:     cir.call @_ZN1SD1Ev(%[[PREV]]) nothrow : (!cir.ptr<!rec_S>{{.*}}) -> ()
 // CIR:     cir.yield
@@ -47,7 +47,7 @@ void test_cleanup_array() {
 // LLVM:   %[[ARRAY:.*]] = alloca [42 x %struct.S]
 // LLVM:   %[[ITER:.*]] = alloca ptr
 // LLVM:   %[[START:.*]] = getelementptr inbounds %struct.S, ptr %[[ARRAY]], i32 0
-// LLVM:   %[[END:.*]] = getelementptr %struct.S, ptr %[[START]], i64 42
+// LLVM:   %[[END:.*]] = getelementptr inbounds %struct.S, ptr %[[START]], i64 42
 // LLVM:   store ptr %[[END]], ptr %[[ITER]]
 // LLVM:   br label %[[LOOP:.*]]
 // LLVM: [[COND:.*]]:
@@ -56,7 +56,7 @@ void test_cleanup_array() {
 // LLVM:   br i1 %[[DONE]], label %[[LOOP]], label %[[EXIT:.*]]
 // LLVM: [[LOOP]]:
 // LLVM:   %[[CURRENT:.*]] = load ptr, ptr %[[ITER]]
-// LLVM:   %[[PREV:.*]] = getelementptr %struct.S, ptr %[[CURRENT]], i64 -1
+// LLVM:   %[[PREV:.*]] = getelementptr inbounds %struct.S, ptr %[[CURRENT]], i64 -1
 // LLVM:   store ptr %[[PREV]], ptr %[[ITER]]
 // LLVM:   call void @_ZN1SD1Ev(ptr{{.*}} %[[PREV]])
 // LLVM:   br label %[[COND]]
@@ -120,13 +120,13 @@ void multi_dimensional() {
 // CIR:       %[[FLAT:.*]] = cir.cast bitcast %[[S]] : !cir.ptr<!cir.array<!cir.array<!rec_S x 5> x 3>> -> !cir.ptr<!cir.array<!rec_S x 15>>
 // CIR:       %[[CONST15:.*]] = cir.const #cir.int<15> : !u64i
 // CIR:       %[[DECAY:.*]] = cir.cast array_to_ptrdecay %[[FLAT]] : !cir.ptr<!cir.array<!rec_S x 15>> -> !cir.ptr<!rec_S>
-// CIR:       %[[END_PTR:.*]] = cir.ptr_stride %[[DECAY]], %[[CONST15]] : (!cir.ptr<!rec_S>, !u64i) -> !cir.ptr<!rec_S>
+// CIR:       %[[END_PTR:.*]] = cir.ptr_stride inbounds %[[DECAY]], %[[CONST15]] : (!cir.ptr<!rec_S>, !u64i) -> !cir.ptr<!rec_S>
 // CIR:       %[[ITER:.*]] = cir.alloca "__array_idx" {{.*}} : !cir.ptr<!cir.ptr<!rec_S>>
 // CIR:       cir.store %[[END_PTR]], %[[ITER]] : !cir.ptr<!rec_S>, !cir.ptr<!cir.ptr<!rec_S>>
 // CIR:       cir.do {
 // CIR:         %[[CUR:.*]] = cir.load %[[ITER]] : !cir.ptr<!cir.ptr<!rec_S>>, !cir.ptr<!rec_S>
 // CIR:         %[[NEG1:.*]] = cir.const #cir.int<-1> : !s64i
-// CIR:         %[[PREV:.*]] = cir.ptr_stride %[[CUR]], %[[NEG1]] : (!cir.ptr<!rec_S>, !s64i) -> !cir.ptr<!rec_S>
+// CIR:         %[[PREV:.*]] = cir.ptr_stride inbounds %[[CUR]], %[[NEG1]] : (!cir.ptr<!rec_S>, !s64i) -> !cir.ptr<!rec_S>
 // CIR:         cir.store %[[PREV]], %[[ITER]] : !cir.ptr<!rec_S>, !cir.ptr<!cir.ptr<!rec_S>>
 // CIR:         cir.call @_ZN1SD1Ev(%[[PREV]]) nothrow : (!cir.ptr<!rec_S>{{.*}}) -> ()
 // CIR:         cir.yield
@@ -141,7 +141,7 @@ void multi_dimensional() {
 // LLVM:       %[[S:.*]] = alloca [3 x [5 x %struct.S]]
 // LLVM:       %[[ITER:.*]] = alloca ptr
 // LLVM:       %[[START:.*]] = getelementptr inbounds %struct.S, ptr %[[S]], i32 0
-// LLVM:       %[[END:.*]] = getelementptr %struct.S, ptr %[[START]], i64 15
+// LLVM:       %[[END:.*]] = getelementptr inbounds %struct.S, ptr %[[START]], i64 15
 // LLVM:       store ptr %[[END]], ptr %[[ITER]]
 // LLVM:       br label %[[LOOP:.*]]
 // LLVM: [[COND:.*]]:
@@ -150,7 +150,7 @@ void multi_dimensional() {
 // LLVM:       br i1 %[[DONE]], label %[[LOOP]], label %[[EXIT:.*]]
 // LLVM: [[LOOP]]:
 // LLVM:       %[[CUR:.*]] = load ptr, ptr %[[ITER]]
-// LLVM:       %[[PREV:.*]] = getelementptr %struct.S, ptr %[[CUR]], i64 -1
+// LLVM:       %[[PREV:.*]] = getelementptr inbounds %struct.S, ptr %[[CUR]], i64 -1
 // LLVM:       store ptr %[[PREV]], ptr %[[ITER]]
 // LLVM:       call void @_ZN1SD1Ev(ptr{{.*}} %[[PREV]])
 // LLVM:       br label %[[COND]]

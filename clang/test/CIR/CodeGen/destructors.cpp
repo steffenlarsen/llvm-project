@@ -84,13 +84,13 @@ void test_array_destructor() {
 // CIR:   } cleanup normal {
 // CIR:     %[[FIVE:.*]] = cir.const #cir.int<5> : !u64i
 // CIR:     %[[BEGIN:.*]] = cir.cast array_to_ptrdecay %[[ARR]] : !cir.ptr<!cir.array<!rec_array_element x 5>>
-// CIR:     %[[END:.*]] = cir.ptr_stride %[[BEGIN]], %[[FIVE]] : (!cir.ptr<!rec_array_element>, !u64i)
+// CIR:     %[[END:.*]] = cir.ptr_stride inbounds %[[BEGIN]], %[[FIVE]] : (!cir.ptr<!rec_array_element>, !u64i)
 // CIR:     %[[ARR_PTR:.*]] = cir.alloca "__array_idx" {{.*}} : !cir.ptr<!cir.ptr<!rec_array_element>>
 // CIR:     cir.store %[[END]], %[[ARR_PTR]]
 // CIR:     cir.do {
 // CIR:       %[[ARR_CUR:.*]] = cir.load{{.*}} %[[ARR_PTR]]
 // CIR:       %[[NEG_ONE:.*]] = cir.const #cir.int<-1> : !s64i
-// CIR:       %[[ARR_PREV:.*]] = cir.ptr_stride %[[ARR_CUR]], %[[NEG_ONE]] : (!cir.ptr<!rec_array_element>, !s64i)
+// CIR:       %[[ARR_PREV:.*]] = cir.ptr_stride inbounds %[[ARR_CUR]], %[[NEG_ONE]] : (!cir.ptr<!rec_array_element>, !s64i)
 // CIR:       cir.store %[[ARR_PREV]], %[[ARR_PTR]]
 // CIR:       cir.call @_ZN13array_elementD1Ev(%[[ARR_PREV]]) nothrow : (!cir.ptr<!rec_array_element> {{.*}}) -> ()
 // CIR:       cir.yield
@@ -122,7 +122,7 @@ void test_array_destructor() {
 // LLVM:   br label %[[INIT_LOOP_NEXT:.*]]
 // LLVM: [[INIT_LOOP_END]]:
 // LLVM:   %[[ARR_BEGIN:.*]] = getelementptr inbounds %struct.array_element, ptr %[[ARR]], i32 0
-// LLVM:   %[[ARR_END:.*]] = getelementptr %struct.array_element, ptr %[[ARR_BEGIN]], i64 5
+// LLVM:   %[[ARR_END:.*]] = getelementptr inbounds %struct.array_element, ptr %[[ARR_BEGIN]], i64 5
 // LLVM:   store ptr %[[ARR_END]], ptr %[[ARR_CUR]]
 // LLVM:   br label %[[DESTROY_LOOP_BODY:.*]]
 // LLVM: [[DESTROY_LOOP_NEXT:.*]]:
@@ -131,7 +131,7 @@ void test_array_destructor() {
 // LLVM:   br i1 %[[CMP]], label %[[DESTROY_LOOP_BODY]], label %[[DESTROY_LOOP_END:.*]]
 // LLVM: [[DESTROY_LOOP_BODY]]:
 // LLVM:   %[[CUR2:.*]] = load ptr, ptr %[[ARR_CUR]]
-// LLVM:   %[[PREV:.*]] = getelementptr %struct.array_element, ptr %[[CUR2]], i64 -1
+// LLVM:   %[[PREV:.*]] = getelementptr inbounds %struct.array_element, ptr %[[CUR2]], i64 -1
 // LLVM:   store ptr %[[PREV]], ptr %[[ARR_CUR]]
 // LLVM:   call void @_ZN13array_elementD1Ev(ptr {{.*}} %[[PREV]])
 // LLVM:   br label %[[DESTROY_LOOP_NEXT]]

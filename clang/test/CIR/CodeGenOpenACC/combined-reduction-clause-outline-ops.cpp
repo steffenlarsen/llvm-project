@@ -385,13 +385,13 @@ void acc_combined() {
 // CHECK-NEXT: ^bb0(%[[ARG:.*]]: !cir.ptr<!cir.array<!rec_HasOperatorsOutline x 5>> {{.*}}, %[[ARG:.*]]: !cir.ptr<!cir.array<!rec_HasOperatorsOutline x 5>> {{.*}}):  
 // CHECK-NEXT: %[[SIZE:.*]] = cir.const #cir.int<5>  : !u64i
 // CHECK-NEXT: %[[DECAY:.*]] = cir.cast array_to_ptrdecay %[[ARG]] : !cir.ptr<!cir.array<!rec_HasOperatorsOutline x 5>> -> !cir.ptr<!rec_HasOperatorsOutline>
-// CHECK-NEXT: %[[LAST_ELT:.*]] = cir.ptr_stride %[[DECAY]], %[[SIZE]] : (!cir.ptr<!rec_HasOperatorsOutline>, !u64i) -> !cir.ptr<!rec_HasOperatorsOutline>
+// CHECK-NEXT: %[[LAST_ELT:.*]] = cir.ptr_stride inbounds %[[DECAY]], %[[SIZE]] : (!cir.ptr<!rec_HasOperatorsOutline>, !u64i) -> !cir.ptr<!rec_HasOperatorsOutline>
 // CHECK-NEXT: %[[IDX:.*]] = cir.alloca "__array_idx" align(1) : !cir.ptr<!cir.ptr<!rec_HasOperatorsOutline>>
 // CHECK-NEXT: cir.store %[[LAST_ELT]], %[[IDX]] : !cir.ptr<!rec_HasOperatorsOutline>, !cir.ptr<!cir.ptr<!rec_HasOperatorsOutline>>
 // CHECK-NEXT: cir.do {
 // CHECK-NEXT: %[[CUR:.*]] = cir.load %[[IDX]] : !cir.ptr<!cir.ptr<!rec_HasOperatorsOutline>>, !cir.ptr<!rec_HasOperatorsOutline>
 // CHECK-NEXT: %[[NEG:.*]] = cir.const #cir.int<-1> : !s64i
-// CHECK-NEXT: %[[NEW_ITEM:.*]] = cir.ptr_stride %[[CUR]], %[[NEG]] : (!cir.ptr<!rec_HasOperatorsOutline>, !s64i) -> !cir.ptr<!rec_HasOperatorsOutline>
+// CHECK-NEXT: %[[NEW_ITEM:.*]] = cir.ptr_stride inbounds %[[CUR]], %[[NEG]] : (!cir.ptr<!rec_HasOperatorsOutline>, !s64i) -> !cir.ptr<!rec_HasOperatorsOutline>
 // CHECK-NEXT: cir.store %[[NEW_ITEM]], %[[IDX]] : !cir.ptr<!rec_HasOperatorsOutline>, !cir.ptr<!cir.ptr<!rec_HasOperatorsOutline>>
 // CHECK-NEXT: cir.call @_ZN19HasOperatorsOutlineD1Ev(%[[NEW_ITEM]]) nothrow : (!cir.ptr<!rec_HasOperatorsOutline>{{.*}})
 // CHECK-NEXT: cir.yield
@@ -528,13 +528,13 @@ void acc_combined() {
 // CHECK-NEXT: ^bb0(%[[ORIG:.*]]: !cir.ptr<!cir.array<!rec_HasOperatorsOutline x 5>> {{.*}}, %[[ARG:.*]]: !cir.ptr<!cir.array<!rec_HasOperatorsOutline x 5>> {{.*}}):  
 // CHECK-NEXT: %[[SIZE:.*]] = cir.const #cir.int<5>  : !u64i
 // CHECK-NEXT: %[[DECAY:.*]] = cir.cast array_to_ptrdecay %[[ARG]] : !cir.ptr<!cir.array<!rec_HasOperatorsOutline x 5>> -> !cir.ptr<!rec_HasOperatorsOutline>
-// CHECK-NEXT: %[[LAST_ELT:.*]] = cir.ptr_stride %[[DECAY]], %[[SIZE]] : (!cir.ptr<!rec_HasOperatorsOutline>, !u64i) -> !cir.ptr<!rec_HasOperatorsOutline>
+// CHECK-NEXT: %[[LAST_ELT:.*]] = cir.ptr_stride inbounds %[[DECAY]], %[[SIZE]] : (!cir.ptr<!rec_HasOperatorsOutline>, !u64i) -> !cir.ptr<!rec_HasOperatorsOutline>
 // CHECK-NEXT: %[[IDX:.*]] = cir.alloca "__array_idx" align(1) : !cir.ptr<!cir.ptr<!rec_HasOperatorsOutline>>
 // CHECK-NEXT: cir.store %[[LAST_ELT]], %[[IDX]] : !cir.ptr<!rec_HasOperatorsOutline>, !cir.ptr<!cir.ptr<!rec_HasOperatorsOutline>>
 // CHECK-NEXT: cir.do {
 // CHECK-NEXT: %[[CUR:.*]] = cir.load %[[IDX]] : !cir.ptr<!cir.ptr<!rec_HasOperatorsOutline>>, !cir.ptr<!rec_HasOperatorsOutline>
 // CHECK-NEXT: %[[NEG:.*]] = cir.const #cir.int<-1> : !s64i
-// CHECK-NEXT: %[[NEW_ITEM:.*]] = cir.ptr_stride %[[CUR]], %[[NEG]] : (!cir.ptr<!rec_HasOperatorsOutline>, !s64i) -> !cir.ptr<!rec_HasOperatorsOutline>
+// CHECK-NEXT: %[[NEW_ITEM:.*]] = cir.ptr_stride inbounds %[[CUR]], %[[NEG]] : (!cir.ptr<!rec_HasOperatorsOutline>, !s64i) -> !cir.ptr<!rec_HasOperatorsOutline>
 // CHECK-NEXT: cir.store %[[NEW_ITEM]], %[[IDX]] : !cir.ptr<!rec_HasOperatorsOutline>, !cir.ptr<!cir.ptr<!rec_HasOperatorsOutline>>
 // CHECK-NEXT: cir.call @_ZN19HasOperatorsOutlineD1Ev(%[[NEW_ITEM]]) nothrow : (!cir.ptr<!rec_HasOperatorsOutline>{{.*}})
 // CHECK-NEXT: cir.yield
@@ -677,13 +677,13 @@ void acc_combined() {
 // CHECK-NEXT: ^bb0(%[[ORIG:.*]]: !cir.ptr<!cir.array<!rec_HasOperatorsOutline x 5>> {{.*}}, %[[ARG:.*]]: !cir.ptr<!cir.array<!rec_HasOperatorsOutline x 5>> {{.*}}):  
 // CHECK-NEXT: %[[SIZE:.*]] = cir.const #cir.int<5>  : !u64i
 // CHECK-NEXT: %[[DECAY:.*]] = cir.cast array_to_ptrdecay %[[ARG]] : !cir.ptr<!cir.array<!rec_HasOperatorsOutline x 5>> -> !cir.ptr<!rec_HasOperatorsOutline>
-// CHECK-NEXT: %[[LAST_ELT:.*]] = cir.ptr_stride %[[DECAY]], %[[SIZE]] : (!cir.ptr<!rec_HasOperatorsOutline>, !u64i) -> !cir.ptr<!rec_HasOperatorsOutline>
+// CHECK-NEXT: %[[LAST_ELT:.*]] = cir.ptr_stride inbounds %[[DECAY]], %[[SIZE]] : (!cir.ptr<!rec_HasOperatorsOutline>, !u64i) -> !cir.ptr<!rec_HasOperatorsOutline>
 // CHECK-NEXT: %[[IDX:.*]] = cir.alloca "__array_idx" align(1) : !cir.ptr<!cir.ptr<!rec_HasOperatorsOutline>>
 // CHECK-NEXT: cir.store %[[LAST_ELT]], %[[IDX]] : !cir.ptr<!rec_HasOperatorsOutline>, !cir.ptr<!cir.ptr<!rec_HasOperatorsOutline>>
 // CHECK-NEXT: cir.do {
 // CHECK-NEXT: %[[CUR:.*]] = cir.load %[[IDX]] : !cir.ptr<!cir.ptr<!rec_HasOperatorsOutline>>, !cir.ptr<!rec_HasOperatorsOutline>
 // CHECK-NEXT: %[[NEG:.*]] = cir.const #cir.int<-1> : !s64i
-// CHECK-NEXT: %[[NEW_ITEM:.*]] = cir.ptr_stride %[[CUR]], %[[NEG]] : (!cir.ptr<!rec_HasOperatorsOutline>, !s64i) -> !cir.ptr<!rec_HasOperatorsOutline>
+// CHECK-NEXT: %[[NEW_ITEM:.*]] = cir.ptr_stride inbounds %[[CUR]], %[[NEG]] : (!cir.ptr<!rec_HasOperatorsOutline>, !s64i) -> !cir.ptr<!rec_HasOperatorsOutline>
 // CHECK-NEXT: cir.store %[[NEW_ITEM]], %[[IDX]] : !cir.ptr<!rec_HasOperatorsOutline>, !cir.ptr<!cir.ptr<!rec_HasOperatorsOutline>>
 // CHECK-NEXT: cir.call @_ZN19HasOperatorsOutlineD1Ev(%[[NEW_ITEM]]) nothrow : (!cir.ptr<!rec_HasOperatorsOutline>{{.*}})
 // CHECK-NEXT: cir.yield
@@ -826,13 +826,13 @@ void acc_combined() {
 // CHECK-NEXT: ^bb0(%[[ORIG:.*]]: !cir.ptr<!cir.array<!rec_HasOperatorsOutline x 5>> {{.*}}, %[[ARG:.*]]: !cir.ptr<!cir.array<!rec_HasOperatorsOutline x 5>> {{.*}}):  
 // CHECK-NEXT: %[[SIZE:.*]] = cir.const #cir.int<5>  : !u64i
 // CHECK-NEXT: %[[DECAY:.*]] = cir.cast array_to_ptrdecay %[[ARG]] : !cir.ptr<!cir.array<!rec_HasOperatorsOutline x 5>> -> !cir.ptr<!rec_HasOperatorsOutline>
-// CHECK-NEXT: %[[LAST_ELT:.*]] = cir.ptr_stride %[[DECAY]], %[[SIZE]] : (!cir.ptr<!rec_HasOperatorsOutline>, !u64i) -> !cir.ptr<!rec_HasOperatorsOutline>
+// CHECK-NEXT: %[[LAST_ELT:.*]] = cir.ptr_stride inbounds %[[DECAY]], %[[SIZE]] : (!cir.ptr<!rec_HasOperatorsOutline>, !u64i) -> !cir.ptr<!rec_HasOperatorsOutline>
 // CHECK-NEXT: %[[IDX:.*]] = cir.alloca "__array_idx" align(1) : !cir.ptr<!cir.ptr<!rec_HasOperatorsOutline>>
 // CHECK-NEXT: cir.store %[[LAST_ELT]], %[[IDX]] : !cir.ptr<!rec_HasOperatorsOutline>, !cir.ptr<!cir.ptr<!rec_HasOperatorsOutline>>
 // CHECK-NEXT: cir.do {
 // CHECK-NEXT: %[[CUR:.*]] = cir.load %[[IDX]] : !cir.ptr<!cir.ptr<!rec_HasOperatorsOutline>>, !cir.ptr<!rec_HasOperatorsOutline>
 // CHECK-NEXT: %[[NEG:.*]] = cir.const #cir.int<-1> : !s64i
-// CHECK-NEXT: %[[NEW_ITEM:.*]] = cir.ptr_stride %[[CUR]], %[[NEG]] : (!cir.ptr<!rec_HasOperatorsOutline>, !s64i) -> !cir.ptr<!rec_HasOperatorsOutline>
+// CHECK-NEXT: %[[NEW_ITEM:.*]] = cir.ptr_stride inbounds %[[CUR]], %[[NEG]] : (!cir.ptr<!rec_HasOperatorsOutline>, !s64i) -> !cir.ptr<!rec_HasOperatorsOutline>
 // CHECK-NEXT: cir.store %[[NEW_ITEM]], %[[IDX]] : !cir.ptr<!rec_HasOperatorsOutline>, !cir.ptr<!cir.ptr<!rec_HasOperatorsOutline>>
 // CHECK-NEXT: cir.call @_ZN19HasOperatorsOutlineD1Ev(%[[NEW_ITEM]]) nothrow : (!cir.ptr<!rec_HasOperatorsOutline>{{.*}})
 // CHECK-NEXT: cir.yield
@@ -969,13 +969,13 @@ void acc_combined() {
 // CHECK-NEXT: ^bb0(%[[ORIG:.*]]: !cir.ptr<!cir.array<!rec_HasOperatorsOutline x 5>> {{.*}}, %[[ARG:.*]]: !cir.ptr<!cir.array<!rec_HasOperatorsOutline x 5>> {{.*}}):  
 // CHECK-NEXT: %[[SIZE:.*]] = cir.const #cir.int<5>  : !u64i
 // CHECK-NEXT: %[[DECAY:.*]] = cir.cast array_to_ptrdecay %[[ARG]] : !cir.ptr<!cir.array<!rec_HasOperatorsOutline x 5>> -> !cir.ptr<!rec_HasOperatorsOutline>
-// CHECK-NEXT: %[[LAST_ELT:.*]] = cir.ptr_stride %[[DECAY]], %[[SIZE]] : (!cir.ptr<!rec_HasOperatorsOutline>, !u64i) -> !cir.ptr<!rec_HasOperatorsOutline>
+// CHECK-NEXT: %[[LAST_ELT:.*]] = cir.ptr_stride inbounds %[[DECAY]], %[[SIZE]] : (!cir.ptr<!rec_HasOperatorsOutline>, !u64i) -> !cir.ptr<!rec_HasOperatorsOutline>
 // CHECK-NEXT: %[[IDX:.*]] = cir.alloca "__array_idx" align(1) : !cir.ptr<!cir.ptr<!rec_HasOperatorsOutline>>
 // CHECK-NEXT: cir.store %[[LAST_ELT]], %[[IDX]] : !cir.ptr<!rec_HasOperatorsOutline>, !cir.ptr<!cir.ptr<!rec_HasOperatorsOutline>>
 // CHECK-NEXT: cir.do {
 // CHECK-NEXT: %[[CUR:.*]] = cir.load %[[IDX]] : !cir.ptr<!cir.ptr<!rec_HasOperatorsOutline>>, !cir.ptr<!rec_HasOperatorsOutline>
 // CHECK-NEXT: %[[NEG:.*]] = cir.const #cir.int<-1> : !s64i
-// CHECK-NEXT: %[[NEW_ITEM:.*]] = cir.ptr_stride %[[CUR]], %[[NEG]] : (!cir.ptr<!rec_HasOperatorsOutline>, !s64i) -> !cir.ptr<!rec_HasOperatorsOutline>
+// CHECK-NEXT: %[[NEW_ITEM:.*]] = cir.ptr_stride inbounds %[[CUR]], %[[NEG]] : (!cir.ptr<!rec_HasOperatorsOutline>, !s64i) -> !cir.ptr<!rec_HasOperatorsOutline>
 // CHECK-NEXT: cir.store %[[NEW_ITEM]], %[[IDX]] : !cir.ptr<!rec_HasOperatorsOutline>, !cir.ptr<!cir.ptr<!rec_HasOperatorsOutline>>
 // CHECK-NEXT: cir.call @_ZN19HasOperatorsOutlineD1Ev(%[[NEW_ITEM]]) nothrow : (!cir.ptr<!rec_HasOperatorsOutline>{{.*}})
 // CHECK-NEXT: cir.yield
@@ -1054,13 +1054,13 @@ void acc_combined() {
 // CHECK-NEXT: ^bb0(%[[ORIG:.*]]: !cir.ptr<!cir.array<!rec_HasOperatorsOutline x 5>> {{.*}}, %[[ARG:.*]]: !cir.ptr<!cir.array<!rec_HasOperatorsOutline x 5>> {{.*}}):  
 // CHECK-NEXT: %[[SIZE:.*]] = cir.const #cir.int<5>  : !u64i
 // CHECK-NEXT: %[[DECAY:.*]] = cir.cast array_to_ptrdecay %[[ARG]] : !cir.ptr<!cir.array<!rec_HasOperatorsOutline x 5>> -> !cir.ptr<!rec_HasOperatorsOutline>
-// CHECK-NEXT: %[[LAST_ELT:.*]] = cir.ptr_stride %[[DECAY]], %[[SIZE]] : (!cir.ptr<!rec_HasOperatorsOutline>, !u64i) -> !cir.ptr<!rec_HasOperatorsOutline>
+// CHECK-NEXT: %[[LAST_ELT:.*]] = cir.ptr_stride inbounds %[[DECAY]], %[[SIZE]] : (!cir.ptr<!rec_HasOperatorsOutline>, !u64i) -> !cir.ptr<!rec_HasOperatorsOutline>
 // CHECK-NEXT: %[[IDX:.*]] = cir.alloca "__array_idx" align(1) : !cir.ptr<!cir.ptr<!rec_HasOperatorsOutline>>
 // CHECK-NEXT: cir.store %[[LAST_ELT]], %[[IDX]] : !cir.ptr<!rec_HasOperatorsOutline>, !cir.ptr<!cir.ptr<!rec_HasOperatorsOutline>>
 // CHECK-NEXT: cir.do {
 // CHECK-NEXT: %[[CUR:.*]] = cir.load %[[IDX]] : !cir.ptr<!cir.ptr<!rec_HasOperatorsOutline>>, !cir.ptr<!rec_HasOperatorsOutline>
 // CHECK-NEXT: %[[NEG:.*]] = cir.const #cir.int<-1> : !s64i
-// CHECK-NEXT: %[[NEW_ITEM:.*]] = cir.ptr_stride %[[CUR]], %[[NEG]] : (!cir.ptr<!rec_HasOperatorsOutline>, !s64i) -> !cir.ptr<!rec_HasOperatorsOutline>
+// CHECK-NEXT: %[[NEW_ITEM:.*]] = cir.ptr_stride inbounds %[[CUR]], %[[NEG]] : (!cir.ptr<!rec_HasOperatorsOutline>, !s64i) -> !cir.ptr<!rec_HasOperatorsOutline>
 // CHECK-NEXT: cir.store %[[NEW_ITEM]], %[[IDX]] : !cir.ptr<!rec_HasOperatorsOutline>, !cir.ptr<!cir.ptr<!rec_HasOperatorsOutline>>
 // CHECK-NEXT: cir.call @_ZN19HasOperatorsOutlineD1Ev(%[[NEW_ITEM]]) nothrow : (!cir.ptr<!rec_HasOperatorsOutline>{{.*}})
 // CHECK-NEXT: cir.yield
@@ -1138,13 +1138,13 @@ void acc_combined() {
 // CHECK-NEXT: ^bb0(%[[ORIG:.*]]: !cir.ptr<!cir.array<!rec_HasOperatorsOutline x 5>> {{.*}}, %[[ARG:.*]]: !cir.ptr<!cir.array<!rec_HasOperatorsOutline x 5>> {{.*}}):  
 // CHECK-NEXT: %[[SIZE:.*]] = cir.const #cir.int<5>  : !u64i
 // CHECK-NEXT: %[[DECAY:.*]] = cir.cast array_to_ptrdecay %[[ARG]] : !cir.ptr<!cir.array<!rec_HasOperatorsOutline x 5>> -> !cir.ptr<!rec_HasOperatorsOutline>
-// CHECK-NEXT: %[[LAST_ELT:.*]] = cir.ptr_stride %[[DECAY]], %[[SIZE]] : (!cir.ptr<!rec_HasOperatorsOutline>, !u64i) -> !cir.ptr<!rec_HasOperatorsOutline>
+// CHECK-NEXT: %[[LAST_ELT:.*]] = cir.ptr_stride inbounds %[[DECAY]], %[[SIZE]] : (!cir.ptr<!rec_HasOperatorsOutline>, !u64i) -> !cir.ptr<!rec_HasOperatorsOutline>
 // CHECK-NEXT: %[[IDX:.*]] = cir.alloca "__array_idx" align(1) : !cir.ptr<!cir.ptr<!rec_HasOperatorsOutline>>
 // CHECK-NEXT: cir.store %[[LAST_ELT]], %[[IDX]] : !cir.ptr<!rec_HasOperatorsOutline>, !cir.ptr<!cir.ptr<!rec_HasOperatorsOutline>>
 // CHECK-NEXT: cir.do {
 // CHECK-NEXT: %[[CUR:.*]] = cir.load %[[IDX]] : !cir.ptr<!cir.ptr<!rec_HasOperatorsOutline>>, !cir.ptr<!rec_HasOperatorsOutline>
 // CHECK-NEXT: %[[NEG:.*]] = cir.const #cir.int<-1> : !s64i
-// CHECK-NEXT: %[[NEW_ITEM:.*]] = cir.ptr_stride %[[CUR]], %[[NEG]] : (!cir.ptr<!rec_HasOperatorsOutline>, !s64i) -> !cir.ptr<!rec_HasOperatorsOutline>
+// CHECK-NEXT: %[[NEW_ITEM:.*]] = cir.ptr_stride inbounds %[[CUR]], %[[NEG]] : (!cir.ptr<!rec_HasOperatorsOutline>, !s64i) -> !cir.ptr<!rec_HasOperatorsOutline>
 // CHECK-NEXT: cir.store %[[NEW_ITEM]], %[[IDX]] : !cir.ptr<!rec_HasOperatorsOutline>, !cir.ptr<!cir.ptr<!rec_HasOperatorsOutline>>
 // CHECK-NEXT: cir.call @_ZN19HasOperatorsOutlineD1Ev(%[[NEW_ITEM]]) nothrow : (!cir.ptr<!rec_HasOperatorsOutline>{{.*}})
 // CHECK-NEXT: cir.yield
@@ -1285,13 +1285,13 @@ void acc_combined() {
 // CHECK-NEXT: ^bb0(%[[ORIG:.*]]: !cir.ptr<!cir.array<!rec_HasOperatorsOutline x 5>> {{.*}}, %[[ARG:.*]]: !cir.ptr<!cir.array<!rec_HasOperatorsOutline x 5>> {{.*}}):  
 // CHECK-NEXT: %[[SIZE:.*]] = cir.const #cir.int<5>  : !u64i
 // CHECK-NEXT: %[[DECAY:.*]] = cir.cast array_to_ptrdecay %[[ARG]] : !cir.ptr<!cir.array<!rec_HasOperatorsOutline x 5>> -> !cir.ptr<!rec_HasOperatorsOutline>
-// CHECK-NEXT: %[[LAST_ELT:.*]] = cir.ptr_stride %[[DECAY]], %[[SIZE]] : (!cir.ptr<!rec_HasOperatorsOutline>, !u64i) -> !cir.ptr<!rec_HasOperatorsOutline>
+// CHECK-NEXT: %[[LAST_ELT:.*]] = cir.ptr_stride inbounds %[[DECAY]], %[[SIZE]] : (!cir.ptr<!rec_HasOperatorsOutline>, !u64i) -> !cir.ptr<!rec_HasOperatorsOutline>
 // CHECK-NEXT: %[[IDX:.*]] = cir.alloca "__array_idx" align(1) : !cir.ptr<!cir.ptr<!rec_HasOperatorsOutline>>
 // CHECK-NEXT: cir.store %[[LAST_ELT]], %[[IDX]] : !cir.ptr<!rec_HasOperatorsOutline>, !cir.ptr<!cir.ptr<!rec_HasOperatorsOutline>>
 // CHECK-NEXT: cir.do {
 // CHECK-NEXT: %[[CUR:.*]] = cir.load %[[IDX]] : !cir.ptr<!cir.ptr<!rec_HasOperatorsOutline>>, !cir.ptr<!rec_HasOperatorsOutline>
 // CHECK-NEXT: %[[NEG:.*]] = cir.const #cir.int<-1> : !s64i
-// CHECK-NEXT: %[[NEW_ITEM:.*]] = cir.ptr_stride %[[CUR]], %[[NEG]] : (!cir.ptr<!rec_HasOperatorsOutline>, !s64i) -> !cir.ptr<!rec_HasOperatorsOutline>
+// CHECK-NEXT: %[[NEW_ITEM:.*]] = cir.ptr_stride inbounds %[[CUR]], %[[NEG]] : (!cir.ptr<!rec_HasOperatorsOutline>, !s64i) -> !cir.ptr<!rec_HasOperatorsOutline>
 // CHECK-NEXT: cir.store %[[NEW_ITEM]], %[[IDX]] : !cir.ptr<!rec_HasOperatorsOutline>, !cir.ptr<!cir.ptr<!rec_HasOperatorsOutline>>
 // CHECK-NEXT: cir.call @_ZN19HasOperatorsOutlineD1Ev(%[[NEW_ITEM]]) nothrow : (!cir.ptr<!rec_HasOperatorsOutline>{{.*}})
 // CHECK-NEXT: cir.yield
@@ -1373,13 +1373,13 @@ void acc_combined() {
 // CHECK-NEXT: ^bb0(%[[ORIG:.*]]: !cir.ptr<!cir.array<!rec_HasOperatorsOutline x 5>> {{.*}}, %[[ARG:.*]]: !cir.ptr<!cir.array<!rec_HasOperatorsOutline x 5>> {{.*}}):  
 // CHECK-NEXT: %[[SIZE:.*]] = cir.const #cir.int<5>  : !u64i
 // CHECK-NEXT: %[[DECAY:.*]] = cir.cast array_to_ptrdecay %[[ARG]] : !cir.ptr<!cir.array<!rec_HasOperatorsOutline x 5>> -> !cir.ptr<!rec_HasOperatorsOutline>
-// CHECK-NEXT: %[[LAST_ELT:.*]] = cir.ptr_stride %[[DECAY]], %[[SIZE]] : (!cir.ptr<!rec_HasOperatorsOutline>, !u64i) -> !cir.ptr<!rec_HasOperatorsOutline>
+// CHECK-NEXT: %[[LAST_ELT:.*]] = cir.ptr_stride inbounds %[[DECAY]], %[[SIZE]] : (!cir.ptr<!rec_HasOperatorsOutline>, !u64i) -> !cir.ptr<!rec_HasOperatorsOutline>
 // CHECK-NEXT: %[[IDX:.*]] = cir.alloca "__array_idx" align(1) : !cir.ptr<!cir.ptr<!rec_HasOperatorsOutline>>
 // CHECK-NEXT: cir.store %[[LAST_ELT]], %[[IDX]] : !cir.ptr<!rec_HasOperatorsOutline>, !cir.ptr<!cir.ptr<!rec_HasOperatorsOutline>>
 // CHECK-NEXT: cir.do {
 // CHECK-NEXT: %[[CUR:.*]] = cir.load %[[IDX]] : !cir.ptr<!cir.ptr<!rec_HasOperatorsOutline>>, !cir.ptr<!rec_HasOperatorsOutline>
 // CHECK-NEXT: %[[NEG:.*]] = cir.const #cir.int<-1> : !s64i
-// CHECK-NEXT: %[[NEW_ITEM:.*]] = cir.ptr_stride %[[CUR]], %[[NEG]] : (!cir.ptr<!rec_HasOperatorsOutline>, !s64i) -> !cir.ptr<!rec_HasOperatorsOutline>
+// CHECK-NEXT: %[[NEW_ITEM:.*]] = cir.ptr_stride inbounds %[[CUR]], %[[NEG]] : (!cir.ptr<!rec_HasOperatorsOutline>, !s64i) -> !cir.ptr<!rec_HasOperatorsOutline>
 // CHECK-NEXT: cir.store %[[NEW_ITEM]], %[[IDX]] : !cir.ptr<!rec_HasOperatorsOutline>, !cir.ptr<!cir.ptr<!rec_HasOperatorsOutline>>
 // CHECK-NEXT: cir.call @_ZN19HasOperatorsOutlineD1Ev(%[[NEW_ITEM]]) nothrow : (!cir.ptr<!rec_HasOperatorsOutline>{{.*}})
 // CHECK-NEXT: cir.yield
