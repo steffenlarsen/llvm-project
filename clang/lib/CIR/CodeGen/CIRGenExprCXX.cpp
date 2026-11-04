@@ -1141,7 +1141,8 @@ void CIRGenFunction::emitNewArrayInitializer(
             initLoc, initListElements,
             getContext().getTypeSize(getContext().getSizeType()));
         curPtr = curPtr.withPointer(builder.createPtrStride(
-            initLoc, curPtr.getPointer(), initListElementsOp));
+            initLoc, curPtr.getPointer(), initListElementsOp,
+            cir::PtrOffsetFlags::InBounds));
 
         bool ok = tryMemsetInitialization();
         (void)ok;
@@ -1195,7 +1196,8 @@ void CIRGenFunction::emitNewArrayInitializer(
       mlir::Value castOp = builder.createPtrBitcast(
           curPtr.getPointer(), convertTypeForMem(allocType));
       mlir::Value offsetOp = builder.getSignedInt(loc, 1, /*width=*/32);
-      mlir::Value dataPtr = builder.createPtrStride(loc, castOp, offsetOp);
+      mlir::Value dataPtr = builder.createPtrStride(
+          loc, castOp, offsetOp, cir::PtrOffsetFlags::InBounds);
       curPtr = Address(dataPtr, curPtr.getElementType(),
                        startAlign.alignmentAtOffset((++i) * elementSize));
     }

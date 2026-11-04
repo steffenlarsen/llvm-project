@@ -83,7 +83,7 @@ thread_local const NonTrivialArr &thread_arr_ref = NonTrivialArr{};
 // CIR-BEFORE:   %[[DECAY:.*]] = cir.cast array_to_ptrdecay %[[STATIC_ARR_REF_TEMP]]
 // CIR-BEFORE:   cir.store{{.*}} %[[DECAY]], %[[ARRAY_INIT_TEMP]]
 // CIR-BEFORE:   %[[TWO:.*]] = cir.const #cir.int<2> : !s64i
-// CIR-BEFORE:   %[[NEXT:.*]] = cir.ptr_stride %[[DECAY]], %[[TWO]] : (!cir.ptr<!rec_NonTrivial>, !s64i) -> !cir.ptr<!rec_NonTrivial>
+// CIR-BEFORE:   %[[NEXT:.*]] = cir.ptr_stride inbounds %[[DECAY]], %[[TWO]] : (!cir.ptr<!rec_NonTrivial>, !s64i) -> !cir.ptr<!rec_NonTrivial>
 // CIR-BEFORE:   cir.do {
 // CIR-BEFORE:     cir.call @_ZN10NonTrivialC1Ev
 // CIR-BEFORE:   } while {
@@ -122,7 +122,7 @@ thread_local const NonTrivialArr &thread_arr_ref = NonTrivialArr{};
 // CIR-BEFORE:   %[[DECAY:.*]] = cir.cast array_to_ptrdecay %[[THREAD_ARR_REF_TEMP]]
 // CIR-BEFORE:   cir.store{{.*}} %[[DECAY]], %[[ARRAY_INIT_TEMP]]
 // CIR-BEFORE:   %[[TWO:.*]] = cir.const #cir.int<2> : !s64i
-// CIR-BEFORE:   %[[NEXT:.*]] = cir.ptr_stride %[[DECAY]], %[[TWO]] : (!cir.ptr<!rec_NonTrivial>, !s64i) -> !cir.ptr<!rec_NonTrivial>
+// CIR-BEFORE:   %[[NEXT:.*]] = cir.ptr_stride inbounds %[[DECAY]], %[[TWO]] : (!cir.ptr<!rec_NonTrivial>, !s64i) -> !cir.ptr<!rec_NonTrivial>
 // CIR-BEFORE:   cir.do {
 // CIR-BEFORE:     cir.call @_ZN10NonTrivialC1Ev
 // CIR-BEFORE:   } while {

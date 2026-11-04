@@ -136,7 +136,7 @@ B *offset_cast(A *a) {
 // CIR-NEXT:     %[[EXACT_RESULT:.*]] = cir.ternary(%[[SUCCESS]], true {
 // CIR-NEXT:       %[[MINUS_EIGHT:.*]] = cir.const #cir.int<18446744073709551608> : !u64i
 // CIR-NEXT:       %[[SRC_VOID:.*]] = cir.cast bitcast %[[SRC]] : !cir.ptr<!rec_A> -> !cir.ptr<!u8i>
-// CIR-NEXT:       %[[SRC_OFFSET:.*]] = cir.ptr_stride %[[SRC_VOID]], %[[MINUS_EIGHT]]
+// CIR-NEXT:       %[[SRC_OFFSET:.*]] = cir.ptr_stride inbounds %[[SRC_VOID]], %[[MINUS_EIGHT]]
 // CIR-NEXT:       %[[RES:.*]] = cir.cast bitcast %[[SRC_OFFSET]] : !cir.ptr<!u8i> -> !cir.ptr<!rec_B>
 // CIR-NEXT:       cir.yield %[[RES]] : !cir.ptr<!rec_B>
 // CIR-NEXT:     }, false {
@@ -152,7 +152,7 @@ B *offset_cast(A *a) {
 //      LLVM: [[LABEL_NOTNULL]]:
 // LLVM-NEXT:   %[[VTABLE:.*]] = load ptr, ptr %[[SRC]]
 // LLVM-NEXT:   %[[VTABLE_CHECK:.*]] = icmp eq ptr %[[VTABLE]], getelementptr inbounds nuw (i8, ptr @_ZTV1B, i64 48)
-// LLVM-NEXT:   %[[SRC_OFFSET:.*]] = getelementptr i8, ptr %[[SRC]], i64 -8
+// LLVM-NEXT:   %[[SRC_OFFSET:.*]] = getelementptr inbounds i8, ptr %[[SRC]], i64 -8
 // LLVM-NEXT:   %[[EXACT_RESULT:.*]] = select i1 %[[VTABLE_CHECK]], ptr %[[SRC_OFFSET]], ptr null
 // LLVM-NEXT:   br label %[[LABEL_END]]
 //      LLVM: [[LABEL_END]]:

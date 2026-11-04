@@ -115,6 +115,6 @@ AS1 V *to_virtual_base(AS1 W *w) { return w; }
 // CIR-VBASE:   cir.const #cir.ptr<null> : !cir.ptr<!rec_V, target_address_space(1)>
 // CIR-VBASE: }, false {
 // CIR-VBASE:   %[[BYTES:.*]] = cir.cast bitcast %{{.*}} : !cir.ptr<!rec_W, target_address_space(1)> -> !cir.ptr<!u8i, target_address_space(1)>
-// CIR-VBASE:   cir.ptr_stride %[[BYTES]], %{{.*}} : (!cir.ptr<!u8i, target_address_space(1)>, !s64i) -> !cir.ptr<!u8i, target_address_space(1)>
+// CIR-VBASE:   cir.ptr_stride inbounds %[[BYTES]], %{{.*}} : (!cir.ptr<!u8i, target_address_space(1)>, !s64i) -> !cir.ptr<!u8i, target_address_space(1)>
 // CIR-VBASE: }) : (!cir.bool) -> !cir.ptr<!rec_V, target_address_space(1)>
 #endif

@@ -67,7 +67,7 @@ void ppp() { B b; }
 // CIR:   %[[OFFSET_PTR:.+]] = cir.cast bitcast %[[ADJ_VPTR_I8]] : !cir.ptr<!u8i> -> !cir.ptr<!s64i>
 // CIR:   %[[OFFSET:.+]] = cir.load {{.*}} %[[OFFSET_PTR]] : !cir.ptr<!s64i>, !s64i
 // CIR:   %[[D_I8:.+]] = cir.cast bitcast %[[D]] : !cir.ptr<!rec_Derived> -> !cir.ptr<!u8i>
-// CIR:   %[[ADJ_THIS_I8:.+]] = cir.ptr_stride %[[D_I8]], %[[OFFSET]] : (!cir.ptr<!u8i>, !s64i) -> !cir.ptr<!u8i>
+// CIR:   %[[ADJ_THIS_I8:.+]] = cir.ptr_stride inbounds %[[D_I8]], %[[OFFSET]] : (!cir.ptr<!u8i>, !s64i) -> !cir.ptr<!u8i>
 // CIR:   %[[ADJ_THIS_D:.+]] = cir.cast bitcast %[[ADJ_THIS_I8]] : !cir.ptr<!u8i> -> !cir.ptr<!rec_Derived>
 // CIR:   %[[BASE_THIS:.+]] = cir.cast bitcast %[[ADJ_THIS_D]] : !cir.ptr<!rec_Derived> -> !cir.ptr<!rec_Base>
 // CIR:   cir.call @_ZN4Base1fEv(%[[BASE_THIS]]) : (!cir.ptr<!rec_Base> {{.*}}) -> ()
@@ -86,7 +86,7 @@ void ppp() { B b; }
 // LLVM:   %[[VPTR_ADDR:.+]] = load ptr, ptr %[[D]]
 // LLVM:   %[[NEG32_PTR:.+]] = getelementptr i8, ptr %[[VPTR_ADDR]], i64 -32
 // LLVM:   %[[OFF:.+]] = load i64, ptr %[[NEG32_PTR]]
-// LLVM:   %[[ADJ_THIS:.+]] = getelementptr i8, ptr %[[D]], i64 %[[OFF]]
+// LLVM:   %[[ADJ_THIS:.+]] = getelementptr inbounds i8, ptr %[[D]], i64 %[[OFF]]
 // LLVM:   call void @_ZN4Base1fEv(ptr {{.*}}%[[ADJ_THIS]])
 // LLVM:   ret void
 

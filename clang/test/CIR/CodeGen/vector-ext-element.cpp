@@ -326,12 +326,12 @@ void array_subscript_expr_with_element_expr_base() {
 // CIR: %[[CONST_1:.*]] = cir.const #cir.int<1> : !s64i
 // CIR: %[[A_PTR:.*]] = cir.cast bitcast %0 : !cir.ptr<!cir.vector<4 x !s32i>> -> !cir.ptr<!s32i>
 // CIR: %[[CONST_0:.*]] = cir.const #cir.int<0> : !s64i
-// CIR: %[[VEC_MEMBER_EXPR:.*]] = cir.ptr_stride %[[A_PTR]], %[[CONST_0]] : (!cir.ptr<!s32i>, !s64i) -> !cir.ptr<!s32i>
+// CIR: %[[VEC_MEMBER_EXPR:.*]] = cir.ptr_stride inbounds %[[A_PTR]], %[[CONST_0]] : (!cir.ptr<!s32i>, !s64i) -> !cir.ptr<!s32i>
 // CIR: %[[VEC_ELEM_PTR:.*]] = cir.ptr_stride inbounds %[[VEC_MEMBER_EXPR]], %[[CONST_1]] : (!cir.ptr<!s32i>, !s64i) -> !cir.ptr<!s32i>
 // CIR: cir.store {{.*}} %[[CONST_2]], %[[VEC_ELEM_PTR]] : !s32i, !cir.ptr<!s32i>
 
 // LLVM: %[[A_ADDR:.*]] = alloca <4 x i32>, align 16
-// LLVM: %[[VEC_MEMBER_EXPR:.*]] = getelementptr i32, ptr %[[A_ADDR]], i64 0
+// LLVM: %[[VEC_MEMBER_EXPR:.*]] = getelementptr inbounds i32, ptr %[[A_ADDR]], i64 0
 // LLVM: %[[VEC_ELEM_PTR:.*]] = getelementptr inbounds i32, ptr %[[VEC_MEMBER_EXPR]], i64 1
 // LLVM: store i32 2, ptr %[[VEC_ELEM_PTR]], align 4
 

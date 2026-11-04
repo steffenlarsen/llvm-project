@@ -317,7 +317,7 @@ void func6() {
 // CIR: %[[TMP:.*]] = cir.load{{.*}} %[[VAR]] : !cir.ptr<!s32i>, !s32i
 // CIR: cir.store{{.*}} %[[TMP]], %[[ARR_PTR]] : !s32i, !cir.ptr<!s32i>
 // CIR: %[[OFFSET:.*]] = cir.const #cir.int<1> : !s64i
-// CIR: %[[ELE_PTR:.*]] = cir.ptr_stride %[[ARR_PTR]], %[[OFFSET]] : (!cir.ptr<!s32i>, !s64i) -> !cir.ptr<!s32i>
+// CIR: %[[ELE_PTR:.*]] = cir.ptr_stride inbounds %[[ARR_PTR]], %[[OFFSET]] : (!cir.ptr<!s32i>, !s64i) -> !cir.ptr<!s32i>
 // CIR: %[[V1:.*]] = cir.const #cir.int<5> : !s32i
 // CIR: cir.store{{.*}} %[[V1]], %[[ELE_PTR]] : !s32i, !cir.ptr<!s32i>
 
@@ -328,7 +328,7 @@ void func6() {
 // LLVM:  %[[ELE_0:.*]] = getelementptr inbounds i32, ptr %[[ARR]], i32 0
 // LLVM:  %[[TMP:.*]] = load i32, ptr %[[VAR]], align 4
 // LLVM:  store i32 %[[TMP]], ptr %[[ELE_0]], align 4
-// LLVM:  %[[ELE_1:.*]] = getelementptr i32, ptr %[[ELE_0]], i64 1
+// LLVM:  %[[ELE_1:.*]] = getelementptr inbounds i32, ptr %[[ELE_0]], i64 1
 // LLVM:  store i32 5, ptr %[[ELE_1]], align 4
 
 // OGCG:  %[[VAR:.*]] = alloca i32, align 4

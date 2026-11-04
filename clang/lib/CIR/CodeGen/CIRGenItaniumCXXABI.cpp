@@ -1950,8 +1950,9 @@ static mlir::Value emitExactDynamicCast(CIRGenItaniumCXXABI &abi,
     mlir::Value strideToApply =
         builder.getConstInt(loc, builder.getUInt64Ty(), -offset->getQuantity());
     mlir::Value srcU8Ptr = builder.createBitcast(src.getPointer(), u8PtrTy);
-    mlir::Value resultU8Ptr = cir::PtrStrideOp::create(builder, loc, u8PtrTy,
-                                                       srcU8Ptr, strideToApply);
+    mlir::Value resultU8Ptr = cir::PtrStrideOp::create(
+        builder, loc, u8PtrTy, srcU8Ptr, strideToApply, /*inbounds=*/true,
+        /*no_unsigned_wrap=*/false);
     return builder.createBitcast(resultU8Ptr, destCIRTy);
   };
 
@@ -2124,8 +2125,8 @@ Address CIRGenItaniumCXXABI::initializeArrayCookie(CIRGenFunction &cgf,
   if (!cookieOffset.isZero()) {
     mlir::Value offsetOp = cgf.getBuilder().getSignedInt(
         loc, cookieOffset.getQuantity(), /*width=*/32);
-    cookiePtrValue =
-        cgf.getBuilder().createPtrStride(loc, cookiePtrValue, offsetOp);
+    cookiePtrValue = cgf.getBuilder().createPtrStride(
+        loc, cookiePtrValue, offsetOp, cir::PtrOffsetFlags::InBounds);
   }
 
   CharUnits baseAlignment = newPtr.getAlignment();
@@ -2142,8 +2143,8 @@ Address CIRGenItaniumCXXABI::initializeArrayCookie(CIRGenFunction &cgf,
   mlir::Value dataOffset =
       cgf.getBuilder().getSignedInt(loc, cookieSize.getQuantity(),
                                     /*width=*/32);
-  mlir::Value dataPtr =
-      cgf.getBuilder().createPtrStride(loc, baseBytePtr, dataOffset);
+  mlir::Value dataPtr = cgf.getBuilder().createPtrStride(
+      loc, baseBytePtr, dataOffset, cir::PtrOffsetFlags::InBounds);
   mlir::Value finalPtr =
       cgf.getBuilder().createPtrBitcast(dataPtr, newPtr.getElementType());
   CharUnits finalAlignment = baseAlignment.alignmentAtOffset(cookieSize);
@@ -2286,10 +2287,14 @@ static mlir::Value performTypeAdjustment(CIRGenFunction &cgf,
       builder.createPtrBitcast(initialPtr.getPointer(), builder.getUInt8Ty());
   auto i8PtrTy = mlir::cast<cir::PointerType>(v.getType());
 
+  // Every adjustment stays within the object or its vtable, so like classic
+  // codegen they are inbounds.
   // In a base-to-derived cast, the non-virtual adjustment is applied first.
   if (nonVirtualAdjustment && !isReturnAdjustment) {
     cir::ConstantOp offsetConst = builder.getSInt64(nonVirtualAdjustment, loc);
-    v = cir::PtrStrideOp::create(builder, loc, i8PtrTy, v, offsetConst);
+    v = cir::PtrStrideOp::create(builder, loc, i8PtrTy, v, offsetConst,
+                                 /*inbounds=*/true,
+                                 /*no_unsigned_wrap=*/false);
   }
 
   // Perform the virtual adjustment if we have one.
@@ -2300,9 +2305,10 @@ static mlir::Value performTypeAdjustment(CIRGenFunction &cgf,
     vtablePtr = builder.createBitcast(vtablePtr, ui8DefaultASPtrTy);
 
     mlir::Value offset;
-    mlir::Value offsetPtr =
-        cir::PtrStrideOp::create(builder, loc, ui8DefaultASPtrTy, vtablePtr,
-                                 builder.getSInt64(virtualAdjustment, loc));
+    mlir::Value offsetPtr = cir::PtrStrideOp::create(
+        builder, loc, ui8DefaultASPtrTy, vtablePtr,
+        builder.getSInt64(virtualAdjustment, loc), /*inbounds=*/true,
+        /*no_unsigned_wrap=*/false);
     if (cgf.cgm.getLangOpts().RelativeCXXABIVTables) {
       assert(!cir::MissingFeatures::vtableRelativeLayout());
       cgf.cgm.errorNYI("virtual adjustment for relative layout vtables");
@@ -2311,7 +2317,9 @@ static mlir::Value performTypeAdjustment(CIRGenFunction &cgf,
                                          cgf.getPointerAlign());
     }
 
-    resultPtr = cir::PtrStrideOp::create(builder, loc, i8PtrTy, v, offset);
+    resultPtr = cir::PtrStrideOp::create(builder, loc, i8PtrTy, v, offset,
+                                         /*inbounds=*/true,
+                                         /*no_unsigned_wrap=*/false);
   } else {
     resultPtr = v;
   }
@@ -2321,7 +2329,8 @@ static mlir::Value performTypeAdjustment(CIRGenFunction &cgf,
   if (nonVirtualAdjustment && isReturnAdjustment) {
     cir::ConstantOp offsetConst = builder.getSInt64(nonVirtualAdjustment, loc);
     resultPtr =
-        cir::PtrStrideOp::create(builder, loc, i8PtrTy, resultPtr, offsetConst);
+        cir::PtrStrideOp::create(builder, loc, i8PtrTy, resultPtr, offsetConst,
+                                 /*inbounds=*/true, /*no_unsigned_wrap=*/false);
   }
 
   // Cast back to original pointer type.

@@ -396,8 +396,10 @@ static Address applyNonVirtualAndVirtualOffset(
   mlir::Type charPtrType =
       cgf.getBuilder().getPointerTo(cgf.uInt8Ty, addr.getAddressSpace());
   mlir::Value charPtr = cgf.getBuilder().createBitcast(ptr, charPtrType);
+  // The base is within the derived object, as in classic codegen.
   mlir::Value adjusted = cir::PtrStrideOp::create(
-      cgf.getBuilder(), loc, charPtrType, charPtr, baseOffset);
+      cgf.getBuilder(), loc, charPtrType, charPtr, baseOffset,
+      /*inbounds=*/true, /*no_unsigned_wrap=*/false);
   ptr = cgf.getBuilder().createBitcast(adjusted, ptr.getType());
 
   // If we have a virtual component, the alignment of the result will

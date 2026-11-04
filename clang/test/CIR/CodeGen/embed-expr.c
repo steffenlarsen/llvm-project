@@ -40,11 +40,11 @@ void embed_expr_on_scalar_with_non_constants() {
 // CIR: %[[TMP_A:.*]] = cir.load {{.*}} %[[A_ADDR]] : !cir.ptr<!s32i>, !s32i
 // CIR: cir.store {{.*}} %[[TMP_A]], %[[B_PTR]] : !s32i, !cir.ptr<!s32i>
 // CIR: %[[CONST_1:.*]] = cir.const #cir.int<1> : !s64i
-// CIR: %[[B_ELEM_1_PTR:.*]] = cir.ptr_stride %[[B_PTR]], %[[CONST_1]] : (!cir.ptr<!s32i>, !s64i) -> !cir.ptr<!s32i>
+// CIR: %[[B_ELEM_1_PTR:.*]] = cir.ptr_stride inbounds %[[B_PTR]], %[[CONST_1]] : (!cir.ptr<!s32i>, !s64i) -> !cir.ptr<!s32i>
 // CIR: %[[TMP_A:.*]] = cir.load {{.*}} %[[A_ADDR]] : !cir.ptr<!s32i>, !s32i
 // CIR: cir.store {{.*}} %[[TMP_A]], %[[B_ELEM_1_PTR]] : !s32i, !cir.ptr<!s32i>
 // CIR: %[[CONST_2:.*]] = cir.const #cir.int<2> : !s64i
-// CIR: %[[B_ELEM_2_PTR:.*]] = cir.ptr_stride %[[B_PTR]], %[[CONST_2]] : (!cir.ptr<!s32i>, !s64i) -> !cir.ptr<!s32i>
+// CIR: %[[B_ELEM_2_PTR:.*]] = cir.ptr_stride inbounds %[[B_PTR]], %[[CONST_2]] : (!cir.ptr<!s32i>, !s64i) -> !cir.ptr<!s32i>
 // CIR: %[[CONST_47:.*]] = cir.const #cir.int<47> : !s32i
 // CIR: cir.store {{.*}} %[[CONST_47]], %[[B_ELEM_2_PTR]] : !s32i, !cir.ptr<!s32i>
 
@@ -53,10 +53,10 @@ void embed_expr_on_scalar_with_non_constants() {
 // LLVM: %[[B_ELEM_0_PTR:.*]] = getelementptr inbounds i32, ptr %[[B_ADDR]], i32 0
 // LLVM: %[[TMP_A:.*]] = load i32, ptr %[[A_ADDR]], align 4
 // LLVM: store i32 %[[TMP_A]], ptr %[[B_ELEM_0_PTR]], align 4
-// LLVM: %[[B_ELEM_1_PTR:.*]] = getelementptr i32, ptr %[[B_ELEM_0_PTR]], i64 1
+// LLVM: %[[B_ELEM_1_PTR:.*]] = getelementptr inbounds i32, ptr %[[B_ELEM_0_PTR]], i64 1
 // LLVM: %[[TMP_A:.*]] = load i32, ptr %[[A_ADDR]], align 4
 // LLVM: store i32 %[[TMP_A]], ptr %[[B_ELEM_1_PTR]], align 4
-// LLVM: %[[B_ELEM_2_PTR:.*]] = getelementptr i32, ptr %[[B_ELEM_0_PTR]], i64 2
+// LLVM: %[[B_ELEM_2_PTR:.*]] = getelementptr inbounds i32, ptr %[[B_ELEM_0_PTR]], i64 2
 // LLVM: store i32 47, ptr %[[B_ELEM_2_PTR]], align 4
 
 // OGCG: %[[A_ADDR:.*]] = alloca i32, align 4

@@ -31,11 +31,11 @@ void init_vec_using_initalizer_list() {
 // CIR: %[[CONST_S32_0:.*]] = cir.const #cir.int<0> : !s32i
 // CIR: cir.store {{.*}} %[[CONST_S32_0]], %[[INIT_LIST_PTR]] : !s32i, !cir.ptr<!s32i>
 // CIR: %[[CONST_S64_1:.*]] = cir.const #cir.int<1> : !s64i
-// CIR: %[[ELEM_1_PTR:.*]] = cir.ptr_stride %[[INIT_LIST_PTR]], %[[CONST_S64_1]] : (!cir.ptr<!s32i>, !s64i) -> !cir.ptr<!s32i>
+// CIR: %[[ELEM_1_PTR:.*]] = cir.ptr_stride inbounds %[[INIT_LIST_PTR]], %[[CONST_S64_1]] : (!cir.ptr<!s32i>, !s64i) -> !cir.ptr<!s32i>
 // CIR: %[[CONST_S32_1:.*]] = cir.const #cir.int<1> : !s32i
 // CIR: cir.store {{.*}} %[[CONST_S32_1]], %[[ELEM_1_PTR]] : !s32i, !cir.ptr<!s32i>
 // CIR: %[[CONST_S64_2:.*]] = cir.const #cir.int<2> : !s64i
-// CIR: %[[ELEM_2_PTR:.*]] = cir.ptr_stride %[[INIT_LIST_PTR]], %[[CONST_S64_2]] : (!cir.ptr<!s32i>, !s64i) -> !cir.ptr<!s32i>
+// CIR: %[[ELEM_2_PTR:.*]] = cir.ptr_stride inbounds %[[INIT_LIST_PTR]], %[[CONST_S64_2]] : (!cir.ptr<!s32i>, !s64i) -> !cir.ptr<!s32i>
 // CIR: %[[CONST_S32_2:.*]] = cir.const #cir.int<2> : !s32i
 // CIR: cir.store {{.*}} %[[CONST_S32_2]], %[[ELEM_2_PTR]] : !s32i, !cir.ptr<!s32i>
 // CIR: %[[DATA_PTR:.*]] = cir.get_member %[[AGG_ADDR]][0] {name = "data"} : !cir.ptr<!rec_std3A3Ainitializer_list3Cint3E> -> !cir.ptr<!cir.ptr<!s32i>>
@@ -62,9 +62,9 @@ void init_vec_using_initalizer_list() {
 // LLVM:   %[[INIT_LIST_ADDR:.*]] = alloca [3 x i32], align 4
 // LLVM:   %[[INIT_LIST_PTR:.*]] = getelementptr inbounds i32, ptr %[[INIT_LIST_ADDR]], i32 0
 // LLVM:   store i32 0, ptr %[[INIT_LIST_PTR]], align 4
-// LLVM:   %[[ELEM_1_PTR:.*]] = getelementptr i32, ptr %[[INIT_LIST_PTR]], i64 1
+// LLVM:   %[[ELEM_1_PTR:.*]] = getelementptr inbounds i32, ptr %[[INIT_LIST_PTR]], i64 1
 // LLVM:   store i32 1, ptr %[[ELEM_1_PTR]], align 4
-// LLVM:   %[[ELEM_2_PTR:.*]] = getelementptr i32, ptr %[[INIT_LIST_PTR]], i64 2
+// LLVM:   %[[ELEM_2_PTR:.*]] = getelementptr inbounds i32, ptr %[[INIT_LIST_PTR]], i64 2
 // LLVM:   store i32 2, ptr %[[ELEM_2_PTR]], align 4
 // LLVM:   %[[DATA_PTR:.*]] = getelementptr inbounds nuw %"class.std::initializer_list<int>", ptr %[[AGG_ADDR]], i32 0, i32 0
 // LLVM:   store ptr %[[INIT_LIST_ADDR]], ptr %[[DATA_PTR]], align 8

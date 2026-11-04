@@ -36,13 +36,13 @@ struct ZeroInit {
 // CIR:   %[[ARR_BEGIN:.*]] = cir.cast array_to_ptrdecay %[[ARR]] : !cir.ptr<!cir.array<!s32i x 4>> -> !cir.ptr<!s32i>
 // CIR:   cir.store{{.*}} %[[ARR_BEGIN]], %[[ITER]]
 // CIR:   %[[FOUR:.*]] = cir.const #cir.int<4> : !s64i
-// CIR:   %[[END:.*]] = cir.ptr_stride %[[ARR_BEGIN]], %[[FOUR]] : (!cir.ptr<!s32i>, !s64i)
+// CIR:   %[[END:.*]] = cir.ptr_stride inbounds %[[ARR_BEGIN]], %[[FOUR]] : (!cir.ptr<!s32i>, !s64i)
 // CIR:   cir.do {
 // CIR:     %[[CUR:.*]] = cir.load{{.*}} %[[ITER]]
 // CIR:     %[[ZERO:.*]] = cir.const #cir.int<0> : !s32i
 // CIR:     cir.store{{.*}} %[[ZERO]], %[[CUR]]
 // CIR:     %[[ONE:.*]] = cir.const #cir.int<1> : !s64i
-// CIR:     %[[NEXT:.*]] = cir.ptr_stride %[[CUR]], %[[ONE]] : (!cir.ptr<!s32i>, !s64i)
+// CIR:     %[[NEXT:.*]] = cir.ptr_stride inbounds %[[CUR]], %[[ONE]] : (!cir.ptr<!s32i>, !s64i)
 // CIR:     cir.store{{.*}} %[[NEXT]], %[[ITER]]
 // CIR:     cir.yield
 // CIR:   } while {
@@ -71,7 +71,7 @@ struct ZeroInit {
 // LLVM:   %[[ARR:.*]] = getelementptr inbounds nuw %struct.ZeroInit, ptr %[[THIS]], i32 0, i32 2
 // LLVM:   %[[ARR_BEGIN:.*]] = getelementptr inbounds i32, ptr %[[ARR]], i32 0
 // LLVM:   store ptr %[[ARR_BEGIN]], ptr %[[ITER]]
-// LLVM:   %[[ARR_END:.*]] = getelementptr i32, ptr %[[ARR_BEGIN]], i64 4
+// LLVM:   %[[ARR_END:.*]] = getelementptr inbounds i32, ptr %[[ARR_BEGIN]], i64 4
 // LLVM:   br label %[[LOOP_BODY:.*]]
 // LLVM: [[LOOP_COND:.*]]:
 // LLVM:   %[[CUR:.*]] = load ptr, ptr %[[ITER]]
@@ -80,7 +80,7 @@ struct ZeroInit {
 // LLVM: [[LOOP_BODY]]:
 // LLVM:   %[[CUR:.*]] = load ptr, ptr %[[ITER]]
 // LLVM:   store i32 0, ptr %[[CUR]]
-// LLVM:   %[[NEXT:.*]] = getelementptr i32, ptr %[[CUR]], i64 1
+// LLVM:   %[[NEXT:.*]] = getelementptr inbounds i32, ptr %[[CUR]], i64 1
 // LLVM:   store ptr %[[NEXT]], ptr %[[ITER]]
 // LLVM:   br label %[[LOOP_COND]]
 // LLVM: [[LOOP_END]]:
@@ -143,20 +143,20 @@ struct ValueInit {
 // CIR:   %[[FOUR:.*]] = cir.const #cir.int<4> : !s32i
 // CIR:   cir.store{{.*}} %[[FOUR]], %[[ARR_BEGIN]]
 // CIR:   %[[ONE:.*]] = cir.const #cir.int<1> : !s64i
-// CIR:   %[[SECOND:.*]] = cir.ptr_stride %[[ARR_BEGIN]], %[[ONE]] : (!cir.ptr<!s32i>, !s64i)
+// CIR:   %[[SECOND:.*]] = cir.ptr_stride inbounds %[[ARR_BEGIN]], %[[ONE]] : (!cir.ptr<!s32i>, !s64i)
 // CIR:   %[[FIVE:.*]] = cir.const #cir.int<5> : !s32i
 // CIR:   cir.store{{.*}} %[[FIVE]], %[[SECOND]]
 // CIR:   %[[ONE:.*]] = cir.const #cir.int<1> : !s64i
-// CIR:   %[[NEXT:.*]] = cir.ptr_stride %[[SECOND]], %[[ONE]] : (!cir.ptr<!s32i>, !s64i)
+// CIR:   %[[NEXT:.*]] = cir.ptr_stride inbounds %[[SECOND]], %[[ONE]] : (!cir.ptr<!s32i>, !s64i)
 // CIR:   cir.store{{.*}} %[[NEXT]], %[[ITER]]
 // CIR:   %[[FOUR:.*]] = cir.const #cir.int<4> : !s64i
-// CIR:   %[[END:.*]] = cir.ptr_stride %[[ARR_BEGIN]], %[[FOUR]] : (!cir.ptr<!s32i>, !s64i)
+// CIR:   %[[END:.*]] = cir.ptr_stride inbounds %[[ARR_BEGIN]], %[[FOUR]] : (!cir.ptr<!s32i>, !s64i)
 // CIR:   cir.do {
 // CIR:     %[[CUR:.*]] = cir.load{{.*}} %[[ITER]]
 // CIR:     %[[ZERO:.*]] = cir.const #cir.int<0> : !s32i
 // CIR:     cir.store{{.*}} %[[ZERO]], %[[CUR]]
 // CIR:     %[[ONE:.*]] = cir.const #cir.int<1> : !s64i
-// CIR:     %[[NEXT:.*]] = cir.ptr_stride %[[CUR]], %[[ONE]] : (!cir.ptr<!s32i>, !s64i)
+// CIR:     %[[NEXT:.*]] = cir.ptr_stride inbounds %[[CUR]], %[[ONE]] : (!cir.ptr<!s32i>, !s64i)
 // CIR:     cir.store{{.*}} %[[NEXT]], %[[ITER]]
 // CIR:     cir.yield
 // CIR:   } while {
@@ -185,11 +185,11 @@ struct ValueInit {
 // LLVM:   %[[ARR:.*]] = getelementptr inbounds nuw %struct.ValueInit, ptr %[[THIS]], i32 0, i32 2
 // LLVM:   %[[ARR_BEGIN:.*]] = getelementptr inbounds i32, ptr %[[ARR]], i32 0
 // LLVM:   store i32 4, ptr %[[ARR_BEGIN]]
-// LLVM:   %[[ARR_1:.*]] = getelementptr i32, ptr %[[ARR_BEGIN]], i64 1
+// LLVM:   %[[ARR_1:.*]] = getelementptr inbounds i32, ptr %[[ARR_BEGIN]], i64 1
 // LLVM:   store i32 5, ptr %[[ARR_1]]
-// LLVM:   %[[ARR_2:.*]] = getelementptr i32, ptr %[[ARR_1]], i64 1
+// LLVM:   %[[ARR_2:.*]] = getelementptr inbounds i32, ptr %[[ARR_1]], i64 1
 // LLVM:   store ptr %[[ARR_2]], ptr %[[ITER]]
-// LLVM:   %[[ARR_END:.*]] = getelementptr i32, ptr %[[ARR_BEGIN]], i64 4
+// LLVM:   %[[ARR_END:.*]] = getelementptr inbounds i32, ptr %[[ARR_BEGIN]], i64 4
 // LLVM:   br label %[[LOOP_BODY:.*]]
 // LLVM: [[LOOP_COND:.*]]:
 // LLVM:   %[[CUR:.*]] = load ptr, ptr %[[ITER]]
@@ -198,7 +198,7 @@ struct ValueInit {
 // LLVM: [[LOOP_BODY]]:
 // LLVM:   %[[CUR:.*]] = load ptr, ptr %[[ITER]]
 // LLVM:   store i32 0, ptr %[[CUR]]
-// LLVM:   %[[NEXT:.*]] = getelementptr i32, ptr %[[CUR]], i64 1
+// LLVM:   %[[NEXT:.*]] = getelementptr inbounds i32, ptr %[[CUR]], i64 1
 // LLVM:   store ptr %[[NEXT]], ptr %[[ITER]]
 // LLVM:   br label %[[LOOP_COND]]
 // LLVM: [[LOOP_END]]:

@@ -965,7 +965,7 @@ Address CIRGenFunction::emitExtVectorElementLValue(LValue lv,
 
   mlir::Value elementValue = builder.getArrayElement(
       loc, loc, castToPointerElement.getPointer(), vectorElementTy, idxValue,
-      /*shouldDecay=*/false);
+      /*shouldDecay=*/false, cir::PtrOffsetFlags::InBounds);
 
   const CharUnits eltSize = getContext().getTypeSizeInChars(elementTy);
   const CharUnits alignment =

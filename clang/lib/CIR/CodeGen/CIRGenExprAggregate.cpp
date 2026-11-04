@@ -647,7 +647,8 @@ public:
              ctx.hasSameType(field->getType()->getPointeeType(),
                              arrayType->getElementType()) &&
              "Expected std::initializer_list second field to be const E *");
-      mlir::Value arrayEnd = builder.createPtrStride(loc, arrayStart, size);
+      mlir::Value arrayEnd = builder.createPtrStride(
+          loc, arrayStart, size, cir::PtrOffsetFlags::InBounds);
       cgf.emitStoreThroughLValue(RValue::get(arrayEnd), endOrLength);
     }
   }
@@ -797,7 +798,8 @@ void AggExprEmitter::emitArrayInit(Address destPtr, cir::ArrayType arrayTy,
     // Advance to the next element.
     if (i > 0) {
       one = builder.getConstantInt(loc, cgf.ptrDiffTy, i);
-      element = builder.createPtrStride(loc, begin, one);
+      element = builder.createPtrStride(loc, begin, one,
+                                        cir::PtrOffsetFlags::InBounds);
 
       // Tell the cleanup that it needs to destroy up to this element.
       if (endOfInit.isValid())
@@ -824,7 +826,8 @@ void AggExprEmitter::emitArrayInit(Address destPtr, cir::ArrayType arrayTy,
     if (numInitElements) {
       one = builder.getConstantInt(loc, cgf.ptrDiffTy, 1);
       element = cir::PtrStrideOp::create(builder, loc, cirElementPtrType,
-                                         element, one);
+                                         element, one, /*inbounds=*/true,
+                                         /*no_unsigned_wrap=*/false);
 
       if (endOfInit.isValid())
         builder.createStore(loc, element, endOfInit);
@@ -840,8 +843,9 @@ void AggExprEmitter::emitArrayInit(Address destPtr, cir::ArrayType arrayTy,
     // Compute the end of array
     cir::ConstantOp numArrayElementsConst = builder.getConstInt(
         loc, mlir::cast<cir::IntType>(cgf.ptrDiffTy), numArrayElements);
-    mlir::Value end = cir::PtrStrideOp::create(builder, loc, cirElementPtrType,
-                                               begin, numArrayElementsConst);
+    mlir::Value end = cir::PtrStrideOp::create(
+        builder, loc, cirElementPtrType, begin, numArrayElementsConst,
+        /*inbounds=*/true, /*no_unsigned_wrap=*/false);
 
     builder.createDoWhile(
         loc,
@@ -886,7 +890,8 @@ void AggExprEmitter::emitArrayInit(Address destPtr, cir::ArrayType arrayTy,
           cir::ConstantOp one = builder.getConstInt(
               loc, mlir::cast<cir::IntType>(cgf.ptrDiffTy), 1);
           auto nextElement = cir::PtrStrideOp::create(
-              builder, loc, cirElementPtrType, currentElement, one);
+              builder, loc, cirElementPtrType, currentElement, one,
+              /*inbounds=*/true, /*no_unsigned_wrap=*/false);
 
           // Tell the EH cleanup that we finished with the last element.
           if (endOfInit.isValid())

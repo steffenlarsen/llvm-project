@@ -67,11 +67,11 @@ void test_array_destructor() {
 // CIR:   %[[BEGIN:.*]] = cir.cast array_to_ptrdecay %[[ARR]] : !cir.ptr<!cir.array<!rec_array_element x 5>>
 // CIR:   cir.store{{.*}} %[[BEGIN]], %[[ARR_PTR]]
 // CIR:   %[[FIVE:.*]] = cir.const #cir.int<5> : !s64i
-// CIR:   %[[ARR_END:.*]] = cir.ptr_stride %[[BEGIN]], %[[FIVE]] : (!cir.ptr<!rec_array_element>, !s64i)
+// CIR:   %[[ARR_END:.*]] = cir.ptr_stride inbounds %[[BEGIN]], %[[FIVE]] : (!cir.ptr<!rec_array_element>, !s64i)
 // CIR:   cir.do {
 // CIR:     %[[ARR_CUR:.*]] = cir.load{{.*}} %[[ARR_PTR]]
 // CIR:     %[[ONE:.*]] = cir.const #cir.int<1> : !s64i
-// CIR:     %[[ARR_NEXT:.*]] = cir.ptr_stride %[[ARR_CUR]], %[[ONE]] : (!cir.ptr<!rec_array_element>, !s64i)
+// CIR:     %[[ARR_NEXT:.*]] = cir.ptr_stride inbounds %[[ARR_CUR]], %[[ONE]] : (!cir.ptr<!rec_array_element>, !s64i)
 // CIR:     cir.store{{.*}} %[[ARR_NEXT]], %[[ARR_PTR]] : !cir.ptr<!rec_array_element>, !cir.ptr<!cir.ptr<!rec_array_element>>
 // CIR:     cir.yield
 // CIR:   } while {
@@ -109,7 +109,7 @@ void test_array_destructor() {
 // LLVM:   %[[ARR_CUR:.*]] = alloca ptr
 // LLVM:   %[[ARR_PTR:.*]] = getelementptr inbounds %struct.array_element, ptr %[[ARR]], i32 0
 // LLVM:   store ptr %[[ARR_PTR]], ptr %[[TMP]]
-// LLVM:   %[[END_PTR:.*]] = getelementptr %struct.array_element, ptr %[[ARR_PTR]], i64 5
+// LLVM:   %[[END_PTR:.*]] = getelementptr inbounds %struct.array_element, ptr %[[ARR_PTR]], i64 5
 // LLVM:   br label %[[INIT_LOOP_BODY:.*]]
 // LLVM: [[INIT_LOOP_NEXT:.*]]:
 // LLVM:   %[[CUR:.*]] = load ptr, ptr %[[TMP]]
@@ -117,7 +117,7 @@ void test_array_destructor() {
 // LLVM:   br i1 %[[CMP]], label %[[INIT_LOOP_BODY]], label %[[INIT_LOOP_END:.*]]
 // LLVM: [[INIT_LOOP_BODY]]:
 // LLVM:   %[[CUR:.*]] = load ptr, ptr %[[TMP]]
-// LLVM:   %[[NEXT:.*]] = getelementptr %struct.array_element, ptr %[[CUR]], i64 1
+// LLVM:   %[[NEXT:.*]] = getelementptr inbounds %struct.array_element, ptr %[[CUR]], i64 1
 // LLVM:   store ptr %[[NEXT]], ptr %[[TMP]]
 // LLVM:   br label %[[INIT_LOOP_NEXT:.*]]
 // LLVM: [[INIT_LOOP_END]]:

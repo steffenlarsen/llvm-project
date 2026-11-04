@@ -1312,7 +1312,8 @@ struct IrregularPartialArrayDestroy final : EHScopeStack::Cleanup {
                 cir::ConstantOp negOne = builder.getConstInt(
                     loc, mlir::cast<cir::IntType>(cgf.ptrDiffTy), -1);
                 mlir::Value prev = cir::PtrStrideOp::create(
-                    builder, loc, ptrToElmType, cur, negOne);
+                    builder, loc, ptrToElmType, cur, negOne,
+                    /*inbounds=*/true, /*no_unsigned_wrap=*/false);
                 builder.createStore(loc, prev, iterAddr);
                 Address elemAddr = Address(prev, cirElementType, elementAlign);
                 destroyer(cgf, elemAddr, baseElementType);

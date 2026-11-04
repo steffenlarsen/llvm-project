@@ -75,7 +75,7 @@ void take_ref(const S &s);
 // CIR-NEXT: %[[TMP1:.*]] = cir.const #cir.int<3> : !s32i
 // CIR-NEXT: cir.store align(4) %[[TMP1]], %[[TMP0]] : !s32i, !cir.ptr<!s32i, target_address_space(4)>
 // CIR-NEXT: %[[TMP2:.*]] = cir.const #cir.int<1> : !s64i
-// CIR-NEXT: %[[TMP3:.*]] = cir.ptr_stride %[[TMP0]], %[[TMP2]] : (!cir.ptr<!s32i, target_address_space(4)>, !s64i) -> !cir.ptr<!s32i, target_address_space(4)>
+// CIR-NEXT: %[[TMP3:.*]] = cir.ptr_stride inbounds %[[TMP0]], %[[TMP2]] : (!cir.ptr<!s32i, target_address_space(4)>, !s64i) -> !cir.ptr<!s32i, target_address_space(4)>
 // CIR-NEXT: %[[TMP4:.*]] = cir.const #cir.int<4> : !s32i
 // CIR-NEXT: cir.store align(4) %[[TMP4]], %[[TMP3]] : !s32i, !cir.ptr<!s32i, target_address_space(4)>
 // CIR-NEXT: %[[TMP5:.*]] = cir.cast array_to_ptrdecay %[[REF_TMP0_ASCAST]] : !cir.ptr<!cir.array<!s32i x 2>, target_address_space(4)> -> !cir.ptr<!s32i, target_address_space(4)>
@@ -130,7 +130,7 @@ void take_ref(const S &s);
 // LLVM-NEXT: %[[REF_TMP_ASCAST:.*]] = addrspacecast ptr %[[REF_TMP]] to ptr addrspace(4)
 // LLVM-NEXT: %[[TMP0:.*]] = getelementptr inbounds i32, ptr addrspace(4) %[[REF_TMP_ASCAST]], i32 0
 // LLVM-NEXT: store i32 3, ptr addrspace(4) %[[TMP0]], align 4
-// LLVM-NEXT: %[[TMP1:.*]] = getelementptr i32, ptr addrspace(4) %[[TMP0]], i64 1
+// LLVM-NEXT: %[[TMP1:.*]] = getelementptr inbounds i32, ptr addrspace(4) %[[TMP0]], i64 1
 // LLVM-NEXT: store i32 4, ptr addrspace(4) %[[TMP1]], align 4
 // LLVM-NEXT: %[[TMP2:.*]] = getelementptr inbounds i32, ptr addrspace(4) %[[REF_TMP_ASCAST]], i32 0
 // LLVM-NEXT: call spir_func void @_Z3usePi(ptr addrspace(4) noundef %[[TMP2]])

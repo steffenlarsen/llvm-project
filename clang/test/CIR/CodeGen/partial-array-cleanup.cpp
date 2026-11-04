@@ -672,18 +672,18 @@ void test_init_list_partial_array_cleanup() {
 //              --- first explicit init ---
 // CIR:         cir.call @_ZN1SC1Ev(%[[BEGIN]])
 //              --- advance + update endOfInit for second element ---
-// CIR:         %[[SECOND:.*]] = cir.ptr_stride %[[BEGIN]], %{{.*}}
+// CIR:         %[[SECOND:.*]] = cir.ptr_stride inbounds %[[BEGIN]], %{{.*}}
 // CIR:         cir.store {{.*}} %[[SECOND]], %[[END_OF_INIT]]
 //              --- second explicit init ---
 // CIR:         cir.call @_ZN1SC1Ev(%[[SECOND]])
 //              --- advance + update endOfInit for filler start ---
-// CIR:         %[[FILLER_START:.*]] = cir.ptr_stride %[[SECOND]], %{{.*}}
+// CIR:         %[[FILLER_START:.*]] = cir.ptr_stride inbounds %[[SECOND]], %{{.*}}
 // CIR:         cir.store {{.*}} %[[FILLER_START]], %[[END_OF_INIT]]
 //              --- do-while filler loop ---
 // CIR:         cir.do {
 // CIR:           %[[CUR:.*]] = cir.load {{.*}} %{{.*}} : !cir.ptr<!cir.ptr<!rec_S>>, !cir.ptr<!rec_S>
 // CIR:           cir.call @_ZN1SC1Ev(%[[CUR]])
-// CIR:           %[[NEXT:.*]] = cir.ptr_stride %[[CUR]], %{{.*}}
+// CIR:           %[[NEXT:.*]] = cir.ptr_stride inbounds %[[CUR]], %{{.*}}
 // CIR:           cir.store {{.*}} %[[NEXT]], %[[END_OF_INIT]]
 // CIR:           cir.yield
 // CIR:         } while {
@@ -698,7 +698,7 @@ void test_init_list_partial_array_cleanup() {
 // CIR:           cir.do {
 // CIR:             %[[EL:.*]] = cir.load {{.*}} %{{.*}} : !cir.ptr<!cir.ptr<!rec_S>>, !cir.ptr<!rec_S>
 // CIR:             %[[NEG1:.*]] = cir.const #cir.int<-1> : !s64i
-// CIR:             %[[PREV:.*]] = cir.ptr_stride %[[EL]], %[[NEG1]] : (!cir.ptr<!rec_S>, !s64i) -> !cir.ptr<!rec_S>
+// CIR:             %[[PREV:.*]] = cir.ptr_stride inbounds %[[EL]], %[[NEG1]] : (!cir.ptr<!rec_S>, !s64i) -> !cir.ptr<!rec_S>
 // CIR:             cir.call @_ZN1SD1Ev(%[[PREV]])
 // CIR:             cir.yield
 // CIR:           } while {
@@ -721,7 +721,7 @@ void test_init_list_partial_array_cleanup() {
 //
 //            --- second ctor ---
 // LLVM:     [[CONT1]]:
-// LLVM:       %[[SECOND:.*]] = getelementptr %struct.S, ptr %[[BEGIN]], i64 1
+// LLVM:       %[[SECOND:.*]] = getelementptr inbounds %struct.S, ptr %[[BEGIN]], i64 1
 // LLVM:       store ptr %[[SECOND]], ptr %[[END_OF_INIT]]
 // LLVM:       invoke void @_ZN1SC1Ev(ptr {{.*}} %[[SECOND]])
 // LLVM:         to label %{{.*}} unwind label %[[LPAD]]
@@ -731,7 +731,7 @@ void test_init_list_partial_array_cleanup() {
 // LLVM:         to label %[[FILLER_CONT:.*]] unwind label %[[LPAD]]
 //
 // LLVM:     [[FILLER_CONT]]:
-// LLVM:       %[[FNEXT:.*]] = getelementptr %struct.S, ptr %{{.*}}, i64 1
+// LLVM:       %[[FNEXT:.*]] = getelementptr inbounds %struct.S, ptr %{{.*}}, i64 1
 // LLVM:       store ptr %[[FNEXT]], ptr %[[END_OF_INIT]]
 //
 //            --- landing pad + cleanup guard ---
@@ -754,7 +754,7 @@ void test_init_list_partial_array_cleanup() {
 //
 // LLVM:     [[DTOR_BODY]]:
 // LLVM:       %[[DCUR:.*]] = load ptr, ptr %[[DTOR_ITER]]
-// LLVM:       %[[PREV:.*]] = getelementptr %struct.S, ptr %[[DCUR]], i64 -1
+// LLVM:       %[[PREV:.*]] = getelementptr inbounds %struct.S, ptr %[[DCUR]], i64 -1
 // LLVM:       store ptr %[[PREV]], ptr %[[DTOR_ITER]]
 // LLVM:       call void @_ZN1SD1Ev(ptr {{.*}} %[[PREV]])
 // LLVM:       br label %[[DTOR_LOOP_COND]]
@@ -845,7 +845,7 @@ void test_multi_dim_init_list_partial_array_cleanup() {
 // CIR-BEFORE-LPP:         cir.cleanup.scope {
 //                           --- row 0: S(), S() ---
 // CIR-BEFORE-LPP:           cir.call @_ZN1SC1Ev(%[[ROW0_ELT0]])
-// CIR-BEFORE-LPP:           %[[ROW0_ELT1:.*]] = cir.ptr_stride %[[ROW0_ELT0]], %{{.*}} : (!cir.ptr<!rec_S>, !s64i) -> !cir.ptr<!rec_S>
+// CIR-BEFORE-LPP:           %[[ROW0_ELT1:.*]] = cir.ptr_stride inbounds %[[ROW0_ELT0]], %{{.*}} : (!cir.ptr<!rec_S>, !s64i) -> !cir.ptr<!rec_S>
 // CIR-BEFORE-LPP:           cir.store {{.*}} %[[ROW0_ELT1]], %[[ROW0_END]]
 // CIR-BEFORE-LPP:           cir.call @_ZN1SC1Ev(%[[ROW0_ELT1]])
 // CIR-BEFORE-LPP:           cir.yield
@@ -857,7 +857,7 @@ void test_multi_dim_init_list_partial_array_cleanup() {
 // CIR-BEFORE-LPP:             cir.store {{.*}} %[[ROW0_EH_END]], %[[ROW0_ITER]]
 // CIR-BEFORE-LPP:             cir.do {
 // CIR-BEFORE-LPP:               %[[ROW0_EH_CUR:.*]] = cir.load {{.*}} %[[ROW0_ITER]] : !cir.ptr<!cir.ptr<!rec_S>>, !cir.ptr<!rec_S>
-// CIR-BEFORE-LPP:               %[[ROW0_EH_PREV:.*]] = cir.ptr_stride %[[ROW0_EH_CUR]], %{{.*}} : (!cir.ptr<!rec_S>, !s64i) -> !cir.ptr<!rec_S>
+// CIR-BEFORE-LPP:               %[[ROW0_EH_PREV:.*]] = cir.ptr_stride inbounds %[[ROW0_EH_CUR]], %{{.*}} : (!cir.ptr<!rec_S>, !s64i) -> !cir.ptr<!rec_S>
 // CIR-BEFORE-LPP:               cir.store {{.*}} %[[ROW0_EH_PREV]], %[[ROW0_ITER]]
 // CIR-BEFORE-LPP:               cir.call @_ZN1SD1Ev(%[[ROW0_EH_PREV]]) nothrow
 // CIR-BEFORE-LPP:               cir.yield
@@ -869,14 +869,14 @@ void test_multi_dim_init_list_partial_array_cleanup() {
 // CIR-BEFORE-LPP:           }
 // CIR-BEFORE-LPP:           cir.yield
 // CIR-BEFORE-LPP:         }
-// CIR-BEFORE-LPP:         %[[ROW1_BEGIN:.*]] = cir.ptr_stride %[[ROW0_BEGIN]], %{{.*}} : (!cir.ptr<!cir.array<!rec_S x 2>>, !s64i) -> !cir.ptr<!cir.array<!rec_S x 2>>
+// CIR-BEFORE-LPP:         %[[ROW1_BEGIN:.*]] = cir.ptr_stride inbounds %[[ROW0_BEGIN]], %{{.*}} : (!cir.ptr<!cir.array<!rec_S x 2>>, !s64i) -> !cir.ptr<!cir.array<!rec_S x 2>>
 // CIR-BEFORE-LPP:         cir.store {{.*}} %[[ROW1_BEGIN]], %[[OUTER_END]]
 // CIR-BEFORE-LPP:         %[[ROW1_ELT0:.*]] = cir.cast array_to_ptrdecay %[[ROW1_BEGIN]] : !cir.ptr<!cir.array<!rec_S x 2>> -> !cir.ptr<!rec_S>
 // CIR-BEFORE-LPP:         cir.store {{.*}} %[[ROW1_ELT0]], %[[ROW1_END]]
 // CIR-BEFORE-LPP:         cir.cleanup.scope {
 //                           --- row 1: S(), S() ---
 // CIR-BEFORE-LPP:           cir.call @_ZN1SC1Ev(%[[ROW1_ELT0]])
-// CIR-BEFORE-LPP:           %[[ROW1_ELT1:.*]] = cir.ptr_stride %[[ROW1_ELT0]], %{{.*}} : (!cir.ptr<!rec_S>, !s64i) -> !cir.ptr<!rec_S>
+// CIR-BEFORE-LPP:           %[[ROW1_ELT1:.*]] = cir.ptr_stride inbounds %[[ROW1_ELT0]], %{{.*}} : (!cir.ptr<!rec_S>, !s64i) -> !cir.ptr<!rec_S>
 // CIR-BEFORE-LPP:           cir.store {{.*}} %[[ROW1_ELT1]], %[[ROW1_END]]
 // CIR-BEFORE-LPP:           cir.call @_ZN1SC1Ev(%[[ROW1_ELT1]])
 // CIR-BEFORE-LPP:           cir.yield
@@ -888,7 +888,7 @@ void test_multi_dim_init_list_partial_array_cleanup() {
 // CIR-BEFORE-LPP:             cir.store {{.*}} %[[ROW1_EH_END]], %[[ROW1_ITER]]
 // CIR-BEFORE-LPP:             cir.do {
 // CIR-BEFORE-LPP:               %[[ROW1_EH_CUR:.*]] = cir.load {{.*}} %[[ROW1_ITER]] : !cir.ptr<!cir.ptr<!rec_S>>, !cir.ptr<!rec_S>
-// CIR-BEFORE-LPP:               %[[ROW1_EH_PREV:.*]] = cir.ptr_stride %[[ROW1_EH_CUR]], %{{.*}} : (!cir.ptr<!rec_S>, !s64i) -> !cir.ptr<!rec_S>
+// CIR-BEFORE-LPP:               %[[ROW1_EH_PREV:.*]] = cir.ptr_stride inbounds %[[ROW1_EH_CUR]], %{{.*}} : (!cir.ptr<!rec_S>, !s64i) -> !cir.ptr<!rec_S>
 // CIR-BEFORE-LPP:               cir.store {{.*}} %[[ROW1_EH_PREV]], %[[ROW1_ITER]]
 // CIR-BEFORE-LPP:               cir.call @_ZN1SD1Ev(%[[ROW1_EH_PREV]]) nothrow
 // CIR-BEFORE-LPP:               cir.yield
@@ -912,7 +912,7 @@ void test_multi_dim_init_list_partial_array_cleanup() {
 // CIR-BEFORE-LPP:           cir.store {{.*}} %[[OUTER_EH_END_BASE]], %[[OUTER_ITER]]
 // CIR-BEFORE-LPP:           cir.do {
 // CIR-BEFORE-LPP:             %[[OUTER_EH_CUR:.*]] = cir.load {{.*}} %[[OUTER_ITER]] : !cir.ptr<!cir.ptr<!rec_S>>, !cir.ptr<!rec_S>
-// CIR-BEFORE-LPP:             %[[OUTER_EH_PREV:.*]] = cir.ptr_stride %[[OUTER_EH_CUR]], %{{.*}} : (!cir.ptr<!rec_S>, !s64i) -> !cir.ptr<!rec_S>
+// CIR-BEFORE-LPP:             %[[OUTER_EH_PREV:.*]] = cir.ptr_stride inbounds %[[OUTER_EH_CUR]], %{{.*}} : (!cir.ptr<!rec_S>, !s64i) -> !cir.ptr<!rec_S>
 // CIR-BEFORE-LPP:             cir.store {{.*}} %[[OUTER_EH_PREV]], %[[OUTER_ITER]]
 // CIR-BEFORE-LPP:             cir.call @_ZN1SD1Ev(%[[OUTER_EH_PREV]]) nothrow
 // CIR-BEFORE-LPP:             cir.yield
@@ -961,7 +961,7 @@ void test_multi_dim_init_list_partial_array_cleanup() {
 // CIR:           cir.do {
 // CIR:             %[[EL:.*]] = cir.load {{.*}} %[[ITER]] : !cir.ptr<!cir.ptr<!rec_S>>, !cir.ptr<!rec_S>
 // CIR:             %[[NEG1:.*]] = cir.const #cir.int<-1> : !s64i
-// CIR:             %[[PREV:.*]] = cir.ptr_stride %[[EL]], %[[NEG1]] : (!cir.ptr<!rec_S>, !s64i) -> !cir.ptr<!rec_S>
+// CIR:             %[[PREV:.*]] = cir.ptr_stride inbounds %[[EL]], %[[NEG1]] : (!cir.ptr<!rec_S>, !s64i) -> !cir.ptr<!rec_S>
 // CIR:             cir.store {{.*}} %[[PREV]], %[[ITER]]
 // CIR:             cir.call @_ZN1SD1Ev(%[[PREV]]) nothrow
 // CIR:             cir.yield
@@ -1002,7 +1002,7 @@ void test_multi_dim_init_list_partial_array_cleanup() {
 // LLVM:      invoke void @_ZN1SC1Ev(ptr {{.*}} %[[ROW0_ELT0]])
 // LLVM:        to label %{{.*}} unwind label %[[ROW0_LPAD:.*]]
 //
-// LLVM:      %[[ROW0_ELT1:.*]] = getelementptr %struct.S, ptr %[[ROW0_ELT0]], i64 1
+// LLVM:      %[[ROW0_ELT1:.*]] = getelementptr inbounds %struct.S, ptr %[[ROW0_ELT0]], i64 1
 // LLVM:      store ptr %[[ROW0_ELT1]], ptr %[[ROW0_END_A]]
 // LLVM:      invoke void @_ZN1SC1Ev(ptr {{.*}} %[[ROW0_ELT1]])
 // LLVM:        to label %{{.*}} unwind label %[[ROW0_LPAD]]
@@ -1021,19 +1021,19 @@ void test_multi_dim_init_list_partial_array_cleanup() {
 //
 // LLVM:      [[ROW0_DTOR_BODY]]:
 // LLVM:        %[[ROW0_DCUR:.*]] = load ptr, ptr %[[ROW0_ITER]]
-// LLVM:        %[[ROW0_DPREV:.*]] = getelementptr %struct.S, ptr %[[ROW0_DCUR]], i64 -1
+// LLVM:        %[[ROW0_DPREV:.*]] = getelementptr inbounds %struct.S, ptr %[[ROW0_DCUR]], i64 -1
 // LLVM:        store ptr %[[ROW0_DPREV]], ptr %[[ROW0_ITER]]
 // LLVM:        call void @_ZN1SD1Ev(ptr {{.*}} %[[ROW0_DPREV]])
 //
 //            --- row 1: element 0, element 1 ---
-// LLVM:      %[[ROW1_BEGIN:.*]] = getelementptr [2 x %struct.S], ptr %[[ROW0_BEGIN]], i64 1
+// LLVM:      %[[ROW1_BEGIN:.*]] = getelementptr inbounds [2 x %struct.S], ptr %[[ROW0_BEGIN]], i64 1
 // LLVM:      store ptr %[[ROW1_BEGIN]], ptr %[[OUTER_END_A]]
 // LLVM:      %[[ROW1_ELT0:.*]] = getelementptr inbounds %struct.S, ptr %[[ROW1_BEGIN]], i32 0
 // LLVM:      store ptr %[[ROW1_ELT0]], ptr %[[ROW1_END_A:.*]]
 // LLVM:      invoke void @_ZN1SC1Ev(ptr {{.*}} %[[ROW1_ELT0]])
 // LLVM:        to label %{{.*}} unwind label %[[ROW1_LPAD:.*]]
 //
-// LLVM:      %[[ROW1_ELT1:.*]] = getelementptr %struct.S, ptr %[[ROW1_ELT0]], i64 1
+// LLVM:      %[[ROW1_ELT1:.*]] = getelementptr inbounds %struct.S, ptr %[[ROW1_ELT0]], i64 1
 // LLVM:      store ptr %[[ROW1_ELT1]], ptr %[[ROW1_END_A]]
 // LLVM:      invoke void @_ZN1SC1Ev(ptr {{.*}} %[[ROW1_ELT1]])
 // LLVM:        to label %{{.*}} unwind label %[[ROW1_LPAD]]
@@ -1052,7 +1052,7 @@ void test_multi_dim_init_list_partial_array_cleanup() {
 //
 // LLVM:      [[ROW1_DTOR_BODY]]:
 // LLVM:        %[[ROW1_DCUR:.*]] = load ptr, ptr %[[ROW1_ITER]]
-// LLVM:        %[[ROW1_DPREV:.*]] = getelementptr %struct.S, ptr %[[ROW1_DCUR]], i64 -1
+// LLVM:        %[[ROW1_DPREV:.*]] = getelementptr inbounds %struct.S, ptr %[[ROW1_DCUR]], i64 -1
 // LLVM:        store ptr %[[ROW1_DPREV]], ptr %[[ROW1_ITER]]
 // LLVM:        call void @_ZN1SD1Ev(ptr {{.*}} %[[ROW1_DPREV]])
 //
@@ -1067,7 +1067,7 @@ void test_multi_dim_init_list_partial_array_cleanup() {
 //
 // LLVM:      [[OUTER_DTOR_BODY]]:
 // LLVM:        %[[OUTER_DCUR:.*]] = load ptr, ptr %[[OUTER_ITER]]
-// LLVM:        %[[OUTER_DPREV:.*]] = getelementptr %struct.S, ptr %[[OUTER_DCUR]], i64 -1
+// LLVM:        %[[OUTER_DPREV:.*]] = getelementptr inbounds %struct.S, ptr %[[OUTER_DCUR]], i64 -1
 // LLVM:        store ptr %[[OUTER_DPREV]], ptr %[[OUTER_ITER]]
 // LLVM:        call void @_ZN1SD1Ev(ptr {{.*}} %[[OUTER_DPREV]])
 // LLVM:        resume { ptr, i32 }

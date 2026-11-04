@@ -48,7 +48,7 @@ Small D0::m0() { return {}; }
 // CIR:   cir.call @_ZN2D02m0Ev
 // LLVM-LABEL: define {{.*}} @_ZN2D02m0Ev(
 // LLVM-LABEL: define {{.*}} @_ZThn8_N2D02m0Ev(
-// LLVM:   getelementptr i8, ptr {{.*}}, i64 -8
+// LLVM:   getelementptr inbounds i8, ptr {{.*}}, i64 -8
 // LLVM:   call {{.*}} @_ZN2D02m0Ev(
 // OGCG-LABEL: define {{.*}} @_ZN2D02m0Ev(
 // OGCG-LABEL: define {{.*}} @_ZThn8_N2D02m0Ev(

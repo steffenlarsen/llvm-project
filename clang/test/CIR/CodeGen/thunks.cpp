@@ -189,7 +189,7 @@ void C::f(int x, ...) {}
 // CIR:   %[[T1_THIS:.*]] = cir.load %[[T1_THIS_ADDR]]
 // CIR:   %[[T1_CAST:.*]] = cir.cast bitcast %[[T1_THIS]] : !cir.ptr<{{.*}}> -> !cir.ptr<!u8i>
 // CIR:   %[[T1_OFFSET:.*]] = cir.const #cir.int<-8> : !s64i
-// CIR:   %[[T1_ADJUSTED:.*]] = cir.ptr_stride %[[T1_CAST]], %[[T1_OFFSET]] : (!cir.ptr<!u8i>, !s64i) -> !cir.ptr<!u8i>
+// CIR:   %[[T1_ADJUSTED:.*]] = cir.ptr_stride inbounds %[[T1_CAST]], %[[T1_OFFSET]] : (!cir.ptr<!u8i>, !s64i) -> !cir.ptr<!u8i>
 // CIR:   %[[T1_RESULT:.*]] = cir.cast bitcast %[[T1_ADJUSTED]] : !cir.ptr<!u8i> -> !cir.ptr<
 // CIR:   cir.call @_ZN5Test11C1fEv(%[[T1_RESULT]])
 // CIR:   cir.return
@@ -202,7 +202,7 @@ void C::f(int x, ...) {}
 // CIR:   %[[T2_THIS:.*]] = cir.load
 // CIR:   %[[T2_CAST:.*]] = cir.cast bitcast %[[T2_THIS]] : !cir.ptr<{{.*}}> -> !cir.ptr<!u8i>
 // CIR:   %[[T2_OFFSET:.*]] = cir.const #cir.int<-8> : !s64i
-// CIR:   %[[T2_ADJUSTED:.*]] = cir.ptr_stride %[[T2_CAST]], %[[T2_OFFSET]] : (!cir.ptr<!u8i>, !s64i) -> !cir.ptr<!u8i>
+// CIR:   %[[T2_ADJUSTED:.*]] = cir.ptr_stride inbounds %[[T2_CAST]], %[[T2_OFFSET]] : (!cir.ptr<!u8i>, !s64i) -> !cir.ptr<!u8i>
 // CIR:   %[[T2_RESULT:.*]] = cir.cast bitcast %[[T2_ADJUSTED]] : !cir.ptr<!u8i> -> !cir.ptr<
 // CIR:   %[[T2_RET:.*]] = cir.call @_ZN5Test21C1gEv(%[[T2_RESULT]])
 // CIR:   cir.store {{.*}} %[[T2_RET]]
@@ -216,7 +216,7 @@ void C::f(int x, ...) {}
 // CIR:   %[[T3A_THIS:.*]] = cir.load
 // CIR:   %[[T3A_CAST:.*]] = cir.cast bitcast %[[T3A_THIS]] : !cir.ptr<{{.*}}> -> !cir.ptr<!u8i>
 // CIR:   %[[T3A_OFFSET:.*]] = cir.const #cir.int<-8> : !s64i
-// CIR:   %[[T3A_ADJUSTED:.*]] = cir.ptr_stride %[[T3A_CAST]], %[[T3A_OFFSET]] : (!cir.ptr<!u8i>, !s64i) -> !cir.ptr<!u8i>
+// CIR:   %[[T3A_ADJUSTED:.*]] = cir.ptr_stride inbounds %[[T3A_CAST]], %[[T3A_OFFSET]] : (!cir.ptr<!u8i>, !s64i) -> !cir.ptr<!u8i>
 // CIR:   %[[T3A_RESULT:.*]] = cir.cast bitcast %[[T3A_ADJUSTED]] : !cir.ptr<!u8i> -> !cir.ptr<
 // CIR:   cir.call @_ZN5Test31DD1Ev(%[[T3A_RESULT]])
 // CIR:   cir.return
@@ -226,7 +226,7 @@ void C::f(int x, ...) {}
 // CIR:   %[[T3B_THIS:.*]] = cir.load
 // CIR:   %[[T3B_CAST:.*]] = cir.cast bitcast %[[T3B_THIS]] : !cir.ptr<{{.*}}> -> !cir.ptr<!u8i>
 // CIR:   %[[T3B_OFFSET:.*]] = cir.const #cir.int<-8> : !s64i
-// CIR:   %[[T3B_ADJUSTED:.*]] = cir.ptr_stride %[[T3B_CAST]], %[[T3B_OFFSET]] : (!cir.ptr<!u8i>, !s64i) -> !cir.ptr<!u8i>
+// CIR:   %[[T3B_ADJUSTED:.*]] = cir.ptr_stride inbounds %[[T3B_CAST]], %[[T3B_OFFSET]] : (!cir.ptr<!u8i>, !s64i) -> !cir.ptr<!u8i>
 // CIR:   %[[T3B_RESULT:.*]] = cir.cast bitcast %[[T3B_ADJUSTED]] : !cir.ptr<!u8i> -> !cir.ptr<
 // CIR:   cir.call @_ZN5Test31DD0Ev(%[[T3B_RESULT]])
 // CIR:   cir.return
@@ -240,7 +240,7 @@ void C::f(int x, ...) {}
 // CIR:   %[[T4_THIS:.*]] = cir.load
 // CIR:   %[[T4_CAST:.*]] = cir.cast bitcast %[[T4_THIS]] : !cir.ptr<{{.*}}> -> !cir.ptr<!u8i>
 // CIR:   %[[T4_OFFSET:.*]] = cir.const #cir.int<-8> : !s64i
-// CIR:   %[[T4_ADJUSTED:.*]] = cir.ptr_stride %[[T4_CAST]], %[[T4_OFFSET]] : (!cir.ptr<!u8i>, !s64i) -> !cir.ptr<!u8i>
+// CIR:   %[[T4_ADJUSTED:.*]] = cir.ptr_stride inbounds %[[T4_CAST]], %[[T4_OFFSET]] : (!cir.ptr<!u8i>, !s64i) -> !cir.ptr<!u8i>
 // CIR:   %[[T4_RESULT:.*]] = cir.cast bitcast %[[T4_ADJUSTED]] : !cir.ptr<!u8i> -> !cir.ptr<
 // CIR:   %[[T4_ARG:.*]] = cir.load
 // CIR:   cir.call @_ZN5Test41C1gEi(%[[T4_RESULT]], %[[T4_ARG]])
@@ -256,7 +256,7 @@ void C::f(int x, ...) {}
 // CIR:   %[[T5_THIS:.*]] = cir.load %[[T5_THIS_ADDR]]
 // CIR:   %[[T5_CAST:.*]] = cir.cast bitcast %[[T5_THIS]] : !cir.ptr<{{.*}}> -> !cir.ptr<!u8i>
 // CIR:   %[[T5_OFFSET:.*]] = cir.const #cir.int<-8> : !s64i
-// CIR:   %[[T5_ADJUSTED:.*]] = cir.ptr_stride %[[T5_CAST]], %[[T5_OFFSET]]
+// CIR:   %[[T5_ADJUSTED:.*]] = cir.ptr_stride inbounds %[[T5_CAST]], %[[T5_OFFSET]]
 // CIR:   %[[T5_RESULT:.*]] = cir.cast bitcast %[[T5_ADJUSTED]] : !cir.ptr<!u8i> -> !cir.ptr<
 // CIR:   cir.call @_ZN5Test51C1hEv(%arg0, %[[T5_RESULT]])
 // CIR:   cir.return
@@ -275,7 +275,7 @@ void C::f(int x, ...) {}
 // CIR:   %[[VT_THIS:.*]] = cir.load
 // CIR:   %[[VT_CAST:.*]] = cir.cast bitcast %[[VT_THIS]] : !cir.ptr<{{.*}}> -> !cir.ptr<!u8i>
 // CIR:   %[[VT_OFFSET:.*]] = cir.const #cir.int<-8> : !s64i
-// CIR:   %[[VT_ADJUSTED:.*]] = cir.ptr_stride %[[VT_CAST]], %[[VT_OFFSET]] : (!cir.ptr<!u8i>, !s64i) -> !cir.ptr<!u8i>
+// CIR:   %[[VT_ADJUSTED:.*]] = cir.ptr_stride inbounds %[[VT_CAST]], %[[VT_OFFSET]] : (!cir.ptr<!u8i>, !s64i) -> !cir.ptr<!u8i>
 // CIR:   %[[VT_RESULT:.*]] = cir.cast bitcast %[[VT_ADJUSTED]] : !cir.ptr<!u8i> -> !cir.ptr<
 // CIR:   cir.call @_ZN11VarargThunk1C1fEiz(%[[VT_RESULT]], %arg1) musttail
 // CIR:   cir.return
@@ -309,33 +309,33 @@ void C::f(int x, ...) {}
 
 // LLVM: define {{.*}} void @_ZThn8_N5Test11C1fEv(ptr{{.*}})
 // LLVM:   %[[L1_THIS:.*]] = load ptr, ptr
-// LLVM:   %[[L1_ADJ:.*]] = getelementptr i8, ptr %[[L1_THIS]], i64 -8
+// LLVM:   %[[L1_ADJ:.*]] = getelementptr inbounds i8, ptr %[[L1_THIS]], i64 -8
 // LLVM:   call void @_ZN5Test11C1fEv(ptr{{.*}} %[[L1_ADJ]])
 
 // LLVM: define {{.*}} i32 @_ZThn8_N5Test21C1gEv(ptr{{.*}})
 // LLVM:   %[[L2_THIS:.*]] = load ptr, ptr
-// LLVM:   %[[L2_ADJ:.*]] = getelementptr i8, ptr %[[L2_THIS]], i64 -8
+// LLVM:   %[[L2_ADJ:.*]] = getelementptr inbounds i8, ptr %[[L2_THIS]], i64 -8
 // LLVM:   %[[L2_RET:.*]] = call {{.*}} i32 @_ZN5Test21C1gEv(ptr{{.*}} %[[L2_ADJ]])
 
 // LLVM: define {{.*}} void @_ZThn8_N5Test31DD1Ev(ptr{{.*}})
 // LLVM:   %[[L3A_THIS:.*]] = load ptr, ptr
-// LLVM:   %[[L3A_ADJ:.*]] = getelementptr i8, ptr %[[L3A_THIS]], i64 -8
+// LLVM:   %[[L3A_ADJ:.*]] = getelementptr inbounds i8, ptr %[[L3A_THIS]], i64 -8
 // LLVM:   call void @_ZN5Test31DD1Ev(ptr{{.*}} %[[L3A_ADJ]])
 
 // LLVM: define {{.*}} void @_ZThn8_N5Test31DD0Ev(ptr{{.*}})
 // LLVM:   %[[L3B_THIS:.*]] = load ptr, ptr
-// LLVM:   %[[L3B_ADJ:.*]] = getelementptr i8, ptr %[[L3B_THIS]], i64 -8
+// LLVM:   %[[L3B_ADJ:.*]] = getelementptr inbounds i8, ptr %[[L3B_THIS]], i64 -8
 // LLVM:   call void @_ZN5Test31DD0Ev(ptr{{.*}} %[[L3B_ADJ]])
 
 // LLVM: define {{.*}} void @_ZThn8_N5Test41C1gEi(ptr{{.*}}, i32{{.*}})
 // LLVM:   %[[L4_THIS:.*]] = load ptr, ptr
-// LLVM:   %[[L4_ADJ:.*]] = getelementptr i8, ptr %[[L4_THIS]], i64 -8
+// LLVM:   %[[L4_ADJ:.*]] = getelementptr inbounds i8, ptr %[[L4_THIS]], i64 -8
 // LLVM:   %[[L4_ARG:.*]] = load i32, ptr
 // LLVM:   call void @_ZN5Test41C1gEi(ptr{{.*}} %[[L4_ADJ]], i32{{.*}} %[[L4_ARG]])
 
 // LLVM: define {{.*}} void @_ZThn8_N5Test51C1hEv(ptr dead_on_unwind noalias writable sret(%"struct.Test5::NonTrivial") align 4 %[[L5_AGG:[^,)]+]], ptr{{[^,)]*}})
 // LLVM:   %[[L5_THIS:.*]] = load ptr, ptr
-// LLVM:   %[[L5_ADJ:.*]] = getelementptr i8, ptr %[[L5_THIS]], i64 -8
+// LLVM:   %[[L5_ADJ:.*]] = getelementptr inbounds i8, ptr %[[L5_THIS]], i64 -8
 // LLVM:   call void @_ZN5Test51C1hEv(ptr dead_on_unwind writable sret(%"struct.Test5::NonTrivial") align 4 %[[L5_AGG]], ptr{{.*}} %[[L5_ADJ]])
 // LLVM:   ret void
 
@@ -344,7 +344,7 @@ void C::f(int x, ...) {}
 // LLVM:       phi ptr
 
 // LLVM-LABEL: define {{.*}} void @_ZThn8_N11VarargThunk1C1fEiz(ptr{{.*}}, i32{{.*}}, ...)
-// LLVM:   getelementptr i8, ptr {{.*}}, i64 -8
+// LLVM:   getelementptr inbounds i8, ptr {{.*}}, i64 -8
 // LLVM:   musttail call void (ptr, i32, ...) @_ZN11VarargThunk1C1fEiz(ptr{{.*}}, i32{{.*}}, ...)
 
 // --- OGCG checks ---

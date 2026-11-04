@@ -276,7 +276,7 @@ D::D() {}
 // CIR-COMMON:        %[[BASE_OFFSET_PTR:.*]] = cir.cast bitcast %[[BASE_OFFSET_ADDR]] : !cir.ptr<!u8i> -> !cir.ptr<!s64i>
 // CIR-COMMON:        %[[BASE_OFFSET:.*]] = cir.load{{.*}} %[[BASE_OFFSET_PTR]] : !cir.ptr<!s64i>, !s64i
 // CIR-COMMON:        %[[THIS_PTR:.*]] = cir.cast bitcast %[[THIS]] : !cir.ptr<!rec_D> -> !cir.ptr<!u8i>
-// CIR-COMMON:        %[[BASE_PTR:.*]] = cir.ptr_stride %[[THIS_PTR]], %[[BASE_OFFSET]] : (!cir.ptr<!u8i>, !s64i) -> !cir.ptr<!u8i>
+// CIR-COMMON:        %[[BASE_PTR:.*]] = cir.ptr_stride inbounds %[[THIS_PTR]], %[[BASE_OFFSET]] : (!cir.ptr<!u8i>, !s64i) -> !cir.ptr<!u8i>
 // CIR-COMMON:        %[[BASE_CAST:.*]] = cir.cast bitcast %[[BASE_PTR]] : !cir.ptr<!u8i> -> !cir.ptr<!rec_D>
 // CIR-COMMON:        %[[BASE_VPTR_ADDR:.*]] = cir.vtable.get_vptr %[[BASE_CAST]]
 // CIR-COMMON:        cir.store{{.*}} %[[D_VPTR]], %[[BASE_VPTR_ADDR]]
@@ -306,7 +306,7 @@ D::D() {}
 // LLVM-COMMON:   %[[D_VPTR_ADDR2:.*]] = load ptr, ptr %[[THIS]]
 // LLVM-COMMON:   %[[BASE_OFFSET_ADDR:.*]] = getelementptr i8, ptr %[[D_VPTR_ADDR2]], i64 -24
 // LLVM-COMMON:   %[[BASE_OFFSET:.*]] = load i64, ptr %[[BASE_OFFSET_ADDR]]
-// LLVM-COMMON:   %[[BASE_PTR:.*]] = getelementptr i8, ptr %[[THIS]], i64 %[[BASE_OFFSET]]
+// LLVM-COMMON:   %[[BASE_PTR:.*]] = getelementptr inbounds i8, ptr %[[THIS]], i64 %[[BASE_OFFSET]]
 // LLVM-COMMON:   store ptr %[[D_VPTR]], ptr %[[BASE_PTR]]
 // LLVM-COMMON:   %[[C_VPTR_ADDR:.*]] = getelementptr inbounds ptr, ptr %[[VTT]], i32 6
 // LLVM-COMMON:   %[[C_VPTR:.*]] = load ptr, ptr %[[C_VPTR_ADDR]]
@@ -366,7 +366,7 @@ D::D() {}
 // CIR-COMMON:        %[[BASE_OFFSET_PTR:.*]] = cir.cast bitcast %[[BASE_OFFSET_ADDR]] : !cir.ptr<!u8i> -> !cir.ptr<!s64i>
 // CIR-COMMON:        %[[BASE_OFFSET:.*]] = cir.load{{.*}} %[[BASE_OFFSET_PTR]] : !cir.ptr<!s64i>, !s64i
 // CIR-COMMON:        %[[THIS_PTR:.*]] = cir.cast bitcast %[[THIS]] : !cir.ptr<!rec_B> -> !cir.ptr<!u8i>
-// CIR-COMMON:        %[[BASE_PTR:.*]] = cir.ptr_stride %[[THIS_PTR]], %[[BASE_OFFSET]] : (!cir.ptr<!u8i>, !s64i) -> !cir.ptr<!u8i>
+// CIR-COMMON:        %[[BASE_PTR:.*]] = cir.ptr_stride inbounds %[[THIS_PTR]], %[[BASE_OFFSET]] : (!cir.ptr<!u8i>, !s64i) -> !cir.ptr<!u8i>
 // CIR-COMMON:        %[[BASE_CAST:.*]] = cir.cast bitcast %[[BASE_PTR]] : !cir.ptr<!u8i> -> !cir.ptr<!rec_B>
 // CIR-COMMON:        %[[BASE_VPTR_ADDR:.*]] = cir.vtable.get_vptr %[[BASE_CAST]]
 // CIR-COMMON:        cir.store{{.*}} %[[B_VPTR]], %[[BASE_VPTR_ADDR]]
@@ -385,7 +385,7 @@ D::D() {}
 // LLVM-COMMON:   %[[VPTR:.*]] = load ptr, ptr %[[THIS]]
 // LLVM-COMMON:   %[[BASE_OFFSET_ADDR:.*]] = getelementptr i8, ptr %[[VPTR]], i64 -24
 // LLVM-COMMON:   %[[BASE_OFFSET:.*]] = load i64, ptr %[[BASE_OFFSET_ADDR]]
-// LLVM-COMMON:   %[[BASE_PTR:.*]] = getelementptr i8, ptr %[[THIS]], i64 %[[BASE_OFFSET]]
+// LLVM-COMMON:   %[[BASE_PTR:.*]] = getelementptr inbounds i8, ptr %[[THIS]], i64 %[[BASE_OFFSET]]
 // LLVM-COMMON:   store ptr %[[B_VPTR]], ptr %[[BASE_PTR]]
 
 // OGCG-COMMON: define {{.*}} void @_ZN1BC2Ev(ptr {{.*}} %[[THIS_ARG:.*]], ptr {{.*}} %[[VTT_ARG:.*]])
@@ -432,7 +432,7 @@ D::D() {}
 // CIR-COMMON:        %[[BASE_OFFSET_PTR:.*]] = cir.cast bitcast %[[BASE_OFFSET_ADDR]] : !cir.ptr<!u8i> -> !cir.ptr<!s64i>
 // CIR-COMMON:        %[[BASE_OFFSET:.*]] = cir.load{{.*}} %[[BASE_OFFSET_PTR]] : !cir.ptr<!s64i>, !s64i
 // CIR-COMMON:        %[[THIS_PTR:.*]] = cir.cast bitcast %[[THIS]] : !cir.ptr<!rec_C> -> !cir.ptr<!u8i>
-// CIR-COMMON:        %[[BASE_PTR:.*]] = cir.ptr_stride %[[THIS_PTR]], %[[BASE_OFFSET]] : (!cir.ptr<!u8i>, !s64i) -> !cir.ptr<!u8i>
+// CIR-COMMON:        %[[BASE_PTR:.*]] = cir.ptr_stride inbounds %[[THIS_PTR]], %[[BASE_OFFSET]] : (!cir.ptr<!u8i>, !s64i) -> !cir.ptr<!u8i>
 // CIR-COMMON:        %[[BASE_CAST:.*]] = cir.cast bitcast %[[BASE_PTR]] : !cir.ptr<!u8i> -> !cir.ptr<!rec_C>
 // CIR-COMMON:        %[[BASE_VPTR_ADDR:.*]] = cir.vtable.get_vptr %[[BASE_CAST]]
 // CIR-COMMON:        cir.store{{.*}} %[[C_VPTR]], %[[BASE_VPTR_ADDR]]
@@ -451,7 +451,7 @@ D::D() {}
 // LLVM-COMMON:   %[[VPTR:.*]] = load ptr, ptr %[[THIS]]
 // LLVM-COMMON:   %[[BASE_OFFSET_ADDR:.*]] = getelementptr i8, ptr %[[VPTR]], i64 -24
 // LLVM-COMMON:   %[[BASE_OFFSET:.*]] = load i64, ptr %[[BASE_OFFSET_ADDR]]
-// LLVM-COMMON:   %[[BASE_PTR:.*]] = getelementptr i8, ptr %[[THIS]], i64 %[[BASE_OFFSET]]
+// LLVM-COMMON:   %[[BASE_PTR:.*]] = getelementptr inbounds i8, ptr %[[THIS]], i64 %[[BASE_OFFSET]]
 // LLVM-COMMON:   store ptr %[[B_VPTR]], ptr %[[BASE_PTR]]
 
 // OGCG-COMMON: define {{.*}} void @_ZN1CC2Ev(ptr {{.*}} %[[THIS_ARG:.*]], ptr {{.*}} %[[VTT_ARG:.*]])

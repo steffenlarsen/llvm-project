@@ -156,7 +156,7 @@ Derived::Derived(const void *inVoid) { squawk(); }
 // CIR:        %[[BASE_OFFSET_I64PTR:.*]] = cir.cast bitcast %[[BASE_OFFSET_PTR]] : !cir.ptr<!u8i> -> !cir.ptr<!s64i>
 // CIR:        %[[BASE_OFFSET:.*]] = cir.load{{.*}} %[[BASE_OFFSET_I64PTR]] : !cir.ptr<!s64i>, !s64i
 // CIR:        %[[THIS_AS_I8PTR:.*]] = cir.cast bitcast %[[THIS]] : !cir.ptr<!rec_Derived> -> !cir.ptr<!u8i>
-// CIR:        %[[BASE_PTR:.*]] = cir.ptr_stride %[[THIS_AS_I8PTR]], %[[BASE_OFFSET]] : (!cir.ptr<!u8i>, !s64i) -> !cir.ptr<!u8i>
+// CIR:        %[[BASE_PTR:.*]] = cir.ptr_stride inbounds %[[THIS_AS_I8PTR]], %[[BASE_OFFSET]] : (!cir.ptr<!u8i>, !s64i) -> !cir.ptr<!u8i>
 // CIR:        %[[BASE_AS_I8PTR:.*]] = cir.cast bitcast %[[BASE_PTR]] : !cir.ptr<!u8i> -> !cir.ptr<!rec_Derived>
 // CIR:        %[[BASE_VPTR_ADDR:.*]] = cir.vtable.get_vptr %[[BASE_AS_I8PTR]] : !cir.ptr<!rec_Derived> -> !cir.ptr<!cir.vptr>
 // CIR:        cir.store{{.*}} %[[VPTR_BASE]], %[[BASE_VPTR_ADDR]] : !cir.vptr, !cir.ptr<!cir.vptr>
@@ -183,7 +183,7 @@ Derived::Derived(const void *inVoid) { squawk(); }
 // LLVM:   %[[VPTR:.*]] = load ptr, ptr %[[THIS]]
 // LLVM:   %[[BASE_OFFSET_ADDR:.*]] = getelementptr i8, ptr %[[VPTR]], i64 -32
 // LLVM:   %[[BASE_OFFSET:.*]] = load i64, ptr %[[BASE_OFFSET_ADDR]]
-// LLVM:   %[[BASE_PTR:.*]] = getelementptr i8, ptr %[[THIS]], i64 %[[BASE_OFFSET]]
+// LLVM:   %[[BASE_PTR:.*]] = getelementptr inbounds i8, ptr %[[THIS]], i64 %[[BASE_OFFSET]]
 // LLVM:   store ptr %[[VPTR_BASE]], ptr %[[BASE_PTR]]
 // LLVM:   %[[VPTR:.*]] = load ptr, ptr %[[THIS]]
 // LLVM:   %[[SQUAWK_FN_ADDR:.*]] = getelementptr inbounds ptr, ptr %[[VPTR]], i32 0

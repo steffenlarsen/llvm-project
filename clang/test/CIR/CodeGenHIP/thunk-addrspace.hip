@@ -15,7 +15,7 @@ __device__ void C::g() {}
 // CIR-LABEL: cir.func {{.*}} @_ZThn8_N1C1gEv
 // CIR:         %[[THIS:.*]] = cir.load {{.*}}, !cir.ptr<!rec_C, target_address_space(4)>
 // CIR:         %[[RAW:.*]] = cir.cast bitcast %[[THIS]] : !cir.ptr<!rec_C, target_address_space(4)> -> !cir.ptr<!u8i, target_address_space(4)>
-// CIR:         %[[ADJ:.*]] = cir.ptr_stride %[[RAW]], %{{.*}} : (!cir.ptr<!u8i, target_address_space(4)>, !s64i) -> !cir.ptr<!u8i, target_address_space(4)>
+// CIR:         %[[ADJ:.*]] = cir.ptr_stride inbounds %[[RAW]], %{{.*}} : (!cir.ptr<!u8i, target_address_space(4)>, !s64i) -> !cir.ptr<!u8i, target_address_space(4)>
 // CIR:         cir.cast bitcast %[[ADJ]] : !cir.ptr<!u8i, target_address_space(4)> -> !cir.ptr<!rec_C, target_address_space(4)>
 
 // LLVM-LABEL: define spir_func void @_ZThn8_N1C1gEv(

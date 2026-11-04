@@ -32,15 +32,15 @@ void fn(int n) {
   // CIR: %[[ONE:.*]] = cir.const #cir.int<1> : !s32i
   // CIR: cir.store {{.*}}%[[ONE]], %[[ALLOC_TO_INTS]] : !s32i, !cir.ptr<!s32i>
   // CIR: %[[ONE:.*]] = cir.const #cir.int<1> : !s32i
-  // CIR: %[[NEXT_ELT:.*]] = cir.ptr_stride %[[ALLOC_TO_INTS]], %[[ONE]] : (!cir.ptr<!s32i>, !s32i) -> !cir.ptr<!s32i>
+  // CIR: %[[NEXT_ELT:.*]] = cir.ptr_stride inbounds %[[ALLOC_TO_INTS]], %[[ONE]] : (!cir.ptr<!s32i>, !s32i) -> !cir.ptr<!s32i>
   // CIR: %[[TWO:.*]] = cir.const #cir.int<2> : !s32i
   // CIR: cir.store {{.*}}%[[TWO]], %[[NEXT_ELT]] : !s32i, !cir.ptr<!s32i>
   // CIR: %[[ONE:.*]] = cir.const #cir.int<1> : !s32i
-  // CIR: %[[NEXT_ELT2:.*]] = cir.ptr_stride %[[NEXT_ELT]], %[[ONE]] : (!cir.ptr<!s32i>, !s32i) -> !cir.ptr<!s32i>
+  // CIR: %[[NEXT_ELT2:.*]] = cir.ptr_stride inbounds %[[NEXT_ELT]], %[[ONE]] : (!cir.ptr<!s32i>, !s32i) -> !cir.ptr<!s32i>
   // CIR: %[[THREE:.*]] = cir.const #cir.int<3> : !s32i
   // CIR: cir.store {{.*}}%[[THREE]], %[[NEXT_ELT2]] : !s32i, !cir.ptr<!s32i>
   // CIR: %[[ONE:.*]] = cir.const #cir.int<1> : !s32i
-  // CIR: %[[NEXT_ELT3:.*]] = cir.ptr_stride %[[NEXT_ELT2]], %[[ONE]] : (!cir.ptr<!s32i>, !s32i) -> !cir.ptr<!s32i>
+  // CIR: %[[NEXT_ELT3:.*]] = cir.ptr_stride inbounds %[[NEXT_ELT2]], %[[ONE]] : (!cir.ptr<!s32i>, !s32i) -> !cir.ptr<!s32i>
   // CIR: %[[TWELVE:.*]] = cir.const #cir.int<12> : !u64i
   // CIR: %[[REST_SIZE:.*]] = cir.sub %[[ADJ_SIZE]], %[[TWELVE]] : !u64i
   // CIR: %[[REST_ALLOC_AS_VOID:.*]] = cir.cast bitcast %[[NEXT_ELT3]] : !cir.ptr<!s32i> -> !cir.ptr<!void>
@@ -87,15 +87,15 @@ void fn_paren(int n) {
   // CIR: %[[ONE:.*]] = cir.const #cir.int<1> : !s32i
   // CIR: cir.store {{.*}}%[[ONE]], %[[ALLOC_TO_INTS]] : !s32i, !cir.ptr<!s32i>
   // CIR: %[[ONE:.*]] = cir.const #cir.int<1> : !s32i
-  // CIR: %[[NEXT_ELT:.*]] = cir.ptr_stride %[[ALLOC_TO_INTS]], %[[ONE]] : (!cir.ptr<!s32i>, !s32i) -> !cir.ptr<!s32i>
+  // CIR: %[[NEXT_ELT:.*]] = cir.ptr_stride inbounds %[[ALLOC_TO_INTS]], %[[ONE]] : (!cir.ptr<!s32i>, !s32i) -> !cir.ptr<!s32i>
   // CIR: %[[TWO:.*]] = cir.const #cir.int<2> : !s32i
   // CIR: cir.store {{.*}}%[[TWO]], %[[NEXT_ELT]] : !s32i, !cir.ptr<!s32i>
   // CIR: %[[ONE:.*]] = cir.const #cir.int<1> : !s32i
-  // CIR: %[[NEXT_ELT2:.*]] = cir.ptr_stride %[[NEXT_ELT]], %[[ONE]] : (!cir.ptr<!s32i>, !s32i) -> !cir.ptr<!s32i>
+  // CIR: %[[NEXT_ELT2:.*]] = cir.ptr_stride inbounds %[[NEXT_ELT]], %[[ONE]] : (!cir.ptr<!s32i>, !s32i) -> !cir.ptr<!s32i>
   // CIR: %[[THREE:.*]] = cir.const #cir.int<3> : !s32i
   // CIR: cir.store {{.*}}%[[THREE]], %[[NEXT_ELT2]] : !s32i, !cir.ptr<!s32i>
   // CIR: %[[ONE:.*]] = cir.const #cir.int<1> : !s32i
-  // CIR: %[[NEXT_ELT3:.*]] = cir.ptr_stride %[[NEXT_ELT2]], %[[ONE]] : (!cir.ptr<!s32i>, !s32i) -> !cir.ptr<!s32i>
+  // CIR: %[[NEXT_ELT3:.*]] = cir.ptr_stride inbounds %[[NEXT_ELT2]], %[[ONE]] : (!cir.ptr<!s32i>, !s32i) -> !cir.ptr<!s32i>
   // CIR: %[[TWELVE:.*]] = cir.const #cir.int<12> : !u64i
   // CIR: %[[REST_SIZE:.*]] = cir.sub %[[ADJ_SIZE]], %[[TWELVE]] : !u64i
   // CIR: %[[REST_ALLOC_AS_VOID:.*]] = cir.cast bitcast %[[NEXT_ELT3]] : !cir.ptr<!s32i> -> !cir.ptr<!void>
@@ -132,15 +132,15 @@ void const_exact() {
   // CIR: %[[ONE:.*]] = cir.const #cir.int<1> : !s32i
   // CIR: cir.store {{.*}}%[[ONE]], %[[ALLOC_TO_INTS]] : !s32i, !cir.ptr<!s32i>
   // CIR: %[[ONE:.*]] = cir.const #cir.int<1> : !s32i
-  // CIR: %[[ELT1:.*]] = cir.ptr_stride %[[ALLOC_TO_INTS]], %[[ONE]] : (!cir.ptr<!s32i>, !s32i) -> !cir.ptr<!s32i>
+  // CIR: %[[ELT1:.*]] = cir.ptr_stride inbounds %[[ALLOC_TO_INTS]], %[[ONE]] : (!cir.ptr<!s32i>, !s32i) -> !cir.ptr<!s32i>
   // CIR: %[[TWO:.*]] = cir.const #cir.int<2> : !s32i
   // CIR: cir.store {{.*}}%[[TWO]], %[[ELT1]] : !s32i, !cir.ptr<!s32i>
   // CIR: %[[ONE:.*]] = cir.const #cir.int<1> : !s32i
-  // CIR: %[[ELT2:.*]] = cir.ptr_stride %[[ELT1]], %[[ONE]] : (!cir.ptr<!s32i>, !s32i) -> !cir.ptr<!s32i>
+  // CIR: %[[ELT2:.*]] = cir.ptr_stride inbounds %[[ELT1]], %[[ONE]] : (!cir.ptr<!s32i>, !s32i) -> !cir.ptr<!s32i>
   // CIR: %[[THREE:.*]] = cir.const #cir.int<3> : !s32i
   // CIR: cir.store {{.*}}%[[THREE]], %[[ELT2]] : !s32i, !cir.ptr<!s32i>
   // CIR: %[[ONE:.*]] = cir.const #cir.int<1> : !s32i
-  // CIR: %[[ELT3:.*]] = cir.ptr_stride %[[ELT2]], %[[ONE]] : (!cir.ptr<!s32i>, !s32i) -> !cir.ptr<!s32i>
+  // CIR: %[[ELT3:.*]] = cir.ptr_stride inbounds %[[ELT2]], %[[ONE]] : (!cir.ptr<!s32i>, !s32i) -> !cir.ptr<!s32i>
   // CIR: cir.return
 
   // LLVM: %[[ALLOC:.*]] = call{{.*}}nonnull ptr @_Znam(i64 noundef 12)
@@ -163,15 +163,15 @@ void const_exact_paren() {
   // CIR: %[[ONE:.*]] = cir.const #cir.int<1> : !s32i
   // CIR: cir.store {{.*}} %[[ONE]], %[[ALLOC_CAST]] : !s32i, !cir.ptr<!s32i>
   // CIR: %[[ONE:.*]] = cir.const #cir.int<1> : !s32i
-  // CIR: %[[ELT1:.*]] = cir.ptr_stride %[[ALLOC_CAST]], %[[ONE]] : (!cir.ptr<!s32i>, !s32i) -> !cir.ptr<!s32i>
+  // CIR: %[[ELT1:.*]] = cir.ptr_stride inbounds %[[ALLOC_CAST]], %[[ONE]] : (!cir.ptr<!s32i>, !s32i) -> !cir.ptr<!s32i>
   // CIR: %[[TWO:.*]] = cir.const #cir.int<2> : !s32i
   // CIR: cir.store {{.*}} %[[TWO]], %[[ELT1]] : !s32i, !cir.ptr<!s32i>
   // CIR: %[[ONE:.*]] = cir.const #cir.int<1> : !s32i
-  // CIR: %[[ELT2:.*]] = cir.ptr_stride %[[ELT1]], %[[ONE]] : (!cir.ptr<!s32i>, !s32i) -> !cir.ptr<!s32i>
+  // CIR: %[[ELT2:.*]] = cir.ptr_stride inbounds %[[ELT1]], %[[ONE]] : (!cir.ptr<!s32i>, !s32i) -> !cir.ptr<!s32i>
   // CIR: %[[THREE:.*]] = cir.const #cir.int<3> : !s32i
   // CIR: cir.store {{.*}} %[[THREE]], %[[ELT2]] : !s32i, !cir.ptr<!s32i>
   // CIR: %[[ONE:.*]] = cir.const #cir.int<1> : !s32i
-  // CIR: %[[ELT3:.*]] = cir.ptr_stride %[[ELT2]], %[[ONE]] : (!cir.ptr<!s32i>, !s32i) -> !cir.ptr<!s32i>
+  // CIR: %[[ELT3:.*]] = cir.ptr_stride inbounds %[[ELT2]], %[[ONE]] : (!cir.ptr<!s32i>, !s32i) -> !cir.ptr<!s32i>
 
   // LLVM: %[[ALLOC:.*]] = call{{.*}}nonnull ptr @_Znam(i64 noundef 12)
   // LLVM: store i32 1, ptr %[[ALLOC]]
@@ -193,15 +193,15 @@ void const_sufficient() {
   // CIR: %[[ONE:.*]] = cir.const #cir.int<1> : !s32i
   // CIR: cir.store {{.*}} %[[ONE]], %[[ALLOC_INTS]] : !s32i, !cir.ptr<!s32i>
   // CIR: %[[ONE:.*]] = cir.const #cir.int<1> : !s32i
-  // CIR: %[[ELT1:.*]] = cir.ptr_stride %[[ALLOC_INTS]], %[[ONE]] : (!cir.ptr<!s32i>, !s32i) -> !cir.ptr<!s32i>
+  // CIR: %[[ELT1:.*]] = cir.ptr_stride inbounds %[[ALLOC_INTS]], %[[ONE]] : (!cir.ptr<!s32i>, !s32i) -> !cir.ptr<!s32i>
   // CIR: %[[TWO:.*]] = cir.const #cir.int<2> : !s32i
   // CIR: cir.store {{.*}} %[[TWO]], %[[ELT1]] : !s32i, !cir.ptr<!s32i>
   // CIR: %[[ONE:.*]] = cir.const #cir.int<1> : !s32i
-  // CIR: %[[ELT2:.*]] = cir.ptr_stride %[[ELT1]], %[[ONE]] : (!cir.ptr<!s32i>, !s32i) -> !cir.ptr<!s32i>
+  // CIR: %[[ELT2:.*]] = cir.ptr_stride inbounds %[[ELT1]], %[[ONE]] : (!cir.ptr<!s32i>, !s32i) -> !cir.ptr<!s32i>
   // CIR: %[[THREE:.*]] = cir.const #cir.int<3> : !s32i
   // CIR: cir.store {{.*}} %[[THREE]], %[[ELT2]] : !s32i, !cir.ptr<!s32i>
   // CIR: %[[ONE:.*]] = cir.const #cir.int<1> : !s32i
-  // CIR: %[[ELT3:.*]] = cir.ptr_stride %[[ELT2]], %[[ONE]] : (!cir.ptr<!s32i>, !s32i) -> !cir.ptr<!s32i>
+  // CIR: %[[ELT3:.*]] = cir.ptr_stride inbounds %[[ELT2]], %[[ONE]] : (!cir.ptr<!s32i>, !s32i) -> !cir.ptr<!s32i>
   // CIR: %[[INIT_SIZE:.*]] = cir.const #cir.int<12> : !u64i
   // CIR: %[[REST_SIZE:.*]] = cir.sub %[[SIZE]], %[[INIT_SIZE]] : !u64i
   // CIR: %[[REST_PTR_DECAY:.*]] = cir.cast bitcast %[[ELT3]] : !cir.ptr<!s32i> -> !cir.ptr<!void>
@@ -230,15 +230,15 @@ void const_sufficient_paren() {
   // CIR: %[[ONE:.*]] = cir.const #cir.int<1> : !s32i
   // CIR: cir.store {{.*}} %[[ONE]], %[[ALLOC_INTS]] : !s32i, !cir.ptr<!s32i>
   // CIR: %[[ONE:.*]] = cir.const #cir.int<1> : !s32i
-  // CIR: %[[ELT1:.*]] = cir.ptr_stride %[[ALLOC_INTS]], %[[ONE]] : (!cir.ptr<!s32i>, !s32i) -> !cir.ptr<!s32i>
+  // CIR: %[[ELT1:.*]] = cir.ptr_stride inbounds %[[ALLOC_INTS]], %[[ONE]] : (!cir.ptr<!s32i>, !s32i) -> !cir.ptr<!s32i>
   // CIR: %[[TWO:.*]] = cir.const #cir.int<2> : !s32i
   // CIR: cir.store {{.*}} %[[TWO]], %[[ELT1]] : !s32i, !cir.ptr<!s32i>
   // CIR: %[[ONE:.*]] = cir.const #cir.int<1> : !s32i
-  // CIR: %[[ELT2:.*]] = cir.ptr_stride %[[ELT1]], %[[ONE]] : (!cir.ptr<!s32i>, !s32i) -> !cir.ptr<!s32i>
+  // CIR: %[[ELT2:.*]] = cir.ptr_stride inbounds %[[ELT1]], %[[ONE]] : (!cir.ptr<!s32i>, !s32i) -> !cir.ptr<!s32i>
   // CIR: %[[THREE:.*]] = cir.const #cir.int<3> : !s32i
   // CIR: cir.store {{.*}} %[[THREE]], %[[ELT2]] : !s32i, !cir.ptr<!s32i>
   // CIR: %[[ONE:.*]] = cir.const #cir.int<1> : !s32i
-  // CIR: %[[ELT3:.*]] = cir.ptr_stride %[[ELT2]], %[[ONE]] : (!cir.ptr<!s32i>, !s32i) -> !cir.ptr<!s32i>
+  // CIR: %[[ELT3:.*]] = cir.ptr_stride inbounds %[[ELT2]], %[[ONE]] : (!cir.ptr<!s32i>, !s32i) -> !cir.ptr<!s32i>
   // CIR: %[[INIT_SIZE:.*]] = cir.const #cir.int<12> : !u64i
   // CIR: %[[REST_SIZE:.*]] = cir.sub %[[SIZE]], %[[INIT_SIZE]] : !u64i
   // CIR: %[[REST_PTR_DECAY:.*]] = cir.cast bitcast %[[ELT3]] : !cir.ptr<!s32i> -> !cir.ptr<!void>
@@ -293,7 +293,7 @@ void string_nonconst(int n) {
   // CIR: %[[GET_STR:.*]] = cir.get_global @[[ABC4]] : !cir.ptr<!cir.array<!s8i x 4>>
   // CIR: cir.copy %[[GET_STR]] align(1) to %[[ALLOC_AS_STRING]] align(1) : !cir.ptr<!cir.array<!s8i x 4>>
   // CIR: %[[CONST_STR_SIZE:.*]] = cir.const #cir.int<4> : !u64i
-  // CIR: %[[AFTER_COPY:.*]] = cir.ptr_stride %[[ALLOC_CAST]], %[[CONST_STR_SIZE]] : (!cir.ptr<!s8i>, !u64i) -> !cir.ptr<!s8i>
+  // CIR: %[[AFTER_COPY:.*]] = cir.ptr_stride inbounds %[[ALLOC_CAST]], %[[CONST_STR_SIZE]] : (!cir.ptr<!s8i>, !u64i) -> !cir.ptr<!s8i>
   // CIR: %[[CONST_STR_SIZE:.*]] = cir.const #cir.int<4> : !u64i
   // CIR: %[[SIZE_LEFT:.*]] = cir.sub %[[SIZE]], %[[CONST_STR_SIZE]] : !u64i
   // CIR: %[[AFTER_COPY_CAST:.*]] = cir.cast bitcast %[[AFTER_COPY]] : !cir.ptr<!s8i> -> !cir.ptr<!void>
@@ -329,7 +329,7 @@ void string_nonconst_paren(int n) {
   // CIR: %[[GET_STR:.*]] = cir.get_global @[[ABC4]] : !cir.ptr<!cir.array<!s8i x 4>>
   // CIR: cir.copy %[[GET_STR]] align(1) to %[[ALLOC_AS_STRING]] align(1) : !cir.ptr<!cir.array<!s8i x 4>>
   // CIR: %[[CONST_STR_SIZE:.*]] = cir.const #cir.int<4> : !u64i
-  // CIR: %[[AFTER_COPY:.*]] = cir.ptr_stride %[[ALLOC_CAST]], %[[CONST_STR_SIZE]] : (!cir.ptr<!s8i>, !u64i) -> !cir.ptr<!s8i>
+  // CIR: %[[AFTER_COPY:.*]] = cir.ptr_stride inbounds %[[ALLOC_CAST]], %[[CONST_STR_SIZE]] : (!cir.ptr<!s8i>, !u64i) -> !cir.ptr<!s8i>
   // CIR: %[[CONST_STR_SIZE:.*]] = cir.const #cir.int<4> : !u64i
   // CIR: %[[SIZE_LEFT:.*]] = cir.sub %[[SIZE]], %[[CONST_STR_SIZE]] : !u64i
   // CIR: %[[AFTER_COPY_CAST:.*]] = cir.cast bitcast %[[AFTER_COPY]] : !cir.ptr<!s8i> -> !cir.ptr<!void>
@@ -365,7 +365,7 @@ void string_nonconst_paren_extra_paren(int n) {
   // CIR: %[[GET_STR:.*]] = cir.get_global @[[ABC4]] : !cir.ptr<!cir.array<!s8i x 4>>
   // CIR: cir.copy %[[GET_STR]] align(1) to %[[ALLOC_AS_STRING]] align(1) : !cir.ptr<!cir.array<!s8i x 4>>
   // CIR: %[[CONST_STR_SIZE:.*]] = cir.const #cir.int<4> : !u64i
-  // CIR: %[[AFTER_COPY:.*]] = cir.ptr_stride %[[ALLOC_CAST]], %[[CONST_STR_SIZE]] : (!cir.ptr<!s8i>, !u64i) -> !cir.ptr<!s8i>
+  // CIR: %[[AFTER_COPY:.*]] = cir.ptr_stride inbounds %[[ALLOC_CAST]], %[[CONST_STR_SIZE]] : (!cir.ptr<!s8i>, !u64i) -> !cir.ptr<!s8i>
   // CIR: %[[CONST_STR_SIZE:.*]] = cir.const #cir.int<4> : !u64i
   // CIR: %[[SIZE_LEFT:.*]] = cir.sub %[[SIZE]], %[[CONST_STR_SIZE]] : !u64i
   // CIR: %[[AFTER_COPY_CAST:.*]] = cir.cast bitcast %[[AFTER_COPY]] : !cir.ptr<!s8i> -> !cir.ptr<!void>
@@ -478,7 +478,7 @@ void aggr_exact() {
   // CIR: %[[TWO:.*]] = cir.const #cir.int<2> : !s32i
   // CIR: cir.store {{.*}} %[[TWO]], %[[GET_B]] : !s32i, !cir.ptr<!s32i>
   // CIR: %[[ONE:.*]] = cir.const #cir.int<1> : !s32i
-  // CIR: %[[ELT1:.*]] = cir.ptr_stride %[[ALLOC_CAST]], %[[ONE]] : (!cir.ptr<!rec_Aggr>, !s32i) -> !cir.ptr<!rec_Aggr>
+  // CIR: %[[ELT1:.*]] = cir.ptr_stride inbounds %[[ALLOC_CAST]], %[[ONE]] : (!cir.ptr<!rec_Aggr>, !s32i) -> !cir.ptr<!rec_Aggr>
   // CIR: %[[GET_A:.*]] = cir.get_member %[[ELT1]][0] {name = "a"} : !cir.ptr<!rec_Aggr> -> !cir.ptr<!s32i>
   // CIR: %[[THREE:.*]] = cir.const #cir.int<3> : !s32i
   // CIR: cir.store {{.*}} %[[THREE]], %[[GET_A]] : !s32i, !cir.ptr<!s32i>
@@ -486,7 +486,7 @@ void aggr_exact() {
   // CIR: %[[ZERO:.*]] = cir.const #cir.int<0> : !s32i
   // CIR: cir.store {{.*}} %[[ZERO]], %[[GET_B]] : !s32i, !cir.ptr<!s32i>
   // CIR: %[[ONE:.*]] = cir.const #cir.int<1> : !s32i
-  // CIR: %[[ELT2:.*]] = cir.ptr_stride %[[ELT1]], %[[ONE]] : (!cir.ptr<!rec_Aggr>, !s32i) -> !cir.ptr<!rec_Aggr>
+  // CIR: %[[ELT2:.*]] = cir.ptr_stride inbounds %[[ELT1]], %[[ONE]] : (!cir.ptr<!rec_Aggr>, !s32i) -> !cir.ptr<!rec_Aggr>
   // CIR: cir.return
 
   // LLVM: %[[ALLOC:.*]] = call{{.*}}nonnull ptr @_Znam(i64 noundef 16)
@@ -527,7 +527,7 @@ void aggr_sufficient(int n) {
   // CIR: %[[TWO:.*]] = cir.const #cir.int<2> : !s32i
   // CIR: cir.store {{.*}} %[[TWO]], %[[GET_B]] : !s32i, !cir.ptr<!s32i>
   // CIR: %[[ONE:.*]] = cir.const #cir.int<1> : !s32i
-  // CIR: %[[ELT1:.*]] = cir.ptr_stride %[[ALLOC_CAST]], %[[ONE]] : (!cir.ptr<!rec_Aggr2E0>, !s32i) -> !cir.ptr<!rec_Aggr2E0>
+  // CIR: %[[ELT1:.*]] = cir.ptr_stride inbounds %[[ALLOC_CAST]], %[[ONE]] : (!cir.ptr<!rec_Aggr2E0>, !s32i) -> !cir.ptr<!rec_Aggr2E0>
   // CIR: %[[GET_A:.*]] = cir.get_member %[[ELT1]][0] {name = "a"} : !cir.ptr<!rec_Aggr2E0> -> !cir.ptr<!s32i>
   // CIR: %[[THREE:.*]] = cir.const #cir.int<3> : !s32i
   // CIR: cir.store {{.*}} %[[THREE]], %[[GET_A]] : !s32i, !cir.ptr<!s32i>
@@ -535,7 +535,7 @@ void aggr_sufficient(int n) {
   // CIR: %[[ZERO:.*]] = cir.const #cir.int<0> : !s32i
   // CIR: cir.store {{.*}} %[[ZERO]], %[[GET_B]] : !s32i, !cir.ptr<!s32i>
   // CIR: %[[ONE:.*]] = cir.const #cir.int<1> : !s32i
-  // CIR: %[[ELT2:.*]] = cir.ptr_stride %[[ELT1]], %[[ONE]] : (!cir.ptr<!rec_Aggr2E0>, !s32i) -> !cir.ptr<!rec_Aggr2E0>
+  // CIR: %[[ELT2:.*]] = cir.ptr_stride inbounds %[[ELT1]], %[[ONE]] : (!cir.ptr<!rec_Aggr2E0>, !s32i) -> !cir.ptr<!rec_Aggr2E0>
   // CIR: %[[TWO_ELTS_SIZE:.*]] = cir.const #cir.int<16> : !u64i
   // CIR: %[[REST_SIZE:.*]] = cir.sub %[[SIZE]], %[[TWO_ELTS_SIZE]] : !u64i
   // CIR: %[[REST_DECAY:.*]] = cir.cast bitcast %[[ELT2]] : !cir.ptr<!rec_Aggr2E0> -> !cir.ptr<!void>
@@ -577,7 +577,7 @@ void constexpr_test() {
   // CIR: %[[ZERO:.*]] = cir.const #cir.int<0> : !s32i
   // CIR: cir.store {{.*}} %[[ZERO]], %[[ALLOC_INTS]] : !s32i, !cir.ptr<!s32i>
   // CIR: %[[ONE:.*]] = cir.const #cir.int<1> : !s32i
-  // CIR: %[[ELT1:.*]] = cir.ptr_stride %[[ALLOC_INTS]], %[[ONE]] : (!cir.ptr<!s32i>, !s32i) -> !cir.ptr<!s32i>
+  // CIR: %[[ELT1:.*]] = cir.ptr_stride inbounds %[[ALLOC_INTS]], %[[ONE]] : (!cir.ptr<!s32i>, !s32i) -> !cir.ptr<!s32i>
 
   // LLVM: %[[ALLOC:.*]] = call{{.*}}nonnull ptr @_Znam(i64 noundef 4)
   // LLVM: store i32 0, ptr %[[ALLOC]]
@@ -602,7 +602,7 @@ void unknown_bound() {
   // CIR: %[[THREE:.*]] = cir.const #cir.int<3> : !s32i
   // CIR: cir.store {{.*}} %[[THREE]], %[[GET_Z]] : !s32i, !cir.ptr<!s32i>
   // CIR: %[[ONE:.*]] = cir.const #cir.int<1> : !s32i
-  // CIR: %[[ELT1:.*]] = cir.ptr_stride %[[ALLOC_AGG]], %[[ONE]] : (!cir.ptr<!rec_Aggr2E1>, !s32i) -> !cir.ptr<!rec_Aggr2E1>
+  // CIR: %[[ELT1:.*]] = cir.ptr_stride inbounds %[[ALLOC_AGG]], %[[ONE]] : (!cir.ptr<!rec_Aggr2E1>, !s32i) -> !cir.ptr<!rec_Aggr2E1>
   // CIR: %[[GET_X:.*]] = cir.get_member %[[ELT1]][0] {name = "x"} : !cir.ptr<!rec_Aggr2E1> -> !cir.ptr<!s32i>
   // CIR: %[[FOUR:.*]] = cir.const #cir.int<4> : !s32i
   // CIR: cir.store {{.*}} %[[FOUR]], %[[GET_X]] : !s32i, !cir.ptr<!s32i>
@@ -613,7 +613,7 @@ void unknown_bound() {
   // CIR: %[[ZERO:.*]] = cir.const #cir.int<0> : !s32i
   // CIR: cir.store {{.*}} %[[ZERO]], %[[GET_Z]] : !s32i, !cir.ptr<!s32i>
   // CIR: %[[ONE:.*]] = cir.const #cir.int<1> : !s32i
-  // CIR: %[[ELT2:.*]] = cir.ptr_stride %[[ELT1]], %[[ONE]] : (!cir.ptr<!rec_Aggr2E1>, !s32i) -> !cir.ptr<!rec_Aggr2E1>
+  // CIR: %[[ELT2:.*]] = cir.ptr_stride inbounds %[[ELT1]], %[[ONE]] : (!cir.ptr<!rec_Aggr2E1>, !s32i) -> !cir.ptr<!rec_Aggr2E1>
 
   // LLVM: %[[ALLOC:.*]] = call{{.*}}nonnull ptr @_Znam(i64 noundef 24)
   // LLVM: %[[GET_X:.*]] = getelementptr {{.*}}%struct.Aggr.1, ptr %[[ALLOC]], i32 0, i32 0

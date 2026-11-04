@@ -326,7 +326,7 @@ void acc_loop() {
 // CHECK-NEXT: %[[DECAY:.*]] = cir.cast array_to_ptrdecay %[[ALLOCA]] : !cir.ptr<!cir.array<!rec_HasOperatorsOutline x 5>> -> !cir.ptr<!rec_HasOperatorsOutline>
 // CHECK-NEXT: cir.store {{.*}} %[[DECAY]], %[[TEMP_ITR]] : !cir.ptr<!rec_HasOperatorsOutline>, !cir.ptr<!cir.ptr<!rec_HasOperatorsOutline>>
 // CHECK-NEXT: %[[LAST_IDX:.*]] = cir.const #cir.int<5> : !s64i
-// CHECK-NEXT: %[[END_ITR:.*]] = cir.ptr_stride %[[DECAY]], %[[LAST_IDX]] : (!cir.ptr<!rec_HasOperatorsOutline>, !s64i) -> !cir.ptr<!rec_HasOperatorsOutline>
+// CHECK-NEXT: %[[END_ITR:.*]] = cir.ptr_stride inbounds %[[DECAY]], %[[LAST_IDX]] : (!cir.ptr<!rec_HasOperatorsOutline>, !s64i) -> !cir.ptr<!rec_HasOperatorsOutline>
 // CHECK-NEXT: cir.do {
 // CHECK-NEXT: %[[TEMP_LOAD:.*]] = cir.load {{.*}} %[[TEMP_ITR]] : !cir.ptr<!cir.ptr<!rec_HasOperatorsOutline>>, !cir.ptr<!rec_HasOperatorsOutline>
 // CHECK-NEXT: %[[GET_I:.*]] = cir.get_member %[[TEMP_LOAD]][0] {name = "i"} : !cir.ptr<!rec_HasOperatorsOutline> -> !cir.ptr<!s32i>
@@ -345,7 +345,7 @@ void acc_loop() {
 // CHECK-NEXT: %[[ZERO:.*]] = cir.const #false
 // CHECK-NEXT: cir.store {{.*}} %[[ZERO]], %[[GET_B]] : !cir.bool, !cir.ptr<!cir.bool>
 // CHECK-NEXT: %[[ONE:.*]] = cir.const #cir.int<1> : !s64i
-// CHECK-NEXT: %[[NEXT_ITEM:.*]] = cir.ptr_stride %[[TEMP_LOAD]], %[[ONE]] : (!cir.ptr<!rec_HasOperatorsOutline>, !s64i) -> !cir.ptr<!rec_HasOperatorsOutline>
+// CHECK-NEXT: %[[NEXT_ITEM:.*]] = cir.ptr_stride inbounds %[[TEMP_LOAD]], %[[ONE]] : (!cir.ptr<!rec_HasOperatorsOutline>, !s64i) -> !cir.ptr<!rec_HasOperatorsOutline>
 // CHECK-NEXT: cir.store {{.*}} %[[NEXT_ITEM]], %[[TEMP_ITR]] : !cir.ptr<!rec_HasOperatorsOutline>, !cir.ptr<!cir.ptr<!rec_HasOperatorsOutline>>
 // CHECK-NEXT: cir.yield
 // CHECK-NEXT: } while {
@@ -425,7 +425,7 @@ void acc_loop() {
 // CHECK-NEXT: cir.store {{.*}} %[[ONE]], %[[GET_B]] : !cir.bool, !cir.ptr<!cir.bool>
 //
 // CHECK-NEXT: %[[ONE_IDX:.*]] = cir.const #cir.int<1> : !s64i
-// CHECK-NEXT: %[[NEXT_ELT:.*]] = cir.ptr_stride %[[DECAY]], %[[ONE_IDX]] : (!cir.ptr<!rec_HasOperatorsOutline>, !s64i) -> !cir.ptr<!rec_HasOperatorsOutline>
+// CHECK-NEXT: %[[NEXT_ELT:.*]] = cir.ptr_stride inbounds %[[DECAY]], %[[ONE_IDX]] : (!cir.ptr<!rec_HasOperatorsOutline>, !s64i) -> !cir.ptr<!rec_HasOperatorsOutline>
 // CHECK-NEXT: %[[GET_I:.*]] = cir.get_member %[[NEXT_ELT]][0] {name = "i"} : !cir.ptr<!rec_HasOperatorsOutline> -> !cir.ptr<!s32i>
 // CHECK-NEXT: %[[ONE:.*]] = cir.const #cir.int<1> : !s32i
 // CHECK-NEXT: cir.store {{.*}} %[[ONE]], %[[GET_I]] : !s32i, !cir.ptr<!s32i>
@@ -443,7 +443,7 @@ void acc_loop() {
 // CHECK-NEXT: cir.store {{.*}} %[[ONE]], %[[GET_B]] : !cir.bool, !cir.ptr<!cir.bool>
 //
 // CHECK-NEXT: %[[TWO_IDX:.*]] = cir.const #cir.int<2> : !s64i
-// CHECK-NEXT: %[[NEXT_ELT:.*]] = cir.ptr_stride %[[DECAY]], %[[TWO_IDX]] : (!cir.ptr<!rec_HasOperatorsOutline>, !s64i) -> !cir.ptr<!rec_HasOperatorsOutline>
+// CHECK-NEXT: %[[NEXT_ELT:.*]] = cir.ptr_stride inbounds %[[DECAY]], %[[TWO_IDX]] : (!cir.ptr<!rec_HasOperatorsOutline>, !s64i) -> !cir.ptr<!rec_HasOperatorsOutline>
 // CHECK-NEXT: %[[GET_I:.*]] = cir.get_member %[[NEXT_ELT]][0] {name = "i"} : !cir.ptr<!rec_HasOperatorsOutline> -> !cir.ptr<!s32i>
 // CHECK-NEXT: %[[ONE:.*]] = cir.const #cir.int<1> : !s32i
 // CHECK-NEXT: cir.store {{.*}} %[[ONE]], %[[GET_I]] : !s32i, !cir.ptr<!s32i>
@@ -462,7 +462,7 @@ void acc_loop() {
 //
 //
 // CHECK-NEXT: %[[THREE_IDX:.*]] = cir.const #cir.int<3> : !s64i
-// CHECK-NEXT: %[[NEXT_ELT:.*]] = cir.ptr_stride %[[DECAY]], %[[THREE_IDX]] : (!cir.ptr<!rec_HasOperatorsOutline>, !s64i) -> !cir.ptr<!rec_HasOperatorsOutline>
+// CHECK-NEXT: %[[NEXT_ELT:.*]] = cir.ptr_stride inbounds %[[DECAY]], %[[THREE_IDX]] : (!cir.ptr<!rec_HasOperatorsOutline>, !s64i) -> !cir.ptr<!rec_HasOperatorsOutline>
 // CHECK-NEXT: %[[GET_I:.*]] = cir.get_member %[[NEXT_ELT]][0] {name = "i"} : !cir.ptr<!rec_HasOperatorsOutline> -> !cir.ptr<!s32i>
 // CHECK-NEXT: %[[ONE:.*]] = cir.const #cir.int<1> : !s32i
 // CHECK-NEXT: cir.store {{.*}} %[[ONE]], %[[GET_I]] : !s32i, !cir.ptr<!s32i>
@@ -480,7 +480,7 @@ void acc_loop() {
 // CHECK-NEXT: cir.store {{.*}} %[[ONE]], %[[GET_B]] : !cir.bool, !cir.ptr<!cir.bool>
 //
 // CHECK-NEXT: %[[FOUR_IDX:.*]] = cir.const #cir.int<4> : !s64i
-// CHECK-NEXT: %[[NEXT_ELT:.*]] = cir.ptr_stride %[[DECAY]], %[[FOUR_IDX]] : (!cir.ptr<!rec_HasOperatorsOutline>, !s64i) -> !cir.ptr<!rec_HasOperatorsOutline>
+// CHECK-NEXT: %[[NEXT_ELT:.*]] = cir.ptr_stride inbounds %[[DECAY]], %[[FOUR_IDX]] : (!cir.ptr<!rec_HasOperatorsOutline>, !s64i) -> !cir.ptr<!rec_HasOperatorsOutline>
 // CHECK-NEXT: %[[GET_I:.*]] = cir.get_member %[[NEXT_ELT]][0] {name = "i"} : !cir.ptr<!rec_HasOperatorsOutline> -> !cir.ptr<!s32i>
 // CHECK-NEXT: %[[ONE:.*]] = cir.const #cir.int<1> : !s32i
 // CHECK-NEXT: cir.store {{.*}} %[[ONE]], %[[GET_I]] : !s32i, !cir.ptr<!s32i>
@@ -568,7 +568,7 @@ void acc_loop() {
 // CHECK-NEXT: cir.store {{.*}} %[[LEAST]], %[[GET_B]] : !cir.bool, !cir.ptr<!cir.bool>
 //
 // CHECK-NEXT: %[[LEAST_IDX:.*]] = cir.const #cir.int<1> : !s64i
-// CHECK-NEXT: %[[NEXT_ELT:.*]] = cir.ptr_stride %[[DECAY]], %[[LEAST_IDX]] : (!cir.ptr<!rec_HasOperatorsOutline>, !s64i) -> !cir.ptr<!rec_HasOperatorsOutline>
+// CHECK-NEXT: %[[NEXT_ELT:.*]] = cir.ptr_stride inbounds %[[DECAY]], %[[LEAST_IDX]] : (!cir.ptr<!rec_HasOperatorsOutline>, !s64i) -> !cir.ptr<!rec_HasOperatorsOutline>
 // CHECK-NEXT: %[[GET_I:.*]] = cir.get_member %[[NEXT_ELT]][0] {name = "i"} : !cir.ptr<!rec_HasOperatorsOutline> -> !cir.ptr<!s32i>
 // CHECK-NEXT: %[[LEAST:.*]] = cir.const #cir.int<-2147483648> : !s32i
 // CHECK-NEXT: cir.store {{.*}} %[[LEAST]], %[[GET_I]] : !s32i, !cir.ptr<!s32i>
@@ -586,7 +586,7 @@ void acc_loop() {
 // CHECK-NEXT: cir.store {{.*}} %[[LEAST]], %[[GET_B]] : !cir.bool, !cir.ptr<!cir.bool>
 //
 // CHECK-NEXT: %[[TWO_IDX:.*]] = cir.const #cir.int<2> : !s64i
-// CHECK-NEXT: %[[NEXT_ELT:.*]] = cir.ptr_stride %[[DECAY]], %[[TWO_IDX]] : (!cir.ptr<!rec_HasOperatorsOutline>, !s64i) -> !cir.ptr<!rec_HasOperatorsOutline>
+// CHECK-NEXT: %[[NEXT_ELT:.*]] = cir.ptr_stride inbounds %[[DECAY]], %[[TWO_IDX]] : (!cir.ptr<!rec_HasOperatorsOutline>, !s64i) -> !cir.ptr<!rec_HasOperatorsOutline>
 // CHECK-NEXT: %[[GET_I:.*]] = cir.get_member %[[NEXT_ELT]][0] {name = "i"} : !cir.ptr<!rec_HasOperatorsOutline> -> !cir.ptr<!s32i>
 // CHECK-NEXT: %[[LEAST:.*]] = cir.const #cir.int<-2147483648> : !s32i
 // CHECK-NEXT: cir.store {{.*}} %[[LEAST]], %[[GET_I]] : !s32i, !cir.ptr<!s32i>
@@ -605,7 +605,7 @@ void acc_loop() {
 //
 //
 // CHECK-NEXT: %[[THREE_IDX:.*]] = cir.const #cir.int<3> : !s64i
-// CHECK-NEXT: %[[NEXT_ELT:.*]] = cir.ptr_stride %[[DECAY]], %[[THREE_IDX]] : (!cir.ptr<!rec_HasOperatorsOutline>, !s64i) -> !cir.ptr<!rec_HasOperatorsOutline>
+// CHECK-NEXT: %[[NEXT_ELT:.*]] = cir.ptr_stride inbounds %[[DECAY]], %[[THREE_IDX]] : (!cir.ptr<!rec_HasOperatorsOutline>, !s64i) -> !cir.ptr<!rec_HasOperatorsOutline>
 // CHECK-NEXT: %[[GET_I:.*]] = cir.get_member %[[NEXT_ELT]][0] {name = "i"} : !cir.ptr<!rec_HasOperatorsOutline> -> !cir.ptr<!s32i>
 // CHECK-NEXT: %[[LEAST:.*]] = cir.const #cir.int<-2147483648> : !s32i
 // CHECK-NEXT: cir.store {{.*}} %[[LEAST]], %[[GET_I]] : !s32i, !cir.ptr<!s32i>
@@ -623,7 +623,7 @@ void acc_loop() {
 // CHECK-NEXT: cir.store {{.*}} %[[LEAST]], %[[GET_B]] : !cir.bool, !cir.ptr<!cir.bool>
 //
 // CHECK-NEXT: %[[FOUR_IDX:.*]] = cir.const #cir.int<4> : !s64i
-// CHECK-NEXT: %[[NEXT_ELT:.*]] = cir.ptr_stride %[[DECAY]], %[[FOUR_IDX]] : (!cir.ptr<!rec_HasOperatorsOutline>, !s64i) -> !cir.ptr<!rec_HasOperatorsOutline>
+// CHECK-NEXT: %[[NEXT_ELT:.*]] = cir.ptr_stride inbounds %[[DECAY]], %[[FOUR_IDX]] : (!cir.ptr<!rec_HasOperatorsOutline>, !s64i) -> !cir.ptr<!rec_HasOperatorsOutline>
 // CHECK-NEXT: %[[GET_I:.*]] = cir.get_member %[[NEXT_ELT]][0] {name = "i"} : !cir.ptr<!rec_HasOperatorsOutline> -> !cir.ptr<!s32i>
 // CHECK-NEXT: %[[LEAST:.*]] = cir.const #cir.int<-2147483648> : !s32i
 // CHECK-NEXT: cir.store {{.*}} %[[LEAST]], %[[GET_I]] : !s32i, !cir.ptr<!s32i>
@@ -717,7 +717,7 @@ void acc_loop() {
 // CHECK-NEXT: cir.store {{.*}} %[[LARGEST]], %[[GET_B]] : !cir.bool, !cir.ptr<!cir.bool>
 //
 // CHECK-NEXT: %[[LARGEST_IDX:.*]] = cir.const #cir.int<1> : !s64i
-// CHECK-NEXT: %[[NEXT_ELT:.*]] = cir.ptr_stride %[[DECAY]], %[[LARGEST_IDX]] : (!cir.ptr<!rec_HasOperatorsOutline>, !s64i) -> !cir.ptr<!rec_HasOperatorsOutline>
+// CHECK-NEXT: %[[NEXT_ELT:.*]] = cir.ptr_stride inbounds %[[DECAY]], %[[LARGEST_IDX]] : (!cir.ptr<!rec_HasOperatorsOutline>, !s64i) -> !cir.ptr<!rec_HasOperatorsOutline>
 // CHECK-NEXT: %[[GET_I:.*]] = cir.get_member %[[NEXT_ELT]][0] {name = "i"} : !cir.ptr<!rec_HasOperatorsOutline> -> !cir.ptr<!s32i>
 // CHECK-NEXT: %[[LARGEST:.*]] = cir.const #cir.int<2147483647> : !s32i
 // CHECK-NEXT: cir.store {{.*}} %[[LARGEST]], %[[GET_I]] : !s32i, !cir.ptr<!s32i>
@@ -735,7 +735,7 @@ void acc_loop() {
 // CHECK-NEXT: cir.store {{.*}} %[[LARGEST]], %[[GET_B]] : !cir.bool, !cir.ptr<!cir.bool>
 //
 // CHECK-NEXT: %[[TWO_IDX:.*]] = cir.const #cir.int<2> : !s64i
-// CHECK-NEXT: %[[NEXT_ELT:.*]] = cir.ptr_stride %[[DECAY]], %[[TWO_IDX]] : (!cir.ptr<!rec_HasOperatorsOutline>, !s64i) -> !cir.ptr<!rec_HasOperatorsOutline>
+// CHECK-NEXT: %[[NEXT_ELT:.*]] = cir.ptr_stride inbounds %[[DECAY]], %[[TWO_IDX]] : (!cir.ptr<!rec_HasOperatorsOutline>, !s64i) -> !cir.ptr<!rec_HasOperatorsOutline>
 // CHECK-NEXT: %[[GET_I:.*]] = cir.get_member %[[NEXT_ELT]][0] {name = "i"} : !cir.ptr<!rec_HasOperatorsOutline> -> !cir.ptr<!s32i>
 // CHECK-NEXT: %[[LARGEST:.*]] = cir.const #cir.int<2147483647> : !s32i
 // CHECK-NEXT: cir.store {{.*}} %[[LARGEST]], %[[GET_I]] : !s32i, !cir.ptr<!s32i>
@@ -754,7 +754,7 @@ void acc_loop() {
 //
 //
 // CHECK-NEXT: %[[THREE_IDX:.*]] = cir.const #cir.int<3> : !s64i
-// CHECK-NEXT: %[[NEXT_ELT:.*]] = cir.ptr_stride %[[DECAY]], %[[THREE_IDX]] : (!cir.ptr<!rec_HasOperatorsOutline>, !s64i) -> !cir.ptr<!rec_HasOperatorsOutline>
+// CHECK-NEXT: %[[NEXT_ELT:.*]] = cir.ptr_stride inbounds %[[DECAY]], %[[THREE_IDX]] : (!cir.ptr<!rec_HasOperatorsOutline>, !s64i) -> !cir.ptr<!rec_HasOperatorsOutline>
 // CHECK-NEXT: %[[GET_I:.*]] = cir.get_member %[[NEXT_ELT]][0] {name = "i"} : !cir.ptr<!rec_HasOperatorsOutline> -> !cir.ptr<!s32i>
 // CHECK-NEXT: %[[LARGEST:.*]] = cir.const #cir.int<2147483647> : !s32i
 // CHECK-NEXT: cir.store {{.*}} %[[LARGEST]], %[[GET_I]] : !s32i, !cir.ptr<!s32i>
@@ -772,7 +772,7 @@ void acc_loop() {
 // CHECK-NEXT: cir.store {{.*}} %[[LARGEST]], %[[GET_B]] : !cir.bool, !cir.ptr<!cir.bool>
 //
 // CHECK-NEXT: %[[FOUR_IDX:.*]] = cir.const #cir.int<4> : !s64i
-// CHECK-NEXT: %[[NEXT_ELT:.*]] = cir.ptr_stride %[[DECAY]], %[[FOUR_IDX]] : (!cir.ptr<!rec_HasOperatorsOutline>, !s64i) -> !cir.ptr<!rec_HasOperatorsOutline>
+// CHECK-NEXT: %[[NEXT_ELT:.*]] = cir.ptr_stride inbounds %[[DECAY]], %[[FOUR_IDX]] : (!cir.ptr<!rec_HasOperatorsOutline>, !s64i) -> !cir.ptr<!rec_HasOperatorsOutline>
 // CHECK-NEXT: %[[GET_I:.*]] = cir.get_member %[[NEXT_ELT]][0] {name = "i"} : !cir.ptr<!rec_HasOperatorsOutline> -> !cir.ptr<!s32i>
 // CHECK-NEXT: %[[LARGEST:.*]] = cir.const #cir.int<2147483647> : !s32i
 // CHECK-NEXT: cir.store {{.*}} %[[LARGEST]], %[[GET_I]] : !s32i, !cir.ptr<!s32i>
@@ -866,7 +866,7 @@ void acc_loop() {
 // CHECK-NEXT: cir.store {{.*}} %[[ALL_ONES]], %[[GET_B]] : !cir.bool, !cir.ptr<!cir.bool>
 //
 // CHECK-NEXT: %[[ALL_ONES_IDX:.*]] = cir.const #cir.int<1> : !s64i
-// CHECK-NEXT: %[[NEXT_ELT:.*]] = cir.ptr_stride %[[DECAY]], %[[ALL_ONES_IDX]] : (!cir.ptr<!rec_HasOperatorsOutline>, !s64i) -> !cir.ptr<!rec_HasOperatorsOutline>
+// CHECK-NEXT: %[[NEXT_ELT:.*]] = cir.ptr_stride inbounds %[[DECAY]], %[[ALL_ONES_IDX]] : (!cir.ptr<!rec_HasOperatorsOutline>, !s64i) -> !cir.ptr<!rec_HasOperatorsOutline>
 // CHECK-NEXT: %[[GET_I:.*]] = cir.get_member %[[NEXT_ELT]][0] {name = "i"} : !cir.ptr<!rec_HasOperatorsOutline> -> !cir.ptr<!s32i>
 // CHECK-NEXT: %[[ALL_ONES:.*]] = cir.const #cir.int<-1> : !s32i
 // CHECK-NEXT: cir.store {{.*}} %[[ALL_ONES]], %[[GET_I]] : !s32i, !cir.ptr<!s32i>
@@ -884,7 +884,7 @@ void acc_loop() {
 // CHECK-NEXT: cir.store {{.*}} %[[ALL_ONES]], %[[GET_B]] : !cir.bool, !cir.ptr<!cir.bool>
 //
 // CHECK-NEXT: %[[TWO_IDX:.*]] = cir.const #cir.int<2> : !s64i
-// CHECK-NEXT: %[[NEXT_ELT:.*]] = cir.ptr_stride %[[DECAY]], %[[TWO_IDX]] : (!cir.ptr<!rec_HasOperatorsOutline>, !s64i) -> !cir.ptr<!rec_HasOperatorsOutline>
+// CHECK-NEXT: %[[NEXT_ELT:.*]] = cir.ptr_stride inbounds %[[DECAY]], %[[TWO_IDX]] : (!cir.ptr<!rec_HasOperatorsOutline>, !s64i) -> !cir.ptr<!rec_HasOperatorsOutline>
 // CHECK-NEXT: %[[GET_I:.*]] = cir.get_member %[[NEXT_ELT]][0] {name = "i"} : !cir.ptr<!rec_HasOperatorsOutline> -> !cir.ptr<!s32i>
 // CHECK-NEXT: %[[ALL_ONES:.*]] = cir.const #cir.int<-1> : !s32i
 // CHECK-NEXT: cir.store {{.*}} %[[ALL_ONES]], %[[GET_I]] : !s32i, !cir.ptr<!s32i>
@@ -903,7 +903,7 @@ void acc_loop() {
 //
 //
 // CHECK-NEXT: %[[THREE_IDX:.*]] = cir.const #cir.int<3> : !s64i
-// CHECK-NEXT: %[[NEXT_ELT:.*]] = cir.ptr_stride %[[DECAY]], %[[THREE_IDX]] : (!cir.ptr<!rec_HasOperatorsOutline>, !s64i) -> !cir.ptr<!rec_HasOperatorsOutline>
+// CHECK-NEXT: %[[NEXT_ELT:.*]] = cir.ptr_stride inbounds %[[DECAY]], %[[THREE_IDX]] : (!cir.ptr<!rec_HasOperatorsOutline>, !s64i) -> !cir.ptr<!rec_HasOperatorsOutline>
 // CHECK-NEXT: %[[GET_I:.*]] = cir.get_member %[[NEXT_ELT]][0] {name = "i"} : !cir.ptr<!rec_HasOperatorsOutline> -> !cir.ptr<!s32i>
 // CHECK-NEXT: %[[ALL_ONES:.*]] = cir.const #cir.int<-1> : !s32i
 // CHECK-NEXT: cir.store {{.*}} %[[ALL_ONES]], %[[GET_I]] : !s32i, !cir.ptr<!s32i>
@@ -921,7 +921,7 @@ void acc_loop() {
 // CHECK-NEXT: cir.store {{.*}} %[[ALL_ONES]], %[[GET_B]] : !cir.bool, !cir.ptr<!cir.bool>
 //
 // CHECK-NEXT: %[[FOUR_IDX:.*]] = cir.const #cir.int<4> : !s64i
-// CHECK-NEXT: %[[NEXT_ELT:.*]] = cir.ptr_stride %[[DECAY]], %[[FOUR_IDX]] : (!cir.ptr<!rec_HasOperatorsOutline>, !s64i) -> !cir.ptr<!rec_HasOperatorsOutline>
+// CHECK-NEXT: %[[NEXT_ELT:.*]] = cir.ptr_stride inbounds %[[DECAY]], %[[FOUR_IDX]] : (!cir.ptr<!rec_HasOperatorsOutline>, !s64i) -> !cir.ptr<!rec_HasOperatorsOutline>
 // CHECK-NEXT: %[[GET_I:.*]] = cir.get_member %[[NEXT_ELT]][0] {name = "i"} : !cir.ptr<!rec_HasOperatorsOutline> -> !cir.ptr<!s32i>
 // CHECK-NEXT: %[[ALL_ONES:.*]] = cir.const #cir.int<-1> : !s32i
 // CHECK-NEXT: cir.store {{.*}} %[[ALL_ONES]], %[[GET_I]] : !s32i, !cir.ptr<!s32i>
@@ -995,7 +995,7 @@ void acc_loop() {
 // CHECK-NEXT: %[[DECAY:.*]] = cir.cast array_to_ptrdecay %[[ALLOCA]] : !cir.ptr<!cir.array<!rec_HasOperatorsOutline x 5>> -> !cir.ptr<!rec_HasOperatorsOutline>
 // CHECK-NEXT: cir.store {{.*}} %[[DECAY]], %[[TEMP_ITR]] : !cir.ptr<!rec_HasOperatorsOutline>, !cir.ptr<!cir.ptr<!rec_HasOperatorsOutline>>
 // CHECK-NEXT: %[[LAST_IDX:.*]] = cir.const #cir.int<5> : !s64i
-// CHECK-NEXT: %[[END_ITR:.*]] = cir.ptr_stride %[[DECAY]], %[[LAST_IDX]] : (!cir.ptr<!rec_HasOperatorsOutline>, !s64i) -> !cir.ptr<!rec_HasOperatorsOutline>
+// CHECK-NEXT: %[[END_ITR:.*]] = cir.ptr_stride inbounds %[[DECAY]], %[[LAST_IDX]] : (!cir.ptr<!rec_HasOperatorsOutline>, !s64i) -> !cir.ptr<!rec_HasOperatorsOutline>
 // CHECK-NEXT: cir.do {
 // CHECK-NEXT: %[[TEMP_LOAD:.*]] = cir.load {{.*}} %[[TEMP_ITR]] : !cir.ptr<!cir.ptr<!rec_HasOperatorsOutline>>, !cir.ptr<!rec_HasOperatorsOutline>
 // CHECK-NEXT: %[[GET_I:.*]] = cir.get_member %[[TEMP_LOAD]][0] {name = "i"} : !cir.ptr<!rec_HasOperatorsOutline> -> !cir.ptr<!s32i>
@@ -1015,7 +1015,7 @@ void acc_loop() {
 // CHECK-NEXT: cir.store {{.*}} %[[ZERO]], %[[GET_B]] : !cir.bool, !cir.ptr<!cir.bool>
 //
 // CHECK-NEXT: %[[ONE:.*]] = cir.const #cir.int<1> : !s64i
-// CHECK-NEXT: %[[NEXT_ITEM:.*]] = cir.ptr_stride %[[TEMP_LOAD]], %[[ONE]] : (!cir.ptr<!rec_HasOperatorsOutline>, !s64i) -> !cir.ptr<!rec_HasOperatorsOutline>
+// CHECK-NEXT: %[[NEXT_ITEM:.*]] = cir.ptr_stride inbounds %[[TEMP_LOAD]], %[[ONE]] : (!cir.ptr<!rec_HasOperatorsOutline>, !s64i) -> !cir.ptr<!rec_HasOperatorsOutline>
 // CHECK-NEXT: cir.store {{.*}} %[[NEXT_ITEM]], %[[TEMP_ITR]] : !cir.ptr<!rec_HasOperatorsOutline>, !cir.ptr<!cir.ptr<!rec_HasOperatorsOutline>>
 // CHECK-NEXT: cir.yield
 // CHECK-NEXT: } while {
@@ -1080,7 +1080,7 @@ void acc_loop() {
 // CHECK-NEXT: %[[DECAY:.*]] = cir.cast array_to_ptrdecay %[[ALLOCA]] : !cir.ptr<!cir.array<!rec_HasOperatorsOutline x 5>> -> !cir.ptr<!rec_HasOperatorsOutline>
 // CHECK-NEXT: cir.store {{.*}} %[[DECAY]], %[[TEMP_ITR]] : !cir.ptr<!rec_HasOperatorsOutline>, !cir.ptr<!cir.ptr<!rec_HasOperatorsOutline>>
 // CHECK-NEXT: %[[LAST_IDX:.*]] = cir.const #cir.int<5> : !s64i
-// CHECK-NEXT: %[[END_ITR:.*]] = cir.ptr_stride %[[DECAY]], %[[LAST_IDX]] : (!cir.ptr<!rec_HasOperatorsOutline>, !s64i) -> !cir.ptr<!rec_HasOperatorsOutline>
+// CHECK-NEXT: %[[END_ITR:.*]] = cir.ptr_stride inbounds %[[DECAY]], %[[LAST_IDX]] : (!cir.ptr<!rec_HasOperatorsOutline>, !s64i) -> !cir.ptr<!rec_HasOperatorsOutline>
 // CHECK-NEXT: cir.do {
 // CHECK-NEXT: %[[TEMP_LOAD:.*]] = cir.load {{.*}} %[[TEMP_ITR]] : !cir.ptr<!cir.ptr<!rec_HasOperatorsOutline>>, !cir.ptr<!rec_HasOperatorsOutline>
 // CHECK-NEXT: %[[GET_I:.*]] = cir.get_member %[[TEMP_LOAD]][0] {name = "i"} : !cir.ptr<!rec_HasOperatorsOutline> -> !cir.ptr<!s32i>
@@ -1099,7 +1099,7 @@ void acc_loop() {
 // CHECK-NEXT: %[[ZERO:.*]] = cir.const #false
 // CHECK-NEXT: cir.store {{.*}} %[[ZERO]], %[[GET_B]] : !cir.bool, !cir.ptr<!cir.bool>
 // CHECK-NEXT: %[[ONE:.*]] = cir.const #cir.int<1> : !s64i
-// CHECK-NEXT: %[[NEXT_ITEM:.*]] = cir.ptr_stride %[[TEMP_LOAD]], %[[ONE]] : (!cir.ptr<!rec_HasOperatorsOutline>, !s64i) -> !cir.ptr<!rec_HasOperatorsOutline>
+// CHECK-NEXT: %[[NEXT_ITEM:.*]] = cir.ptr_stride inbounds %[[TEMP_LOAD]], %[[ONE]] : (!cir.ptr<!rec_HasOperatorsOutline>, !s64i) -> !cir.ptr<!rec_HasOperatorsOutline>
 // CHECK-NEXT: cir.store {{.*}} %[[NEXT_ITEM]], %[[TEMP_ITR]] : !cir.ptr<!rec_HasOperatorsOutline>, !cir.ptr<!cir.ptr<!rec_HasOperatorsOutline>>
 // CHECK-NEXT: cir.yield
 // CHECK-NEXT: } while {
@@ -1179,7 +1179,7 @@ void acc_loop() {
 // CHECK-NEXT: cir.store {{.*}} %[[ONE]], %[[GET_B]] : !cir.bool, !cir.ptr<!cir.bool>
 //
 // CHECK-NEXT: %[[ONE_IDX:.*]] = cir.const #cir.int<1> : !s64i
-// CHECK-NEXT: %[[NEXT_ELT:.*]] = cir.ptr_stride %[[DECAY]], %[[ONE_IDX]] : (!cir.ptr<!rec_HasOperatorsOutline>, !s64i) -> !cir.ptr<!rec_HasOperatorsOutline>
+// CHECK-NEXT: %[[NEXT_ELT:.*]] = cir.ptr_stride inbounds %[[DECAY]], %[[ONE_IDX]] : (!cir.ptr<!rec_HasOperatorsOutline>, !s64i) -> !cir.ptr<!rec_HasOperatorsOutline>
 // CHECK-NEXT: %[[GET_I:.*]] = cir.get_member %[[NEXT_ELT]][0] {name = "i"} : !cir.ptr<!rec_HasOperatorsOutline> -> !cir.ptr<!s32i>
 // CHECK-NEXT: %[[ONE:.*]] = cir.const #cir.int<1> : !s32i
 // CHECK-NEXT: cir.store {{.*}} %[[ONE]], %[[GET_I]] : !s32i, !cir.ptr<!s32i>
@@ -1197,7 +1197,7 @@ void acc_loop() {
 // CHECK-NEXT: cir.store {{.*}} %[[ONE]], %[[GET_B]] : !cir.bool, !cir.ptr<!cir.bool>
 //
 // CHECK-NEXT: %[[TWO_IDX:.*]] = cir.const #cir.int<2> : !s64i
-// CHECK-NEXT: %[[NEXT_ELT:.*]] = cir.ptr_stride %[[DECAY]], %[[TWO_IDX]] : (!cir.ptr<!rec_HasOperatorsOutline>, !s64i) -> !cir.ptr<!rec_HasOperatorsOutline>
+// CHECK-NEXT: %[[NEXT_ELT:.*]] = cir.ptr_stride inbounds %[[DECAY]], %[[TWO_IDX]] : (!cir.ptr<!rec_HasOperatorsOutline>, !s64i) -> !cir.ptr<!rec_HasOperatorsOutline>
 // CHECK-NEXT: %[[GET_I:.*]] = cir.get_member %[[NEXT_ELT]][0] {name = "i"} : !cir.ptr<!rec_HasOperatorsOutline> -> !cir.ptr<!s32i>
 // CHECK-NEXT: %[[ONE:.*]] = cir.const #cir.int<1> : !s32i
 // CHECK-NEXT: cir.store {{.*}} %[[ONE]], %[[GET_I]] : !s32i, !cir.ptr<!s32i>
@@ -1216,7 +1216,7 @@ void acc_loop() {
 //
 //
 // CHECK-NEXT: %[[THREE_IDX:.*]] = cir.const #cir.int<3> : !s64i
-// CHECK-NEXT: %[[NEXT_ELT:.*]] = cir.ptr_stride %[[DECAY]], %[[THREE_IDX]] : (!cir.ptr<!rec_HasOperatorsOutline>, !s64i) -> !cir.ptr<!rec_HasOperatorsOutline>
+// CHECK-NEXT: %[[NEXT_ELT:.*]] = cir.ptr_stride inbounds %[[DECAY]], %[[THREE_IDX]] : (!cir.ptr<!rec_HasOperatorsOutline>, !s64i) -> !cir.ptr<!rec_HasOperatorsOutline>
 // CHECK-NEXT: %[[GET_I:.*]] = cir.get_member %[[NEXT_ELT]][0] {name = "i"} : !cir.ptr<!rec_HasOperatorsOutline> -> !cir.ptr<!s32i>
 // CHECK-NEXT: %[[ONE:.*]] = cir.const #cir.int<1> : !s32i
 // CHECK-NEXT: cir.store {{.*}} %[[ONE]], %[[GET_I]] : !s32i, !cir.ptr<!s32i>
@@ -1234,7 +1234,7 @@ void acc_loop() {
 // CHECK-NEXT: cir.store {{.*}} %[[ONE]], %[[GET_B]] : !cir.bool, !cir.ptr<!cir.bool>
 //
 // CHECK-NEXT: %[[FOUR_IDX:.*]] = cir.const #cir.int<4> : !s64i
-// CHECK-NEXT: %[[NEXT_ELT:.*]] = cir.ptr_stride %[[DECAY]], %[[FOUR_IDX]] : (!cir.ptr<!rec_HasOperatorsOutline>, !s64i) -> !cir.ptr<!rec_HasOperatorsOutline>
+// CHECK-NEXT: %[[NEXT_ELT:.*]] = cir.ptr_stride inbounds %[[DECAY]], %[[FOUR_IDX]] : (!cir.ptr<!rec_HasOperatorsOutline>, !s64i) -> !cir.ptr<!rec_HasOperatorsOutline>
 // CHECK-NEXT: %[[GET_I:.*]] = cir.get_member %[[NEXT_ELT]][0] {name = "i"} : !cir.ptr<!rec_HasOperatorsOutline> -> !cir.ptr<!s32i>
 // CHECK-NEXT: %[[ONE:.*]] = cir.const #cir.int<1> : !s32i
 // CHECK-NEXT: cir.store {{.*}} %[[ONE]], %[[GET_I]] : !s32i, !cir.ptr<!s32i>
@@ -1311,7 +1311,7 @@ void acc_loop() {
 // CHECK-NEXT: %[[DECAY:.*]] = cir.cast array_to_ptrdecay %[[ALLOCA]] : !cir.ptr<!cir.array<!rec_HasOperatorsOutline x 5>> -> !cir.ptr<!rec_HasOperatorsOutline>
 // CHECK-NEXT: cir.store {{.*}} %[[DECAY]], %[[TEMP_ITR]] : !cir.ptr<!rec_HasOperatorsOutline>, !cir.ptr<!cir.ptr<!rec_HasOperatorsOutline>>
 // CHECK-NEXT: %[[LAST_IDX:.*]] = cir.const #cir.int<5> : !s64i
-// CHECK-NEXT: %[[END_ITR:.*]] = cir.ptr_stride %[[DECAY]], %[[LAST_IDX]] : (!cir.ptr<!rec_HasOperatorsOutline>, !s64i) -> !cir.ptr<!rec_HasOperatorsOutline>
+// CHECK-NEXT: %[[END_ITR:.*]] = cir.ptr_stride inbounds %[[DECAY]], %[[LAST_IDX]] : (!cir.ptr<!rec_HasOperatorsOutline>, !s64i) -> !cir.ptr<!rec_HasOperatorsOutline>
 // CHECK-NEXT: cir.do {
 // CHECK-NEXT: %[[TEMP_LOAD:.*]] = cir.load {{.*}} %[[TEMP_ITR]] : !cir.ptr<!cir.ptr<!rec_HasOperatorsOutline>>, !cir.ptr<!rec_HasOperatorsOutline>
 // CHECK-NEXT: %[[GET_I:.*]] = cir.get_member %[[TEMP_LOAD]][0] {name = "i"} : !cir.ptr<!rec_HasOperatorsOutline> -> !cir.ptr<!s32i>
@@ -1331,7 +1331,7 @@ void acc_loop() {
 // CHECK-NEXT: cir.store {{.*}} %[[ZERO]], %[[GET_B]] : !cir.bool, !cir.ptr<!cir.bool>
 //
 // CHECK-NEXT: %[[ONE:.*]] = cir.const #cir.int<1> : !s64i
-// CHECK-NEXT: %[[NEXT_ITEM:.*]] = cir.ptr_stride %[[TEMP_LOAD]], %[[ONE]] : (!cir.ptr<!rec_HasOperatorsOutline>, !s64i) -> !cir.ptr<!rec_HasOperatorsOutline>
+// CHECK-NEXT: %[[NEXT_ITEM:.*]] = cir.ptr_stride inbounds %[[TEMP_LOAD]], %[[ONE]] : (!cir.ptr<!rec_HasOperatorsOutline>, !s64i) -> !cir.ptr<!rec_HasOperatorsOutline>
 // CHECK-NEXT: cir.store {{.*}} %[[NEXT_ITEM]], %[[TEMP_ITR]] : !cir.ptr<!rec_HasOperatorsOutline>, !cir.ptr<!cir.ptr<!rec_HasOperatorsOutline>>
 // CHECK-NEXT: cir.yield
 // CHECK-NEXT: } while {

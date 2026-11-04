@@ -43,7 +43,7 @@ D* x;
 // LLVM-NEXT:  [[VTABLE:%.*]] = load ptr, ptr [[OBJ]]
 // LLVM-NEXT:  [[VBASE_OFFSET_PTR:%.*]] = getelementptr i8, ptr [[VTABLE]], i64 -32
 // LLVM-NEXT:  [[VBASE_OFFSET:%.*]] = load i64, ptr [[VBASE_OFFSET_PTR]]
-// LLVM-NEXT:  [[ADD_PTR:%.*]] = getelementptr i8, ptr [[OBJ]], i64 [[VBASE_OFFSET]]
+// LLVM-NEXT:  [[ADD_PTR:%.*]] = getelementptr inbounds i8, ptr [[OBJ]], i64 [[VBASE_OFFSET]]
 // LLVM:       phi ptr
 // LLVM:       ret ptr
 
@@ -71,7 +71,7 @@ A* a() { return x; }
 // LLVM-NEXT:  [[VTABLE:%.*]] = load ptr, ptr [[OBJ]]
 // LLVM-NEXT:  [[VBASE_OFFSET_PTR:%.*]] = getelementptr i8, ptr [[VTABLE]], i64 -40
 // LLVM-NEXT:  [[VBASE_OFFSET:%.*]] = load i64, ptr [[VBASE_OFFSET_PTR]]
-// LLVM-NEXT:  [[ADD_PTR:%.*]] = getelementptr i8, ptr [[OBJ]], i64 [[VBASE_OFFSET]]
+// LLVM-NEXT:  [[ADD_PTR:%.*]] = getelementptr inbounds i8, ptr [[OBJ]], i64 [[VBASE_OFFSET]]
 // LLVM:       phi ptr
 // LLVM:       ret ptr
 
@@ -101,7 +101,7 @@ B* b() { return x; }
 // LLVM-NEXT:  [[VBASE_OFFSET_PTR:%.*]] = getelementptr i8, ptr [[VTABLE]], i64 -48
 // LLVM-NEXT:  [[VBASE_OFFSET:%.*]] = load i64, ptr [[VBASE_OFFSET_PTR]]
 // LLVM-NEXT:  [[OFFSET:%.*]] = add i64 [[VBASE_OFFSET]], 16
-// LLVM-NEXT:  [[ADD_PTR:%.*]] = getelementptr i8, ptr [[OBJ]], i64 [[OFFSET]]
+// LLVM-NEXT:  [[ADD_PTR:%.*]] = getelementptr inbounds i8, ptr [[OBJ]], i64 [[OFFSET]]
 // LLVM:       phi ptr
 // LLVM:       ret ptr
 
@@ -143,7 +143,7 @@ F* y;
 // LLVM-NEXT:  [[VBASE_OFFSET_PTR:%.*]] = getelementptr i8, ptr [[VTABLE]], i64 -48
 // LLVM-NEXT:  [[VBASE_OFFSET:%.*]] = load i64, ptr [[VBASE_OFFSET_PTR]]
 // LLVM-NEXT:  [[OFFSET:%.*]] = add i64 [[VBASE_OFFSET]], 16
-// LLVM-NEXT:  [[ADD_PTR:%.*]] = getelementptr i8, ptr [[OBJ]], i64 [[OFFSET]]
+// LLVM-NEXT:  [[ADD_PTR:%.*]] = getelementptr inbounds i8, ptr [[OBJ]], i64 [[OFFSET]]
 // LLVM:       phi ptr
 // LLVM:       ret ptr
 
