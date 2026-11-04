@@ -39,8 +39,10 @@ void CIRCXXABI::readArrayCookie(mlir::Location loc, mlir::Value elementPtr,
 
   mlir::Value negCookieSize = cir::ConstantOp::create(
       builder, loc, cir::IntAttr::get(ptrDiffTy, -cookieSize.getQuantity()));
+  // The cookie is part of the allocation that the array is in.
   mlir::Value allocBytePtr =
-      cir::PtrStrideOp::create(builder, loc, u8PtrTy, bytePtr, negCookieSize);
+      cir::PtrStrideOp::create(builder, loc, u8PtrTy, bytePtr, negCookieSize,
+                               /*inbounds=*/true, /*no_unsigned_wrap=*/false);
 
   allocPtr = cir::CastOp::create(builder, loc, voidPtrTy,
                                  cir::CastKind::bitcast, allocBytePtr);

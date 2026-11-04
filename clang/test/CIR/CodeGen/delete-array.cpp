@@ -126,7 +126,7 @@ void test_sized_array_delete(SizedArrayDelete *ptr) {
 // CIR:   cir.if %[[NOT_NULL]] {
 // CIR:     %[[BYTE_PTR:.*]] = cir.cast bitcast %[[PTR]] : !cir.ptr<!rec_SizedArrayDelete> -> !cir.ptr<!u8i>
 // CIR:     %[[NEG_COOKIE:.*]] = cir.const #cir.int<-8> : !s64i
-// CIR:     %[[ALLOC_BYTE_PTR:.*]] = cir.ptr_stride %[[BYTE_PTR]], %[[NEG_COOKIE]] : (!cir.ptr<!u8i>, !s64i) -> !cir.ptr<!u8i>
+// CIR:     %[[ALLOC_BYTE_PTR:.*]] = cir.ptr_stride inbounds %[[BYTE_PTR]], %[[NEG_COOKIE]] : (!cir.ptr<!u8i>, !s64i) -> !cir.ptr<!u8i>
 // CIR:     %[[VOID_PTR:.*]] = cir.cast bitcast %[[ALLOC_BYTE_PTR]] : !cir.ptr<!u8i> -> !cir.ptr<!void>
 // CIR:     %[[COOKIE_PTR:.*]] = cir.cast bitcast %[[ALLOC_BYTE_PTR]] : !cir.ptr<!u8i> -> !cir.ptr<!u64i>
 // CIR:     %[[NUM_ELEM:.*]] = cir.load align(4) %[[COOKIE_PTR]] : !cir.ptr<!u64i>, !u64i
@@ -147,7 +147,7 @@ void test_sized_array_delete(SizedArrayDelete *ptr) {
 // LLVM:   %[[NOT_NULL:.*]] = icmp ne ptr %[[PTR]], null
 // LLVM:   br i1 %[[NOT_NULL]], label %[[DELETE_NOTNULL:.*]], label %[[DELETE_END:.*]]
 // LLVM: [[DELETE_NOTNULL]]:
-// LLVM:   %[[ALLOC_PTR:.*]] = getelementptr i8, ptr %[[PTR]], i64 -8
+// LLVM:   %[[ALLOC_PTR:.*]] = getelementptr inbounds i8, ptr %[[PTR]], i64 -8
 // LLVM:   %[[NUM_ELEM:.*]] = load i64, ptr %[[ALLOC_PTR]], align 4
 // LLVM:   %[[ARRAY_SIZE:.*]] = mul i64 4, %[[NUM_ELEM]]
 // LLVM:   %[[TOTAL_SIZE:.*]] = add i64 %[[ARRAY_SIZE]], 8
@@ -197,7 +197,7 @@ void test_delete_array_destructed(Destructed *ptr) {
 // Read the array cookie.
 // CIR:     %[[BYTE_PTR:.*]] = cir.cast bitcast %[[PTR]] : !cir.ptr<!rec_Destructed> -> !cir.ptr<!u8i>
 // CIR:     %[[NEG_COOKIE:.*]] = cir.const #cir.int<-8> : !s64i
-// CIR:     %[[ALLOC_BYTE_PTR:.*]] = cir.ptr_stride %[[BYTE_PTR]], %[[NEG_COOKIE]] : (!cir.ptr<!u8i>, !s64i) -> !cir.ptr<!u8i>
+// CIR:     %[[ALLOC_BYTE_PTR:.*]] = cir.ptr_stride inbounds %[[BYTE_PTR]], %[[NEG_COOKIE]] : (!cir.ptr<!u8i>, !s64i) -> !cir.ptr<!u8i>
 // CIR:     %[[VOID_PTR:.*]] = cir.cast bitcast %[[ALLOC_BYTE_PTR]] : !cir.ptr<!u8i> -> !cir.ptr<!void>
 // CIR:     %[[COOKIE_PTR:.*]] = cir.cast bitcast %[[ALLOC_BYTE_PTR]] : !cir.ptr<!u8i> -> !cir.ptr<!u64i>
 // CIR:     %[[NUM_ELEM:.*]] = cir.load{{.*}} %[[COOKIE_PTR]] : !cir.ptr<!u64i>, !u64i
@@ -238,7 +238,7 @@ void test_delete_array_destructed(Destructed *ptr) {
 // LLVM:   %[[NOT_NULL:.*]] = icmp ne ptr %[[PTR]], null
 // LLVM:   br i1 %[[NOT_NULL]], label %[[DELETE_NOTNULL:.*]], label %[[DONE:.*]]
 // LLVM: [[DELETE_NOTNULL]]:
-// LLVM:   %[[ALLOC_PTR:.*]] = getelementptr i8, ptr %[[PTR]], i64 -8
+// LLVM:   %[[ALLOC_PTR:.*]] = getelementptr inbounds i8, ptr %[[PTR]], i64 -8
 // LLVM:   %[[NUM_ELEM:.*]] = load i64, ptr %[[ALLOC_PTR]], align 4
 // LLVM:   %[[ARR_END:.*]] = getelementptr inbounds %struct.Destructed, ptr %[[PTR]], i64 %[[NUM_ELEM]]
 // LLVM:   %[[NOT_EMPTY:.*]] = icmp ne ptr %[[ARR_END]], %[[PTR]]

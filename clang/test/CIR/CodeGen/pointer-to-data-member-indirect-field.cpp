@@ -55,7 +55,7 @@ int test_use(A &a, int A::*member) {
 // CIR-AFTER: %[[LOAD_ARG:.*]] = cir.load %{{.*}} : !cir.ptr<!cir.ptr<!rec_A>>, !cir.ptr<!rec_A>
 // CIR-AFTER: %[[LOAD_PTR:.*]] = cir.load align(8) %{{.*}} : !cir.ptr<!s64i>, !s64i
 // CIR-AFTER: %[[ARG_TO_CHARPTR:.*]] = cir.cast bitcast %[[LOAD_ARG]] : !cir.ptr<!rec_A> -> !cir.ptr<!s8i>
-// CIR-AFTER: %[[OFFSET:.*]] = cir.ptr_stride %[[ARG_TO_CHARPTR]], %[[LOAD_PTR]] : (!cir.ptr<!s8i>, !s64i) -> !cir.ptr<!s8i>
+// CIR-AFTER: %[[OFFSET:.*]] = cir.ptr_stride inbounds %[[ARG_TO_CHARPTR]], %[[LOAD_PTR]] : (!cir.ptr<!s8i>, !s64i) -> !cir.ptr<!s8i>
 // CIR-AFTER: cir.cast bitcast %[[OFFSET]] : !cir.ptr<!s8i> -> !cir.ptr<!s32i>
 
 // LLVM-LABEL: define {{.*}}i32 @_Z8test_useR1AMS_i(

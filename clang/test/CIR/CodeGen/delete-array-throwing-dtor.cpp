@@ -49,7 +49,7 @@ void test_delete_array_throwing_dtor(ThrowingDtor *ptr) {
 //
 // CIR:     %[[BYTE_PTR:.*]] = cir.cast bitcast %[[PTR]] : !cir.ptr<!rec_ThrowingDtor> -> !cir.ptr<!u8i>
 // CIR:     %[[NEG_COOKIE:.*]] = cir.const #cir.int<-8> : !s64i
-// CIR:     %[[ALLOC_BYTE_PTR:.*]] = cir.ptr_stride %[[BYTE_PTR]], %[[NEG_COOKIE]]
+// CIR:     %[[ALLOC_BYTE_PTR:.*]] = cir.ptr_stride inbounds %[[BYTE_PTR]], %[[NEG_COOKIE]]
 // CIR:     %[[VOID_PTR:.*]] = cir.cast bitcast %[[ALLOC_BYTE_PTR]] : !cir.ptr<!u8i> -> !cir.ptr<!void>
 // CIR:     %[[COOKIE_PTR:.*]] = cir.cast bitcast %[[ALLOC_BYTE_PTR]] : !cir.ptr<!u8i> -> !cir.ptr<!u64i>
 // CIR:     %[[NUM_ELEM:.*]] = cir.load{{.*}} %[[COOKIE_PTR]]
@@ -115,7 +115,7 @@ void test_delete_array_throwing_dtor(ThrowingDtor *ptr) {
 //
 // Cookie read and is-empty check.
 // LLVM: [[NOTNULL]]:
-// LLVM:   %[[ALLOC_PTR:.*]] = getelementptr i8, ptr %[[PTR]], i64 -8
+// LLVM:   %[[ALLOC_PTR:.*]] = getelementptr inbounds i8, ptr %[[PTR]], i64 -8
 // LLVM:   %[[NUM_ELEM:.*]] = load i64, ptr %[[ALLOC_PTR]]
 // LLVM:   %[[ARR_END:.*]] = getelementptr inbounds %struct.ThrowingDtor, ptr %[[PTR]], i64 %[[NUM_ELEM]]
 // LLVM:   %[[NOT_EMPTY:.*]] = icmp ne ptr %[[ARR_END]], %[[PTR]]

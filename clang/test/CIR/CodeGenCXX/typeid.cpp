@@ -46,7 +46,7 @@ extern A &a;
 //
 // CIR-AFTER: %[[NEG_ONE:.*]] = cir.const #cir.int<-1> : !s64i
 // CIR-AFTER: %[[VPTR_CAST:.*]] = cir.cast bitcast %[[LOAD_VPTR]] : !cir.vptr -> !cir.ptr<!cir.ptr<!rec_std3A3Atype_info>>
-// CIR-AFTER: %[[GET_TYPEINFO:.*]] = cir.ptr_stride %[[VPTR_CAST]], %[[NEG_ONE]] : (!cir.ptr<!cir.ptr<!rec_std3A3Atype_info>>, !s64i) -> !cir.ptr<!cir.ptr<!rec_std3A3Atype_info>>
+// CIR-AFTER: %[[GET_TYPEINFO:.*]] = cir.ptr_stride inbounds %[[VPTR_CAST]], %[[NEG_ONE]] : (!cir.ptr<!cir.ptr<!rec_std3A3Atype_info>>, !s64i) -> !cir.ptr<!cir.ptr<!rec_std3A3Atype_info>>
 //
 // CIR-NEXT: %[[LOAD_TYPEINFO:.*]] = cir.load align(8) %[[GET_TYPEINFO]] : !cir.ptr<!cir.ptr<!rec_std3A3Atype_info>>, !cir.ptr<!rec_std3A3Atype_info>
 // CIR-NEXT: cir.store align(8) %[[LOAD_TYPEINFO]], %[[GET_GLOB_ATI]] : !cir.ptr<!rec_std3A3Atype_info>, !cir.ptr<!cir.ptr<!rec_std3A3Atype_info>>
@@ -83,7 +83,7 @@ const char *f(void *arg) {
     //
     // CIR-AFTER: %[[NEG_ONE:.*]] = cir.const #cir.int<-1> : !s64i
     // CIR-AFTER: %[[VPTR_CAST:.*]] = cir.cast bitcast %[[LOAD_VPTR]] : !cir.vptr -> !cir.ptr<!cir.ptr<!rec_std3A3Atype_info>>
-    // CIR-AFTER: %[[GET_TYPEINFO:.*]] = cir.ptr_stride %[[VPTR_CAST]], %[[NEG_ONE]] : (!cir.ptr<!cir.ptr<!rec_std3A3Atype_info>>, !s64i) -> !cir.ptr<!cir.ptr<!rec_std3A3Atype_info>>
+    // CIR-AFTER: %[[GET_TYPEINFO:.*]] = cir.ptr_stride inbounds %[[VPTR_CAST]], %[[NEG_ONE]] : (!cir.ptr<!cir.ptr<!rec_std3A3Atype_info>>, !s64i) -> !cir.ptr<!cir.ptr<!rec_std3A3Atype_info>>
     //
     // CIR-NEXT: %[[LOAD_TYPEINFO:.*]] = cir.load{{.*}}%[[GET_TYPEINFO]]
     // CIR-NEXT: cir.call @_ZNKSt9type_info4nameEv(%[[LOAD_TYPEINFO]])

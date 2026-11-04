@@ -324,8 +324,10 @@ mlir::Operation *LowerItaniumCXXABI::lowerGetRuntimeMember(
       mlir::cast<cir::PointerType>(op.getAddr().getType()).getAddrSpace());
   auto objectBytesPtr = cir::CastOp::create(
       builder, op.getLoc(), bytePtrTy, cir::CastKind::bitcast, op.getAddr());
+  // A data member is within the object, as in classic codegen.
   auto memberBytesPtr = cir::PtrStrideOp::create(
-      builder, op.getLoc(), bytePtrTy, objectBytesPtr, loweredMember);
+      builder, op.getLoc(), bytePtrTy, objectBytesPtr, loweredMember,
+      /*inbounds=*/true, /*no_unsigned_wrap=*/false);
   return cir::CastOp::create(builder, op.getLoc(), op.getType(),
                              cir::CastKind::bitcast, memberBytesPtr);
 }
@@ -375,8 +377,10 @@ void LowerItaniumCXXABI::lowerGetMethod(
                             op.getObject().getType().getAddrSpace());
   mlir::Value thisVoidPtr = cir::CastOp::create(
       locBuilder, thisVoidPtrTy, cir::CastKind::bitcast, loweredObjectPtr);
-  thisArg =
-      cir::PtrStrideOp::create(locBuilder, thisVoidPtrTy, thisVoidPtr, adj);
+  // The adjusted this points into the same object, as in classic codegen.
+  thisArg = cir::PtrStrideOp::create(locBuilder, thisVoidPtrTy, thisVoidPtr,
+                                     adj, /*inbounds=*/true,
+                                     /*no_unsigned_wrap=*/false);
 
   // Load the "ptr" field of the member function pointer and determine if it
   // points to a virtual function.
@@ -825,8 +829,11 @@ static mlir::Value buildDynamicCastToVoidAfterNullCheck(
                                                cir::CastKind::bitcast, vptr);
   mlir::Value minusTwo =
       cir::ConstantOp::create(builder, loc, cir::IntAttr::get(i64Ty, -2));
+  // The offset-to-top slot and the most derived object are within the vtable
+  // and the object, as in classic codegen.
   mlir::Value offsetToTopSlotPtr = cir::PtrStrideOp::create(
-      builder, loc, vtableElemPtrTy, elementPtr, minusTwo);
+      builder, loc, vtableElemPtrTy, elementPtr, minusTwo, /*inbounds=*/true,
+      /*no_unsigned_wrap=*/false);
   mlir::Value offsetToTop = cir::LoadOp::create(
       builder, loc, offsetToTopSlotPtr,
       /*isDeref=*/false,
@@ -846,7 +853,8 @@ static mlir::Value buildDynamicCastToVoidAfterNullCheck(
   mlir::Value srcBytePtr = cir::CastOp::create(
       builder, loc, u8PtrTy, cir::CastKind::bitcast, op.getSrc());
   auto dstBytePtr =
-      cir::PtrStrideOp::create(builder, loc, u8PtrTy, srcBytePtr, offsetToTop);
+      cir::PtrStrideOp::create(builder, loc, u8PtrTy, srcBytePtr, offsetToTop,
+                               /*inbounds=*/true, /*no_unsigned_wrap=*/false);
   // Cast the result to a void*.
   return cir::CastOp::create(builder, loc, op.getType(), cir::CastKind::bitcast,
                              dstBytePtr);
@@ -895,8 +903,10 @@ LowerItaniumCXXABI::lowerVTableGetTypeInfo(cir::VTableGetTypeInfoOp op,
   auto vptrCast = cir::CastOp::create(builder, loc, op.getType(),
                                       cir::CastKind::bitcast, op.getVptr());
 
+  // The type_info slot is within the vtable, as in classic codegen.
   return cir::PtrStrideOp::create(builder, loc, vptrCast.getType(), vptrCast,
-                                  offset)
+                                  offset, /*inbounds=*/true,
+                                  /*no_unsigned_wrap=*/false)
       .getResult();
 }
 
@@ -929,7 +939,8 @@ mlir::Value LowerItaniumCXXABI::readArrayCookieImpl(
     mlir::Value offsetVal = cir::ConstantOp::create(
         builder, loc, cir::IntAttr::get(ptrDiffTy, countOffset.getQuantity()));
     countBytePtr =
-        cir::PtrStrideOp::create(builder, loc, u8PtrTy, allocPtr, offsetVal);
+        cir::PtrStrideOp::create(builder, loc, u8PtrTy, allocPtr, offsetVal,
+                                 /*inbounds=*/true, /*no_unsigned_wrap=*/false);
     countAlignment = cookieAlignment.alignmentAtOffset(countOffset);
   }
 

@@ -71,9 +71,9 @@ int f(int i) {
         // CIR: %[[A:.*]] = cir.get_global @[[F_A]] : !cir.ptr<!rec_A>
         // CIR: %[[N:.*]] = cir.load{{.*}} %{{.*}} : !cir.ptr<!s64i>, !s64i
         // CIR: %[[A_BYTE_PTR:.*]] = cir.cast bitcast %[[A]] : !cir.ptr<!rec_A> -> !cir.ptr<!s8i>
-        // CIR: cir.ptr_stride %[[A_BYTE_PTR]], %[[N]] : (!cir.ptr<!s8i>, !s64i) -> !cir.ptr<!s8i>
+        // CIR: cir.ptr_stride inbounds %[[A_BYTE_PTR]], %[[N]] : (!cir.ptr<!s8i>, !s64i) -> !cir.ptr<!s8i>
 
-        // LLVM: getelementptr i8, ptr @[[F_A]], i64 %{{.*}}
+        // LLVM: getelementptr inbounds i8, ptr @[[F_A]], i64 %{{.*}}
         // LLVM: load i32
 
         // OGCG: getelementptr inbounds i8, ptr @__const._Z1fi.a, i64 %{{.*}}

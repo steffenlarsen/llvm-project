@@ -25,9 +25,9 @@ void test_delete_array(OverAligned *a) {
 // CIR-AFTER: %[[LOAD_A:.*]] = cir.load align(8) %[[A]] : !cir.ptr<!cir.ptr<!rec_OverAligned>>, !cir.ptr<!rec_OverAligned>
 // CIR-AFTER:   %[[CAST_TO_BYTES:.*]] = cir.cast bitcast %[[LOAD_A]] : !cir.ptr<!rec_OverAligned> -> !cir.ptr<!u8i>
 // CIR-AFTER:   %[[COOKIE_OFFSET:.*]] = cir.const #cir.int<-64> : !s64i
-// CIR-AFTER:   %[[BEFORE_COOKIE:.*]] = cir.ptr_stride %[[CAST_TO_BYTES]], %[[COOKIE_OFFSET]] : (!cir.ptr<!u8i>, !s64i) -> !cir.ptr<!u8i>
+// CIR-AFTER:   %[[BEFORE_COOKIE:.*]] = cir.ptr_stride inbounds %[[CAST_TO_BYTES]], %[[COOKIE_OFFSET]] : (!cir.ptr<!u8i>, !s64i) -> !cir.ptr<!u8i>
 // CIR-AFTER:   %[[COUNT_OFFSET:.*]] = cir.const #cir.int<56> : !s64i
-// CIR-AFTER:   %[[AFTER_COUNT:.*]] = cir.ptr_stride %[[BEFORE_COOKIE]], %[[COUNT_OFFSET]] : (!cir.ptr<!u8i>, !s64i) -> !cir.ptr<!u8i>
+// CIR-AFTER:   %[[AFTER_COUNT:.*]] = cir.ptr_stride inbounds %[[BEFORE_COOKIE]], %[[COUNT_OFFSET]] : (!cir.ptr<!u8i>, !s64i) -> !cir.ptr<!u8i>
 // CIR-AFTER:   %[[TO_SIZE:.*]] = cir.cast bitcast %[[AFTER_COUNT]] : !cir.ptr<!u8i> -> !cir.ptr<!u64i>
 // CIR-AFTER:   %[[LOAD_VAL:.*]] = cir.load align(8) %[[TO_SIZE]] : !cir.ptr<!u64i>, !u64i
 // CIR-AFTER:   } cleanup normal {
@@ -64,9 +64,9 @@ void test_not_aligned_new_but_need_cookie(NotAlignedNewButNeedCookie *a) {
 // CIR-AFTER: %[[LOAD_A:.*]] = cir.load align(8) %[[A]] : !cir.ptr<!cir.ptr<!rec_NotAlignedNewButNeedCookie>>, !cir.ptr<!rec_NotAlignedNewButNeedCookie>
 // CIR-AFTER: %[[CAST_TO_BYTES:.*]] = cir.cast bitcast %[[LOAD_A]] : !cir.ptr<!rec_NotAlignedNewButNeedCookie> -> !cir.ptr<!u8i>
 // CIR-AFTER: %[[COOKIE_OFFSET:.*]] = cir.const #cir.int<-16> : !s64i
-// CIR-AFTER: %[[BEFORE_COOKIE:.*]] = cir.ptr_stride %[[CAST_TO_BYTES]], %[[COOKIE_OFFSET]] : (!cir.ptr<!u8i>, !s64i) -> !cir.ptr<!u8i>
+// CIR-AFTER: %[[BEFORE_COOKIE:.*]] = cir.ptr_stride inbounds %[[CAST_TO_BYTES]], %[[COOKIE_OFFSET]] : (!cir.ptr<!u8i>, !s64i) -> !cir.ptr<!u8i>
 // CIR-AFTER: %[[COUNT_OFFSET:.*]] = cir.const #cir.int<8> : !s64i
-// CIR-AFTER: %[[AFTER_COUNT:.*]] = cir.ptr_stride %[[BEFORE_COOKIE]], %[[COUNT_OFFSET]] : (!cir.ptr<!u8i>, !s64i) -> !cir.ptr<!u8i>
+// CIR-AFTER: %[[AFTER_COUNT:.*]] = cir.ptr_stride inbounds %[[BEFORE_COOKIE]], %[[COUNT_OFFSET]] : (!cir.ptr<!u8i>, !s64i) -> !cir.ptr<!u8i>
 // CIR-AFTER: %[[TO_SIZE:.*]] = cir.cast bitcast %[[AFTER_COUNT]] : !cir.ptr<!u8i> -> !cir.ptr<!u64i>
 // CIR-AFTER: %[[LOAD_VAL:.*]] = cir.load align(8) %[[TO_SIZE]] : !cir.ptr<!u64i>, !u64i
 // CIR-AFTER: } cleanup normal {

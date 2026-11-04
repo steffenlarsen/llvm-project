@@ -58,7 +58,7 @@ void test_class_size_align(OverAlignedTyClassDeleteCookie *p) { delete[] p; }
 // CIR-LABEL: cir.func no_inline dso_local @_Z21test_class_size_alignP30OverAlignedTyClassDeleteCookie(
 // CIR-BEFORE: cir.delete_array %{{.*}} : !cir.ptr<!rec_OverAlignedTyClassDeleteCookie> delete_fn(@_ZN30OverAlignedTyClassDeleteCookiedaEPvmSt11align_val_t) delete_params<size = true, alignment = 128> element_align(128)
 // CIR-AFTER:      %[[ORIG_PTR:.*]] = cir.cast bitcast %{{.*}} : !cir.ptr<!rec_OverAlignedTyClassDeleteCookie> -> !cir.ptr<!u8i>
-// CIR-AFTER:      %[[COOKIE_STRIDE:.*]] = cir.ptr_stride %[[ORIG_PTR]], %{{.*}} : (!cir.ptr<!u8i>, !s64i) -> !cir.ptr<!u8i>
+// CIR-AFTER:      %[[COOKIE_STRIDE:.*]] = cir.ptr_stride inbounds %[[ORIG_PTR]], %{{.*}} : (!cir.ptr<!u8i>, !s64i) -> !cir.ptr<!u8i>
 // CIR-AFTER-NEXT: %[[PTR:.*]] = cir.cast bitcast %[[COOKIE_STRIDE]] : !cir.ptr<!u8i> -> !cir.ptr<!void>
 // CIR-AFTER:      cir.cleanup.scope {
 // CIR-AFTER-NEXT:   cir.yield
@@ -82,7 +82,7 @@ void test_class_align_only_dtor(OverAlignedTyClassDeleteDtor *p) { delete[] p; }
 // CIR-LABEL: cir.func no_inline dso_local @_Z26test_class_align_only_dtorP28OverAlignedTyClassDeleteDtor(
 // CIR-BEFORE: cir.delete_array %{{.*}} : !cir.ptr<!rec_OverAlignedTyClassDeleteDtor> delete_fn(@_ZN28OverAlignedTyClassDeleteDtordaEPvSt11align_val_t) delete_params<alignment = 128> element_dtor(@_ZN28OverAlignedTyClassDeleteDtorD1Ev) element_align(128)
 // CIR-AFTER:      %[[ORIG_PTR:.*]] = cir.cast bitcast %{{.*}} : !cir.ptr<!rec_OverAlignedTyClassDeleteDtor> -> !cir.ptr<!u8i>
-// CIR-AFTER:      %[[COOKIE_STRIDE:.*]] = cir.ptr_stride %[[ORIG_PTR]], %{{.*}} : (!cir.ptr<!u8i>, !s64i) -> !cir.ptr<!u8i>
+// CIR-AFTER:      %[[COOKIE_STRIDE:.*]] = cir.ptr_stride inbounds %[[ORIG_PTR]], %{{.*}} : (!cir.ptr<!u8i>, !s64i) -> !cir.ptr<!u8i>
 // CIR-AFTER-NEXT: %[[PTR:.*]] = cir.cast bitcast %[[COOKIE_STRIDE]] : !cir.ptr<!u8i> -> !cir.ptr<!void>
 // CIR-AFTER:      cir.cleanup.scope {
 // CIR-AFTER:        cir.if %{{.*}} {
@@ -116,7 +116,7 @@ void test_class_size_align_dtor(OverAlignedTyClassDeleteCookieDtor *p) {
 // CIR-LABEL: cir.func no_inline dso_local @_Z26test_class_size_align_dtorP34OverAlignedTyClassDeleteCookieDtor(
 // CIR-BEFORE: cir.delete_array %{{.*}} : !cir.ptr<!rec_OverAlignedTyClassDeleteCookieDtor> delete_fn(@_ZN34OverAlignedTyClassDeleteCookieDtordaEPvmSt11align_val_t) delete_params<size = true, alignment = 128> element_dtor(@_ZN34OverAlignedTyClassDeleteCookieDtorD1Ev) element_align(128)
 // CIR-AFTER:      %[[ORIG_PTR:.*]] = cir.cast bitcast %{{.*}} : !cir.ptr<!rec_OverAlignedTyClassDeleteCookieDtor> -> !cir.ptr<!u8i>
-// CIR-AFTER:      %[[COOKIE_STRIDE:.*]] = cir.ptr_stride %[[ORIG_PTR]], %{{.*}} : (!cir.ptr<!u8i>, !s64i) -> !cir.ptr<!u8i>
+// CIR-AFTER:      %[[COOKIE_STRIDE:.*]] = cir.ptr_stride inbounds %[[ORIG_PTR]], %{{.*}} : (!cir.ptr<!u8i>, !s64i) -> !cir.ptr<!u8i>
 // CIR-AFTER-NEXT: %[[PTR:.*]] = cir.cast bitcast %[[COOKIE_STRIDE]] : !cir.ptr<!u8i> -> !cir.ptr<!void>
 // CIR-AFTER:      cir.cleanup.scope {
 // CIR-AFTER:       cir.if %{{.*}} {

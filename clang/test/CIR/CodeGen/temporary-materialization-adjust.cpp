@@ -31,7 +31,7 @@ void MemPtr(int Base::*mp) {
 // CIR: %[[R_ALLOCA:.*]] = cir.alloca "r" align(8) init const : !cir.ptr<!cir.ptr<!s32i>>
 // CIR: %[[ARG_LOAD:.*]] = cir.load align(8) %[[MP_ALLOCA]] : !cir.ptr<!s64i>, !s64i
 // CIR: %[[TEMP_LOAD:.*]] = cir.cast bitcast %[[TEMP_ALLOCA]] : !cir.ptr<!rec_Base> -> !cir.ptr<!s8i>
-// CIR: %[[STRIDE:.*]] = cir.ptr_stride %[[TEMP_LOAD]], %[[ARG_LOAD]] : (!cir.ptr<!s8i>, !s64i) -> !cir.ptr<!s8i>
+// CIR: %[[STRIDE:.*]] = cir.ptr_stride inbounds %[[TEMP_LOAD]], %[[ARG_LOAD]] : (!cir.ptr<!s8i>, !s64i) -> !cir.ptr<!s8i>
 // CIR: %[[TO_INT:.*]] = cir.cast bitcast %[[STRIDE:.*]] : !cir.ptr<!s8i> -> !cir.ptr<!s32i>
 // CIR: cir.store align(8) %[[TO_INT]], %[[R_ALLOCA]] : !cir.ptr<!s32i>, !cir.ptr<!cir.ptr<!s32i>>
 

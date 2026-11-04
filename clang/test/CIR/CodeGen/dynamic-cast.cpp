@@ -118,10 +118,10 @@ void *ptr_cast_to_complete(Base *ptr) {
 // CIR-AFTER-NEXT:     %[[VPTR:.*]] = cir.load {{.*}} %[[VPTR_PTR]] : !cir.ptr<!cir.vptr>, !cir.vptr
 // CIR-AFTER-NEXT:     %[[ELEM_PTR:.*]] = cir.cast bitcast %[[VPTR]] : !cir.vptr -> !cir.ptr<!s64i>
 // CIR-AFTER-NEXT:     %[[MINUS_TWO:.*]] = cir.const #cir.int<-2> : !s64i
-// CIR-AFTER-NEXT:     %[[BASE_OFFSET_PTR:.*]] = cir.ptr_stride %[[ELEM_PTR]], %[[MINUS_TWO]] : (!cir.ptr<!s64i>, !s64i) -> !cir.ptr<!s64i>
+// CIR-AFTER-NEXT:     %[[BASE_OFFSET_PTR:.*]] = cir.ptr_stride inbounds %[[ELEM_PTR]], %[[MINUS_TWO]] : (!cir.ptr<!s64i>, !s64i) -> !cir.ptr<!s64i>
 // CIR-AFTER-NEXT:     %[[BASE_OFFSET:.*]] = cir.load{{.*}} %[[BASE_OFFSET_PTR]] : !cir.ptr<!s64i>, !s64i
 // CIR-AFTER-NEXT:     %[[SRC_BYTES_PTR:.*]] = cir.cast bitcast %[[SRC]] : !cir.ptr<!rec_Base> -> !cir.ptr<!u8i>
-// CIR-AFTER-NEXT:     %[[DST_BYTES_PTR:.*]] = cir.ptr_stride %[[SRC_BYTES_PTR]], %[[BASE_OFFSET]] : (!cir.ptr<!u8i>, !s64i) -> !cir.ptr<!u8i>
+// CIR-AFTER-NEXT:     %[[DST_BYTES_PTR:.*]] = cir.ptr_stride inbounds %[[SRC_BYTES_PTR]], %[[BASE_OFFSET]] : (!cir.ptr<!u8i>, !s64i) -> !cir.ptr<!u8i>
 // CIR-AFTER-NEXT:     %[[CASTED_PTR:.*]] = cir.cast bitcast %[[DST_BYTES_PTR]] : !cir.ptr<!u8i> -> !cir.ptr<!void>
 // CIR-AFTER-NEXT:     cir.yield %[[CASTED_PTR]] : !cir.ptr<!void>
 // CIR-AFTER-NEXT:   }, false {
@@ -135,9 +135,9 @@ void *ptr_cast_to_complete(Base *ptr) {
 // LLVM:   br i1 %[[IS_NOT_NULL]], label %[[NOT_NULL:.*]], label %[[NULL:.*]]
 // LLVM: [[NOT_NULL]]:
 // LLVM:   %[[VPTR:.*]] = load ptr, ptr %[[PTR]]
-// LLVM:   %[[BASE_OFFSET_PTR:.*]] = getelementptr i64, ptr %7, i64 -2
+// LLVM:   %[[BASE_OFFSET_PTR:.*]] = getelementptr inbounds i64, ptr %7, i64 -2
 // LLVM:   %[[BASE_OFFSET:.*]] = load i64, ptr %[[BASE_OFFSET_PTR]]
-// LLVM:   %[[RESULT:.*]] = getelementptr i8, ptr %[[PTR]], i64 %[[BASE_OFFSET]]
+// LLVM:   %[[RESULT:.*]] = getelementptr inbounds i8, ptr %[[PTR]], i64 %[[BASE_OFFSET]]
 // LLVM:   br label %[[DONE:.*]]
 // LLVM: [[NULL]]:
 // LLVM:   br label %[[DONE]]

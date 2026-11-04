@@ -170,7 +170,7 @@ int test2(const Point &pt, int Point::*member) {
 // CIR-AFTER:        %[[PT:.*]] = cir.load %[[PT_ADDR]] : !cir.ptr<!cir.ptr<!rec_Point>>, !cir.ptr<!rec_Point>
 // CIR-AFTER:        %[[MEMBER:.*]] = cir.load{{.*}} %[[MEMBER_ADDR]] : !cir.ptr<!s64i>, !s64i
 // CIR-AFTER:        %[[BYTE_PTR:.*]] = cir.cast bitcast %[[PT]] : !cir.ptr<!rec_Point> -> !cir.ptr<!s8i>
-// CIR-AFTER:        %[[BYTE_PTR_STRIDE:.*]] = cir.ptr_stride %[[BYTE_PTR]], %[[MEMBER]] : (!cir.ptr<!s8i>, !s64i) -> !cir.ptr<!s8i>
+// CIR-AFTER:        %[[BYTE_PTR_STRIDE:.*]] = cir.ptr_stride inbounds %[[BYTE_PTR]], %[[MEMBER]] : (!cir.ptr<!s8i>, !s64i) -> !cir.ptr<!s8i>
 // CIR-AFTER:        %[[VAL_ADDR:.*]] = cir.cast bitcast %[[BYTE_PTR_STRIDE]] : !cir.ptr<!s8i> -> !cir.ptr<!s32i>
 // CIR-AFTER:        %[[VAL:.*]] = cir.load{{.*}} %[[VAL_ADDR]] : !cir.ptr<!s32i>, !s32i
 // CIR-AFTER:        cir.store %[[VAL]], %[[RETVAL_ADDR]] : !s32i, !cir.ptr<!s32i>
@@ -185,7 +185,7 @@ int test2(const Point &pt, int Point::*member) {
 // LLVM:   store i64 %[[MEMBER_ARG]], ptr %[[MEMBER_ADDR]]
 // LLVM:   %[[PT:.*]] = load ptr, ptr %[[PT_ADDR]]
 // LLVM:   %[[MEMBER:.*]] = load i64, ptr %[[MEMBER_ADDR]]
-// LLVM:   %[[RT_MEMBER:.*]] = getelementptr i8, ptr %[[PT]], i64 %[[MEMBER]]
+// LLVM:   %[[RT_MEMBER:.*]] = getelementptr inbounds i8, ptr %[[PT]], i64 %[[MEMBER]]
 // LLVM:   %[[VAL:.*]] = load i32, ptr %[[RT_MEMBER]]
 // LLVM:   store i32 %[[VAL]], ptr %[[RETVAL_ADDR]]
 // LLVM:   %[[RET:.*]] = load i32, ptr %[[RETVAL_ADDR]]
@@ -233,7 +233,7 @@ int test3(const Point *pt, int Point::*member) {
 // CIR-AFTER:        %[[PT:.*]] = cir.load{{.*}} %[[PT_ADDR]] : !cir.ptr<!cir.ptr<!rec_Point>>, !cir.ptr<!rec_Point>
 // CIR-AFTER:        %[[MEMBER:.*]] = cir.load{{.*}} %[[MEMBER_ADDR]] : !cir.ptr<!s64i>, !s64i
 // CIR-AFTER:        %[[BYTE_PTR:.*]] = cir.cast bitcast %[[PT]] : !cir.ptr<!rec_Point> -> !cir.ptr<!s8i>
-// CIR-AFTER:        %[[BYTE_PTR_STRIDE:.*]] = cir.ptr_stride %[[BYTE_PTR]], %[[MEMBER]] : (!cir.ptr<!s8i>, !s64i) -> !cir.ptr<!s8i>
+// CIR-AFTER:        %[[BYTE_PTR_STRIDE:.*]] = cir.ptr_stride inbounds %[[BYTE_PTR]], %[[MEMBER]] : (!cir.ptr<!s8i>, !s64i) -> !cir.ptr<!s8i>
 // CIR-AFTER:        %[[VAL_ADDR:.*]] = cir.cast bitcast %[[BYTE_PTR_STRIDE]] : !cir.ptr<!s8i> -> !cir.ptr<!s32i>
 // CIR-AFTER:        %[[VAL:.*]] = cir.load{{.*}} %[[VAL_ADDR]] : !cir.ptr<!s32i>, !s32i
 // CIR-AFTER:        cir.store %[[VAL]], %[[RETVAL_ADDR]] : !s32i, !cir.ptr<!s32i>
@@ -248,7 +248,7 @@ int test3(const Point *pt, int Point::*member) {
 // LLVM:   store i64 %[[MEMBER_ARG]], ptr %[[MEMBER_ADDR]]
 // LLVM:   %[[PT:.*]] = load ptr, ptr %[[PT_ADDR]]
 // LLVM:   %[[MEMBER:.*]] = load i64, ptr %[[MEMBER_ADDR]]
-// LLVM:   %[[RT_MEMBER:.*]] = getelementptr i8, ptr %[[PT]], i64 %[[MEMBER]]
+// LLVM:   %[[RT_MEMBER:.*]] = getelementptr inbounds i8, ptr %[[PT]], i64 %[[MEMBER]]
 // LLVM:   %[[VAL:.*]] = load i32, ptr %[[RT_MEMBER]]
 // LLVM:   store i32 %[[VAL]], ptr %[[RETVAL_ADDR]]
 // LLVM:   %[[RET:.*]] = load i32, ptr %[[RETVAL_ADDR]]
@@ -337,7 +337,7 @@ int test5(Incomplete *ic, int Incomplete::*member) {
 // CIR-AFTER:        %[[IC:.*]] = cir.load{{.*}} %[[IC_ADDR]] : !cir.ptr<!cir.ptr<!rec_Incomplete>>, !cir.ptr<!rec_Incomplete>
 // CIR-AFTER:        %[[MEMBER:.*]] = cir.load{{.*}} %[[MEMBER_ADDR]] : !cir.ptr<!s64i>, !s64i
 // CIR-AFTER:        %[[BYTE_PTR:.*]] = cir.cast bitcast %[[IC]] : !cir.ptr<!rec_Incomplete> -> !cir.ptr<!s8i>
-// CIR-AFTER:        %[[BYTE_PTR_STRIDE:.*]] = cir.ptr_stride %[[BYTE_PTR]], %[[MEMBER]] : (!cir.ptr<!s8i>, !s64i) -> !cir.ptr<!s8i>
+// CIR-AFTER:        %[[BYTE_PTR_STRIDE:.*]] = cir.ptr_stride inbounds %[[BYTE_PTR]], %[[MEMBER]] : (!cir.ptr<!s8i>, !s64i) -> !cir.ptr<!s8i>
 // CIR-AFTER:        %[[VAL_ADDR:.*]] = cir.cast bitcast %[[BYTE_PTR_STRIDE]] : !cir.ptr<!s8i> -> !cir.ptr<!s32i>
 // CIR-AFTER:        %[[VAL:.*]] = cir.load{{.*}} %[[VAL_ADDR]] : !cir.ptr<!s32i>, !s32i
 // CIR-AFTER:        cir.store %[[VAL]], %[[RETVAL_ADDR]] : !s32i, !cir.ptr<!s32i>
@@ -352,7 +352,7 @@ int test5(Incomplete *ic, int Incomplete::*member) {
 // LLVM:   store i64 %[[MEMBER_ARG]], ptr %[[MEMBER_ADDR]]
 // LLVM:   %[[IC:.*]] = load ptr, ptr %[[IC_ADDR]]
 // LLVM:   %[[MEMBER:.*]] = load i64, ptr %[[MEMBER_ADDR]]
-// LLVM:   %[[RT_MEMBER:.*]] = getelementptr i8, ptr %[[IC]], i64 %[[MEMBER]]
+// LLVM:   %[[RT_MEMBER:.*]] = getelementptr inbounds i8, ptr %[[IC]], i64 %[[MEMBER]]
 // LLVM:   %[[VAL:.*]] = load i32, ptr %[[RT_MEMBER]]
 // LLVM:   store i32 %[[VAL]], ptr %[[RETVAL_ADDR]]
 // LLVM:   %[[RET:.*]] = load i32, ptr %[[RETVAL_ADDR]]
@@ -470,14 +470,14 @@ void useHasField() {
 // CIR-AFTER: %[[LOAD_ARG:.*]] = cir.load %[[ARG]] : !cir.ptr<!cir.ptr<!rec_hasField>>, !cir.ptr<!rec_hasField>
 // CIR-AFTER: %[[ZERO:.*]] = cir.const #cir.int<0> : !s64i
 // CIR-AFTER: %[[ARG_AS_PTR:.*]] = cir.cast bitcast %[[LOAD_ARG]] : !cir.ptr<!rec_hasField> -> !cir.ptr<!s8i>
-// CIR-AFTER: %[[STRIDE:.*]] = cir.ptr_stride %[[ARG_AS_PTR]], %[[ZERO]] : (!cir.ptr<!s8i>, !s64i) -> !cir.ptr<!s8i>
+// CIR-AFTER: %[[STRIDE:.*]] = cir.ptr_stride inbounds %[[ARG_AS_PTR]], %[[ZERO]] : (!cir.ptr<!s8i>, !s64i) -> !cir.ptr<!s8i>
 // CIR-AFTER: %[[GET_MEM:.*]] = cir.cast bitcast %[[STRIDE]] : !cir.ptr<!s8i> -> !cir.ptr<!u32i>
 // CIR-AFTER: cir.store {{.*}}%[[ONE]], %[[GET_MEM]] : !u32i, !cir.ptr<!u32i>
 
 // LLVM-LABEL: define linkonce_odr void @_Z14changeFieldPtrIXadL_ZN8hasField5fieldEEEEvRS0_
 // LLVM: %[[ARG:.*]] = alloca ptr
 // LLVM: %[[LOAD_ARG:.*]] = load ptr, ptr %[[ARG]]
-// LLVM: %[[GET_MEM:.*]] = getelementptr i8, ptr %[[LOAD_ARG]], i64 0
+// LLVM: %[[GET_MEM:.*]] = getelementptr inbounds i8, ptr %[[LOAD_ARG]], i64 0
 // LLVM: store i32 1, ptr %[[GET_MEM]]
 
 struct Inner {
@@ -519,7 +519,7 @@ Inner test_agg_dot(const Outer &o, Inner Outer::*p) {
 // CIR-AFTER:        %[[O:.*]] = cir.load %[[O_ADDR]] : !cir.ptr<!cir.ptr<!rec_Outer>>, !cir.ptr<!rec_Outer>
 // CIR-AFTER:        %[[P:.*]] = cir.load{{.*}} %[[P_ADDR]] : !cir.ptr<!s64i>, !s64i
 // CIR-AFTER:        %[[BYTE_PTR:.*]] = cir.cast bitcast %[[O]] : !cir.ptr<!rec_Outer> -> !cir.ptr<!s8i>
-// CIR-AFTER:        %[[BYTE_PTR_STRIDE:.*]] = cir.ptr_stride %[[BYTE_PTR]], %[[P]] : (!cir.ptr<!s8i>, !s64i) -> !cir.ptr<!s8i>
+// CIR-AFTER:        %[[BYTE_PTR_STRIDE:.*]] = cir.ptr_stride inbounds %[[BYTE_PTR]], %[[P]] : (!cir.ptr<!s8i>, !s64i) -> !cir.ptr<!s8i>
 // CIR-AFTER:        %[[MEMBER_ADDR:.*]] = cir.cast bitcast %[[BYTE_PTR_STRIDE]] : !cir.ptr<!s8i> -> !cir.ptr<!rec_Inner>
 // CIR-AFTER:        cir.copy %[[MEMBER_ADDR]] align(4) to %[[RETVAL_ADDR]] align(4) : !cir.ptr<!rec_Inner>
 // CIR-AFTER:        cir.return
@@ -532,7 +532,7 @@ Inner test_agg_dot(const Outer &o, Inner Outer::*p) {
 // LLVM:   store i64 %[[P_ARG:.*]], ptr %[[P_ADDR]]
 // LLVM:   %[[O:.*]] = load ptr, ptr %[[O_ADDR]]
 // LLVM:   %[[P:.*]] = load i64, ptr %[[P_ADDR]]
-// LLVM:   %[[RT_MEMBER:.*]] = getelementptr i8, ptr %[[O]], i64 %[[P]]
+// LLVM:   %[[RT_MEMBER:.*]] = getelementptr inbounds i8, ptr %[[O]], i64 %[[P]]
 // LLVM:   call void @llvm.memcpy.p0.p0.i64(ptr align 4 %[[RETVAL_ADDR]], ptr align 4 %[[RT_MEMBER]], i64 8, i1 false)
 // LLVM-NEXT:   %[[RET:.*]] = load i64, ptr %[[RETVAL_ADDR]], align 4
 // LLVM-NEXT:   ret i64 %[[RET]]
@@ -579,7 +579,7 @@ Inner test_agg_arrow(const Outer *o, Inner Outer::*p) {
 // CIR-AFTER:        %[[O:.*]] = cir.load{{.*}} %[[O_ADDR]] : !cir.ptr<!cir.ptr<!rec_Outer>>, !cir.ptr<!rec_Outer>
 // CIR-AFTER:        %[[P:.*]] = cir.load{{.*}} %[[P_ADDR]] : !cir.ptr<!s64i>, !s64i
 // CIR-AFTER:        %[[BYTE_PTR:.*]] = cir.cast bitcast %[[O]] : !cir.ptr<!rec_Outer> -> !cir.ptr<!s8i>
-// CIR-AFTER:        %[[BYTE_PTR_STRIDE:.*]] = cir.ptr_stride %[[BYTE_PTR]], %[[P]] : (!cir.ptr<!s8i>, !s64i) -> !cir.ptr<!s8i>
+// CIR-AFTER:        %[[BYTE_PTR_STRIDE:.*]] = cir.ptr_stride inbounds %[[BYTE_PTR]], %[[P]] : (!cir.ptr<!s8i>, !s64i) -> !cir.ptr<!s8i>
 // CIR-AFTER:        %[[MEMBER_ADDR:.*]] = cir.cast bitcast %[[BYTE_PTR_STRIDE]] : !cir.ptr<!s8i> -> !cir.ptr<!rec_Inner>
 // CIR-AFTER:        cir.copy %[[MEMBER_ADDR]] align(4) to %[[RETVAL_ADDR]] align(4) : !cir.ptr<!rec_Inner>
 // CIR-AFTER:        cir.return
@@ -592,7 +592,7 @@ Inner test_agg_arrow(const Outer *o, Inner Outer::*p) {
 // LLVM:   store i64 %[[P_ARG:.*]], ptr %[[P_ADDR]]
 // LLVM:   %[[O:.*]] = load ptr, ptr %[[O_ADDR]]
 // LLVM:   %[[P:.*]] = load i64, ptr %[[P_ADDR]]
-// LLVM:   %[[RT_MEMBER:.*]] = getelementptr i8, ptr %[[O]], i64 %[[P]]
+// LLVM:   %[[RT_MEMBER:.*]] = getelementptr inbounds i8, ptr %[[O]], i64 %[[P]]
 // LLVM:   call void @llvm.memcpy.p0.p0.i64(ptr align 4 %[[RETVAL_ADDR]], ptr align 4 %[[RT_MEMBER]], i64 8, i1 false)
 // LLVM-NEXT:   %[[RET:.*]] = load i64, ptr %[[RETVAL_ADDR]], align 4
 // LLVM-NEXT:   ret i64 %[[RET]]

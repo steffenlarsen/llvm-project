@@ -170,8 +170,8 @@ void call(Foo *obj, void (Foo::*func)(int), int arg) {
 // CIR-AFTER:      %[[ADJ:.*]] = cir.extract_member %[[FUNC]][1] : !rec_anon_struct -> !s64i
 // CIR-AFTER-ARM:  %[[ADJ_SHIFT:.*]] = cir.shift(right, %[[ADJ]] : !s64i, %[[ONE:.*]] : !s64i) -> !s64i
 // CIR-AFTER:      %[[THIS:.*]] = cir.cast bitcast %[[OBJ]] : !cir.ptr<!rec_Foo> -> !cir.ptr<!void>
-// CIR-AFTER-X86:  %[[ADJUSTED_THIS:.*]] = cir.ptr_stride %[[THIS]], %[[ADJ]] : (!cir.ptr<!void>, !s64i) -> !cir.ptr<!void>
-// CIR-AFTER-ARM:  %[[ADJUSTED_THIS:.*]] = cir.ptr_stride %[[THIS]], %[[ADJ_SHIFT]] : (!cir.ptr<!void>, !s64i) -> !cir.ptr<!void>
+// CIR-AFTER-X86:  %[[ADJUSTED_THIS:.*]] = cir.ptr_stride inbounds %[[THIS]], %[[ADJ]] : (!cir.ptr<!void>, !s64i) -> !cir.ptr<!void>
+// CIR-AFTER-ARM:  %[[ADJUSTED_THIS:.*]] = cir.ptr_stride inbounds %[[THIS]], %[[ADJ_SHIFT]] : (!cir.ptr<!void>, !s64i) -> !cir.ptr<!void>
 // CIR-AFTER:      %[[METHOD_PTR:.*]] = cir.extract_member %[[FUNC]][0] : !rec_anon_struct -> !s64i
 // CIR-AFTER-X86:  %[[VIRT_BIT_TEST:.*]] = cir.and %[[METHOD_PTR]], %[[ONE]] : !s64i
 // CIR-AFTER-ARM:  %[[VIRT_BIT_TEST:.*]] = cir.and %[[ADJ]], %[[ONE]] : !s64i
@@ -196,9 +196,9 @@ void call(Foo *obj, void (Foo::*func)(int), int arg) {
 // LLVM:       %[[OBJ:.*]] = load ptr, ptr %{{.*}}
 // LLVM:       %[[MEMFN_PTR:.*]] = load { i64, i64 }, ptr %{{.*}}
 // LLVM:       %[[THIS_ADJ:.*]] = extractvalue { i64, i64 } %[[MEMFN_PTR]], 1
-// LLVM-X86:   %[[ADJUSTED_THIS:.*]] = getelementptr i8, ptr %[[OBJ]], i64 %[[THIS_ADJ]]
+// LLVM-X86:   %[[ADJUSTED_THIS:.*]] = getelementptr inbounds i8, ptr %[[OBJ]], i64 %[[THIS_ADJ]]
 // LLVM-ARM:   %[[THIS_ADJ_SHIFT:.*]] = ashr i64 %[[THIS_ADJ]], 1
-// LLVM-ARM:   %[[ADJUSTED_THIS:.*]] = getelementptr i8, ptr %[[OBJ]], i64 %[[THIS_ADJ_SHIFT]]
+// LLVM-ARM:   %[[ADJUSTED_THIS:.*]] = getelementptr inbounds i8, ptr %[[OBJ]], i64 %[[THIS_ADJ_SHIFT]]
 // LLVM:       %[[PTR_FIELD:.*]] = extractvalue { i64, i64 } %[[MEMFN_PTR]], 0
 // LLVM-ARM:   %[[VIRT_BIT:.*]] = and i64 %[[THIS_ADJ]], 1
 // LLVM-X86:   %[[VIRT_BIT:.*]] = and i64 %[[PTR_FIELD]], 1
