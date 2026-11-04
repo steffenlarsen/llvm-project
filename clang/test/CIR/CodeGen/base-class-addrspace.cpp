@@ -37,7 +37,7 @@ int nonzero_base_member(AS1 D *d) { return d->b; }
 // CIR: cir.base_class_addr nonnull %{{.*}} [4] : !cir.ptr<!rec_D, target_address_space(1)> -> !cir.ptr<!rec_B, target_address_space(1)>
 
 // LLVM-LABEL: define {{.*}}@_Z19nonzero_base_memberPU3AS11D
-// LLVM: %[[BASE:.*]] = getelementptr i8, ptr addrspace(1) %{{.*}}, i32 4
+// LLVM: %[[BASE:.*]] = getelementptr inbounds i8, ptr addrspace(1) %{{.*}}, i32 4
 // LLVM: %[[B:.*]] = getelementptr inbounds nuw %struct.B, ptr addrspace(1) %[[BASE]], i32 0, i32 0
 // LLVM: load i32, ptr addrspace(1) %[[B]]
 
@@ -53,7 +53,7 @@ AS1 B *to_base(AS1 D *d) { return d; }
 
 // LLVM-LABEL: define {{.*}}@_Z7to_basePU3AS11D
 // LLVM: %[[ISNULL:.*]] = icmp eq ptr addrspace(1) %[[D:.*]], null
-// LLVM: %[[BASE:.*]] = getelementptr i8, ptr addrspace(1) %[[D]], i32 4
+// LLVM: %[[BASE:.*]] = getelementptr inbounds i8, ptr addrspace(1) %[[D]], i32 4
 // LLVM: select i1 %[[ISNULL]], ptr addrspace(1) %[[D]], ptr addrspace(1) %[[BASE]]
 
 // OGCG-LABEL: define {{.*}}@_Z7to_basePU3AS11D
@@ -83,7 +83,7 @@ AS3 B *to_base_as3(AS3 D *d) { return d; }
 
 // LLVM-LABEL: define {{.*}}@_Z11to_base_as3PU3AS31D
 // LLVM: %[[ISNULL:.*]] = icmp eq ptr addrspace(3) %[[D:.*]], null
-// LLVM: %[[BASE:.*]] = getelementptr i8, ptr addrspace(3) %[[D]], i32 4
+// LLVM: %[[BASE:.*]] = getelementptr inbounds i8, ptr addrspace(3) %[[D]], i32 4
 // LLVM: select i1 %[[ISNULL]], ptr addrspace(3) %[[D]], ptr addrspace(3) %[[BASE]]
 
 // OGCG-LABEL: define {{.*}}@_Z11to_base_as3PU3AS31D

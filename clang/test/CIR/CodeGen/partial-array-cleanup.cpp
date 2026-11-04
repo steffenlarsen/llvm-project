@@ -68,7 +68,7 @@ void test_partial_array_cleanup() {
 
 // LLVM:     define dso_local void @_Z26test_partial_array_cleanupv()
 // LLVM:       %[[ARRAY:.*]] = alloca [4 x %struct.S]
-// LLVM:       %[[BEGIN:.*]] = getelementptr %struct.S, ptr %[[ARRAY]], i32 0
+// LLVM:       %[[BEGIN:.*]] = getelementptr inbounds %struct.S, ptr %[[ARRAY]], i32 0
 // LLVM:       %[[END:.*]] = getelementptr %struct.S, ptr %[[BEGIN]], i64 4
 // LLVM:       %[[ITER:.*]] = alloca ptr
 // LLVM:       store ptr %[[BEGIN]], ptr %[[ITER]]
@@ -712,7 +712,7 @@ void test_init_list_partial_array_cleanup() {
 
 // LLVM-LABEL:  define dso_local void @_Z36test_init_list_partial_array_cleanupv()
 // LLVM:       %[[ARRAY:.*]] = alloca [4 x %struct.S]
-// LLVM:       %[[BEGIN:.*]] = getelementptr %struct.S, ptr %[[ARRAY]], i32 0
+// LLVM:       %[[BEGIN:.*]] = getelementptr inbounds %struct.S, ptr %[[ARRAY]], i32 0
 // LLVM:       store ptr %[[BEGIN]], ptr %[[END_OF_INIT:.*]]
 //
 //            --- first ctor ---
@@ -995,9 +995,9 @@ void test_multi_dim_init_list_partial_array_cleanup() {
 // LLVM:      %[[ARR:.*]] = alloca [2 x [2 x %struct.S]]
 //
 //            --- row 0: element 0, element 1 ---
-// LLVM:      %[[ROW0_BEGIN:.*]] = getelementptr [2 x %struct.S], ptr %[[ARR]], i32 0
+// LLVM:      %[[ROW0_BEGIN:.*]] = getelementptr inbounds [2 x %struct.S], ptr %[[ARR]], i32 0
 // LLVM:      store ptr %[[ROW0_BEGIN]], ptr %[[OUTER_END_A:.*]]
-// LLVM:      %[[ROW0_ELT0:.*]] = getelementptr %struct.S, ptr %[[ROW0_BEGIN]], i32 0
+// LLVM:      %[[ROW0_ELT0:.*]] = getelementptr inbounds %struct.S, ptr %[[ROW0_BEGIN]], i32 0
 // LLVM:      store ptr %[[ROW0_ELT0]], ptr %[[ROW0_END_A:.*]]
 // LLVM:      invoke void @_ZN1SC1Ev(ptr {{.*}} %[[ROW0_ELT0]])
 // LLVM:        to label %{{.*}} unwind label %[[ROW0_LPAD:.*]]
@@ -1028,7 +1028,7 @@ void test_multi_dim_init_list_partial_array_cleanup() {
 //            --- row 1: element 0, element 1 ---
 // LLVM:      %[[ROW1_BEGIN:.*]] = getelementptr [2 x %struct.S], ptr %[[ROW0_BEGIN]], i64 1
 // LLVM:      store ptr %[[ROW1_BEGIN]], ptr %[[OUTER_END_A]]
-// LLVM:      %[[ROW1_ELT0:.*]] = getelementptr %struct.S, ptr %[[ROW1_BEGIN]], i32 0
+// LLVM:      %[[ROW1_ELT0:.*]] = getelementptr inbounds %struct.S, ptr %[[ROW1_BEGIN]], i32 0
 // LLVM:      store ptr %[[ROW1_ELT0]], ptr %[[ROW1_END_A:.*]]
 // LLVM:      invoke void @_ZN1SC1Ev(ptr {{.*}} %[[ROW1_ELT0]])
 // LLVM:        to label %{{.*}} unwind label %[[ROW1_LPAD:.*]]
@@ -1073,7 +1073,7 @@ void test_multi_dim_init_list_partial_array_cleanup() {
 // LLVM:        resume { ptr, i32 }
 //
 //            --- normal (non-EH) cleanup: destroys all 4 elements ---
-// LLVM:      %[[FLAT_BEGIN:.*]] = getelementptr %struct.S, ptr %[[ARR]], i32 0
+// LLVM:      %[[FLAT_BEGIN:.*]] = getelementptr inbounds %struct.S, ptr %[[ARR]], i32 0
 // LLVM:      %[[FLAT_END:.*]] = getelementptr %struct.S, ptr %[[FLAT_BEGIN]], i64 4
 // LLVM:      store ptr %[[FLAT_END]], ptr %[[NORM_ITER:.*]]
 // LLVM:      br label %[[NORM_BODY:.*]]

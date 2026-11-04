@@ -231,12 +231,12 @@ void test_conditional_bzero(void) {
 //
 // LLVM-LABEL: @test_conditional_bzero
 // LLVM: %[[ARR:.*]] = alloca [20 x i8]
-// LLVM: %[[ARR_DECAY:.*]] = getelementptr i8, ptr %[[ARR]], i32 0
+// LLVM: %[[ARR_DECAY:.*]] = getelementptr inbounds i8, ptr %[[ARR]], i32 0
 // LLVM: %[[SIZE_LOAD:.*]] = load i32, ptr %{{.*}}
 // LLVM: %[[SIZE_CAST:.*]] = sext i32 %[[SIZE_LOAD]] to i64
 // LLVM: call void @llvm.memset.p0.i64(ptr align 16 %[[ARR_DECAY]], i8 0, i64 %[[SIZE_CAST]], i1 false)
 //
-// LLVM: %[[ARR_DECAY:.*]] = getelementptr i8, ptr %[[ARR]], i32 0
+// LLVM: %[[ARR_DECAY:.*]] = getelementptr inbounds i8, ptr %[[ARR]], i32 0
 // LLVM: %[[SIZE_LOAD:.*]] = load i32, ptr %{{.*}}
 // LLVM: %[[SIZE_CAST:.*]] = sext i32 %[[SIZE_LOAD]] to i64
 // LLVM: call void @llvm.memset.p0.i64(ptr align 16 %[[ARR_DECAY]], i8 0, i64 %[[SIZE_CAST]], i1 false)

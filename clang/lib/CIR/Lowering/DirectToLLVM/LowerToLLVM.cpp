@@ -1944,9 +1944,12 @@ mlir::LogicalResult CIRToLLVMCastOpLowering::matchAndRewrite(
                                                 ptrTy.getPointee());
     if (!elementTy)
       return emitTypeConversionError(castOp, ptrTy.getPointee());
+    // The first element is within the array, so like classic codegen the
+    // decay is inbounds.
     llvm::SmallVector<mlir::LLVM::GEPArg> offset{0};
     rewriter.replaceOpWithNewOp<mlir::LLVM::GEPOp>(
-        castOp, targetType, elementTy, sourceValue, offset);
+        castOp, targetType, elementTy, sourceValue, offset,
+        mlir::LLVM::GEPNoWrapFlags::inbounds);
     break;
   }
   case cir::CastKind::int_to_bool: {
@@ -2327,16 +2330,21 @@ mlir::LogicalResult CIRToLLVMBaseClassAddrOpLowering::matchAndRewrite(
     return mlir::success();
   }
 
+  // The base is a subobject of the derived object, so like classic codegen
+  // the adjustment is inbounds. A null derived pointer is selected over the
+  // adjusted one below.
   if (baseClassOp.getAssumeNotNull()) {
     rewriter.replaceOpWithNewOp<mlir::LLVM::GEPOp>(
-        baseClassOp, resultType, byteType, derivedAddr, offset);
+        baseClassOp, resultType, byteType, derivedAddr, offset,
+        mlir::LLVM::GEPNoWrapFlags::inbounds);
   } else {
     auto loc = baseClassOp.getLoc();
     mlir::Value isNull = mlir::LLVM::ICmpOp::create(
         rewriter, loc, mlir::LLVM::ICmpPredicate::eq, derivedAddr,
         mlir::LLVM::ZeroOp::create(rewriter, loc, derivedAddr.getType()));
     mlir::Value adjusted = mlir::LLVM::GEPOp::create(
-        rewriter, loc, resultType, byteType, derivedAddr, offset);
+        rewriter, loc, resultType, byteType, derivedAddr, offset,
+        mlir::LLVM::GEPNoWrapFlags::inbounds);
     rewriter.replaceOpWithNewOp<mlir::LLVM::SelectOp>(baseClassOp, isNull,
                                                       derivedAddr, adjusted);
   }

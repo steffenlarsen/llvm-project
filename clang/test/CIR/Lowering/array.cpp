@@ -103,7 +103,7 @@ void func6() {
 // CHECK:  %[[VAR:.*]] = alloca i32, align 4
 // CHECK:  %[[ARR:.*]] = alloca [2 x i32], align 4
 // CHECK:  store i32 4, ptr %[[VAR]], align 4
-// CHECK:  %[[ELE_0:.*]] = getelementptr i32, ptr %[[ARR]], i32 0
+// CHECK:  %[[ELE_0:.*]] = getelementptr inbounds i32, ptr %[[ARR]], i32 0
 // CHECK:  %[[TMP:.*]] = load i32, ptr %[[VAR]], align 4
 // CHECK:  store i32 %[[TMP]], ptr %[[ELE_0]], align 4
 // CHECK:  %[[ELE_1:.*]] = getelementptr i32, ptr %[[ELE_0]], i64 1

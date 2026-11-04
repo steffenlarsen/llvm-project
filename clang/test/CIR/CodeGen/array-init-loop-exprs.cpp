@@ -159,7 +159,7 @@ struct HasMultiDimArray {
 // LLVM: %[[THIS_ARR:.*]] = getelementptr inbounds nuw %struct.HasNonTrivialArray, ptr %[[THIS_LOAD]], i32 0, i32 0
 // LLVM: %[[RHS_LOAD:.*]] = load ptr, ptr %[[RHS_ALLOCA]]
 // LLVM: %[[RHS_ARR:.*]] = getelementptr inbounds nuw %struct.HasNonTrivialArray, ptr %[[RHS_LOAD]], i32 0, i32 0
-// LLVM: %[[THIS_ARR_DECAY:.*]] = getelementptr %struct.NonTrivial, ptr %[[THIS_ARR]], i32 0
+// LLVM: %[[THIS_ARR_DECAY:.*]] = getelementptr inbounds %struct.NonTrivial, ptr %[[THIS_ARR]], i32 0
 // LLVM: store ptr %[[THIS_ARR_DECAY]], ptr %[[ITR_ALLOCA]]
 // LLVM: %[[END_ITR:.*]] = getelementptr %struct.NonTrivial, ptr %[[THIS_ARR_DECAY]], i64 3
 // LLVM: br label %[[BODY:.*]]
@@ -194,7 +194,7 @@ struct HasMultiDimArray {
 // LLVM: %[[THIS_ARR:.*]] = getelementptr inbounds nuw %struct.HasMultiDimArray, ptr %[[THIS_LOAD]], i32 0, i32 0
 // LLVM: %[[RHS_LOAD:.*]] = load ptr, ptr %[[RHS_ALLOCA]]
 // LLVM: %[[RHS_ARR:.*]] = getelementptr inbounds nuw %struct.HasMultiDimArray, ptr %[[RHS_LOAD]], i32 0, i32 0
-// LLVM: %[[THIS_ARR_DECAY:.*]] = getelementptr [3 x [4 x %struct.NonTrivial]], ptr %[[THIS_ARR]], i32 0
+// LLVM: %[[THIS_ARR_DECAY:.*]] = getelementptr inbounds [3 x [4 x %struct.NonTrivial]], ptr %[[THIS_ARR]], i32 0
 // LLVM: store ptr %[[THIS_ARR_DECAY]], ptr %[[ITR1_ALLOCA]]
 // LLVM: %[[END_ITR1:.*]] = getelementptr [3 x [4 x %struct.NonTrivial]], ptr %[[THIS_ARR_DECAY]], i64 2
 // LLVM: br label %[[WHILE1_BODY:.*]]
@@ -211,7 +211,7 @@ struct HasMultiDimArray {
 // LLVM: %[[PTR_DIFF:.*]] = sub i64 %[[ITR1_PTR]], %[[ITR1_START_PTR]]
 // LLVM: %[[IDX1:.*]] = sdiv exact i64 %[[PTR_DIFF]], 48
 // LLVM: %[[RHS_ELT1:.*]] = getelementptr inbounds nuw [2 x [3 x [4 x %struct.NonTrivial]]], ptr %[[RHS_ARR]], i32 0, i64 %[[IDX1]]
-// LLVM: %[[ARR1_DECAY:.*]] = getelementptr [4 x %struct.NonTrivial], ptr %[[ITR1_LOAD]], i32 0
+// LLVM: %[[ARR1_DECAY:.*]] = getelementptr inbounds [4 x %struct.NonTrivial], ptr %[[ITR1_LOAD]], i32 0
 // LLVM: store ptr %[[ARR1_DECAY]], ptr %[[ITR2_ALLOCA]]
 // LLVM: %[[END_ITR2:.*]] = getelementptr [4 x %struct.NonTrivial], ptr %[[ARR1_DECAY]], i64 3
 // LLVM: br label %[[WHILE2_BODY:.*]]
@@ -228,7 +228,7 @@ struct HasMultiDimArray {
 // LLVM: %[[PTR_DIFF:.*]] = sub i64 %[[ITR2_PTR]], %[[ITR2_START_PTR]]
 // LLVM: %[[IDX2:.*]] = sdiv exact i64 %[[PTR_DIFF]], 16
 // LLVM: %[[RHS_ELT2:.*]] = getelementptr inbounds nuw [3 x [4 x %struct.NonTrivial]], ptr %[[RHS_ELT1]], i32 0, i64 %[[IDX2]]
-// LLVM: %[[ARR2_DECAY:.*]] = getelementptr %struct.NonTrivial, ptr %[[ITR2_LOAD]], i32 0
+// LLVM: %[[ARR2_DECAY:.*]] = getelementptr inbounds %struct.NonTrivial, ptr %[[ITR2_LOAD]], i32 0
 // LLVM: store ptr %[[ARR2_DECAY]], ptr %[[ITR3_ALLOCA]]
 // LLVM: %[[END_ITR3:.*]] = getelementptr %struct.NonTrivial, ptr %[[ARR2_DECAY]], i64 4
 // LLVM: br label %[[WHILE3_BODY:.*]]

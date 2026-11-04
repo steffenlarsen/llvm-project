@@ -794,7 +794,7 @@ void test_array_new_with_ctor_init() {
 // LLVM: define{{.*}} void @_Z29test_array_new_with_ctor_initv
 // LLVM:   %[[P_ADDR:.*]] = alloca ptr, align 8
 // LLVM:   %[[RAW_PTR:.*]] = call noalias noundef nonnull ptr @_Znam(i64 noundef 3)
-// LLVM:   %[[BEGIN:.*]] = getelementptr %class.F, ptr %[[RAW_PTR]], i32 0
+// LLVM:   %[[BEGIN:.*]] = getelementptr inbounds %class.F, ptr %[[RAW_PTR]], i32 0
 // LLVM:   %[[ARRAY_END:.*]] = getelementptr %class.F, ptr %[[BEGIN]], i64 3
 // LLVM:   %[[IDX_ADDR:.*]] = alloca ptr, align 1
 // LLVM:   store ptr %[[BEGIN]], ptr %[[IDX_ADDR]], align 8
@@ -914,7 +914,7 @@ void test_const_array_new_value_init() {
 //
 // LLVM: define{{.*}} void @_Z31test_const_array_new_value_initv
 // LLVM:   %[[RAW:.*]] = call noalias noundef nonnull ptr @_Znam(i64 noundef 3)
-// LLVM:   %[[BEGIN:.*]] = getelementptr %class.OuterZero, ptr %[[RAW]], i32 0
+// LLVM:   %[[BEGIN:.*]] = getelementptr inbounds %class.OuterZero, ptr %[[RAW]], i32 0
 // LLVM:   %[[END:.*]] = getelementptr %class.OuterZero, ptr %[[BEGIN]], i64 3
 // LLVM:   store ptr %[[BEGIN]], ptr %[[IDX:.*]], align 8
 // LLVM:   br label %[[BODY:.*]]
@@ -1038,7 +1038,7 @@ void test_multidim_array_new_with_ctor() {
 
 // LLVM: define{{.*}} void @_Z33test_multidim_array_new_with_ctorv
 // LLVM:   %[[RAW:.*]] = call noalias noundef nonnull ptr @_Znam(i64 noundef 6)
-// LLVM:   %[[BEGIN:.*]] = getelementptr %class.F, ptr %[[RAW]], i32 0
+// LLVM:   %[[BEGIN:.*]] = getelementptr inbounds %class.F, ptr %[[RAW]], i32 0
 // LLVM:   %[[END:.*]] = getelementptr %class.F, ptr %[[BEGIN]], i64 6
 // LLVM:   store ptr %[[BEGIN]], ptr %[[IDX:.*]], align 8
 // LLVM:   br label %[[BODY:.*]]
@@ -1200,7 +1200,7 @@ void test_array_new_with_ctor_partial_init_list() {
 // LLVM:   %[[SECOND:.*]] = getelementptr %class.G, ptr %[[RAW_PTR]], i64 1
 // LLVM:   call void @_ZN1GC1Ei(ptr noundef nonnull align 1 dereferenceable(1) %[[SECOND]], i32 noundef 2)
 // LLVM:   %[[THIRD:.*]] = getelementptr %class.G, ptr %[[SECOND]], i64 1
-// LLVM:   %[[ARRAY_BEGIN:.*]] = getelementptr %class.G, ptr %[[THIRD]], i32 0
+// LLVM:   %[[ARRAY_BEGIN:.*]] = getelementptr inbounds %class.G, ptr %[[THIRD]], i32 0
 // LLVM:   %[[ARRAY_END:.*]] = getelementptr %class.G, ptr %[[ARRAY_BEGIN]], i64 6
 // LLVM:   %[[IDX_ADDR:.*]] = alloca ptr, align 1
 // LLVM:   store ptr %[[ARRAY_BEGIN]], ptr %[[IDX_ADDR]], align 8

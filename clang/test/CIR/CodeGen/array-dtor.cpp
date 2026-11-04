@@ -46,7 +46,7 @@ void test_cleanup_array() {
 // LLVM: define{{.*}} void @_Z18test_cleanup_arrayv()
 // LLVM:   %[[ARRAY:.*]] = alloca [42 x %struct.S]
 // LLVM:   %[[ITER:.*]] = alloca ptr
-// LLVM:   %[[START:.*]] = getelementptr %struct.S, ptr %[[ARRAY]], i32 0
+// LLVM:   %[[START:.*]] = getelementptr inbounds %struct.S, ptr %[[ARRAY]], i32 0
 // LLVM:   %[[END:.*]] = getelementptr %struct.S, ptr %[[START]], i64 42
 // LLVM:   store ptr %[[END]], ptr %[[ITER]]
 // LLVM:   br label %[[LOOP:.*]]
@@ -140,7 +140,7 @@ void multi_dimensional() {
 // LLVM:     define{{.*}} void @_Z17multi_dimensionalv()
 // LLVM:       %[[S:.*]] = alloca [3 x [5 x %struct.S]]
 // LLVM:       %[[ITER:.*]] = alloca ptr
-// LLVM:       %[[START:.*]] = getelementptr %struct.S, ptr %[[S]], i32 0
+// LLVM:       %[[START:.*]] = getelementptr inbounds %struct.S, ptr %[[S]], i32 0
 // LLVM:       %[[END:.*]] = getelementptr %struct.S, ptr %[[START]], i64 15
 // LLVM:       store ptr %[[END]], ptr %[[ITER]]
 // LLVM:       br label %[[LOOP:.*]]

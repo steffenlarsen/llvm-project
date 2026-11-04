@@ -128,11 +128,11 @@ void take_ref(const S &s);
 // LLVM-LABEL: define {{.*}}spir_func void @_Z10array_tempv(
 // LLVM: %[[REF_TMP:.*]] = alloca [2 x i32], align 4
 // LLVM-NEXT: %[[REF_TMP_ASCAST:.*]] = addrspacecast ptr %[[REF_TMP]] to ptr addrspace(4)
-// LLVM-NEXT: %[[TMP0:.*]] = getelementptr i32, ptr addrspace(4) %[[REF_TMP_ASCAST]], i32 0
+// LLVM-NEXT: %[[TMP0:.*]] = getelementptr inbounds i32, ptr addrspace(4) %[[REF_TMP_ASCAST]], i32 0
 // LLVM-NEXT: store i32 3, ptr addrspace(4) %[[TMP0]], align 4
 // LLVM-NEXT: %[[TMP1:.*]] = getelementptr i32, ptr addrspace(4) %[[TMP0]], i64 1
 // LLVM-NEXT: store i32 4, ptr addrspace(4) %[[TMP1]], align 4
-// LLVM-NEXT: %[[TMP2:.*]] = getelementptr i32, ptr addrspace(4) %[[REF_TMP_ASCAST]], i32 0
+// LLVM-NEXT: %[[TMP2:.*]] = getelementptr inbounds i32, ptr addrspace(4) %[[REF_TMP_ASCAST]], i32 0
 // LLVM-NEXT: call spir_func void @_Z3usePi(ptr addrspace(4) noundef %[[TMP2]])
 // LLVM-NEXT: ret void
 

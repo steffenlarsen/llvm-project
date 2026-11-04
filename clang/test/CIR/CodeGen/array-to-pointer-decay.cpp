@@ -20,7 +20,7 @@ void incomplete_array_temporary(long x) {
 // LLVM-LABEL: define {{.*}} void @_Z26incomplete_array_temporaryl
 // LLVM:         %[[TMP:.*]] = alloca [1 x i32], align 4
 // LLVM:         store i32 {{.*}}, ptr {{.*}}, align 4
-// LLVM-NEXT:    %[[DECAY:.*]] = getelementptr i32, ptr %[[TMP]], i32 0
+// LLVM-NEXT:    %[[DECAY:.*]] = getelementptr inbounds i32, ptr %[[TMP]], i32 0
 // LLVM-NEXT:    call void @{{.*}}(ptr noundef %[[DECAY]])
 
 // OGCG-LABEL: define {{.*}} void @_Z26incomplete_array_temporaryl

@@ -244,10 +244,10 @@ void l4() {
 // LLVM: [[SETUP]]:
 // LLVM:   store ptr %[[A_ADDR]], ptr %[[RANGE_ADDR]]
 // LLVM:   %[[BEGIN:.*]] = load ptr, ptr %[[RANGE_ADDR]]
-// LLVM:   %[[BEGIN_CAST:.*]] = getelementptr i32, ptr %[[BEGIN]], i32 0
+// LLVM:   %[[BEGIN_CAST:.*]] = getelementptr inbounds i32, ptr %[[BEGIN]], i32 0
 // LLVM:   store ptr %[[BEGIN_CAST]], ptr %[[BEGIN_ADDR]]
 // LLVM:   %[[RANGE:.*]] = load ptr, ptr %[[RANGE_ADDR]]
-// LLVM:   %[[RANGE_CAST:.*]] = getelementptr i32, ptr %[[RANGE]], i32 0
+// LLVM:   %[[RANGE_CAST:.*]] = getelementptr inbounds i32, ptr %[[RANGE]], i32 0
 // LLVM:   %[[END_PTR:.*]] = getelementptr inbounds i32, ptr %[[RANGE_CAST]], i64 10
 // LLVM:   store ptr %[[END_PTR]], ptr %[[END_ADDR]]
 // LLVM:   br label %[[COND:.*]]
@@ -356,10 +356,10 @@ void l5() {
 // LLVM:   call void @llvm.memcpy{{.*}}(ptr align 16 %[[ARR_ADDR]], ptr align 16 @[[L5_ARR]], i64 16, i1 false)
 // LLVM:   store ptr %[[ARR_ADDR]], ptr %[[RANGE_ADDR]]
 // LLVM:   %[[BEGIN:.*]] = load ptr, ptr %[[RANGE_ADDR]]
-// LLVM:   %[[BEGIN_CAST:.*]] = getelementptr i32, ptr %[[BEGIN]], i32 0
+// LLVM:   %[[BEGIN_CAST:.*]] = getelementptr inbounds i32, ptr %[[BEGIN]], i32 0
 // LLVM:   store ptr %[[BEGIN_CAST]], ptr %[[BEGIN_ADDR]]
 // LLVM:   %[[RANGE:.*]] = load ptr, ptr %[[RANGE_ADDR]]
-// LLVM:   %[[RANGE_CAST:.*]] = getelementptr i32, ptr %[[RANGE]], i32 0
+// LLVM:   %[[RANGE_CAST:.*]] = getelementptr inbounds i32, ptr %[[RANGE]], i32 0
 // LLVM:   %[[END_PTR:.*]] = getelementptr inbounds i32, ptr %[[RANGE_CAST]], i64 4
 // LLVM:   store ptr %[[END_PTR]], ptr %[[END_ADDR]]
 // LLVM:   br label %[[COND:.*]]

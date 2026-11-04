@@ -296,7 +296,7 @@ D::D() {}
 // LLVM-COMMON:   %[[VTT:.*]] = load ptr, ptr %[[VTT_ADDR]]
 // LLVM-COMMON:   %[[B_VTT:.*]] = getelementptr inbounds ptr, ptr %[[VTT]], i32 1
 // LLVM-COMMON:   call void @_ZN1BC2Ev(ptr {{.*}} %[[THIS]], ptr {{.*}} %[[B_VTT]])
-// LLVM-COMMON:   %[[C_ADDR:.*]] = getelementptr i8, ptr %[[THIS]], i32 16
+// LLVM-COMMON:   %[[C_ADDR:.*]] = getelementptr inbounds i8, ptr %[[THIS]], i32 16
 // LLVM-COMMON:   %[[C_VTT:.*]] = getelementptr inbounds ptr, ptr %[[VTT]], i32 3
 // LLVM-COMMON:   call void @_ZN1CC2Ev(ptr {{.*}} %[[C_ADDR]], ptr {{.*}} %[[C_VTT]])
 // LLVM-COMMON:   %[[VPTR:.*]] = load ptr, ptr %[[VTT]]
@@ -310,7 +310,7 @@ D::D() {}
 // LLVM-COMMON:   store ptr %[[D_VPTR]], ptr %[[BASE_PTR]]
 // LLVM-COMMON:   %[[C_VPTR_ADDR:.*]] = getelementptr inbounds ptr, ptr %[[VTT]], i32 6
 // LLVM-COMMON:   %[[C_VPTR:.*]] = load ptr, ptr %[[C_VPTR_ADDR]]
-// LLVM-COMMON:   %[[C_ADDR:.*]] = getelementptr i8, ptr %[[THIS]], i32 16
+// LLVM-COMMON:   %[[C_ADDR:.*]] = getelementptr inbounds i8, ptr %[[THIS]], i32 16
 // LLVM-COMMON:   store ptr %[[C_VPTR]], ptr %[[C_ADDR]]
 
 // OGCG-COMMON: define {{.*}} void @_ZN1DC2Ev(ptr {{.*}} %[[THIS_ARG:.*]], ptr {{.*}} %[[VTT_ARG:.*]])
@@ -502,15 +502,15 @@ D::D() {}
 // LLVM-COMMON:   %[[THIS_ADDR:.*]] = alloca ptr
 // LLVM-COMMON:   store ptr %[[THIS_ARG]], ptr %[[THIS_ADDR]]
 // LLVM-COMMON:   %[[THIS:.*]] = load ptr, ptr %[[THIS_ADDR]]
-// LLVM-COMMON:   %[[A_ADDR:.*]] = getelementptr i8, ptr %[[THIS]], i32 40
+// LLVM-COMMON:   %[[A_ADDR:.*]] = getelementptr inbounds i8, ptr %[[THIS]], i32 40
 // LLVM-COMMON:   call void @_ZN1AC2Ev(ptr {{.*}} %[[A_ADDR]])
 // LLVM-COMMON:   call void @_ZN1BC2Ev(ptr {{.*}} %[[THIS]], ptr {{.*}} getelementptr inbounds nuw (i8, ptr @_ZTT1D, i64 8))
-// LLVM-COMMON:   %[[C_ADDR:.*]] = getelementptr i8, ptr %[[THIS]], i32 16
+// LLVM-COMMON:   %[[C_ADDR:.*]] = getelementptr inbounds i8, ptr %[[THIS]], i32 16
 // LLVM-COMMON:   call void @_ZN1CC2Ev(ptr {{.*}} %[[C_ADDR]], ptr {{.*}} getelementptr inbounds nuw (i8, ptr @_ZTT1D, i64 24))
 // LLVM-COMMON:   store ptr getelementptr inbounds nuw (i8, ptr @_ZTV1D, i64 24), ptr %[[THIS]]
-// LLVM-COMMON:   %[[A_ADDR:.*]] = getelementptr i8, ptr %[[THIS]], i32 40
+// LLVM-COMMON:   %[[A_ADDR:.*]] = getelementptr inbounds i8, ptr %[[THIS]], i32 40
 // LLVM-COMMON:   store ptr getelementptr inbounds nuw (i8, ptr @_ZTV1D, i64 96), ptr %[[A_ADDR]]
-// LLVM-COMMON:   %[[C_ADDR:.*]] = getelementptr i8, ptr %[[THIS]], i32 16
+// LLVM-COMMON:   %[[C_ADDR:.*]] = getelementptr inbounds i8, ptr %[[THIS]], i32 16
 // LLVM-COMMON:   store ptr getelementptr inbounds nuw (i8, ptr @_ZTV1D, i64 64), ptr %[[C_ADDR]]
 
 // OGCG-COMMON: define {{.*}} void @_ZN1DC1Ev(ptr {{.*}} %[[THIS_ARG:.*]])

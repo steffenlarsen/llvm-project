@@ -115,7 +115,7 @@ void test__cpuid_with_cpu_info_as_array(int functionId) {
     // CIR: cir.cpuid [[CPU_INFO_PTR]], [[FUNCTION_ID]], [[SUB_FUNCTION_ID]] : !cir.ptr<!s32i>, !s32i, !s32i
 
     // LLVM-LABEL: _cpuid_with_cpu_info_as_array
-    // LLVM: [[CPU_INFO_PTR:%.*]] = getelementptr i32, ptr
+    // LLVM: [[CPU_INFO_PTR:%.*]] = getelementptr inbounds i32, ptr
     // LLVM: [[FUNCTION_ID:%.*]] = load i32
     // LLVM: [[ASM_RESULTS:%.*]] = call { i32, i32, i32, i32 } asm "{{.*}}cpuid{{.*}}", "={ax},=r,={cx},={dx},0,2"(i32 [[FUNCTION_ID]], i32 0)
     // LLVM: [[RESULT_0:%.*]] = extractvalue { i32, i32, i32, i32 } [[ASM_RESULTS]], 0

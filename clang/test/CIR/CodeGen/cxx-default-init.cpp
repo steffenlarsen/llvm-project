@@ -69,7 +69,7 @@ struct ZeroInit {
 // LLVM:   %[[P_B:.*]] = getelementptr inbounds nuw %struct.Pair, ptr %[[P]], i32 0, i32 1
 // LLVM:   store i32 0, ptr %[[P_B]]
 // LLVM:   %[[ARR:.*]] = getelementptr inbounds nuw %struct.ZeroInit, ptr %[[THIS]], i32 0, i32 2
-// LLVM:   %[[ARR_BEGIN:.*]] = getelementptr i32, ptr %[[ARR]], i32 0
+// LLVM:   %[[ARR_BEGIN:.*]] = getelementptr inbounds i32, ptr %[[ARR]], i32 0
 // LLVM:   store ptr %[[ARR_BEGIN]], ptr %[[ITER]]
 // LLVM:   %[[ARR_END:.*]] = getelementptr i32, ptr %[[ARR_BEGIN]], i64 4
 // LLVM:   br label %[[LOOP_BODY:.*]]
@@ -183,7 +183,7 @@ struct ValueInit {
 // LLVM:   %[[P_B:.*]] = getelementptr inbounds nuw %struct.Pair, ptr %[[P]], i32 0, i32 1
 // LLVM:   store i32 3, ptr %[[P_B]]
 // LLVM:   %[[ARR:.*]] = getelementptr inbounds nuw %struct.ValueInit, ptr %[[THIS]], i32 0, i32 2
-// LLVM:   %[[ARR_BEGIN:.*]] = getelementptr i32, ptr %[[ARR]], i32 0
+// LLVM:   %[[ARR_BEGIN:.*]] = getelementptr inbounds i32, ptr %[[ARR]], i32 0
 // LLVM:   store i32 4, ptr %[[ARR_BEGIN]]
 // LLVM:   %[[ARR_1:.*]] = getelementptr i32, ptr %[[ARR_BEGIN]], i64 1
 // LLVM:   store i32 5, ptr %[[ARR_1]]

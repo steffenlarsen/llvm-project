@@ -40,7 +40,7 @@ void initalizer_list_with_two_pointers_layout() {
 
 // LLVM: %[[ARR_ADDR:.*]] = alloca [3 x i32], align 4
 // LLVM: %[[A_ADDR:.*]] = alloca %"class.std::initializer_list<int>", align 8
-// LLVM: %[[ARR_ELEM_0_PTR:.*]] = getelementptr i32, ptr %[[ARR_ADDR]], i32 0
+// LLVM: %[[ARR_ELEM_0_PTR:.*]] = getelementptr inbounds i32, ptr %[[ARR_ADDR]], i32 0
 // LLVM: store i32 10, ptr %[[ARR_ELEM_0_PTR]], align 4
 // LLVM: %[[ARR_ELEM_1_PTR:.*]] = getelementptr i32, ptr %[[ARR_ELEM_0_PTR]], i64 1
 // LLVM: store i32 20, ptr %[[ARR_ELEM_1_PTR]], align 4

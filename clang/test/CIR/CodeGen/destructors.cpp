@@ -107,7 +107,7 @@ void test_array_destructor() {
 // LLVM:   %[[ARR:.*]] = alloca [5 x %struct.array_element]
 // LLVM:   %[[TMP:.*]] = alloca ptr
 // LLVM:   %[[ARR_CUR:.*]] = alloca ptr
-// LLVM:   %[[ARR_PTR:.*]] = getelementptr %struct.array_element, ptr %[[ARR]], i32 0
+// LLVM:   %[[ARR_PTR:.*]] = getelementptr inbounds %struct.array_element, ptr %[[ARR]], i32 0
 // LLVM:   store ptr %[[ARR_PTR]], ptr %[[TMP]]
 // LLVM:   %[[END_PTR:.*]] = getelementptr %struct.array_element, ptr %[[ARR_PTR]], i64 5
 // LLVM:   br label %[[INIT_LOOP_BODY:.*]]
@@ -121,7 +121,7 @@ void test_array_destructor() {
 // LLVM:   store ptr %[[NEXT]], ptr %[[TMP]]
 // LLVM:   br label %[[INIT_LOOP_NEXT:.*]]
 // LLVM: [[INIT_LOOP_END]]:
-// LLVM:   %[[ARR_BEGIN:.*]] = getelementptr %struct.array_element, ptr %[[ARR]], i32 0
+// LLVM:   %[[ARR_BEGIN:.*]] = getelementptr inbounds %struct.array_element, ptr %[[ARR]], i32 0
 // LLVM:   %[[ARR_END:.*]] = getelementptr %struct.array_element, ptr %[[ARR_BEGIN]], i64 5
 // LLVM:   store ptr %[[ARR_END]], ptr %[[ARR_CUR]]
 // LLVM:   br label %[[DESTROY_LOOP_BODY:.*]]

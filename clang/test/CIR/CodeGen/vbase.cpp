@@ -127,7 +127,7 @@ void ppp() { B b; }
 // LLVM:   %[[THIS_ADDR:.*]] = alloca ptr
 // LLVM:   store ptr %[[THIS_ARG]], ptr %[[THIS_ADDR]]
 // LLVM:   %[[THIS:.*]] = load ptr, ptr %[[THIS_ADDR]]
-// LLVM:   %[[BASE_A_ADDR:.*]] = getelementptr i8, ptr %[[THIS]], i32 12
+// LLVM:   %[[BASE_A_ADDR:.*]] = getelementptr inbounds i8, ptr %[[THIS]], i32 12
 // LLVM:   store ptr getelementptr inbounds nuw (i8, ptr @_ZTV1B, i64 24), ptr %[[THIS]]
 // LLVM:   ret void
 

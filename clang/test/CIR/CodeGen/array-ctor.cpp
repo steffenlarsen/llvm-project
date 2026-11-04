@@ -49,7 +49,7 @@ void foo() {
 
 // LLVM: define dso_local void @_Z3foov()
 // LLVM: %[[ARRAY:.*]] = alloca [42 x %struct.S]
-// LLVM: %[[START:.*]] = getelementptr %struct.S, ptr %[[ARRAY]], i32 0
+// LLVM: %[[START:.*]] = getelementptr inbounds %struct.S, ptr %[[ARRAY]], i32 0
 // LLVM: %[[END:.*]] = getelementptr %struct.S, ptr %[[START]], i64 42
 // LLVM: %[[ITER:.*]] = alloca ptr
 // LLVM: store ptr %[[START]], ptr %[[ITER]]
@@ -142,7 +142,7 @@ void multi_dimensional() {
 
 // LLVM:     define{{.*}} @_Z17multi_dimensionalv()
 // LLVM:       %[[S:.*]] = alloca [3 x [5 x %struct.S]]
-// LLVM:       %[[START:.*]] = getelementptr %struct.S, ptr %[[S]], i32 0
+// LLVM:       %[[START:.*]] = getelementptr inbounds %struct.S, ptr %[[S]], i32 0
 // LLVM:       %[[END:.*]] = getelementptr %struct.S, ptr %[[START]], i64 15
 // LLVM:       %[[ITER:.*]] = alloca ptr
 // LLVM:       store ptr %[[START]], ptr %[[ITER]]
