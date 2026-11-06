@@ -3136,7 +3136,7 @@ struct AMDGPUDeviceTy : public GenericDeviceTy, AMDGenericDeviceTy {
     // For large transfers use synchronous behavior.
     if (Size >= OMPX_MaxAsyncCopyBytes) {
       if (AsyncInfoWrapper.hasQueue())
-        if (auto Err = synchronize(AsyncInfoWrapper))
+        if (auto Err = synchronize(AsyncInfoWrapper, /*ReleaseQueue=*/false))
           return Err;
 
       hsa_status_t Status;
@@ -3200,7 +3200,7 @@ struct AMDGPUDeviceTy : public GenericDeviceTy, AMDGenericDeviceTy {
     // For large transfers use synchronous behavior.
     if (Size >= OMPX_MaxAsyncCopyBytes) {
       if (AsyncInfoWrapper.hasQueue())
-        if (auto Err = synchronize(AsyncInfoWrapper))
+        if (auto Err = synchronize(AsyncInfoWrapper, /*ReleaseQueue=*/false))
           return Err;
 
       hsa_status_t Status;
@@ -3282,7 +3282,7 @@ struct AMDGPUDeviceTy : public GenericDeviceTy, AMDGenericDeviceTy {
     // For large transfers use synchronous behavior.
     if (Size >= OMPX_MaxAsyncCopyBytes) {
       if (AsyncInfoWrapper.hasQueue())
-        if (auto Err = synchronize(AsyncInfoWrapper))
+        if (auto Err = synchronize(AsyncInfoWrapper, /*ReleaseQueue=*/false))
           return Err;
 
       AMDGPUSignalTy Signal;
