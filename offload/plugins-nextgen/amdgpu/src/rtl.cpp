@@ -39,6 +39,7 @@
 #include "UtilitiesRTL.h"
 #include "omptarget.h"
 
+#include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
@@ -1035,7 +1036,8 @@ struct AMDGPUQueueTy {
                          uint32_t NumThreads[3], uint32_t NumBlocks[3],
                          uint32_t GroupSize, uint64_t StackSize,
                          AMDGPUSignalTy *OutputSignal,
-                         AMDGPUSignalTy *InputSignal, bool OrderedByQueue) {
+                         AMDGPUSignalTy *InputSignal, bool OrderedByQueue,
+                         bool AgentAcquire) {
     assert(OutputSignal && "Invalid kernel output signal");
 
     // Lock the queue during the packet publishing process. Notice this blocks
@@ -1084,7 +1086,7 @@ struct AMDGPUQueueTy {
 
     // Publish the packet. Do not modify the packet after this point.
     publishKernelPacket(PacketId, Setup, Packet,
-                        /*Barrier=*/Pending && OrderedByQueue);
+                        /*Barrier=*/Pending && OrderedByQueue, AgentAcquire);
 
     return Plugin::success();
   }
@@ -1162,13 +1164,15 @@ private:
   /// the kernel launch. Do not modify the packet once this function is called.
   /// Assumes the queue lock is acquired.
   void publishKernelPacket(uint64_t PacketId, uint16_t Setup,
-                           hsa_kernel_dispatch_packet_t *Packet, bool Barrier) {
+                           hsa_kernel_dispatch_packet_t *Packet, bool Barrier,
+                           bool AgentAcquire) {
     uint32_t *PacketPtr = reinterpret_cast<uint32_t *>(Packet);
 
     uint16_t Header = HSA_PACKET_TYPE_KERNEL_DISPATCH << HSA_PACKET_HEADER_TYPE;
     if (Barrier)
       Header |= 1 << HSA_PACKET_HEADER_BARRIER;
-    Header |= HSA_FENCE_SCOPE_SYSTEM << HSA_PACKET_HEADER_ACQUIRE_FENCE_SCOPE;
+    Header |= (AgentAcquire ? HSA_FENCE_SCOPE_AGENT : HSA_FENCE_SCOPE_SYSTEM)
+              << HSA_PACKET_HEADER_ACQUIRE_FENCE_SCOPE;
     Header |= HSA_FENCE_SCOPE_SYSTEM << HSA_PACKET_HEADER_RELEASE_FENCE_SCOPE;
 
     // Publish the packet. Do not modify the package after this point.
@@ -1221,6 +1225,16 @@ private:
   uint32_t NumUsers;
 };
 
+/// The count of memory writes, by other than kernels, that a kernel's
+/// agent-scope acquire may not see. A kernel takes a system-scope acquire
+/// after it changes.
+static std::atomic<uint64_t> WriteEpoch = 0;
+
+/// Note a write to memory by other than a kernel, or the host seeing one
+/// complete. Data operations note it when they return, after a synchronous
+/// write ended.
+static void noteWrite() { WriteEpoch.fetch_add(1, std::memory_order_release); }
+
 /// Struct that implements a stream of asynchronous operations for AMDGPU
 /// devices. This class relies on signals to implement streams and define the
 /// dependencies between asynchronous operations.
@@ -1256,7 +1270,10 @@ private:
   enum class SlotKindTy : uint8_t {
     /// Not a packet on the stream's HSA queue, such as a copy or a callback.
     OffQueue,
-    /// A packet on the stream's HSA queue.
+    /// A barrier packet that waits for another stream. The other stream's
+    /// writes may need a system-scope acquire.
+    QueueWait,
+    /// A kernel or a marker packet.
     QueuePacket,
   };
 
@@ -1424,6 +1441,13 @@ private:
   /// operation that was already finalized in a previous stream sycnhronize.
   uint32_t SyncCycle;
 
+  /// The write epoch at the stream's last kernel.
+  uint64_t KernelEpoch = UINT64_MAX;
+
+  /// Whether an operation that may write memory unseen by an agent-scope
+  /// acquire ran since the host last saw the stream complete.
+  bool UnobservedWrite = false;
+
   /// Mutex to protect stream's management.
   mutable std::mutex Mutex;
 
@@ -1451,6 +1475,14 @@ private:
   /// Return the current number of asynchronous operations on the stream.
   uint32_t size() const { return NextSlot; }
 
+  /// Note that the host saw operations of the stream complete. Once the host
+  /// sees a copy complete, any later kernel may read its data, so kernels of
+  /// every stream need a system-scope acquire again.
+  void observeCompletion() {
+    if (UnobservedWrite)
+      noteWrite();
+  }
+
   /// Return the last valid slot on the stream.
   uint32_t last() const { return size() - 1; }
 
@@ -1474,6 +1506,9 @@ private:
     // Set the output signal of the current slot.
     Slots[Curr].Signal = OutputSignal;
     Slots[Curr].Kind = Kind;
+    // With several devices, a kernel may write a peer's memory.
+    if (Kind == SlotKindTy::OffQueue || Device.Plugin.getNumDevices() > 1)
+      UnobservedWrite = true;
 
     return {Curr, InputSignal};
   }
@@ -1493,6 +1528,9 @@ private:
   /// Complete all pending post actions and reset the stream after synchronizing
   /// or positively querying the stream.
   Error complete() {
+    observeCompletion();
+    UnobservedWrite = false;
+
     for (uint32_t Slot = 0; Slot < NextSlot; ++Slot) {
       // Take the post action of the operation if any.
       if (auto Err = Slots[Slot].performAction())
@@ -1550,7 +1588,7 @@ private:
     OutputSignal->increaseUseCount();
 
     // Consume stream slot and compute dependencies.
-    auto [Curr, InputSignal] = consume(OutputSignal, SlotKindTy::QueuePacket);
+    auto [Curr, InputSignal] = consume(OutputSignal, SlotKindTy::QueueWait);
 
     // Setup the post action to release the signal.
     if (auto Err = Slots[Curr].schedReleaseSignal(OtherSignal, &SignalManager))
@@ -1657,6 +1695,7 @@ public:
                          uint32_t NumThreads[3], uint32_t NumBlocks[3],
                          uint32_t GroupSize, uint64_t StackSize,
                          AMDGPUMemoryManagerTy &MemoryManager,
+                         bool DeviceInputsOnly,
                          void *ProfilerSpecificData = nullptr,
                          GenericProfilerTy *ProfilerPtr = nullptr) {
     if (Queue == nullptr)
@@ -1676,6 +1715,15 @@ public:
     // the barrier bit orders without a barrier packet.
     bool OrderedByQueue =
         NextSlot > 0 && Slots[NextSlot - 1].Kind != SlotKindTy::OffQueue;
+
+    // An agent-scope acquire suffices when the kernel reads no host stores,
+    // follows packets of the same agent, and no other writer touched memory
+    // since the stream's last kernel.
+    uint64_t Epoch = WriteEpoch.load(std::memory_order_acquire);
+    bool AgentAcquire = DeviceInputsOnly && NextSlot > 0 &&
+                        Slots[NextSlot - 1].Kind == SlotKindTy::QueuePacket &&
+                        Epoch == KernelEpoch;
+    KernelEpoch = Epoch;
 
     // Consume stream slot and compute dependencies.
     auto [Curr, InputSignal] = consume(OutputSignal, SlotKindTy::QueuePacket);
@@ -1699,7 +1747,7 @@ public:
     // Push the kernel with the output signal and an input signal (optional)
     if (auto Err = Queue->pushKernelLaunch(
             Kernel, KernelArgs, NumThreads, NumBlocks, GroupSize, StackSize,
-            OutputSignal, InputSignal, OrderedByQueue))
+            OutputSignal, InputSignal, OrderedByQueue, AgentAcquire))
       return Err;
 
     // Register a callback to indicate when the kernel is complete.
@@ -2227,8 +2275,10 @@ Error AMDGPUStreamTy::waitEvent(const AMDGPUEventTy &Event) {
 
   // Again, the recorded stream already completed the operation, the last
   // operation's output signal is satisfied.
-  if (!RecordedStream.Slots[Event.RecordedSlot].Signal->load())
+  if (!RecordedStream.Slots[Event.RecordedSlot].Signal->load()) {
+    RecordedStream.observeCompletion();
     return Plugin::success();
+  }
 
   // Otherwise, make the current stream wait on the other stream's operation.
   return waitOnStreamOperation(RecordedStream, Event.RecordedSlot);
@@ -2251,6 +2301,8 @@ Error AMDGPUStreamTy::synchronizeOn(AMDGPUEventTy &Event) {
   if (Event.RecordedSlot == last())
     return complete();
 
+  observeCompletion();
+
   // Otherwise, only finalize until the appropriate event
   return completeUntil(Event.RecordedSlot);
 }
@@ -2264,7 +2316,10 @@ Expected<bool> AMDGPUStreamTy::isEventComplete(const AMDGPUEventTy &Event) {
   }
   assert(Event.RecordedSyncCycle == SyncCycle && "event is from the future?");
 
-  return !Slots[Event.RecordedSlot].Signal->load();
+  if (Slots[Event.RecordedSlot].Signal->load())
+    return false;
+  observeCompletion();
+  return true;
 }
 
 struct AMDGPUStreamManagerTy final
@@ -3140,6 +3195,8 @@ struct AMDGPUDeviceTy : public GenericDeviceTy, AMDGenericDeviceTy {
   Error dataSubmitImpl(void *TgtPtr, const void *HstPtr, int64_t Size,
                        AsyncInfoWrapperTy &AsyncInfoWrapper,
                        GenericProfilerTy *ProfilerPtr) override {
+    llvm::scope_exit NoteWrite(noteWrite);
+
     AMDGPUStreamTy *Stream = nullptr;
     void *PinnedPtr = nullptr;
 
@@ -3209,6 +3266,8 @@ struct AMDGPUDeviceTy : public GenericDeviceTy, AMDGenericDeviceTy {
   Error dataRetrieveImpl(void *HstPtr, const void *TgtPtr, int64_t Size,
                          AsyncInfoWrapperTy &AsyncInfoWrapper,
                          GenericProfilerTy *ProfilerPtr) override {
+    llvm::scope_exit NoteWrite(noteWrite);
+
     AMDGPUStreamTy *Stream = nullptr;
     void *PinnedPtr = nullptr;
 
@@ -3301,6 +3360,8 @@ struct AMDGPUDeviceTy : public GenericDeviceTy, AMDGenericDeviceTy {
                          void *DstPtr, int64_t Size,
                          AsyncInfoWrapperTy &AsyncInfoWrapper,
                          GenericProfilerTy *ProfilerPtr) override {
+    llvm::scope_exit NoteWrite(noteWrite);
+
     AMDGPUDeviceTy &DstDevice = static_cast<AMDGPUDeviceTy &>(DstGenericDevice);
 
     auto ProfilerSpecificData = getOrNullProfilerSpecificData(AsyncInfoWrapper);
@@ -3340,6 +3401,8 @@ struct AMDGPUDeviceTy : public GenericDeviceTy, AMDGenericDeviceTy {
   Error dataFillImpl(void *TgtPtr, const void *PatternPtr, int64_t PatternSize,
                      int64_t Size,
                      AsyncInfoWrapperTy &AsyncInfoWrapper) override {
+    llvm::scope_exit NoteWrite(noteWrite);
+
     // Fast case, where we can use the 4 byte hsa_amd_memory_fill
     if (Size % 4 == 0 &&
         (PatternSize == 4 || PatternSize == 2 || PatternSize == 1)) {
@@ -4786,7 +4849,8 @@ Error AMDGPUKernelTy::launchImpl(GenericDeviceTy &GenericDevice,
   // Push the kernel launch into the stream.
   return Stream->pushKernelLaunch(
       *this, AllArgs, NumThreads, NumBlocks, TotalBlockMemSize, StackSize,
-      ArgsMemoryManager, ProfilerSpecificData, ProfilerPtr);
+      ArgsMemoryManager, LaunchArgs.Flags.DeviceInputsOnly,
+      ProfilerSpecificData, ProfilerPtr);
 }
 
 Error AMDGPUKernelTy::printLaunchInfoDetails(

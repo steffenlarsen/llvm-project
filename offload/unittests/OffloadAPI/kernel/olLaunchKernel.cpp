@@ -30,6 +30,30 @@ KERNEL_TEST(GlobalDtor, global_dtor)
 KERNEL_TEST(GridSize, gridsize)
 KERNEL_TEST(ByValPtr, byval_ptr)
 
+struct olLaunchKernelDeviceInputsOnlyTest : LaunchSingleKernelTestBase {
+  void SetUp() override {
+    RETURN_ON_FATAL_FAILURE(SetUpKernel("sequence"));
+    LaunchArgs.GroupSize = {1, 1, 1};
+  }
+
+  // Launches `sequence` for the indices in [Begin, End), each reading the
+  // results of the two before it.
+  void launchChain(void *Mem, uint32_t Begin, uint32_t End, bool InputsOnly) {
+    ol_kernel_launch_prop_t Props[] = {
+        {OL_KERNEL_LAUNCH_PROP_TYPE_DEVICE_INPUTS_ONLY, &InputsOnly},
+        OL_KERNEL_LAUNCH_PROP_END};
+    for (uint32_t Idx = Begin; Idx < End; Idx++) {
+      void *ArgPtrs[] = {&Idx, &Mem};
+      size_t ArgSizes[] = {sizeof(Idx), sizeof(Mem)};
+      ASSERT_SUCCESS(olLaunchKernel(Queue, Device, Kernel, &LaunchArgs, Props,
+                                    2, ArgPtrs, ArgSizes));
+    }
+  }
+
+  static constexpr uint32_t Count = 32;
+};
+OFFLOAD_TESTS_INSTANTIATE_DEVICE_FIXTURE(olLaunchKernelDeviceInputsOnlyTest);
+
 struct LaunchMultipleKernelTestBase : LaunchKernelTestBase {
   void SetUpKernels(const char *program, std::vector<const char *> kernels) {
     RETURN_ON_FATAL_FAILURE(SetUpProgram(program));
@@ -525,4 +549,56 @@ TEST_P(olLaunchKernelGridSizeTest, Success) {
   }
 
   ASSERT_SUCCESS(olMemFree(Context, Mem));
+}
+
+TEST_P(olLaunchKernelDeviceInputsOnlyTest, SuccessChain) {
+  for (bool InputsOnly : {true, false}) {
+    void *Mem, *Out;
+    ASSERT_SUCCESS(olMemAlloc(Context, Device, OL_ALLOC_TYPE_DEVICE,
+                              Count * sizeof(uint32_t), &Mem));
+    ASSERT_SUCCESS(
+        olMemAllocHost(Context, Device, Count * sizeof(uint32_t), &Out));
+
+    RETURN_ON_FATAL_FAILURE(launchChain(Mem, 0, Count, InputsOnly));
+    ASSERT_SUCCESS(
+        olMemcpy(Queue, Out, Host, Mem, Device, Count * sizeof(uint32_t)));
+    ASSERT_SUCCESS(olSyncQueue(Queue));
+
+    uint32_t *Data = static_cast<uint32_t *>(Out);
+    ASSERT_EQ(Data[0], 0u);
+    ASSERT_EQ(Data[1], 1u);
+    for (uint32_t I = 2; I < Count; I++)
+      ASSERT_EQ(Data[I], Data[I - 1] + Data[I - 2]);
+
+    ASSERT_SUCCESS(olMemFree(Context, Mem));
+    ASSERT_SUCCESS(olMemFree(Context, Out));
+  }
+}
+
+// Kernels with the property still see a copy made between them.
+TEST_P(olLaunchKernelDeviceInputsOnlyTest, SuccessAfterCopy) {
+  constexpr uint32_t Half = Count / 2;
+  void *Mem, *Out;
+  ASSERT_SUCCESS(olMemAlloc(Context, Device, OL_ALLOC_TYPE_DEVICE,
+                            Count * sizeof(uint32_t), &Mem));
+  ASSERT_SUCCESS(
+      olMemAllocHost(Context, Device, Count * sizeof(uint32_t), &Out));
+
+  RETURN_ON_FATAL_FAILURE(launchChain(Mem, 0, Half, true));
+  uint32_t Seed[] = {3, 5};
+  ASSERT_SUCCESS(olMemcpy(Queue, static_cast<uint32_t *>(Mem) + Half - 2,
+                          Device, Seed, Host, sizeof(Seed)));
+  RETURN_ON_FATAL_FAILURE(launchChain(Mem, Half, Count, true));
+  ASSERT_SUCCESS(
+      olMemcpy(Queue, Out, Host, Mem, Device, Count * sizeof(uint32_t)));
+  ASSERT_SUCCESS(olSyncQueue(Queue));
+
+  uint32_t *Data = static_cast<uint32_t *>(Out);
+  ASSERT_EQ(Data[Half - 2], 3u);
+  ASSERT_EQ(Data[Half - 1], 5u);
+  for (uint32_t I = Half; I < Count; I++)
+    ASSERT_EQ(Data[I], Data[I - 1] + Data[I - 2]);
+
+  ASSERT_SUCCESS(olMemFree(Context, Mem));
+  ASSERT_SUCCESS(olMemFree(Context, Out));
 }

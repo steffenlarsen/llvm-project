@@ -30,7 +30,12 @@ def ol_kernel_launch_prop_type_t : Enum {
   let is_typed = 1;
   let etors =
       [TaggedEtor<"none", "void *", "Used for null terminating property array">,
-       TaggedEtor<"is_cooperative ", "bool *", "Cooperative kernel launch">];
+       TaggedEtor<"is_cooperative ", "bool *", "Cooperative kernel launch">,
+       TaggedEtor<"device_inputs_only", "bool *",
+                  "The kernel reads no memory that the host wrote with its own "
+                  "stores. Memory written by Offload operations and kernels "
+                  "may be read. A device may then skip making host stores "
+                  "visible to the kernel. Devices may ignore it">];
 }
 
 def ol_kernel_launch_prop_t : Struct {

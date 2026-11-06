@@ -381,8 +381,10 @@ struct KernelLaunchArgsTy {
   uint32_t UserThreadLimit[3] = {0, 0, 0};
   struct {
     uint64_t Cooperative : 1; // Was this kernel spawned as cooperative.
-    uint64_t Unused : 63;
-  } Flags = {0, 0};
+    // The kernel reads no memory the host wrote with its own stores.
+    uint64_t DeviceInputsOnly : 1;
+    uint64_t Unused : 62;
+  } Flags = {0, 0, 0};
 };
 
 /// Class implementing common functionalities of offload kernels. Each plugin
