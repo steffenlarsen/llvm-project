@@ -265,6 +265,7 @@ typedef enum { HSA_FENCE_SCOPE_SYSTEM = 2 } hsa_fence_scope_t;
 
 typedef enum {
   HSA_PACKET_HEADER_TYPE = 0,
+  HSA_PACKET_HEADER_BARRIER = 8,
   HSA_PACKET_HEADER_ACQUIRE_FENCE_SCOPE = 9,
   HSA_PACKET_HEADER_RELEASE_FENCE_SCOPE = 11
 } hsa_packet_header_t;

@@ -1035,7 +1035,7 @@ struct AMDGPUQueueTy {
                          uint32_t NumThreads[3], uint32_t NumBlocks[3],
                          uint32_t GroupSize, uint64_t StackSize,
                          AMDGPUSignalTy *OutputSignal,
-                         AMDGPUSignalTy *InputSignal) {
+                         AMDGPUSignalTy *InputSignal, bool OrderedByQueue) {
     assert(OutputSignal && "Invalid kernel output signal");
 
     // Lock the queue during the packet publishing process. Notice this blocks
@@ -1049,7 +1049,10 @@ struct AMDGPUQueueTy {
     // subsequent queue's packets until the barrier input signal are satisfied.
     // No need output signal needed because the dependency is already guaranteed
     // by the queue barrier itself.
-    if (InputSignal && InputSignal->load())
+    // A pending input on the same queue is ordered by the packet's barrier
+    // bit. Others need a barrier packet that waits for the input signal.
+    bool Pending = InputSignal && InputSignal->load();
+    if (Pending && !OrderedByQueue)
       if (auto Err = pushBarrierImpl(nullptr, InputSignal))
         return Err;
 
@@ -1080,7 +1083,8 @@ struct AMDGPUQueueTy {
     Packet->completion_signal = OutputSignal->get();
 
     // Publish the packet. Do not modify the packet after this point.
-    publishKernelPacket(PacketId, Setup, Packet);
+    publishKernelPacket(PacketId, Setup, Packet,
+                        /*Barrier=*/Pending && OrderedByQueue);
 
     return Plugin::success();
   }
@@ -1158,10 +1162,12 @@ private:
   /// the kernel launch. Do not modify the packet once this function is called.
   /// Assumes the queue lock is acquired.
   void publishKernelPacket(uint64_t PacketId, uint16_t Setup,
-                           hsa_kernel_dispatch_packet_t *Packet) {
+                           hsa_kernel_dispatch_packet_t *Packet, bool Barrier) {
     uint32_t *PacketPtr = reinterpret_cast<uint32_t *>(Packet);
 
     uint16_t Header = HSA_PACKET_TYPE_KERNEL_DISPATCH << HSA_PACKET_HEADER_TYPE;
+    if (Barrier)
+      Header |= 1 << HSA_PACKET_HEADER_BARRIER;
     Header |= HSA_FENCE_SCOPE_SYSTEM << HSA_PACKET_HEADER_ACQUIRE_FENCE_SCOPE;
     Header |= HSA_FENCE_SCOPE_SYSTEM << HSA_PACKET_HEADER_RELEASE_FENCE_SCOPE;
 
@@ -1246,6 +1252,14 @@ private:
 
   using AMDGPUStreamCallbackTy = Error(void *Data);
 
+  /// The kinds of stream operations.
+  enum class SlotKindTy : uint8_t {
+    /// Not a packet on the stream's HSA queue, such as a copy or a callback.
+    OffQueue,
+    /// A packet on the stream's HSA queue.
+    QueuePacket,
+  };
+
   /// The stream is composed of N stream's slots. The struct below represents
   /// the fields of each slot. Each slot has a signal and an optional action
   /// function. When appending an HSA asynchronous operation to the stream, one
@@ -1276,6 +1290,10 @@ private:
     };
 
     llvm::SmallVector<ActionArgsTy> ActionArgs;
+
+    /// What the operation is. A later packet on the stream's HSA queue waits
+    /// for a packet with the barrier bit.
+    SlotKindTy Kind = SlotKindTy::OffQueue;
 
     /// Create an empty slot.
     StreamSlotTy() : Signal(nullptr), Callbacks({}), ActionArgs({}) {}
@@ -1439,7 +1457,9 @@ private:
   /// Consume one slot from the stream. Since the stream uses signals on demand
   /// and releases them once the slot is no longer used, the function requires
   /// an idle signal for the new consumed slot.
-  std::pair<uint32_t, AMDGPUSignalTy *> consume(AMDGPUSignalTy *OutputSignal) {
+  std::pair<uint32_t, AMDGPUSignalTy *>
+  consume(AMDGPUSignalTy *OutputSignal,
+          SlotKindTy Kind = SlotKindTy::OffQueue) {
     // Double the stream size if needed. Since we use std::deque, this operation
     // does not invalidate the already added slots.
     if (Slots.size() == NextSlot)
@@ -1453,6 +1473,7 @@ private:
 
     // Set the output signal of the current slot.
     Slots[Curr].Signal = OutputSignal;
+    Slots[Curr].Kind = Kind;
 
     return {Curr, InputSignal};
   }
@@ -1529,7 +1550,7 @@ private:
     OutputSignal->increaseUseCount();
 
     // Consume stream slot and compute dependencies.
-    auto [Curr, InputSignal] = consume(OutputSignal);
+    auto [Curr, InputSignal] = consume(OutputSignal, SlotKindTy::QueuePacket);
 
     // Setup the post action to release the signal.
     if (auto Err = Slots[Curr].schedReleaseSignal(OtherSignal, &SignalManager))
@@ -1651,8 +1672,13 @@ public:
 
     std::lock_guard<std::mutex> StreamLock(Mutex);
 
+    // Whether the previous operation is a packet on the same HSA queue, which
+    // the barrier bit orders without a barrier packet.
+    bool OrderedByQueue =
+        NextSlot > 0 && Slots[NextSlot - 1].Kind != SlotKindTy::OffQueue;
+
     // Consume stream slot and compute dependencies.
-    auto [Curr, InputSignal] = consume(OutputSignal);
+    auto [Curr, InputSignal] = consume(OutputSignal, SlotKindTy::QueuePacket);
 
     // Setup the post action to release the kernel args buffer.
     if (auto Err = Slots[Curr].schedReleaseBuffer(KernelArgs, MemoryManager))
@@ -1671,9 +1697,9 @@ public:
       Device.Plugin.getRPCServer().Thread->notify();
 
     // Push the kernel with the output signal and an input signal (optional)
-    if (auto Err = Queue->pushKernelLaunch(Kernel, KernelArgs, NumThreads,
-                                           NumBlocks, GroupSize, StackSize,
-                                           OutputSignal, InputSignal))
+    if (auto Err = Queue->pushKernelLaunch(
+            Kernel, KernelArgs, NumThreads, NumBlocks, GroupSize, StackSize,
+            OutputSignal, InputSignal, OrderedByQueue))
       return Err;
 
     // Register a callback to indicate when the kernel is complete.
@@ -2163,7 +2189,7 @@ Error AMDGPUStreamTy::recordEventWithProfiling(AMDGPUEventTy &Event,
   std::lock_guard<std::mutex> StreamLock(Mutex);
 
   // Consume stream slot and compute dependencies.
-  auto [Curr, InputSignal] = consume(OutputSignal);
+  auto [Curr, InputSignal] = consume(OutputSignal, SlotKindTy::QueuePacket);
 
   // Materialize the event as a real marker on the queue. Elapsed-time queries
   // need a packet-backed completion signal to retrieve dispatch timing.
